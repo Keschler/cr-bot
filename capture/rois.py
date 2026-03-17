@@ -28,6 +28,7 @@ ROIS = {
     "own_king_hp_bar": (500, 1771, 120, 35),
     "own_support_hp_bar_left": (170, 1443, 120, 35),
     "own_support_hp_bar_right": (800, 1443, 120, 35),
+    "timer": (920, 160, 130, 60)
 }
 
 ELIXIR_SLOT_ROIS = [
