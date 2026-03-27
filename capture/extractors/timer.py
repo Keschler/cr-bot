@@ -26,6 +26,6 @@ def load_templates():
 
 TEMPLATES = load_templates()
 def extract_time(frame):
-    timer_frame = crop(frame, ROIS["timer"])
+    timer_frame = crop(frame, ROIS["match_timer"])
     time = read_number_from_roi(timer_frame, TEMPLATES, semicolon=True)
     return time

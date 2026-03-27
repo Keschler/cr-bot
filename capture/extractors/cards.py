@@ -43,11 +43,11 @@ TEMPLATES = load_templates()
 
 def extract_hand_state(frame):
     cards = {
-        "card_1": {"image": crop(frame, ROIS["card_1"]), "detected_card": None},
-        "card_2": {"image": crop(frame, ROIS["card_2"]), "detected_card": None},
-        "card_3": {"image": crop(frame, ROIS["card_3"]), "detected_card": None},
-        "card_4": {"image": crop(frame, ROIS["card_4"]), "detected_card": None},
-        "next_card": {"image": crop(frame, ROIS["next_card"]), "detected_card": None},
+        "card_1": {"image": crop(frame, ROIS["hand_card_slot_1"]), "detected_card": None},
+        "card_2": {"image": crop(frame, ROIS["hand_card_slot_2"]), "detected_card": None},
+        "card_3": {"image": crop(frame, ROIS["hand_card_slot_3"]), "detected_card": None},
+        "card_4": {"image": crop(frame, ROIS["hand_card_slot_4"]), "detected_card": None},
+        "next_card": {"image": crop(frame, ROIS["next_card_slot"]), "detected_card": None},
     }
 
     for card, card_data in cards.items():

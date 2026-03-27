@@ -1,5 +1,10 @@
+import os
+from pathlib import Path
+
 import cv2
 import numpy as np
+
+from rois import ROIS
 
 HAND_CARD_ART_ROI = (18, 38, 184, 212)
 CARD_TEMPLATE_SIZE = (150, 180)
@@ -34,7 +39,7 @@ def preprocess_digit(img):
     else:
         img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    _, thresholded = cv2.threshold(img_gray, 210, 255, cv2.THRESH_BINARY)
+    _, thresholded = cv2.threshold(img_gray, 200, 255, cv2.THRESH_BINARY)
     return thresholded
 
 
@@ -108,6 +113,8 @@ def classify_card(slot_img, templates):
 
 
 def _normalize_card_name(name, evolved=False):
+    if name is None:
+        return None
     normalized = name
 
     if normalized.endswith("-ev1"):
@@ -186,6 +193,7 @@ def _feature_match_card_template(slot_img, templates, crop_roi=None):
 def classify_card_for_slot(slot_img, templates, slot_name):
     has_purple_header, has_filled_evo_pips = _is_evolved_slot(slot_img)
     evolved = has_purple_header and has_filled_evo_pips
+
     evo_templates = {
         name: tmpl for name, tmpl in templates.items()
         if name.endswith("-ev1")
@@ -195,9 +203,14 @@ def classify_card_for_slot(slot_img, templates, slot_name):
         if not name.endswith("-ev1")
     }
 
-    if evolved and slot_name == "next_card": # Active Evo Card
+    def normalize_result(best_name, best_score, evolved_flag=False):
+        if best_name is None:
+            return None, best_score
+        return _normalize_card_name(best_name, evolved=evolved_flag), best_score
+
+    if evolved and slot_name == "next_card":  # Active Evo Card
         best_name, best_score = _feature_match_card_template(slot_img, evo_templates)
-        return _normalize_card_name(best_name, evolved=True), best_score
+        return normalize_result(best_name, best_score, evolved_flag=True)
 
     if evolved:
         best_name, best_score = _feature_match_card_template(
@@ -205,23 +218,22 @@ def classify_card_for_slot(slot_img, templates, slot_name):
             base_templates,
             crop_roi=HAND_CARD_ART_ROI,
         )
-        return _normalize_card_name(best_name, evolved=True), best_score
+        return normalize_result(best_name, best_score, evolved_flag=True)
 
-    if has_purple_header and slot_name == "next_card": # Not active Evo card
+    if has_purple_header and slot_name == "next_card":  # Not active Evo card
         best_name, best_score = _feature_match_card_template(slot_img, evo_templates)
-        return _normalize_card_name(best_name), best_score
+        return normalize_result(best_name, best_score)
 
-    if slot_name != "next_card": # Four Hand Cards
+    if slot_name != "next_card":  # Four Hand Cards
         best_name, best_score = _feature_match_card_template(
             slot_img,
             base_templates,
             crop_roi=HAND_CARD_ART_ROI,
         )
-        return _normalize_card_name(best_name), best_score
+        return normalize_result(best_name, best_score)
 
-    best_name, best_score = _feature_match_card_template(slot_img, base_templates) # Normal Next Card
-    return _normalize_card_name(best_name), best_score
-
+    best_name, best_score = _feature_match_card_template(slot_img, base_templates)  # Normal Next Card
+    return normalize_result(best_name, best_score)
 
 
 def show_digit_segmentation_debug(binary_img):
@@ -252,6 +264,7 @@ def show_digit_segmentation_debug(binary_img):
 def read_number_from_roi(img, templates, semicolon=False):
     binary = preprocess_digit(img)
     boxes = segment_digits(binary)
+    #boxes = show_digit_segmentation_debug(binary) ## Debug
     if not boxes:
         return None
 
@@ -274,3 +287,184 @@ def read_number_from_roi(img, templates, semicolon=False):
         return value
 
     return int(value)
+
+def _extract_king_bar_fill(bar_img):
+    height, width = bar_img.shape[:2]
+    x0 = max(0, int(width * 0.12))
+    x1 = min(width, int(width * 0.94))
+    y0 = max(0, int(height * 0.2))
+    y1 = min(height, int(height * 0.75))
+    return bar_img[y0:y1, x0:x1]
+
+
+def _measure_cyan_ratio(bar_img):
+    fill = _extract_king_bar_fill(bar_img)
+    hsv = cv2.cvtColor(fill, cv2.COLOR_BGR2HSV)
+
+    cyan_mask = cv2.inRange(
+        hsv,
+        np.array([80, 80, 80], dtype=np.uint8),
+        np.array([110, 255, 255], dtype=np.uint8),
+    )
+    return float(cyan_mask.mean() / 255.0)
+
+
+def _measure_red_ratio(bar_img):
+    fill = _extract_king_bar_fill(bar_img)
+    hsv = cv2.cvtColor(fill, cv2.COLOR_BGR2HSV)
+
+    lower_red_mask = cv2.inRange(
+        hsv,
+        np.array([0, 80, 80], dtype=np.uint8),
+        np.array([10, 255, 255], dtype=np.uint8),
+    )
+    upper_red_mask = cv2.inRange(
+        hsv,
+        np.array([170, 80, 80], dtype=np.uint8),
+        np.array([179, 255, 255], dtype=np.uint8),
+    )
+    red_mask = cv2.bitwise_or(lower_red_mask, upper_red_mask)
+    return float(red_mask.mean() / 255.0)
+
+
+def detect_if_king_tower_activated(img):
+    own_king_hp_bar = crop(img, ROIS["player_king_health_bar"])
+    enemy_king_hp_bar = crop(img, ROIS["opponent_king_health_bar"])
+
+    own_king = _measure_cyan_ratio(own_king_hp_bar) >= 0.3
+    enemy_king = _measure_red_ratio(enemy_king_hp_bar) >= 0.3
+
+    return {
+        "own_king_activated": own_king,
+        "enemy_king_activated": enemy_king,
+    }
+
+def detect_if_support_tower_alive(img):
+    own_support_left_bar = crop(img, ROIS["player_left_support_health_bar"])
+    own_support_right_bar = crop(img, ROIS["player_right_support_health_bar"])
+
+    enemy_support_left_bar = crop(img, ROIS["opponent_left_support_health_bar"])
+    enemy_support_right_bar = crop(img, ROIS["opponent_right_support_health_bar"])
+
+    support_left = _measure_cyan_ratio(own_support_left_bar) >= 0.3
+    support_right = _measure_cyan_ratio(own_support_right_bar) >= 0.3
+
+    enemy_support_right = _measure_red_ratio(enemy_support_left_bar) >= 0.3
+    enemy_support_left = _measure_red_ratio(enemy_support_right_bar) >= 0.3
+
+    return {
+            "support_left_activated": support_left,
+            "support_right_activated": support_right,
+            "enemy_support_left_activated": enemy_support_left,
+            "enemy_support_right_activated": enemy_support_right
+            }
+
+
+def extract_health_bar(img, bar):
+    health_bar = img[
+      int(bar["y1"]):int(bar["y2"]),
+      int(bar["x1"]):int(bar["x2"])
+  ]
+    if health_bar.size == 0:
+        print("health bar check: invalid crop")
+        return
+
+    team = bar.get("team")
+    height, width = health_bar.shape[:2]
+    aspect_ratio = width / max(height, 1)
+
+    fill = _extract_king_bar_fill(health_bar)
+    hsv = cv2.cvtColor(fill, cv2.COLOR_BGR2HSV)
+
+    if team == "enemy":
+        lower_mask = cv2.inRange(
+            hsv,
+            np.array([0, 80, 80], dtype=np.uint8),
+            np.array([10, 255, 255], dtype=np.uint8),
+        )
+        upper_mask = cv2.inRange(
+            hsv,
+            np.array([170, 80, 80], dtype=np.uint8),
+            np.array([179, 255, 255], dtype=np.uint8),
+        )
+        color_mask = cv2.bitwise_or(lower_mask, upper_mask)
+        color_ratio = _measure_red_ratio(health_bar)
+    else:
+        color_mask = cv2.inRange(
+            hsv,
+            np.array([80, 80, 80], dtype=np.uint8),
+            np.array([110, 255, 255], dtype=np.uint8),
+        )
+        color_ratio = _measure_cyan_ratio(health_bar)
+        if color_ratio < 0.12:
+            broader_blue_mask = cv2.inRange(
+                hsv,
+                np.array([90, 35, 35], dtype=np.uint8),
+                np.array([135, 255, 255], dtype=np.uint8),
+            )
+            broader_blue_ratio = float(broader_blue_mask.mean() / 255.0)
+            if broader_blue_ratio > color_ratio:
+                color_mask = broader_blue_mask
+                color_ratio = broader_blue_ratio
+
+    kernel = np.ones((3, 3), dtype=np.uint8)
+    color_mask = cv2.morphologyEx(color_mask, cv2.MORPH_OPEN, kernel)
+    color_mask = cv2.morphologyEx(color_mask, cv2.MORPH_CLOSE, kernel)
+
+    contours, _ = cv2.findContours(color_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    largest_area = 0.0
+    horizontal_continuity = 0.0
+
+    if contours:
+        largest = max(contours, key=cv2.contourArea)
+        largest_area = float(cv2.contourArea(largest))
+        x, y, w, h = cv2.boundingRect(largest)
+        active_columns = np.count_nonzero(color_mask.max(axis=0) > 0)
+        horizontal_continuity = active_columns / max(fill.shape[1], 1)
+
+    gray = cv2.cvtColor(health_bar, cv2.COLOR_BGR2GRAY)
+    edge_mask = cv2.Canny(gray, 60, 160)
+    gray_std = float(gray.std())
+    edge_density = float((edge_mask > 0).mean())
+    horizontal_edge_peak = float((edge_mask > 0).mean(axis=1).max())
+    low_texture = gray_std < 12.0 and edge_density < 0.02
+    is_top_ui_bar = int(bar["y1"]) < 150
+    strong_color_bar = (
+        color_ratio >= 0.22
+        and horizontal_continuity >= 0.30
+        and largest_area >= 60.0
+    )
+    grayscale_bar = (
+        aspect_ratio >= 3.2
+        and gray_std >= 45.0
+        and edge_density >= 0.08
+        and horizontal_edge_peak >= 0.6
+    )
+
+    is_probable_health_bar = (
+        not is_top_ui_bar
+        and not low_texture
+        and aspect_ratio >= 1.5
+        and (strong_color_bar or grayscale_bar)
+    )
+    
+    return is_probable_health_bar
+
+'''
+    print(
+        "health bar check:",
+        {
+            "team": team,
+            "is_probable_health_bar": is_probable_health_bar,
+            "aspect_ratio": round(aspect_ratio, 3),
+            "color_ratio": round(color_ratio, 3),
+            "horizontal_continuity": round(horizontal_continuity, 3),
+            "largest_area": round(largest_area, 3),
+            "gray_std": round(gray_std, 3),
+            "edge_density": round(edge_density, 3),
+            "horizontal_edge_peak": round(horizontal_edge_peak, 3),
+            "is_top_ui_bar": is_top_ui_bar,
+        },
+    )
+'''
+

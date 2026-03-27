@@ -27,7 +27,7 @@ def detect_elixir_digit(digit_img, templates):
     best_score = -1.0
 
     for digit, template in templates.items():
-        template_digit = preprocess_digit(crop(template, ROIS["elixir_number"]))
+        template_digit = preprocess_digit(crop(template, ROIS["elixir_digit"]))
         result = cv2.matchTemplate(black_white_elixir, template_digit, cv2.TM_CCOEFF_NORMED)
         score = result[0, 0]
 
@@ -50,7 +50,7 @@ def read_elixir_value(displayed_digit, frame, slot_rois=ELIXIR_SLOT_ROIS):
 
 def extract_elixir(frame, templates=None):
     templates = templates or load_templates()
-    elixir_digit = crop(frame, ROIS["elixir_number"])
+    elixir_digit = crop(frame, ROIS["elixir_digit"])
     displayed_digit = detect_elixir_digit(elixir_digit, templates)
     elixir_estimate = read_elixir_value(displayed_digit, frame)
     return {

@@ -1,5 +1,5 @@
 import cv2
-from image_utils import crop, read_number_from_roi, preprocess_digit
+from image_utils import crop, read_number_from_roi, preprocess_digit, detect_if_king_tower_activated, detect_if_support_tower_alive
 
 from rois import ROIS
 
@@ -28,28 +28,28 @@ TEMPLATES = load_templates()
 
 def extract_tower_hp(frame):
     towers_hp = {
-        "enemy_king_hp_bar": {
-            "image": crop(frame, ROIS["enemy_king_hp_bar"]),
+        "enemy_king_hp": {
+            "image": crop(frame, ROIS["opponent_king_health_text"]),
             "value": None,
         },
-        "own_king_hp_bar": {
-            "image": crop(frame, ROIS["own_king_hp_bar"]),
+        "own_king_hp": {
+            "image": crop(frame, ROIS["player_king_health_text"]),
             "value": None,
         },
-        "enemy_support_hp_bar_left": {
-            "image": crop(frame, ROIS["enemy_support_hp_bar_left"]),
+        "enemy_support_hp_left": {
+            "image": crop(frame, ROIS["opponent_left_support_health_text"]),
             "value": None,
         },
-        "enemy_support_hp_bar_right": {
-            "image": crop(frame, ROIS["enemy_support_hp_bar_right"]),
+        "enemy_support_hp_right": {
+            "image": crop(frame, ROIS["opponent_right_support_health_text"]),
             "value": None,
         },
-        "own_support_hp_bar_left": {
-            "image": crop(frame, ROIS["own_support_hp_bar_left"]),
+        "own_support_hp_left": {
+            "image": crop(frame, ROIS["player_left_support_health_text"]),
             "value": None,
         },
-        "own_support_hp_bar_right": {
-            "image": crop(frame, ROIS["own_support_hp_bar_right"]),
+        "own_support_hp_right": {
+            "image": crop(frame, ROIS["player_right_support_health_text"]),
             "value": None,
         },
     }
@@ -58,7 +58,25 @@ def extract_tower_hp(frame):
         tower_data["value"] = read_number_from_roi(tower_data["image"], TEMPLATES)
 
 
+    king_tower_activated = detect_if_king_tower_activated(frame)
+
+    if not king_tower_activated["own_king_activated"]:
+        towers_hp["own_king_hp"]["value"] = 7032
+    if not king_tower_activated["enemy_king_activated"]:
+        towers_hp["enemy_king_hp"]["value"] = 7032
+
+    support_tower_alive = detect_if_support_tower_alive(frame)
+
+    if not support_tower_alive["support_left_activated"]:
+        towers_hp["own_support_hp_left"]["value"] = 0
+    if not support_tower_alive["support_right_activated"]:
+        towers_hp["own_support_hp_right"]["value"] = 0
+    if not support_tower_alive["enemy_support_left_activated"]:
+        towers_hp["enemy_support_hp_left"]["value"] = 0
+    if not support_tower_alive["enemy_support_right_activated"]:
+        towers_hp["enemy_support_hp_right"]["value"] = 0
+
     return {
-            tower_name: tower_data["value"]
-            for tower_name, tower_data in towers_hp.items()
-            } 
+        tower_name: tower_data["value"]
+        for tower_name, tower_data in towers_hp.items()
+    }
