@@ -190,18 +190,9 @@ def _feature_match_card_template(slot_img, templates, crop_roi=None):
     return best_name, best_score
 
 
-def classify_card_for_slot(slot_img, templates, slot_name):
+def classify_card_for_slot(slot_img, base_templates, evo_templates, slot_name):
     has_purple_header, has_filled_evo_pips = _is_evolved_slot(slot_img)
     evolved = has_purple_header and has_filled_evo_pips
-
-    evo_templates = {
-        name: tmpl for name, tmpl in templates.items()
-        if name.endswith("-ev1")
-    }
-    base_templates = {
-        name: tmpl for name, tmpl in templates.items()
-        if not name.endswith("-ev1")
-    }
 
     def normalize_result(best_name, best_score, evolved_flag=False):
         if best_name is None:
@@ -279,7 +270,6 @@ def read_number_from_roi(img, templates, semicolon=False):
 
         dimg = binary[y:y + h, x:x + w]
         digit, score = classify_digit(dimg, templates)
-        print(f"{digit} got {score}")
         chars.append(str(digit)) # Classify each digit separately
 
     value = "".join(chars)
@@ -467,4 +457,3 @@ def extract_health_bar(img, bar):
         },
     )
 '''
-

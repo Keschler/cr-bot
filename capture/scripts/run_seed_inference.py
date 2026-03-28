@@ -89,7 +89,7 @@ class CombinedDetector:
         self.iou = iou
 
     def infer(self, frame: np.ndarray) -> torch.Tensor:
-        results = [model.predict(frame, verbose=False, conf=self.conf)[0] for model in self.models]
+        results = [model.predict(frame, verbose=False, conf=self.conf, device=0)[0] for model in self.models]
         preds = []
         for result in results:
             boxes = result.orig_boxes.clone()

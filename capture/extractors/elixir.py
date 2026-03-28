@@ -19,15 +19,23 @@ def load_templates():
         10: cv2.imread("templates/elixir_10.png", cv2.IMREAD_GRAYSCALE),
     }
 
+def build_digit_templates():
+    raw_templates = load_templates()
+    return {
+            digit: preprocess_digit(crop(template, ROIS["elixir_digit"]))
+            for digit, template in raw_templates.items()
+            }
 
-def detect_elixir_digit(digit_img, templates):
+DIGIT_TEMPLATES = build_digit_templates()
+
+
+def detect_elixir_digit(digit_img, templates=DIGIT_TEMPLATES):
     black_white_elixir = preprocess_digit(digit_img)
 
     best_digit = None
     best_score = -1.0
 
-    for digit, template in templates.items():
-        template_digit = preprocess_digit(crop(template, ROIS["elixir_digit"]))
+    for digit, template_digit in templates.items():
         result = cv2.matchTemplate(black_white_elixir, template_digit, cv2.TM_CCOEFF_NORMED)
         score = result[0, 0]
 
@@ -48,8 +56,7 @@ def read_elixir_value(displayed_digit, frame, slot_rois=ELIXIR_SLOT_ROIS):
     return estimate_slot_fraction(next_slot)
 
 
-def extract_elixir(frame, templates=None):
-    templates = templates or load_templates()
+def extract_elixir(frame, templates=DIGIT_TEMPLATES):
     elixir_digit = crop(frame, ROIS["elixir_digit"])
     displayed_digit = detect_elixir_digit(elixir_digit, templates)
     elixir_estimate = read_elixir_value(displayed_digit, frame)

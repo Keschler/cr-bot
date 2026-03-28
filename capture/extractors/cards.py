@@ -41,6 +41,19 @@ def load_templates():
 
 TEMPLATES = load_templates()
 
+BASE_TEMPLATES = {
+      name: tmpl
+      for name, tmpl in TEMPLATES.items()
+      if not name.endswith("-ev1")
+  }
+
+EVO_TEMPLATES = {
+  name: tmpl
+  for name, tmpl in TEMPLATES.items()
+  if name.endswith("-ev1")
+}
+
+
 def extract_hand_state(frame):
     cards = {
         "card_1": {"image": crop(frame, ROIS["hand_card_slot_1"]), "detected_card": None},
@@ -53,7 +66,8 @@ def extract_hand_state(frame):
     for card, card_data in cards.items():
         card_data["detected_card"] = classify_card_for_slot(
             card_data["image"],
-            TEMPLATES,
+            BASE_TEMPLATES,
+            EVO_TEMPLATES,
             card,
         )
     
