@@ -41,7 +41,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--weights", nargs="+", required=True, help="One or more detector weight files.")
     parser.add_argument("--source", required=True, help="Path to an image or video source.")
     parser.add_argument("--video-interval", type=int, default=1)
-    parser.add_argument("--conf", type=float, default=0.25)
+    parser.add_argument("--conf", type=float, default=0.5)
     parser.add_argument("--iou", type=float, default=0.6)
     parser.add_argument(
         "--export-labelme",
@@ -62,8 +62,15 @@ def parse_args() -> argparse.Namespace:
 
 def draw_boxes(frame: np.ndarray, boxes: torch.Tensor) -> np.ndarray:
     rendered = frame.copy()
-    for row in boxes.cpu().numpy():
-        x1, y1, x2, y2, conf, cls, bel = row[:7]
+    rows = boxes.cpu().numpy() if hasattr(boxes, "cpu") else boxes
+    for row in rows:
+        values = row.tolist() if hasattr(row, "tolist") else list(row)
+        if len(values) == 7:
+            x1, y1, x2, y2, conf, cls, bel = values
+        elif len(values) == 8:
+            x1, y1, x2, y2, _track_id, conf, cls, bel = values
+        else:
+            raise ValueError(f"Unexpected YOLO box format with {len(values)} values: {values}")
         label = idx2unit.get(int(cls), str(int(cls)))
         team = int(bel)
         color = (255, 64, 64) if team == 1 else (64, 160, 255)
@@ -89,7 +96,7 @@ class CombinedDetector:
         self.iou = iou
 
     def infer(self, frame: np.ndarray) -> torch.Tensor:
-        results = [model.predict(frame, verbose=False, conf=self.conf, device=0)[0] for model in self.models]
+        results = [model.predict(frame, verbose=False, conf=self.conf, device=0, imgsz=896)[0] for model in self.models]
         preds = []
         for result in results:
             boxes = result.orig_boxes.clone()

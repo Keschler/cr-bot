@@ -50,7 +50,7 @@ def read_elixir_value(displayed_digit, frame, slot_rois=ELIXIR_SLOT_ROIS):
     number = displayed_digit[0]
 
     if number >= 10:
-        return 10
+        return 0.0
 
     next_slot = crop(frame, slot_rois[number])
     return estimate_slot_fraction(next_slot)

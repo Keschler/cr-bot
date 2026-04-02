@@ -1,11 +1,22 @@
-from pathlib import Path
-from typing import Any
-from dataclasses import dataclass
 import os
 import json
-import time
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 import cv2
+from numpy import true_divide
+
+ROOT = Path(__file__).resolve().parent
+KATACR_ROOT = ROOT / "vendor/external/KataCR"
+SEED_ROOT = ROOT / "data/seed_dataset"
+if str(KATACR_ROOT) not in sys.path:
+    sys.path.insert(0, str(KATACR_ROOT))
+os.environ.setdefault("KATACR_DATASET_PATH", str(SEED_ROOT))
+os.environ.setdefault("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "1")
+
+
 
 from extractors.cards import extract_hand_state
 from extractors.elixir import extract_elixir
@@ -15,9 +26,10 @@ from extractors.health import filter_real_bars, estimate_health
 from troop_hp_level16 import get_troop_hp_level16
 from image_utils import draw_rois
 from rois import ROIS
+from katacr.build_dataset.utils.split_part import process_part, ratio2name
+from katacr.yolov8.combo_detect import ComboDetector 
 
 
-ROOT = Path(__file__).resolve().parent
 DEFAULT_DETECTOR_WEIGHTS = [
     ROOT / "detector1_v0.7.13.pt",
     ROOT / "detector2_v0.7.13.pt",
@@ -81,83 +93,95 @@ def load_yolo_runtime():
 
 
 def build_detector() -> Any:
-    CombinedDetector, _, _ = load_yolo_runtime()
-    missing = [str(path) for path in DEFAULT_DETECTOR_WEIGHTS if not path.exists()]
-    if missing:
-        raise FileNotFoundError(
-            "Missing detector weights: " + ", ".join(missing)
-        )
-    return CombinedDetector(DEFAULT_DETECTOR_WEIGHTS, conf=0.25, iou=0.6)
+    return ComboDetector(
+            DEFAULT_DETECTOR_WEIGHTS,
+            show_conf=True,
+            conf=0.7,
+            iou_thre=0.6,
+            tracker='bytetrack'
+            )
+
+
+def parse_box_row(row):
+    values = row.tolist() if hasattr(row, "tolist") else list(row)
+    if len(values) == 7:
+        x1, y1, x2, y2, conf, cls, team = values
+        track_id = None
+    elif len(values) == 8:
+        x1, y1, x2, y2, track_id, conf, cls, team = values
+    else:
+        raise ValueError(f"Unexpected YOLO box format with {len(values)} values: {values}")
+    return x1, y1, x2, y2, track_id, conf, cls, team
 
 
 def summarize_detections(boxes) -> str:
     _, _, idx2unit = load_yolo_runtime()
-    if boxes.numel() == 0:
+    if len(boxes) == 0:
         return "none"
 
     counts: dict[str, int] = {}
-    for row in boxes.cpu().numpy():
-        label = idx2unit.get(int(row[5]), str(int(row[5])))
-        team = "enemy" if int(row[6]) == 1 else "ally"
+    rows = boxes.cpu().numpy() if hasattr(boxes, "cpu") else boxes
+    for row in rows:
+        _x1, _y1, _x2, _y2, _track_id, _conf, cls, team = parse_box_row(row)
+        label = idx2unit.get(int(cls), str(int(cls)))
+        team = "enemy" if int(team) == 1 else "ally"
         key = f"{label}:{team}"
         counts[key] = counts.get(key, 0) + 1
     return ", ".join(
         f"{label} x{count}" for label, count in sorted(counts.items())
     )
 
+def remap_boxes_to_frame(boxes, arena_shape, crop_xywh):
+      arena_h, arena_w = arena_shape[:2]
+      crop_x, crop_y, crop_w, crop_h = crop_xywh
+      scale_x = crop_w / arena_w
+      scale_y = crop_h / arena_h
+
+      remapped = boxes.clone() if hasattr(boxes, "clone") else boxes.copy()
+      remapped[:, [0, 2]] = remapped[:, [0, 2]] * scale_x + crop_x
+      remapped[:, [1, 3]] = remapped[:, [1, 3]] * scale_y + crop_y
+      return remapped
+
+
 
 def process_frame(frame, detector, show_rois: bool = False):
     _, draw_boxes, _ = load_yolo_runtime()
-    timings: dict[str, float] = {}
-
-    start = time.perf_counter()
     frame_to_analyze = draw_rois(frame, ROIS) if show_rois else frame
-    timings["draw_rois"] = time.perf_counter() - start
+    ratio_name = ratio2name(frame)
+    if ratio_name is None:
+        height, width = frame.shape[:2]
+        raise ValueError(
+            f"Unsupported frame aspect ratio {height / width:.4f} for KataCR part2 crop "
+            f"(frame shape: {frame.shape})"
+        )
+    arena, box_params = process_part(frame, 2, verbose=True)
+    fx, fy, fw, fh = box_params
+    frame_h, frame_w = frame.shape[:2]
 
-    start = time.perf_counter()
-    yolo_boxes = detector.infer(frame)
-    timings["infer"] = time.perf_counter() - start
+    crop_x = int(frame_w * fx)
+    crop_y = int(frame_h * fy)
+    crop_w = int(frame_w * fw)
+    crop_h = int(frame_h * fh)
 
-    start = time.perf_counter()
+    result = detector.infer(arena)
+    yolo_boxes = result.get_data()
+    yolo_boxes = remap_boxes_to_frame(
+      yolo_boxes,
+      arena.shape,
+      (crop_x, crop_y, crop_w, crop_h),
+    )
+
     rendered = draw_boxes(frame_to_analyze, yolo_boxes)
-    timings["draw_boxes"] = time.perf_counter() - start
-
-    start = time.perf_counter()
     elixir = extract_elixir(frame)
-    timings["extract_elixir"] = time.perf_counter() - start
-
-    start = time.perf_counter()
     towers_hp = extract_tower_hp(frame)
-    timings["extract_tower_hp"] = time.perf_counter() - start
-
-    start = time.perf_counter()
     current_time = extract_time(frame)
-    timings["extract_time"] = time.perf_counter() - start
-
-    start = time.perf_counter()
     state = extract_hand_state(frame)
-    timings["extract_hand_state"] = time.perf_counter() - start
 
-    start = time.perf_counter()
     troops, bars = convert_yolo(yolo_boxes)
-    timings["convert_yolo"] = time.perf_counter() - start
-
-    start = time.perf_counter()
     real_bars = filter_real_bars(frame, bars)
-    timings["filter_real_bars"] = time.perf_counter() - start
-
-    start = time.perf_counter()
     estimate_health(frame, real_bars)
-    timings["estimate_health"] = time.perf_counter() - start
-
-    start = time.perf_counter()
     matches = match_troops_to_bars(troops, real_bars)
-    timings["match_troops_to_bars"] = time.perf_counter() - start
-
-    start = time.perf_counter()
     typed_matches = [match_from_dict(m) for m in matches]
-    timings["match_from_dict"] = time.perf_counter() - start
-    timings["total"] = sum(timings.values())
     return {
         "rendered": rendered,
         "elixir": elixir,
@@ -165,8 +189,7 @@ def process_frame(frame, detector, show_rois: bool = False):
         "time": current_time,
         "state": state,
         "yolo_boxes": yolo_boxes,
-        "matches": typed_matches,
-        "timings": timings,
+        "matches": typed_matches
     }
 
 def convert_yolo(boxes):
@@ -175,7 +198,7 @@ def convert_yolo(boxes):
     not_troops = ["bar-level", "tower-bar", "queen-tower", "emote", "evolution-symbol", "elixir"]
     _, _, idx2unit = load_yolo_runtime()
     for box in boxes:
-        x1, y1, x2, y2, conf, cls, team = box.tolist()
+        x1, y1, x2, y2, _track_id, conf, cls, team = parse_box_row(box)
         class_name = idx2unit[int(cls)]
         team_name = "enemy" if int(team) == 1 else "ally"
         if class_name == "bar":
@@ -325,7 +348,7 @@ def main(debug: bool):
         elixir = result["elixir"]
         detection_summary = summarize_detections(result["yolo_boxes"])
         print(f"time:   {result['time']}")
-        print(f"elixir: {elixir['estimated_value'] + elixir['displayed_digit'][0]:.2f}")
+        print(f"elixir: {elixir['estimated_value'] + elixir['displayed_digit'][1]:.2f}")
         print(f"yolo:   {detection_summary}")
 
         print("towers:")
@@ -354,4 +377,4 @@ def main(debug: bool):
 
 
 if __name__ == "__main__":
-    main(False)
+    main(True)
