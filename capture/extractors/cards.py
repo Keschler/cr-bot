@@ -6,7 +6,7 @@ from image_utils import crop, classify_card_for_slot
 from rois import ROIS
 
 
-CARDS_TEMPLATE_DIR = Path("templates/cr-api-assets/cards-150")
+CARDS_TEMPLATE_DIR = Path(__file__).resolve().parents[1] / "templates/cr-api-assets/cards-150"
 
 
 def _is_supported_template(template_path):
