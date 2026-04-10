@@ -11,6 +11,7 @@ from numpy import true_divide
 ROOT = Path(__file__).resolve().parent
 KATACR_ROOT = ROOT / "vendor/external/KataCR"
 SEED_ROOT = ROOT / "data/seed_dataset"
+MODELS_DIR = ROOT / "models"
 if str(KATACR_ROOT) not in sys.path:
     sys.path.insert(0, str(KATACR_ROOT))
 os.environ.setdefault("KATACR_DATASET_PATH", str(SEED_ROOT))
@@ -31,8 +32,8 @@ from katacr.yolov8.combo_detect import ComboDetector
 
 
 DEFAULT_DETECTOR_WEIGHTS = [
-    ROOT / "detector1_v0.7.13.pt",
-    ROOT / "detector2_v0.7.13.pt",
+    MODELS_DIR / "detector1_v0.7.13.pt",
+    MODELS_DIR / "detector2_v0.7.13.pt",
 ]
 
 

@@ -5,6 +5,12 @@ from torchvision import datasets, models, transforms
 import numpy as np
 from sklearn.metrics import confusion_matrix
 
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+MODELS_DIR = ROOT / "models"
+HAND_CLASSIFIER_PATH = MODELS_DIR / "hand_classifier_best.pt"
 
 
 def main():
@@ -109,7 +115,7 @@ def main():
                 "val_acc": val_acc,
                 "epoch": epoch + 1
                 },
-                       "hand_classifier_best.pt"
+                       HAND_CLASSIFIER_PATH
                 )
         print(
                   f"epoch {epoch+1}/{epochs} "
@@ -118,7 +124,7 @@ def main():
                   f"val_loss={val_loss/val_total:.4f} "
                   f"val_acc={val_correct/val_total:.4f}"
               )
-    checkpoint = torch.load("hand_classifier_best.pt", map_location=device)
+    checkpoint = torch.load(HAND_CLASSIFIER_PATH, map_location=device)
     model.load_state_dict(checkpoint["model_state"])
     model.eval()
     all_labels = []

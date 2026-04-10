@@ -13,9 +13,10 @@ HAND_CARD_ART_ROI = (18, 38, 184, 212)
 CARD_TEMPLATE_SIZE = (150, 180)
 CARD_FEATURE_MATCHER = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
 CARD_ORB = cv2.ORB_create(nfeatures=500)
-CHECKPOINT_DIR = Path(__file__).resolve().parent
-HAND_CLASSIFIER_PATH = CHECKPOINT_DIR / "hand_classifier_best.pt"
-NEXT_CLASSIFIER_PATH = CHECKPOINT_DIR / "next_classifier_best.pt"
+ROOT = Path(__file__).resolve().parent
+MODELS_DIR = ROOT / "models"
+HAND_CLASSIFIER_PATH = MODELS_DIR / "hand_classifier_best.pt"
+NEXT_CLASSIFIER_PATH = MODELS_DIR / "next_classifier_best.pt"
 CLASSIFIER_TRANSFORM = transforms.Compose([
     transforms.Resize((128, 128)),
     transforms.ToTensor(),

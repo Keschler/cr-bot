@@ -18,6 +18,12 @@ This workspace now uses a clearer split between local data, upstream vendor code
   - `setup_seed_detectors.py`: generate KataCR detector configs against the merged seed dataset
 - `configs/`
   - `katacr_train_baseline.yaml`: smaller baseline training config for a single low-VRAM GPU
+- `models/`
+  - detector and classifier checkpoints used by the runtime and training scripts
+- `docs/`
+  - workspace notes, exports, and reference documents kept out of the runtime root
+- `bin/`
+  - shell helpers such as `start_stream.sh`
 - `.venv-train/`
   - dedicated training environment for the KataCR detector workflow
 
