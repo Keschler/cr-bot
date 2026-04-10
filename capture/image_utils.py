@@ -19,6 +19,10 @@ NEXT_CLASSIFIER_PATH = CHECKPOINT_DIR / "next_classifier_best.pt"
 CLASSIFIER_TRANSFORM = transforms.Compose([
     transforms.Resize((128, 128)),
     transforms.ToTensor(),
+    transforms.Normalize(
+      mean=[0.485, 0.456, 0.406],
+      std=[0.229, 0.224, 0.225],
+  ),
 ])
 _CLASSIFIER_CACHE = {}
 
@@ -270,9 +274,9 @@ def classify_card_for_slot(slot_img, base_templates, evo_templates, slot_name):
         crop_roi=HAND_CARD_ART_ROI,
     )
     if best_name is None:
-        best_name, best_score = _feature_match_card_template(
+        best_name, best_score = _classify_card_with_model(
             slot_img,
-            base_templates,
+            HAND_CLASSIFIER_PATH,
             crop_roi=HAND_CARD_ART_ROI,
         )
     return normalize_result(best_name, best_score, evolved_flag=evolved)
@@ -350,9 +354,12 @@ def _measure_cyan_ratio(bar_img):
     return float(cyan_mask.mean() / 255.0)
 
 
-def _measure_red_ratio(bar_img):
-    fill = _extract_king_bar_fill(bar_img)
-    hsv = cv2.cvtColor(fill, cv2.COLOR_BGR2HSV)
+def _measure_red_ratio(bar_img, king: bool):
+    if king:
+        fill = _extract_king_bar_fill(bar_img)
+        hsv = cv2.cvtColor(fill, cv2.COLOR_BGR2HSV)
+    else:
+        hsv = cv2.cvtColor(bar_img, cv2.COLOR_BGR2HSV)
 
     lower_red_mask = cv2.inRange(
         hsv,
@@ -373,7 +380,7 @@ def detect_if_king_tower_activated(img):
     enemy_king_hp_bar = crop(img, ROIS["opponent_king_health_bar"])
 
     own_king = _measure_cyan_ratio(own_king_hp_bar) >= 0.3
-    enemy_king = _measure_red_ratio(enemy_king_hp_bar) >= 0.3
+    enemy_king = _measure_red_ratio(enemy_king_hp_bar, True) >= 0.3
 
     return {
         "own_king_activated": own_king,
@@ -390,8 +397,8 @@ def detect_if_support_tower_alive(img):
     support_left = _measure_cyan_ratio(own_support_left_bar) >= 0.3
     support_right = _measure_cyan_ratio(own_support_right_bar) >= 0.3
 
-    enemy_support_right = _measure_red_ratio(enemy_support_left_bar) >= 0.3
-    enemy_support_left = _measure_red_ratio(enemy_support_right_bar) >= 0.3
+    enemy_support_right = _measure_red_ratio(enemy_support_left_bar, True) >= 0.3
+    enemy_support_left = _measure_red_ratio(enemy_support_right_bar, True) >= 0.3
 
     return {
             "support_left_activated": support_left,
@@ -429,7 +436,7 @@ def extract_health_bar(img, bar):
             np.array([179, 255, 255], dtype=np.uint8),
         )
         color_mask = cv2.bitwise_or(lower_mask, upper_mask)
-        color_ratio = _measure_red_ratio(health_bar)
+        color_ratio = _measure_red_ratio(health_bar, True)
     else:
         color_mask = cv2.inRange(
             hsv,

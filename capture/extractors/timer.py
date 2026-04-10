@@ -1,7 +1,8 @@
 import cv2
+import re
 
 from rois import ROIS
-from image_utils import crop, read_number_from_roi, preprocess_digit
+from image_utils import crop, read_number_from_roi, preprocess_digit, _measure_red_ratio
 
 def load_templates():
     raw_templates = {
@@ -28,4 +29,13 @@ TEMPLATES = load_templates()
 def extract_time(frame):
     timer_frame = crop(frame, ROIS["match_timer"])
     time = read_number_from_roi(timer_frame, TEMPLATES, semicolon=True)
-    return time
+    fixed_time = re.sub(r':+', ':', str(time))
+    return fixed_time 
+
+def is_overtime(frame):
+    timer_box = crop(frame, ROIS["timer_box"])
+    red_ratio = _measure_red_ratio(timer_box, False)
+    if red_ratio >= 0.5:
+        return True
+    else:
+        return False

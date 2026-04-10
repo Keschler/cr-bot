@@ -20,7 +20,7 @@ os.environ.setdefault("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "1")
 
 from extractors.cards import extract_hand_state
 from extractors.elixir import extract_elixir
-from extractors.timer import extract_time
+from extractors.timer import extract_time, is_overtime
 from extractors.tower_hp import extract_tower_hp
 from extractors.health import filter_real_bars, estimate_health
 from troop_hp_level16 import get_troop_hp_level16
@@ -78,6 +78,7 @@ class GameState:
     tower_hp_enemy: list[float]
     hand_cards: list[str]
     next_card: str
+    overtime: bool
 
 
 
@@ -175,6 +176,7 @@ def process_frame(frame, detector, show_rois: bool = False):
     elixir = extract_elixir(frame)
     towers_hp = extract_tower_hp(frame)
     current_time = extract_time(frame)
+    overtime = is_overtime(frame)
     state = extract_hand_state(frame)
 
     troops, bars = convert_yolo(yolo_boxes)
@@ -187,6 +189,7 @@ def process_frame(frame, detector, show_rois: bool = False):
         "elixir": elixir,
         "towers_hp": towers_hp,
         "time": current_time,
+        "overtime": overtime,
         "state": state,
         "yolo_boxes": yolo_boxes,
         "matches": typed_matches
@@ -292,7 +295,7 @@ def main(debug: bool):
     detector = build_detector()
 
     if debug:
-        frame = cv2.imread("data/video_clips/output.png")
+        frame = cv2.imread("pictures/overtime2.png")
         if frame is None:
             raise FileNotFoundError("Failed to read data/video_clips/test.png")
 
@@ -311,6 +314,7 @@ def main(debug: bool):
         print(f"Current time {result['time']}")
         print(f"Current hand {result['state']}")
         print(f"YOLO detections {summarize_detections(result['yolo_boxes'])}")
+        print(f"Overtime {result['overtime']}")
 
 
         if has_display:
