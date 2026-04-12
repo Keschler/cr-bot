@@ -6,7 +6,7 @@ anywhere on the battlefield, using project-friendly lowercase card IDs.
 
 Notes:
 - `mirror` is intentionally omitted.
-- Spells with placement restrictions such as `the-log`, `barbarian-barrel`,
+- Spells with placement restrictions such as `log`, `barbarian-barrel`,
   and `royal-delivery` are not included.
 """
 
@@ -14,7 +14,6 @@ from __future__ import annotations
 
 ANYWHERE_TROOPS = [
     "miner",
-    "goblin-drill"
 ]
 
 ANYWHERE_SPELLS = [
@@ -32,6 +31,7 @@ ANYWHERE_SPELLS = [
     "rage",
     "rocket",
     "tornado",
+    "vines",
     "void",
     "zap",
 ]

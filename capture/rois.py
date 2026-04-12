@@ -35,7 +35,8 @@ ROIS = {
     "player_right_support_health_text": (800, 1443, 120, 35),
     "player_right_support_health_bar": (800, 1430, 150, 40),
     "match_timer": (920, 160, 130, 60),
-    "timer_box": (890, 100, 260, 130)
+    "timer_box": (890, 100, 260, 130),
+    "battlefield": (30, 314, 1010, 1480)
 }
 
 ELIXIR_SLOT_ROIS = [

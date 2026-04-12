@@ -25,8 +25,6 @@ Notes:
   is mapped to the standalone hog unit HP used by ``royal-hog``.
 """
 
-from __future__ import annotations
-
 
 TROOP_HP_LEVEL16: dict[str, int] = {
     "archer": 486,

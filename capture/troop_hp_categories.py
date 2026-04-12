@@ -11,8 +11,6 @@ Non-troop YOLO classes such as towers, buildings, spells, HUD markers, and
 projectile-only objects are intentionally excluded.
 """
 
-from __future__ import annotations
-
 TROOP_HP_SIZE = {
     "archer": "small",
     "archer-evolution": "small",
