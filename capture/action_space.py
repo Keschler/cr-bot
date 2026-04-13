@@ -2,6 +2,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from card_metadata import CARD_METADATA
+
 
 GRID_SIZE = (18, 32)  # (columns, rows)
 KATACR_BACKGROUND_SIZE = (1080, 2400)  # (width, height)
@@ -126,10 +128,22 @@ def build_own_ground_mask() -> np.ndarray:
     return mask
 
 
+def build_own_half_mask() -> np.ndarray:
+    mask = np.zeros_like(map_ground, dtype=bool)
+    mask[OWN_SIDE_FIRST_ROW:, :] = True
+    return mask
+
+
 LEGAL_GROUND = build_ground_mask()
 LEGAL_OWN_GROUND = build_own_ground_mask()
+LEGAL_OWN_HALF = build_own_half_mask()
+LEGAL_SPELL_ANYWHERE = np.ones_like(LEGAL_GROUND, dtype=bool)
+LEGAL_GLOBAL_TARGET = LEGAL_GROUND
+
+LEGAL_SPELL_ANYWHERE.setflags(write=False)
 LEGAL_GROUND.setflags(write=False)
 LEGAL_OWN_GROUND.setflags(write=False)
+LEGAL_OWN_HALF.setflags(write=False)
 
 OWN_LEFT_PRINCESS_DOWN_PATCH = np.zeros_like(LEGAL_OWN_GROUND)
 OWN_LEFT_PRINCESS_DOWN_PATCH[24:27, 2:5] = True
@@ -153,8 +167,32 @@ OWN_RIGHT_PRINCESS_DOWN_PATCH.setflags(write=False)
 ENEMY_LEFT_PRINCESS_DOWN_PATCH.setflags(write=False)
 ENEMY_RIGHT_PRINCESS_DOWN_PATCH.setflags(write=False)
 
+ENEMY_LEFT_SPELL_DOWN_PATCH = np.zeros_like(LEGAL_OWN_HALF)
+ENEMY_LEFT_SPELL_DOWN_PATCH[11:17, 0:9] = True
 
-# TODO ENEMY WHEN BOTH PRINCESS TOWERS ARE DOWN + 
+ENEMY_RIGHT_SPELL_DOWN_PATCH = np.zeros_like(LEGAL_OWN_HALF)
+ENEMY_RIGHT_SPELL_DOWN_PATCH[11:17, 9:18] = True
+
+ENEMY_LEFT_SPELL_DOWN_PATCH.setflags(write=False)
+ENEMY_RIGHT_SPELL_DOWN_PATCH.setflags(write=False)
+
+# BUILDINGS
+
+BUILDING_FOOTPRINT = (3, 3)
+TESLA_FOOTPRINT = (2, 2)
+
+
+def build_footprint_anchor_mask(base_mask: np.ndarray, rows: int, cols: int) -> np.ndarray:
+    mask = np.zeros_like(base_mask, dtype=bool)
+    max_row = base_mask.shape[0] - rows + 1
+    max_col = base_mask.shape[1] - cols + 1
+
+    for row in range(max_row):
+        for col in range(max_col):
+            # True means the building footprint can start at this top-left cell.
+            mask[row, col] = bool(base_mask[row : row + rows, col : col + cols].all())
+
+    return mask
 
 
 def build_own_deploy_mask(
@@ -177,41 +215,114 @@ def build_own_deploy_mask(
     return mask
 
 
-@dataclass(frozen=True)
-class Region:
-    id: int
-    name: str
-    mask: np.ndarray
-    allowed_classes: frozenset[str]
-    requires_left_princess_down: bool = False
-    requires_right_princess_down: bool = False
-    requires_left_enemy_princess_down: bool = False
-    requires_right_enemy_princess_down: bool = False
+def build_restricted_spell_deploy_mask(
+    enemy_left_princess_down: bool = False,
+    enemy_right_princess_down: bool = False,
+) -> np.ndarray:
+    mask = LEGAL_OWN_HALF.copy()
 
-    def contains_cell(self, col: int, row: int) -> bool:
-        rows, cols = self.mask.shape
-        return 0 <= row < rows and 0 <= col < cols and bool(self.mask[row, col])
+    if enemy_left_princess_down:
+        mask |= ENEMY_LEFT_SPELL_DOWN_PATCH
+    if enemy_right_princess_down:
+        mask |= ENEMY_RIGHT_SPELL_DOWN_PATCH
 
-    def contains_norm(self, x: float, y: float, grid: GridSpec = ACTION_GRID) -> bool:
-        cell = grid.norm_to_cell(x, y)
-        return cell is not None and self.contains_cell(*cell)
-
-    def contains_pixel(
-        self,
-        x: float,
-        y: float,
-        arena_px: tuple[float, float, float, float],
-        grid: GridSpec = ACTION_GRID,
-    ) -> bool:
-        cell = grid.pixel_to_cell(x, y, arena_px)
-        return cell is not None and self.contains_cell(*cell)
+    return mask
 
 
-REGIONS = [
-    Region(
-        id=0,
-        name="troops_my_side",
-        mask=LEGAL_OWN_GROUND,
-        allowed_classes=frozenset({"own_ground"}),
-    ),
-]
+def build_building_deploy_mask(
+    footprint_rows: int,
+    footprint_cols: int,
+    own_left_princess_down: bool = False,
+    own_right_princess_down: bool = False,
+    enemy_left_princess_down: bool = False,
+    enemy_right_princess_down: bool = False,
+) -> np.ndarray:
+    deploy_mask = build_own_deploy_mask(
+        own_left_princess_down=own_left_princess_down,
+        own_right_princess_down=own_right_princess_down,
+        enemy_left_princess_down=enemy_left_princess_down,
+        enemy_right_princess_down=enemy_right_princess_down,
+    )
+    return build_footprint_anchor_mask(deploy_mask, footprint_rows, footprint_cols)
+
+
+def build_standard_building_deploy_mask(
+    own_left_princess_down: bool = False,
+    own_right_princess_down: bool = False,
+    enemy_left_princess_down: bool = False,
+    enemy_right_princess_down: bool = False,
+) -> np.ndarray:
+    return build_building_deploy_mask(
+        *BUILDING_FOOTPRINT,
+        own_left_princess_down=own_left_princess_down,
+        own_right_princess_down=own_right_princess_down,
+        enemy_left_princess_down=enemy_left_princess_down,
+        enemy_right_princess_down=enemy_right_princess_down,
+    )
+
+
+def build_tesla_deploy_mask(
+    own_left_princess_down: bool = False,
+    own_right_princess_down: bool = False,
+    enemy_left_princess_down: bool = False,
+    enemy_right_princess_down: bool = False,
+) -> np.ndarray:
+    return build_building_deploy_mask(
+        *TESLA_FOOTPRINT,
+        own_left_princess_down=own_left_princess_down,
+        own_right_princess_down=own_right_princess_down,
+        enemy_left_princess_down=enemy_left_princess_down,
+        enemy_right_princess_down=enemy_right_princess_down,
+    )
+
+
+def normalize_card_name(card_name: str) -> str:
+    return card_name.strip().lower().replace(" ", "-")
+
+
+def get_card_deploy_mask(
+    card_name: str,
+    own_left_princess_down: bool = False,
+    own_right_princess_down: bool = False,
+    enemy_left_princess_down: bool = False,
+    enemy_right_princess_down: bool = False,
+) -> np.ndarray:
+    card_key = normalize_card_name(card_name)
+    metadata = CARD_METADATA.get(card_key)
+    if metadata is None:
+        raise KeyError(f"unknown card: {card_name!r}")
+
+    placement_class = metadata.get("placement_class")
+
+    if placement_class == "own_ground":
+        return build_own_deploy_mask(
+            own_left_princess_down=own_left_princess_down,
+            own_right_princess_down=own_right_princess_down,
+            enemy_left_princess_down=enemy_left_princess_down,
+            enemy_right_princess_down=enemy_right_princess_down,
+        )
+    if placement_class == "building":
+        if card_key == "tesla":
+            return build_tesla_deploy_mask(
+                own_left_princess_down=own_left_princess_down,
+                own_right_princess_down=own_right_princess_down,
+                enemy_left_princess_down=enemy_left_princess_down,
+                enemy_right_princess_down=enemy_right_princess_down,
+            )
+        return build_standard_building_deploy_mask(
+            own_left_princess_down=own_left_princess_down,
+            own_right_princess_down=own_right_princess_down,
+            enemy_left_princess_down=enemy_left_princess_down,
+            enemy_right_princess_down=enemy_right_princess_down,
+        )
+    if placement_class == "spell_anywhere":
+        return LEGAL_SPELL_ANYWHERE
+    if placement_class == "global_target":
+        return LEGAL_GLOBAL_TARGET
+    if placement_class == "spells":
+        return build_restricted_spell_deploy_mask(
+            enemy_left_princess_down=enemy_left_princess_down,
+            enemy_right_princess_down=enemy_right_princess_down,
+        )
+
+    raise ValueError(f"unsupported placement_class {placement_class!r} for {card_key!r}")

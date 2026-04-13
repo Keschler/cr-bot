@@ -296,12 +296,12 @@ def main(debug: bool):
     detector = build_detector()
 
     if debug:
-        frame = cv2.imread("pictures/overtime2.png")
+        frame = cv2.imread("pictures/screen.png")
         if frame is None:
-            raise FileNotFoundError("Failed to read data/video_clips/test.png")
+            raise FileNotFoundError(f"Failed to read {debug_frame}")
 
         result = process_frame(frame, detector, show_rois=False)
-        has_display = bool(os.environ.get("DISPLAY"))
+        has_display = os.environ.get("SHOW_DEBUG_WINDOW") == "1"
         if has_display:
             cv2.namedWindow("debug", cv2.WINDOW_NORMAL)
             cv2.setWindowProperty("debug", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
