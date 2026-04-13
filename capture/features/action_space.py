@@ -16,6 +16,15 @@ KATACR_GRID_XYXY = (
     KATACR_GRID_TOP_LEFT[1] + GRID_SIZE[1] * KATACR_GRID_CELL_SIZE[1],
 )
 OWN_SIDE_FIRST_ROW = 17
+RIVER_ROWS = (15, 16)
+BRIDGE_COLS = (3, 14)
+ENEMY_KING_TOWER_ROWS = (1, 2, 3, 4)
+OWN_KING_TOWER_ROWS = (27, 28, 29, 30)
+KING_TOWER_COLS = (7, 8, 9, 10)
+ENEMY_PRINCESS_TOWER_ROWS = (5, 6, 7)
+OWN_PRINCESS_TOWER_ROWS = (24, 25, 26)
+LEFT_PRINCESS_TOWER_COLS = (2, 3, 4)
+RIGHT_PRINCESS_TOWER_COLS = (13, 14, 15)
 
 map_ground = np.array(
     [
@@ -122,6 +131,49 @@ def build_ground_mask() -> np.ndarray:
     return map_ground > 0
 
 
+def build_river_mask() -> np.ndarray:
+    mask = np.zeros_like(map_ground, dtype=bool)
+    mask[list(RIVER_ROWS), :] = True
+    mask[np.ix_(RIVER_ROWS, BRIDGE_COLS)] = False
+    return mask
+
+
+def build_bridge_mask() -> np.ndarray:
+    mask = np.zeros_like(map_ground, dtype=bool)
+    mask[np.ix_(RIVER_ROWS, BRIDGE_COLS)] = True
+    return mask
+
+
+def build_rect_mask(rows: tuple[int, ...], cols: tuple[int, ...]) -> np.ndarray:
+    mask = np.zeros_like(map_ground, dtype=bool)
+    mask[np.ix_(rows, cols)] = True
+    return mask
+
+
+def build_left_princess_tower_site(rows: tuple[int, ...]) -> np.ndarray:
+    return build_rect_mask(rows, LEFT_PRINCESS_TOWER_COLS)
+
+
+def build_right_princess_tower_site(rows: tuple[int, ...]) -> np.ndarray:
+    return build_rect_mask(rows, RIGHT_PRINCESS_TOWER_COLS)
+
+
+def build_own_princess_tower_sites() -> np.ndarray:
+    return OWN_LEFT_PRINCESS_TOWER_SITE | OWN_RIGHT_PRINCESS_TOWER_SITE
+
+
+def build_own_king_tower_site() -> np.ndarray:
+    return build_rect_mask(OWN_KING_TOWER_ROWS, KING_TOWER_COLS)
+
+
+def build_enemy_princess_tower_sites() -> np.ndarray:
+    return ENEMY_LEFT_PRINCESS_TOWER_SITE | ENEMY_RIGHT_PRINCESS_TOWER_SITE
+
+
+def build_enemy_king_tower_site() -> np.ndarray:
+    return build_rect_mask(ENEMY_KING_TOWER_ROWS, KING_TOWER_COLS)
+
+
 def build_own_ground_mask() -> np.ndarray:
     mask = build_ground_mask()
     mask[:OWN_SIDE_FIRST_ROW, :] = False
@@ -133,8 +185,17 @@ def build_own_half_mask() -> np.ndarray:
     mask[OWN_SIDE_FIRST_ROW:, :] = True
     return mask
 
-
 LEGAL_GROUND = build_ground_mask()
+RIVER_MASK = build_river_mask()
+BRIDGE_MASK = build_bridge_mask()
+OWN_LEFT_PRINCESS_TOWER_SITE = build_left_princess_tower_site(OWN_PRINCESS_TOWER_ROWS)
+OWN_RIGHT_PRINCESS_TOWER_SITE = build_right_princess_tower_site(OWN_PRINCESS_TOWER_ROWS)
+OWN_PRINCESS_TOWER_SITES = build_own_princess_tower_sites()
+OWN_KING_TOWER_SITE = build_own_king_tower_site()
+ENEMY_LEFT_PRINCESS_TOWER_SITE = build_left_princess_tower_site(ENEMY_PRINCESS_TOWER_ROWS)
+ENEMY_RIGHT_PRINCESS_TOWER_SITE = build_right_princess_tower_site(ENEMY_PRINCESS_TOWER_ROWS)
+ENEMY_PRINCESS_TOWER_SITES = build_enemy_princess_tower_sites()
+ENEMY_KING_TOWER_SITE = build_enemy_king_tower_site()
 LEGAL_OWN_GROUND = build_own_ground_mask()
 LEGAL_OWN_HALF = build_own_half_mask()
 LEGAL_SPELL_ANYWHERE = np.ones_like(LEGAL_GROUND, dtype=bool)
@@ -142,6 +203,16 @@ LEGAL_GLOBAL_TARGET = LEGAL_GROUND
 
 LEGAL_SPELL_ANYWHERE.setflags(write=False)
 LEGAL_GROUND.setflags(write=False)
+RIVER_MASK.setflags(write=False)
+BRIDGE_MASK.setflags(write=False)
+OWN_LEFT_PRINCESS_TOWER_SITE.setflags(write=False)
+OWN_RIGHT_PRINCESS_TOWER_SITE.setflags(write=False)
+OWN_PRINCESS_TOWER_SITES.setflags(write=False)
+OWN_KING_TOWER_SITE.setflags(write=False)
+ENEMY_LEFT_PRINCESS_TOWER_SITE.setflags(write=False)
+ENEMY_RIGHT_PRINCESS_TOWER_SITE.setflags(write=False)
+ENEMY_PRINCESS_TOWER_SITES.setflags(write=False)
+ENEMY_KING_TOWER_SITE.setflags(write=False)
 LEGAL_OWN_GROUND.setflags(write=False)
 LEGAL_OWN_HALF.setflags(write=False)
 
@@ -181,6 +252,7 @@ ENEMY_RIGHT_SPELL_DOWN_PATCH.setflags(write=False)
 BUILDING_FOOTPRINT = (3, 3)
 TESLA_FOOTPRINT = (2, 2)
 
+    
 
 def build_footprint_anchor_mask(base_mask: np.ndarray, rows: int, cols: int) -> np.ndarray:
     mask = np.zeros_like(base_mask, dtype=bool)

@@ -27,6 +27,7 @@ from extractors.health import filter_real_bars, estimate_health
 from troop_hp_level16 import get_troop_hp_level16
 from image_utils import draw_rois
 from rois import ROIS
+from game_state import Detection, GameState, HudState, Match, PrincessTowerState
 from katacr.build_dataset.utils.split_part import process_part, ratio2name
 from katacr.yolov8.combo_detect import ComboDetector 
 
@@ -50,37 +51,6 @@ def get_default_video_device() -> str:
             continue
 
     return "/dev/video37"
-
-@dataclass(slots=True)
-class Detection:
-    class_name: str
-    team: str
-    confusion: float
-    x1: float
-    y1: float
-    x2: float
-    y2: float
-    center_x: float
-    center_y: float
-    estimated_hp: float | None=None
-
-@dataclass(slots=True)
-class Match:
-    troop: Detection
-    bar: Detection | None
-
-
-@dataclass(slots=True)
-class GameState:
-    time_left_s: float
-    elixir_self: float
-    #elixir_enemy: float 
-    tower_hp_self: list[float]
-    tower_hp_enemy: list[float]
-    hand_cards: list[str]
-    next_card: str
-    overtime: bool
-
 
 
 def load_yolo_runtime():
