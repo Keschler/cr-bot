@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 
 
-Cell = tuple[int, int]
 
 @dataclass(slots=True)
 class Detection:
@@ -24,10 +23,18 @@ class Match:
 
 @dataclass(slots=True, frozen=True)
 class PrincessTowerState:
-    own_left: bool
-    own_right: bool
-    enemy_left: bool
-    enemy_right: bool
+    own_left_alive: bool
+    own_right_alive: bool
+    enemy_left_alive: bool
+    enemy_right_alive: bool
+
+    def as_deploy_kwargs(self) -> dict[str, bool]:
+        return {
+            "own_left_princess_down": not self.own_left_alive,
+            "own_right_princess_down": not self.own_right_alive,
+            "enemy_left_princess_down": not self.enemy_left_alive,
+            "enemy_right_princess_down": not self.enemy_right_alive,
+        }
 
 @dataclass(slots=True)
 class HudState:
@@ -45,9 +52,11 @@ class HudState:
 class GameState:
     hud: HudState
     own_units: list[Match]
-    enemy_unist: list[Match]
+    enemy_units: list[Match]
     seen_enemy_cards: list[int]
-    #elixir_enemy: float 
+    elixir_enemy_est: float 
+    own_king_active: bool
+    enemy_king_active: bool
 
 Cell = tuple[int, int]
 
@@ -55,6 +64,5 @@ Cell = tuple[int, int]
 class Action:
     kind: str   # Wait or Play
     card_idx: int | None = None
-    cell: None or Cell
-
+    cell: Cell | None = None
 
