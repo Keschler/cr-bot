@@ -50,9 +50,12 @@ def build_static_board() -> np.ndarray:
 
     return board
 
-def build_dynamic_board(state: GameState):
+def build_dynamic_board(state: GameState, arena_px: tuple[float, float, float, float]):
     board = np.zeros((len(DYNAMIC_CHANNELS), GRID_ROWS, GRID_COLS), dtype=np.float32)
 
+    rasterize_units(board, state.own_units, team="ally", arena_px=arena_px)
+    rasterize_units(board, state.enemy_units, team="enemy", arena_px=arena_px)
+    rasterize_alive_towers(board, state)
 
     return board
 
@@ -88,13 +91,13 @@ def rasterize_alive_towers(board, state: GameState):
     own_ch[OWN_KING_TOWER_SITE] = 1.0
     enemy_ch[ENEMY_KING_TOWER_SITE] = 1.0
 
-    if towers.own_left:
+    if towers.own_left_alive:
         own_ch[OWN_LEFT_PRINCESS_TOWER_SITE] = 1.0
-    if towers.own_right:
+    if towers.own_right_alive:
         own_ch[OWN_RIGHT_PRINCESS_TOWER_SITE] = 1.0
-    if towers.enemy_left:
+    if towers.enemy_left_alive:
         enemy_ch[ENEMY_LEFT_PRINCESS_TOWER_SITE] = 1.0
-    if towers.enemy_right:
+    if towers.enemy_right_alive:
         enemy_ch[ENEMY_RIGHT_PRINCESS_TOWER_SITE] = 1.0
 
 
@@ -139,7 +142,7 @@ def estimate_threat_weight(card_name) -> float:
     return min(dps / 1000.0, 5.0)
 
 
-def build_board(state: GameState) -> np.ndarray:
+def build_board(state: GameState, arena_px: tuple[float, float, float, float]) -> np.ndarray:
     static = build_static_board()
-    dynamic = build_dynamic_board(state)
+    dynamic = build_dynamic_board(state, arena_px)
     return np.concatenate([static, dynamic], axis=0)
