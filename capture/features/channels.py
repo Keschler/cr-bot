@@ -26,28 +26,31 @@ DYNAMIC_CHANNELS = [
     "enemy_alive_tower_mask",
 ]
 
-GLOBAL_FEATURES = [
-    "elixir_self",
-    "elixir_enemy_est",
-    "tower_hp_self_left",
-    "tower_hp_self_king",
-    "tower_hp_self_right",
-    "tower_hp_enemy_left",
-    "tower_hp_enemy_king",
-    "tower_hp_enemy_right",
-    "own_king_active",
-    "enemy_king_active",
-    "time_left",
-    "overtime",
-    "deploy_state_left",
-    "deploy_state_right",
-    "hand_cards",
-    "next_card",
-    "seen_enemy_cards",
-]
+GLOBAL_SCALAR_FEATURES = [
+      "elixir_self",
+      "elixir_enemy_est",
+      "time_left_norm",
+      "overtime",
+      "own_king_active",
+      "enemy_king_active",
+      "own_left_princess_alive",
+      "own_right_princess_alive",
+      "enemy_left_princess_alive",
+      "enemy_right_princess_alive",
+      "deploy_state_left",
+      "deploy_state_right",
+      "tower_hp_self_left",
+      "tower_hp_self_king",
+      "tower_hp_self_right",
+      "tower_hp_enemy_left",
+      "tower_hp_enemy_king",
+      "tower_hp_enemy_right",
+  ]
+
 
 
 
 STATIC_CHANNEL_IDX = {name: i for i, name in enumerate(STATIC_CHANNELS)}
 DYNAMIC_CHANNEL_IDX = {name: i for i, name in enumerate(DYNAMIC_CHANNELS)}
-GLOBAL_FEATURE_IDX = {name: i for i, name in enumerate(GLOBAL_FEATURES)}
+GLOBAL_SCALAR_IDX = {name: i for i, name in enumerate(GLOBAL_SCALAR_FEATURES)}
+
