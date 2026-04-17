@@ -8,34 +8,20 @@ from typing import Any
 import cv2
 from numpy import true_divide
 
-ROOT = Path(__file__).resolve().parent
-KATACR_ROOT = ROOT / "vendor/external/KataCR"
-SEED_ROOT = ROOT / "data/seed_dataset"
-MODELS_DIR = ROOT / "models"
-if str(KATACR_ROOT) not in sys.path:
-    sys.path.insert(0, str(KATACR_ROOT))
-os.environ.setdefault("KATACR_DATASET_PATH", str(SEED_ROOT))
-os.environ.setdefault("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "1")
-
-
 
 from extractors.cards import extract_hand_state
 from extractors.elixir import extract_elixir
-from extractors.timer import extract_time, is_overtime
+from extractors.timer import extract_time, is_overtime, parse_time_left_s, total_remaining_seconds
 from extractors.tower_hp import extract_tower_hp
 from extractors.health import filter_real_bars, estimate_health
-from troop_hp_level16 import get_troop_hp_level16
+from extractors.units import match_troops_to_bars, match_from_dict
 from image_utils import draw_rois
 from rois import ROIS
-from game_state import Detection, GameState, HudState, Match, PrincessTowerState
+from game_state import GameState, HudState, PrincessTowerState
+from vision.yolo_runtime import load_yolo_runtime, build_detector, parse_box_row, summarize_detections, remap_boxes_to_frame, convert_yolo
 from katacr.build_dataset.utils.split_part import process_part, ratio2name
-from katacr.yolov8.combo_detect import ComboDetector 
 
 
-DEFAULT_DETECTOR_WEIGHTS = [
-    MODELS_DIR / "detector1_v0.7.13.pt",
-    MODELS_DIR / "detector2_v0.7.13.pt",
-]
 
 
 def get_default_video_device() -> str:
@@ -51,68 +37,6 @@ def get_default_video_device() -> str:
             continue
 
     return "/dev/video37"
-
-
-def load_yolo_runtime():
-    try:
-        from scripts.run_seed_inference import CombinedDetector, draw_boxes, idx2unit
-    except ModuleNotFoundError as exc:
-        raise RuntimeError(
-            "YOLO runtime dependencies are missing. Activate the training/inference env "
-            "(for example `.venv-train`) before running main.py."
-        ) from exc
-    return CombinedDetector, draw_boxes, idx2unit
-
-
-def build_detector() -> Any:
-    return ComboDetector(
-            DEFAULT_DETECTOR_WEIGHTS,
-            show_conf=True,
-            conf=0.7,
-            iou_thre=0.6,
-            tracker='bytetrack'
-            )
-
-
-def parse_box_row(row):
-    values = row.tolist() if hasattr(row, "tolist") else list(row)
-    if len(values) == 7:
-        x1, y1, x2, y2, conf, cls, team = values
-        track_id = None
-    elif len(values) == 8:
-        x1, y1, x2, y2, track_id, conf, cls, team = values
-    else:
-        raise ValueError(f"Unexpected YOLO box format with {len(values)} values: {values}")
-    return x1, y1, x2, y2, track_id, conf, cls, team
-
-
-def summarize_detections(boxes) -> str:
-    _, _, idx2unit = load_yolo_runtime()
-    if len(boxes) == 0:
-        return "none"
-
-    counts: dict[str, int] = {}
-    rows = boxes.cpu().numpy() if hasattr(boxes, "cpu") else boxes
-    for row in rows:
-        _x1, _y1, _x2, _y2, _track_id, _conf, cls, team = parse_box_row(row)
-        label = idx2unit.get(int(cls), str(int(cls)))
-        team = "enemy" if int(team) == 1 else "ally"
-        key = f"{label}:{team}"
-        counts[key] = counts.get(key, 0) + 1
-    return ", ".join(
-        f"{label} x{count}" for label, count in sorted(counts.items())
-    )
-
-def remap_boxes_to_frame(boxes, arena_shape, crop_xywh):
-      arena_h, arena_w = arena_shape[:2]
-      crop_x, crop_y, crop_w, crop_h = crop_xywh
-      scale_x = crop_w / arena_w
-      scale_y = crop_h / arena_h
-
-      remapped = boxes.clone() if hasattr(boxes, "clone") else boxes.copy()
-      remapped[:, [0, 2]] = remapped[:, [0, 2]] * scale_x + crop_x
-      remapped[:, [1, 3]] = remapped[:, [1, 3]] * scale_y + crop_y
-      return remapped
 
 
 
@@ -146,8 +70,12 @@ def process_frame(frame, detector, show_rois: bool = False):
     rendered = draw_boxes(frame_to_analyze, yolo_boxes)
     elixir = extract_elixir(frame)
     towers_hp = extract_tower_hp(frame)
-    current_time = extract_time(frame)
+
+    current_time_text = extract_time(frame)
     overtime = is_overtime(frame)
+    time_left_s = parse_time_left_s(current_time_text)
+    total_remaining_s = total_remaining_seconds(time_left_s, overtime)
+
     state = extract_hand_state(frame)
 
     troops, bars = convert_yolo(yolo_boxes)
@@ -159,106 +87,62 @@ def process_frame(frame, detector, show_rois: bool = False):
         "rendered": rendered,
         "elixir": elixir,
         "towers_hp": towers_hp,
-        "time": current_time,
+        "time": current_time_text,
+        "time_left_s": time_left_s,
+        "total_remaining_s": total_remaining_s,
         "overtime": overtime,
         "state": state,
         "yolo_boxes": yolo_boxes,
         "matches": typed_matches
     }
 
-def convert_yolo(boxes):
-    troops = []
-    bars = []
-    not_troops = ["bar-level", "tower-bar", "queen-tower", "emote", "evolution-symbol", "elixir"]
-    _, _, idx2unit = load_yolo_runtime()
-    for box in boxes:
-        x1, y1, x2, y2, _track_id, conf, cls, team = parse_box_row(box)
-        class_name = idx2unit[int(cls)]
-        team_name = "enemy" if int(team) == 1 else "ally"
-        if class_name == "bar":
-            bars.append({
-                "class_name": class_name,
-                "team": team_name,
-                "confusion": conf,
-                "x1": x1,
-                "y1": y1,
-                "x2": x2,
-                "y2": y2,
-                "center_x": (x1 + x2) / 2, 
-                "center_y": (y1 + y2) / 2
-                })
-        elif class_name not in not_troops:
-            troops.append({
-                "class_name": class_name,
-                "team": team_name,
-                "confusion": conf,
-                "x1": x1,
-                "y1": y1,
-                "x2": x2,
-                "y2": y2,
-                "center_x": (x1 + x2) / 2, 
-                "center_y": (y1 + y2) / 2
-                })
+def build_game_state(result, *, seen_enemy_cards=None, elixir_enemy_est=None):
+    towers_hp = result["towers_hp"]
+    hand = result["state"]
 
-    return troops, bars
+    princess_towers = PrincessTowerState(
+        own_left_alive=towers_hp["own_support_left"] > 0,
+          own_right_alive=towers_hp["own_support_right"] > 0,
+          enemy_left_alive=towers_hp["enemy_support_left"] > 0,
+          enemy_right_alive=towers_hp["enemy_support_right"] > 0,
+    )
 
-def find_corresponding_bar(troop, bars):
-    corresponding_bar = None
+    hud = HudState(
+        time_left_s=result["time_left_s"],
+          overtime=result["overtime"],
+          elixir_self=result["elixir"]["estimated_value"] + result["elixir"]["displayed_digit"][1],
+          hand_cards=[
+              hand["card_1"],
+              hand["card_2"],
+              hand["card_3"],
+              hand["card_4"],
+          ],
+          next_card=hand["next_card"],
+          tower_hp_self=[
+              towers_hp["own_support_left"],
+              towers_hp["own_king"],
+              towers_hp["own_support_right"],
+          ],
+          tower_hp_enemy=[
+              towers_hp["enemy_support_left"],
+              towers_hp["enemy_king"],
+              towers_hp["enemy_support_right"],
+          ],
+          princess_towers=princess_towers,
+    )
     
-    best_score = 100000 # the lower the better
+    own_units = [m for m in result["matches"] if m.troop.team == "ally"]
+    enemy_units = [m for m in result["matches"] if m.troop.team == "enemy"]
 
-    for bar in bars:
-        x_distance = abs(bar["center_x"] - troop["center_x"])
-        vertical_gap = troop["center_y"] - bar["center_y"]
-
-        if vertical_gap < 0 or bar["team"] != troop["team"]:
-            continue
-        score = x_distance + 2 * vertical_gap
-        if score < best_score:
-            best_score = score
-            corresponding_bar = bar
-    return corresponding_bar
-
-def match_troops_to_bars(troops, bars):
-    matches = []
-    available_bars = bars.copy()
-    for troop in troops:
-        corresponding_bar = find_corresponding_bar(troop, available_bars)
-        matches.append({"troop": troop, "bar": corresponding_bar})
-        if corresponding_bar is not None:
-            available_bars.remove(corresponding_bar)
-
-    return matches
-
-def detection_from_dict(d: dict) -> Detection:
-      return Detection(
-          class_name=d["class_name"],
-          team=d["team"],
-          confusion=d["confusion"],
-          x1=d["x1"],
-          y1=d["y1"],
-          x2=d["x2"],
-          y2=d["y2"],
-          center_x=d["center_x"],
-          center_y=d["center_y"],
-          estimated_hp=d.get("estimated_hp")
-      )
-
-def match_from_dict(d: dict) -> Match:
-
-    troop = detection_from_dict(d["troop"])
-    bar = detection_from_dict(d["bar"]) if d["bar"] is not None else None
-
-    if bar is not None:
-        troop_hp = get_troop_hp_level16(troop.class_name)
-        if troop_hp:
-            troop.estimated_hp = bar.estimated_hp * get_troop_hp_level16(troop.class_name)
-    else:
-        troop.estimated_hp = get_troop_hp_level16(troop.class_name)
-
-    return Match(
-    troop=troop,
-    bar=bar,
+    return GameState(
+        hud=hud,
+        total_remaining_s=result["total_remaining_s"],
+        own_units=own_units,
+        enemy_units=enemy_units,
+        seen_enemy_cards=seen_enemy_cards or [],
+        elixir_enemy_est=elixir_enemy_est,
+        own_king_active=towers_hp["own_king"] < 7032,
+        enemy_king_active=towers_hp["enemy_king"] < 7032,
     )
 
 
@@ -271,6 +155,7 @@ def main(debug: bool):
             raise FileNotFoundError(f"Failed to read {debug_frame}")
 
         result = process_frame(frame, detector, show_rois=False)
+        game_state = build_game_state(result)
         has_display = os.environ.get("SHOW_DEBUG_WINDOW") == "1"
         if has_display:
             cv2.namedWindow("debug", cv2.WINDOW_NORMAL)
@@ -339,7 +224,7 @@ def main(debug: bool):
             print(
               f"  troop={m.troop.class_name:<18} "
               f"team={m.troop.team:<5} "
-              f"conf={m.troop.confusion:.3f} "
+              f"conf={m.troop.confidence:.3f} "
               f"hp={m.troop.estimated_hp}"
             )
         print()

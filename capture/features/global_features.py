@@ -18,7 +18,7 @@ def build_global_scalar_vector(state) -> np.ndarray:
 
     g[GLOBAL_SCALAR_IDX["elixir_self"]] = normalize_elixir(hud.elixir_self)
     g[GLOBAL_SCALAR_IDX["elixir_enemy_est"]] = normalize_elixir(state.elixir_enemy_est)
-    g[GLOBAL_SCALAR_IDX["time_left_norm"]] = normalize_time(hud.time_left_s)
+    g[GLOBAL_SCALAR_IDX["time_left_norm"]] = normalize_time(state.total_remaining_s)
     g[GLOBAL_SCALAR_IDX["overtime"]] = float(hud.overtime)
 
     g[GLOBAL_SCALAR_IDX["own_left_princess_alive"]] = float(towers.own_left_alive)

@@ -4,6 +4,10 @@ import re
 from rois import ROIS
 from image_utils import crop, read_number_from_roi, preprocess_digit, _measure_red_ratio
 
+NORMAL_SECONDS = 180
+OVERTIME_SECONDS = 120
+TOTAL_MATCH_SECONDS = NORMAL_SECONDS + OVERTIME_SECONDS
+
 def load_templates():
     raw_templates = {
         0: cv2.imread("templates/numbers/0.png", cv2.IMREAD_GRAYSCALE),
@@ -39,3 +43,17 @@ def is_overtime(frame):
         return True
     else:
         return False
+
+def parse_time_left_s(timer_text) -> float:
+      text = str(timer_text)
+      if ":" not in text:
+          return 0.0
+
+      minutes, seconds = text.split(":", 1)
+      return int(minutes) * 60 + int(seconds)
+
+
+def total_remaining_seconds(time_left, overtime):
+    if overtime:
+        return time_left
+    return time_left + OVERTIME_SECONDS

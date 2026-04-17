@@ -4,9 +4,10 @@ from dataclasses import dataclass
 
 @dataclass(slots=True)
 class Detection:
+    track_id: int | None
     class_name: str
     team: str
-    confusion: float
+    confidence: float
     x1: float
     y1: float
     x2: float
@@ -51,6 +52,7 @@ class HudState:
 @dataclass(slots=True)
 class GameState:
     hud: HudState
+    total_remaining_s: float
     own_units: list[Match]
     enemy_units: list[Match]
     seen_enemy_cards: list[int]
@@ -65,4 +67,3 @@ class Action:
     kind: str   # Wait or Play
     card_idx: int | None = None
     cell: Cell | None = None
-
