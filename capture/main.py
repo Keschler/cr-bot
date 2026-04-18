@@ -19,6 +19,7 @@ from image_utils import draw_rois
 from rois import ROIS
 from game_state import GameState, HudState, PrincessTowerState
 from vision.yolo_runtime import load_yolo_runtime, build_detector, parse_box_row, summarize_detections, remap_boxes_to_frame, convert_yolo
+from trackers.enemy_cards import EnemyCardTracker 
 from katacr.build_dataset.utils.split_part import process_part, ratio2name
 
 
@@ -100,11 +101,17 @@ def build_game_state(result, *, seen_enemy_cards=None, elixir_enemy_est=None):
     towers_hp = result["towers_hp"]
     hand = result["state"]
 
+    def tower_alive(hp):
+        return hp is not None and hp > 0
+
+    def king_active(hp):
+        return hp is not None and hp < 7032
+
     princess_towers = PrincessTowerState(
-        own_left_alive=towers_hp["own_support_left"] > 0,
-          own_right_alive=towers_hp["own_support_right"] > 0,
-          enemy_left_alive=towers_hp["enemy_support_left"] > 0,
-          enemy_right_alive=towers_hp["enemy_support_right"] > 0,
+        own_left_alive=tower_alive(towers_hp["own_support_left"]),
+          own_right_alive=tower_alive(towers_hp["own_support_right"]),
+          enemy_left_alive=tower_alive(towers_hp["enemy_support_left"]),
+          enemy_right_alive=tower_alive(towers_hp["enemy_support_right"]),
     )
 
     hud = HudState(
@@ -140,14 +147,15 @@ def build_game_state(result, *, seen_enemy_cards=None, elixir_enemy_est=None):
         own_units=own_units,
         enemy_units=enemy_units,
         seen_enemy_cards=seen_enemy_cards or [],
-        elixir_enemy_est=elixir_enemy_est,
-        own_king_active=towers_hp["own_king"] < 7032,
-        enemy_king_active=towers_hp["enemy_king"] < 7032,
+        elixir_enemy_est=0.0 if elixir_enemy_est is None else elixir_enemy_est,
+        own_king_active=king_active(towers_hp["own_king"]),
+        enemy_king_active=king_active(towers_hp["enemy_king"]),
     )
 
 
 def main(debug: bool):
     detector = build_detector()
+    enemy_card_tracker = EnemyCardTracker()
 
     if debug:
         frame = cv2.imread("pictures/screen.png")
@@ -195,6 +203,7 @@ def main(debug: bool):
 
     cv2.namedWindow("feed", cv2.WINDOW_NORMAL)
     cv2.setWindowProperty("feed", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+    input("Start")
 
     while True:
         ok, frame = cap.read()
@@ -203,6 +212,19 @@ def main(debug: bool):
             break
 
         result = process_frame(frame, detector, show_rois=False)
+        enemy_card_tracker.update(result["total_remaining_s"], result["matches"])
+        print()
+        print(f"enemy elixir est: {enemy_card_tracker.elixir_enemy_est:.2f}")
+        print(f"seen enemy cards: {sorted(enemy_card_tracker.confirmed_seen_cards)}")
+        print(f"enemy plays: {enemy_card_tracker.detected_card_plays[-5:]}")
+        print()
+        
+        game_state = build_game_state(
+            result, 
+            seen_enemy_cards=list(enemy_card_tracker.confirmed_seen_cards), 
+            elixir_enemy_est=enemy_card_tracker.elixir_enemy_est
+        )
+
         cv2.imshow("feed", result["rendered"])
 
         elixir = result["elixir"]
@@ -237,4 +259,4 @@ def main(debug: bool):
 
 
 if __name__ == "__main__":
-    main(True)
+    main(False)

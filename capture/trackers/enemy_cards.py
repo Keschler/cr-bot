@@ -23,13 +23,15 @@ class TrackMemory:
     first_seen_time: float
     last_seen_time: float
     class_votes: dict[str, int] = field(default_factory=dict)
+    team_votes: dict[str, int] = field(default_factory=dict)
     confidence_sum: float = 0.0
     seen_frames: int = 0
     confirmed: bool = False
     counted_as_card: bool = False
 
-    def add_observation(self, class_name, confidence, total_remaining_s):
+    def add_observation(self, class_name, team, confidence, total_remaining_s):
         self.class_votes[class_name] = self.class_votes.get(class_name, 0) + 1
+        self.team_votes[team] = self.team_votes.get(team, 0) + 1
         self.confidence_sum += confidence
         self.seen_frames += 1
         self.last_seen_time = total_remaining_s 
@@ -45,6 +47,24 @@ class TrackMemory:
         if self.seen_frames == 0.0:
             return None
         return self.confidence_sum / self.seen_frames
+
+    @property
+    def best_team(self):
+        if not self.team_votes:
+            return None
+        return max(self.team_votes, key=self.team_votes.get)
+
+    @property 
+    def best_team_ratio(self):
+        if self.seen_frames == 0:
+            return 0.0
+        
+        best_team = self.best_team
+        if best_team is None:
+            return 0.0
+        
+        return self.team_votes[best_team] / self.seen_frames
+
 
 class EnemyCardTracker:
     """
@@ -81,6 +101,7 @@ class EnemyCardTracker:
 
             memory.add_observation(
                 troop.class_name,
+                troop.team,
                 troop.confidence,
                 time_left_s,
             )
@@ -93,6 +114,7 @@ class EnemyCardTracker:
 
         self._drop_stale_tracks(time_left_s)
 
+        
     def _should_confirm(self, memory):
         if memory.confirmed:
             return True
@@ -107,7 +129,24 @@ class EnemyCardTracker:
 
         best_votes = memory.class_votes[best_class]
         return best_votes / memory.seen_frames >= 0.6 # Did at least 60% of this track's observations agree on the same class?
+    def _is_reliable_enemy_play(self, memory):
+        if memory.best_team != "enemy":
+            return False
+        if memory.best_team_ratio < 0.8:
+            return False 
+        if memory.avg_confidence < 0.8:
+            return False
+        if memory.seen_frames < 5:
+            return False
+        if memory.best_class is None:
+            return False
+        
+        return True
+
     def _maybe_record_play(self, memory, time_left_s):
+        if not self._is_reliable_enemy_play(memory):
+            return
+        
         unit_name = memory.best_class
         card_name = DIRECT_UNIT_TO_CARD.get(unit_name)
 
@@ -138,6 +177,7 @@ class EnemyCardTracker:
         
         elapsed = self.last_time_left_s - time_left_s
         if elapsed <= 0:
+            self.last_time_left_s = time_left_s
             return
         
         rate = self._elixir_rate(time_left_s)
@@ -163,4 +203,3 @@ class EnemyCardTracker:
 
         for track_id in stale_ids:
             del self.tracks[track_id]
-
