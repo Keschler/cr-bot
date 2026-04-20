@@ -50,6 +50,10 @@ def parse_time_left_s(timer_text) -> float:
           return 0.0
 
       minutes, seconds = text.split(":", 1)
+      if minutes is None:
+        minutes = 0
+      if seconds is None:
+        seconds = 0
       return int(minutes) * 60 + int(seconds)
 
 

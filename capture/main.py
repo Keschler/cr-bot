@@ -17,8 +17,8 @@ from extractors.health import filter_real_bars, estimate_health
 from extractors.units import match_troops_to_bars, match_from_dict
 from image_utils import draw_rois
 from rois import ROIS
-from game_state import GameState, HudState, PrincessTowerState
-from vision.yolo_runtime import load_yolo_runtime, build_detector, parse_box_row, summarize_detections, remap_boxes_to_frame, convert_yolo
+from state_builder import build_game_state
+from vision.yolo_runtime import load_yolo_runtime, build_detector, summarize_detections, remap_boxes_to_frame, convert_yolo
 from trackers.enemy_cards import EnemyCardTracker 
 from katacr.build_dataset.utils.split_part import process_part, ratio2name
 
@@ -97,60 +97,6 @@ def process_frame(frame, detector, show_rois: bool = False):
         "matches": typed_matches
     }
 
-def build_game_state(result, *, seen_enemy_cards=None, elixir_enemy_est=None):
-    towers_hp = result["towers_hp"]
-    hand = result["state"]
-
-    def tower_alive(hp):
-        return hp is not None and hp > 0
-
-    def king_active(hp):
-        return hp is not None and hp < 7032
-
-    princess_towers = PrincessTowerState(
-        own_left_alive=tower_alive(towers_hp["own_support_left"]),
-          own_right_alive=tower_alive(towers_hp["own_support_right"]),
-          enemy_left_alive=tower_alive(towers_hp["enemy_support_left"]),
-          enemy_right_alive=tower_alive(towers_hp["enemy_support_right"]),
-    )
-
-    hud = HudState(
-        time_left_s=result["time_left_s"],
-          overtime=result["overtime"],
-          elixir_self=result["elixir"]["estimated_value"] + result["elixir"]["displayed_digit"][1],
-          hand_cards=[
-              hand["card_1"],
-              hand["card_2"],
-              hand["card_3"],
-              hand["card_4"],
-          ],
-          next_card=hand["next_card"],
-          tower_hp_self=[
-              towers_hp["own_support_left"],
-              towers_hp["own_king"],
-              towers_hp["own_support_right"],
-          ],
-          tower_hp_enemy=[
-              towers_hp["enemy_support_left"],
-              towers_hp["enemy_king"],
-              towers_hp["enemy_support_right"],
-          ],
-          princess_towers=princess_towers,
-    )
-    
-    own_units = [m for m in result["matches"] if m.troop.team == "ally"]
-    enemy_units = [m for m in result["matches"] if m.troop.team == "enemy"]
-
-    return GameState(
-        hud=hud,
-        total_remaining_s=result["total_remaining_s"],
-        own_units=own_units,
-        enemy_units=enemy_units,
-        seen_enemy_cards=seen_enemy_cards or [],
-        elixir_enemy_est=0.0 if elixir_enemy_est is None else elixir_enemy_est,
-        own_king_active=king_active(towers_hp["own_king"]),
-        enemy_king_active=king_active(towers_hp["enemy_king"]),
-    )
 
 
 def main(debug: bool):
@@ -171,14 +117,30 @@ def main(debug: bool):
             cv2.imshow("debug", result["rendered"])
 
         elixir = result["elixir"]
-
-        print(elixir["displayed_digit"], elixir["displayed_digit"][0])
         print(f"Estimated elixir {elixir['estimated_value'] + elixir['displayed_digit'][0]}")
-        print(f"Towers hp {result['towers_hp']}")
-        print(f"Current time {result['time']}")
-        print(f"Current hand {result['state']}")
-        print(f"YOLO detections {summarize_detections(result['yolo_boxes'])}")
         print(f"Overtime {result['overtime']}")
+
+        detection_summary = summarize_detections(result["yolo_boxes"])
+        print(f"time:   {result['time']}")
+        print(f"yolo:   {detection_summary}")
+
+        print("towers:")
+        for name, hp in result["towers_hp"].items():
+            print(f"{name}: {hp}")
+
+        print("state:")
+        for slot, value in result["state"].items():
+            print(f"  {slot}: {value}")
+
+        print("matches:")
+        for m in result["matches"]:
+            print(
+              f"  troop={m.troop.class_name:<18} "
+              f"team={m.troop.team:<5} "
+              f"conf={m.troop.confidence:.3f} "
+              f"hp={m.troop.estimated_hp}"
+            )
+        print()
 
 
         if has_display:
@@ -230,7 +192,7 @@ def main(debug: bool):
         elixir = result["elixir"]
         detection_summary = summarize_detections(result["yolo_boxes"])
         print(f"time:   {result['time']}")
-        print(f"elixir: {elixir['estimated_value'] + elixir['displayed_digit'][1]:.2f}")
+        print(f"elixir: {elixir['estimated_value'] + elixir['displayed_digit'][0]}")
         print(f"yolo:   {detection_summary}")
 
         print("towers:")
