@@ -7,6 +7,18 @@ from torch import nn
 from torchvision import models, transforms
 from PIL import Image
 
+from constants import (
+    ALLY_BROADER_BLUE_HSV_HIGH,
+    ALLY_BROADER_BLUE_HSV_LOW,
+    ALLY_CYAN_HSV_HIGH,
+    ALLY_CYAN_HSV_LOW,
+    ENEMY_RED_HSV_HIGH_1,
+    ENEMY_RED_HSV_HIGH_2,
+    ENEMY_RED_HSV_LOW_1,
+    ENEMY_RED_HSV_LOW_2,
+    HEALTH_BAR_BROADER_BLUE_RATIO_THRESHOLD,
+    TOWER_BAR_VISIBLE_RATIO_THRESHOLD,
+)
 from rois import ROIS
 
 HAND_CARD_ART_ROI = (18, 38, 184, 212)
@@ -105,16 +117,85 @@ def extract_digit_images(binary_img, boxes):
         digits.append(digit)
     return digits
 
-def classify_digit(digit_img, templates, out_size=(32,48)):
+def _binary_region_mean(binary_img, y0, y1, x0, x1):
+    h, w = binary_img.shape[:2]
+    ys0 = max(0, min(h, int(round(h * y0))))
+    ys1 = max(ys0 + 1, min(h, int(round(h * y1))))
+    xs0 = max(0, min(w, int(round(w * x0))))
+    xs1 = max(xs0 + 1, min(w, int(round(w * x1))))
+    return float((binary_img[ys0:ys1, xs0:xs1] > 0).mean())
+
+
+def _tower_digit_override(best_digit, scores, norm_digit):
+    top_mid = _binary_region_mean(norm_digit, 0.00, 0.25, 0.35, 0.65)
+    center_mid = _binary_region_mean(norm_digit, 0.35, 0.65, 0.40, 0.60)
+    left_mid = _binary_region_mean(norm_digit, 0.35, 0.65, 0.15, 0.35)
+    right_mid = _binary_region_mean(norm_digit, 0.35, 0.65, 0.65, 0.85)
+    bottom_mid = _binary_region_mean(norm_digit, 0.75, 1.00, 0.35, 0.65)
+
+    # Tower-font 4 often gets matched as 0 when the open bottom and tall side rails
+    # are preserved but the template correlation still prefers the rounded glyph.
+    if (
+        best_digit == 0
+        and scores.get(4, -1.0) > scores.get(0, -1.0) - 0.30
+        and top_mid > 0.85
+        and left_mid > 0.90
+        and right_mid > 0.90
+        and center_mid < 0.30
+        and bottom_mid < 0.50
+    ):
+        return 4
+
+    if (
+        best_digit == 0
+        and scores.get(4, -1.0) > scores.get(0, -1.0) - 0.15
+        and top_mid > 0.90
+        and left_mid > 0.95
+        and right_mid > 0.95
+        and center_mid > 0.40
+        and 0.40 < bottom_mid < 0.65
+    ):
+        return 4
+
+    if (
+        best_digit == 0
+        and scores.get(4, -1.0) > 0.20
+        and scores.get(4, -1.0) > scores.get(0, -1.0) - 0.30
+        and top_mid > 0.75
+        and center_mid < 0.05
+        and left_mid > 0.75
+        and right_mid > 0.85
+        and bottom_mid < 0.35
+    ):
+        return 4
+
+    # Tower-font 6 often gets matched as 5 when the left wall and inner bowl are
+    # visible but the lower-right curve is a bit weak after thresholding.
+    if (
+        best_digit == 5
+        and scores.get(6, -1.0) > scores.get(5, -1.0) - 0.20
+        and left_mid > 0.90
+        and right_mid < 0.70
+        and center_mid > 0.45
+        and bottom_mid < 0.45
+    ):
+        return 6
+
+    return best_digit
+
+
+def classify_digit(digit_img, templates, out_size=(32,48), mode="default"):
     digit_img = cv2.resize(digit_img, out_size)
 
     best_digit = None
     best_score = -1.0
+    scores = {}
 
     for digit, tmpl in templates.items():
         tmpl_resized = cv2.resize(tmpl, out_size)
         result = cv2.matchTemplate(digit_img, tmpl_resized, cv2.TM_CCOEFF_NORMED)
         score = result[0,0]
+        scores[digit] = float(score)
 
         if score > best_score:
             best_score = score
@@ -122,10 +203,10 @@ def classify_digit(digit_img, templates, out_size=(32,48)):
     if best_score <= 0:
         return 0, best_score
 
-    return best_digit, best_score 
+    if mode == "tower":
+        best_digit = _tower_digit_override(best_digit, scores, digit_img)
 
-def classify_card(slot_img, templates):
-    return classify_card_for_slot(slot_img, templates, None)
+    return best_digit, best_score 
 
 
 def _normalize_card_name(name, evolved=False):
@@ -283,50 +364,66 @@ def classify_card_for_slot(slot_img, base_templates, evo_templates, slot_name):
     return normalize_result(best_name, best_score, evolved_flag=evolved)
 
 
-def show_digit_segmentation_debug(binary_img):
-      contours, _ = cv2.findContours(binary_img.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+def build_digit_debug_views(binary_img, boxes, digit_views):
+    box_view = cv2.cvtColor(binary_img, cv2.COLOR_GRAY2BGR)
+    for x, y, w, h in boxes:
+        cv2.rectangle(box_view, (x, y), (x + w, y + h), (0, 0, 255), 1)
 
-      contour_view = cv2.cvtColor(binary_img, cv2.COLOR_GRAY2BGR)
-      box_view = contour_view.copy()
+    tile_h = 56
+    tile_w = 40
+    if not digit_views:
+        digits_view = np.zeros((tile_h, tile_w, 3), dtype=np.uint8)
+        cv2.putText(digits_view, "none", (4, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1, cv2.LINE_AA)
+        return box_view, digits_view
 
-      boxes = []
-      for c in contours:
-          cv2.drawContours(contour_view, [c], -1, (0, 255, 0), 1)
+    tiles = []
+    for label, digit_img in digit_views:
+        tile = np.zeros((tile_h, tile_w, 3), dtype=np.uint8)
+        if len(digit_img.shape) == 2:
+            digit_img = cv2.cvtColor(digit_img, cv2.COLOR_GRAY2BGR)
+        resized = cv2.resize(digit_img, (24, 36), interpolation=cv2.INTER_NEAREST)
+        tile[4:40, 8:32] = resized
+        cv2.putText(tile, label, (8, 52), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
+        tiles.append(tile)
 
-          x, y, w, h = cv2.boundingRect(c)
-          if w > 4 and h > 8:
-              boxes.append((x, y, w, h))
-              cv2.rectangle(box_view, (x, y), (x + w, y + h), (0, 0, 255), 1)
-
-      boxes.sort(key=lambda b: b[0])
-
-      cv2.imshow("binary", binary_img)
-      cv2.imshow("contours", contour_view)
-      cv2.imshow("boxes", box_view)
-      cv2.waitKey(0)
-
-      return boxes
+    return box_view, np.hstack(tiles)
 
 
-def read_number_from_roi(img, templates, semicolon=False):
+def read_number_from_roi(img, templates, semicolon=False, debug_steps=None, digit_mode="default"):
+    if debug_steps is not None:
+        debug_steps["raw"] = img.copy()
     binary = preprocess_digit(img)
+    if debug_steps is not None:
+        debug_steps["binary"] = binary.copy()
     boxes = segment_digits(binary)
     #boxes = show_digit_segmentation_debug(binary) ## Debug
     if not boxes:
+        if debug_steps is not None:
+            box_view, digits_view = build_digit_debug_views(binary, [], [])
+            debug_steps["boxes"] = box_view
+            debug_steps["digits"] = digits_view
         return None
 
     max_width = max(w for _, _, w, _ in boxes)
     max_height = max(h for _, _, _, h in boxes)
 
     chars = []
+    digit_views = []
     for x, y, w, h in boxes:
         if semicolon and w < max_width * 0.5 and h < max_height * 0.5:
             chars.append(":")
+            digit_views.append((":", binary[y:y + h, x:x + w]))
             continue
 
         dimg = binary[y:y + h, x:x + w]
-        digit, score = classify_digit(dimg, templates)
+        digit, score = classify_digit(dimg, templates, mode=digit_mode)
         chars.append(str(digit)) # Classify each digit separately
+        digit_views.append((str(digit), dimg))
+
+    if debug_steps is not None:
+        box_view, digits_view = build_digit_debug_views(binary, boxes, digit_views)
+        debug_steps["boxes"] = box_view
+        debug_steps["digits"] = digits_view
 
     value = "".join(chars)
     if semicolon:
@@ -349,8 +446,8 @@ def _measure_cyan_ratio(bar_img):
 
     cyan_mask = cv2.inRange(
         hsv,
-        np.array([80, 80, 80], dtype=np.uint8),
-        np.array([110, 255, 255], dtype=np.uint8),
+        np.array(ALLY_CYAN_HSV_LOW, dtype=np.uint8),
+        np.array(ALLY_CYAN_HSV_HIGH, dtype=np.uint8),
     )
     return float(cyan_mask.mean() / 255.0)
 
@@ -364,13 +461,13 @@ def _measure_red_ratio(bar_img, king: bool):
 
     lower_red_mask = cv2.inRange(
         hsv,
-        np.array([0, 80, 80], dtype=np.uint8),
-        np.array([10, 255, 255], dtype=np.uint8),
+        np.array(ENEMY_RED_HSV_LOW_1, dtype=np.uint8),
+        np.array(ENEMY_RED_HSV_HIGH_1, dtype=np.uint8),
     )
     upper_red_mask = cv2.inRange(
         hsv,
-        np.array([170, 80, 80], dtype=np.uint8),
-        np.array([179, 255, 255], dtype=np.uint8),
+        np.array(ENEMY_RED_HSV_LOW_2, dtype=np.uint8),
+        np.array(ENEMY_RED_HSV_HIGH_2, dtype=np.uint8),
     )
     red_mask = cv2.bitwise_or(lower_red_mask, upper_red_mask)
     return float(red_mask.mean() / 255.0)
@@ -380,8 +477,8 @@ def detect_if_king_tower_activated(img):
     own_king_hp_bar = crop(img, ROIS["player_king_health_bar"])
     enemy_king_hp_bar = crop(img, ROIS["opponent_king_health_bar"])
 
-    own_king = _measure_cyan_ratio(own_king_hp_bar) >= 0.3
-    enemy_king = _measure_red_ratio(enemy_king_hp_bar, True) >= 0.3
+    own_king = _measure_cyan_ratio(own_king_hp_bar) >= TOWER_BAR_VISIBLE_RATIO_THRESHOLD
+    enemy_king = _measure_red_ratio(enemy_king_hp_bar, True) >= TOWER_BAR_VISIBLE_RATIO_THRESHOLD
 
     return {
         "own_king_activated": own_king,
@@ -395,11 +492,11 @@ def detect_if_support_tower_alive(img):
     enemy_support_left_bar = crop(img, ROIS["opponent_left_support_health_bar"])
     enemy_support_right_bar = crop(img, ROIS["opponent_right_support_health_bar"])
 
-    support_left = _measure_cyan_ratio(own_support_left_bar) >= 0.3
-    support_right = _measure_cyan_ratio(own_support_right_bar) >= 0.3
+    support_left = _measure_cyan_ratio(own_support_left_bar) >= TOWER_BAR_VISIBLE_RATIO_THRESHOLD
+    support_right = _measure_cyan_ratio(own_support_right_bar) >= TOWER_BAR_VISIBLE_RATIO_THRESHOLD
 
-    enemy_support_right = _measure_red_ratio(enemy_support_left_bar, True) >= 0.3
-    enemy_support_left = _measure_red_ratio(enemy_support_right_bar, True) >= 0.3
+    enemy_support_right = _measure_red_ratio(enemy_support_right_bar, True) >= TOWER_BAR_VISIBLE_RATIO_THRESHOLD
+    enemy_support_left = _measure_red_ratio(enemy_support_left_bar, True) >= TOWER_BAR_VISIBLE_RATIO_THRESHOLD
 
     return {
             "support_left_activated": support_left,
@@ -428,28 +525,28 @@ def extract_health_bar(img, bar):
     if team == "enemy":
         lower_mask = cv2.inRange(
             hsv,
-            np.array([0, 80, 80], dtype=np.uint8),
-            np.array([10, 255, 255], dtype=np.uint8),
+            np.array(ENEMY_RED_HSV_LOW_1, dtype=np.uint8),
+            np.array(ENEMY_RED_HSV_HIGH_1, dtype=np.uint8),
         )
         upper_mask = cv2.inRange(
             hsv,
-            np.array([170, 80, 80], dtype=np.uint8),
-            np.array([179, 255, 255], dtype=np.uint8),
+            np.array(ENEMY_RED_HSV_LOW_2, dtype=np.uint8),
+            np.array(ENEMY_RED_HSV_HIGH_2, dtype=np.uint8),
         )
         color_mask = cv2.bitwise_or(lower_mask, upper_mask)
         color_ratio = _measure_red_ratio(health_bar, True)
     else:
         color_mask = cv2.inRange(
             hsv,
-            np.array([80, 80, 80], dtype=np.uint8),
-            np.array([110, 255, 255], dtype=np.uint8),
+            np.array(ALLY_CYAN_HSV_LOW, dtype=np.uint8),
+            np.array(ALLY_CYAN_HSV_HIGH, dtype=np.uint8),
         )
         color_ratio = _measure_cyan_ratio(health_bar)
-        if color_ratio < 0.12:
+        if color_ratio < HEALTH_BAR_BROADER_BLUE_RATIO_THRESHOLD:
             broader_blue_mask = cv2.inRange(
                 hsv,
-                np.array([90, 35, 35], dtype=np.uint8),
-                np.array([135, 255, 255], dtype=np.uint8),
+                np.array(ALLY_BROADER_BLUE_HSV_LOW, dtype=np.uint8),
+                np.array(ALLY_BROADER_BLUE_HSV_HIGH, dtype=np.uint8),
             )
             broader_blue_ratio = float(broader_blue_mask.mean() / 255.0)
             if broader_blue_ratio > color_ratio:

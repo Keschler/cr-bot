@@ -6,7 +6,8 @@ from pathlib import Path
 from typing import Any
 
 import cv2
-from numpy import true_divide
+import numpy as np
+from numpy import dsplit, true_divide
 
 
 from extractors.cards import extract_hand_state
@@ -70,7 +71,9 @@ def process_frame(frame, detector, show_rois: bool = False):
 
     rendered = draw_boxes(frame_to_analyze, yolo_boxes)
     elixir = extract_elixir(frame)
-    towers_hp = extract_tower_hp(frame)
+    tower_hp_debug_steps = {}
+    towers_hp = extract_tower_hp(frame, yolo_boxes, debug_steps_by_tower=tower_hp_debug_steps)
+
 
     current_time_text = extract_time(frame)
     overtime = is_overtime(frame)
@@ -94,8 +97,54 @@ def process_frame(frame, detector, show_rois: bool = False):
         "overtime": overtime,
         "state": state,
         "yolo_boxes": yolo_boxes,
-        "matches": typed_matches
+        "matches": typed_matches,
+        "tower_hp_debug_steps": tower_hp_debug_steps,
     }
+
+
+def render_debug_panel(img: np.ndarray | None, label: str, tile_w: int, tile_h: int) -> np.ndarray:
+    tile = np.zeros((tile_h, tile_w, 3), dtype=np.uint8)
+    cv2.putText(tile, label, (8, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
+    if img is None or img.size == 0:
+        cv2.putText(tile, "missing", (8, tile_h // 2), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2, cv2.LINE_AA)
+        return tile
+
+    if len(img.shape) == 2:
+        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+    scale = min((tile_w - 10) / img.shape[1], (tile_h - 26) / img.shape[0])
+    resized = cv2.resize(
+        img,
+        (max(1, int(img.shape[1] * scale)), max(1, int(img.shape[0] * scale))),
+        interpolation=cv2.INTER_NEAREST,
+    )
+    y0 = 22 + (tile_h - 22 - resized.shape[0]) // 2
+    x0 = (tile_w - resized.shape[1]) // 2
+    tile[y0:y0 + resized.shape[0], x0:x0 + resized.shape[1]] = resized
+    return tile
+
+
+def render_tower_hp_debug(steps_by_tower: dict[str, dict[str, np.ndarray]]) -> np.ndarray:
+    order = [
+        "enemy_king",
+        "enemy_support_left",
+        "enemy_support_right",
+        "own_king",
+        "own_support_left",
+        "own_support_right",
+    ]
+    step_order = ["raw", "binary", "boxes", "digits"]
+    cell_w = 180
+    cell_h = 90
+    rows = []
+
+    for tower_name in order:
+        row_tiles = []
+        steps = steps_by_tower.get(tower_name) or {}
+        for step_name in step_order:
+            row_tiles.append(render_debug_panel(steps.get(step_name), f"{tower_name}:{step_name}", cell_w, cell_h))
+        rows.append(np.hstack(row_tiles))
+
+    return np.vstack(rows)
 
 
 
@@ -106,7 +155,7 @@ def main(debug: bool):
     if debug:
         frame = cv2.imread("pictures/screen.png")
         if frame is None:
-            raise FileNotFoundError(f"Failed to read {debug_frame}")
+            raise FileNotFoundError("Failed to read pictures/screen.png")
 
         result = process_frame(frame, detector, show_rois=False)
         game_state = build_game_state(result)
@@ -115,6 +164,8 @@ def main(debug: bool):
             cv2.namedWindow("debug", cv2.WINDOW_NORMAL)
             cv2.setWindowProperty("debug", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
             cv2.imshow("debug", result["rendered"])
+            cv2.namedWindow("tower_hp_debug", cv2.WINDOW_NORMAL)
+            cv2.imshow("tower_hp_debug", render_tower_hp_debug(result["tower_hp_debug_steps"]))
 
         elixir = result["elixir"]
         print(f"Estimated elixir {elixir['estimated_value'] + elixir['displayed_digit'][0]}")
@@ -202,7 +253,6 @@ def main(debug: bool):
         print("state:")
         for slot, value in result["state"].items():
             print(f"  {slot}: {value}")
-
         print("matches:")
         for m in result["matches"]:
             print(
