@@ -1,3 +1,4 @@
+from constants import KING_TOWER_HP
 from game_state import GameState, HudState, PrincessTowerState
 
 def build_game_state(result, *, seen_enemy_cards=None, elixir_enemy_est=None):
@@ -8,7 +9,7 @@ def build_game_state(result, *, seen_enemy_cards=None, elixir_enemy_est=None):
         return hp is not None and hp > 0
 
     def king_active(hp):
-        return hp is not None and hp < 7032
+        return hp is not None and hp < KING_TOWER_HP
 
     princess_towers = PrincessTowerState(
         own_left_alive=tower_alive(towers_hp["own_support_left"]),
@@ -20,7 +21,7 @@ def build_game_state(result, *, seen_enemy_cards=None, elixir_enemy_est=None):
     hud = HudState(
         time_left_s=result["time_left_s"],
           overtime=result["overtime"],
-          elixir_self=result["elixir"]["estimated_value"] + result["elixir"]["displayed_digit"][1],
+          elixir_self=result["elixir"]["estimated_value"] + result["elixir"]["displayed_digit"][0],
           hand_cards=[
               hand["card_1"],
               hand["card_2"],
@@ -54,4 +55,3 @@ def build_game_state(result, *, seen_enemy_cards=None, elixir_enemy_est=None):
         own_king_active=king_active(towers_hp["own_king"]),
         enemy_king_active=king_active(towers_hp["enemy_king"]),
     )
-

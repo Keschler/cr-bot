@@ -1,6 +1,14 @@
 from image_utils import extract_health_bar
 import cv2
 import numpy as np
+from constants import (
+    ALLY_CYAN_HSV_HIGH,
+    ALLY_CYAN_HSV_LOW,
+    ENEMY_RED_HSV_HIGH_1,
+    ENEMY_RED_HSV_HIGH_2,
+    ENEMY_RED_HSV_LOW_1,
+    ENEMY_RED_HSV_LOW_2,
+)
 
 def get_valid_troop_bars(frame, matched):
     valid_troop_bars = []
@@ -25,14 +33,14 @@ def estimate_health(frame, bars):
         ]
         hsv = cv2.cvtColor(health_bar, cv2.COLOR_BGR2HSV)
         
-        cyan_lower = np.array([80, 80, 80])
-        cyan_upper = np.array([100, 255, 255])
+        cyan_lower = np.array(ALLY_CYAN_HSV_LOW)
+        cyan_upper = np.array(ALLY_CYAN_HSV_HIGH)
 
-        red_lower_1 = np.array([0, 80, 80])
-        red_upper_1 = np.array([10, 255, 255])
+        red_lower_1 = np.array(ENEMY_RED_HSV_LOW_1)
+        red_upper_1 = np.array(ENEMY_RED_HSV_HIGH_1)
 
-        red_lower_2 = np.array([170, 80, 80])
-        red_upper_2 = np.array([179, 255, 255])
+        red_lower_2 = np.array(ENEMY_RED_HSV_LOW_2)
+        red_upper_2 = np.array(ENEMY_RED_HSV_HIGH_2)
 
         cyan_mask = cv2.inRange(hsv, cyan_lower, cyan_upper)
 

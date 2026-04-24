@@ -1,12 +1,9 @@
 import cv2
 import re
 
+from constants import NORMAL_SECONDS, OVERTIME_SECONDS, OVERTIME_RED_RATIO_THRESHOLD, TOTAL_MATCH_SECONDS
 from rois import ROIS
 from image_utils import crop, read_number_from_roi, preprocess_digit, _measure_red_ratio
-
-NORMAL_SECONDS = 180
-OVERTIME_SECONDS = 120
-TOTAL_MATCH_SECONDS = NORMAL_SECONDS + OVERTIME_SECONDS
 
 def load_templates():
     raw_templates = {
@@ -39,7 +36,7 @@ def extract_time(frame):
 def is_overtime(frame):
     timer_box = crop(frame, ROIS["timer_box"])
     red_ratio = _measure_red_ratio(timer_box, False)
-    if red_ratio >= 0.5:
+    if red_ratio >= OVERTIME_RED_RATIO_THRESHOLD:
         return True
     else:
         return False

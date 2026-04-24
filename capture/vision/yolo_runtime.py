@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from constants import YOLO_CONF_THRESHOLD, YOLO_IOU_THRESHOLD
 
 ROOT = Path(__file__).resolve().parents[1]
 KATACR_ROOT = ROOT / "vendor/external/KataCR"
@@ -43,8 +44,8 @@ def build_detector() -> Any:
     return ComboDetector(
             DEFAULT_DETECTOR_WEIGHTS,
             show_conf=True,
-            conf=0.7,
-            iou_thre=0.6,
+            conf=YOLO_CONF_THRESHOLD,
+            iou_thre=YOLO_IOU_THRESHOLD,
             tracker='bytetrack'
             )
 

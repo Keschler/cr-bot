@@ -1,15 +1,11 @@
 import numpy as np
 
+from constants import FEATURE_MAX_KING_TOWER_HP, MAX_ELIXIR, PRINCESS_TOWER_HP, TOTAL_MATCH_SECONDS
 from features.channels import GLOBAL_SCALAR_FEATURES, GLOBAL_SCALAR_IDX
 from game_state import GameState
 from card_metadata import CARD_METADATA
 
 CARD_COUNT = max(card["id"] for card in CARD_METADATA.values()) + 1
-
-MAX_PRINCESS_TOWER_HP = 4848.0
-MAX_KING_TOWER_HP = 7704.0
-MATCH_TIME_SECONDS = 300.0
-
 
 def build_global_scalar_vector(state) -> np.ndarray:
     g = np.zeros(len(GLOBAL_SCALAR_FEATURES), dtype=np.float32)
@@ -48,10 +44,10 @@ def build_global_scalar_vector(state) -> np.ndarray:
 
 
 def normalize_elixir(elixir):
-    return float(np.clip(elixir / 10.0, 0.0, 1.0))
+    return float(np.clip(elixir / MAX_ELIXIR, 0.0, 1.0))
 
 def normalize_time(time_left_s):
-    return float(np.clip(time_left_s / MATCH_TIME_SECONDS, 0.0, 1.0))
+    return float(np.clip(time_left_s / TOTAL_MATCH_SECONDS, 0.0, 1.0))
 
 def normalize_hp(hp, max_hp):
     if hp is None:
@@ -62,9 +58,9 @@ def normalize_tower_hp_triplet(values) -> tuple[float, float, float]:
     left, king, right = values
 
     return (
-        normalize_hp(left, MAX_PRINCESS_TOWER_HP),
-        normalize_hp(king, MAX_KING_TOWER_HP),
-        normalize_hp(right, MAX_PRINCESS_TOWER_HP),
+        normalize_hp(left, PRINCESS_TOWER_HP),
+        normalize_hp(king, FEATURE_MAX_KING_TOWER_HP),
+        normalize_hp(right, PRINCESS_TOWER_HP),
     )
 
 def card_to_id(card_name):
