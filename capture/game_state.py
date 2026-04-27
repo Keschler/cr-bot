@@ -59,6 +59,7 @@ class GameState:
     elixir_enemy_est: float 
     own_king_active: bool
     enemy_king_active: bool
+    started: bool
 
 Cell = tuple[int, int]
 

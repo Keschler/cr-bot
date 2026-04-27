@@ -7,10 +7,8 @@ from constants import (
     ENEMY_RED_HSV_HIGH_2,
     ENEMY_RED_HSV_LOW_1,
     ENEMY_RED_HSV_LOW_2,
-    NORMAL_SECONDS,
     OVERTIME_SECONDS,
     OVERTIME_RED_RATIO_THRESHOLD,
-    TOTAL_MATCH_SECONDS,
 )
 from rois import ROIS
 from image_utils import (

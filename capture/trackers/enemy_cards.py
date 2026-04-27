@@ -6,7 +6,7 @@ from trackers.direct_unit_to_card import DIRECT_UNIT_TO_CARD
 
 CONFIRM_FRAMES = 3
 STALE_AFTER_SECONDS = 2.0
-STARTING_ELIXIR_EST = 5.0
+STARTING_ELIXIR_EST = 5
 MAX_ELIXIR = 10.0
 ELIXIR_PER_SECOND_NORMAL = 1.0 / 2.8
 ELIXIR_PER_SECOND_DOUBLE = 1.0 / 1.4
@@ -77,8 +77,14 @@ class EnemyCardTracker:
         self.tracks: dict[int, TrackMemory] = {}
         self.confirmed_seen_cards: set[int] = set()
         self.detected_card_plays: list[dict] = []
-        self.elixir_enemy_est = STARTING_ELIXIR_EST
+        self.elixir_enemy_est: float | None = None
         self.last_time_left_s: float | None = None
+
+    def start_match(self, time_left_s, total_remaining_s):
+        opening_elapsed = max(0.0, 180.0 - time_left_s)
+        self.elixir_enemy_est = min(MAX_ELIXIR, 5.0 + opening_elapsed * ELIXIR_PER_SECOND_NORMAL)
+        self.last_time_left_s = total_remaining_s
+
 
     def update(self, time_left_s, enemy_matches):
         self._regen_elixir(time_left_s)

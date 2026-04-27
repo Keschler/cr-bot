@@ -1,7 +1,7 @@
 from constants import KING_TOWER_HP
 from game_state import GameState, HudState, PrincessTowerState
 
-def build_game_state(result, *, seen_enemy_cards=None, elixir_enemy_est=None):
+def build_game_state(result, *, seen_enemy_cards=None, elixir_enemy_est=None, game_started=None):
     towers_hp = result["towers_hp"]
     hand = result["state"]
 
@@ -54,4 +54,5 @@ def build_game_state(result, *, seen_enemy_cards=None, elixir_enemy_est=None):
         elixir_enemy_est=0.0 if elixir_enemy_est is None else elixir_enemy_est,
         own_king_active=king_active(towers_hp["own_king"]),
         enemy_king_active=king_active(towers_hp["enemy_king"]),
+        started=game_started
     )

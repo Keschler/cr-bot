@@ -161,6 +161,9 @@ def game_start(frame) -> bool:
         return False
     return in_game(frame) and timer_seconds >= GAME_START_MIN_SECONDS
 
+def game_end(frame):
+    return not in_game(frame)
+
 
 def in_game(frame) -> bool:
     non_card = _extract_non_card_signals(frame)

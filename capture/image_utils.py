@@ -203,7 +203,7 @@ def classify_digit(digit_img, templates, out_size=(32,48), mode="default"):
     if best_score <= 0:
         return 0, best_score
 
-    if mode == "tower":
+    if mode == "tower" or mode == "timer":
         best_digit = _tower_digit_override(best_digit, scores, digit_img)
 
     return best_digit, best_score 
@@ -396,7 +396,6 @@ def read_number_from_roi(img, templates, semicolon=False, debug_steps=None, digi
     if debug_steps is not None:
         debug_steps["binary"] = binary.copy()
     boxes = segment_digits(binary)
-    #boxes = show_digit_segmentation_debug(binary) ## Debug
     if not boxes:
         if debug_steps is not None:
             box_view, digits_view = build_digit_debug_views(binary, [], [])
@@ -504,112 +503,3 @@ def detect_if_support_tower_alive(img):
             "enemy_support_left_activated": enemy_support_left,
             "enemy_support_right_activated": enemy_support_right
             }
-
-
-def extract_health_bar(img, bar):
-    health_bar = img[
-      int(bar["y1"]):int(bar["y2"]),
-      int(bar["x1"]):int(bar["x2"])
-  ]
-    if health_bar.size == 0:
-        print("health bar check: invalid crop")
-        return
-
-    team = bar.get("team")
-    height, width = health_bar.shape[:2]
-    aspect_ratio = width / max(height, 1)
-
-    fill = _extract_king_bar_fill(health_bar)
-    hsv = cv2.cvtColor(fill, cv2.COLOR_BGR2HSV)
-
-    if team == "enemy":
-        lower_mask = cv2.inRange(
-            hsv,
-            np.array(ENEMY_RED_HSV_LOW_1, dtype=np.uint8),
-            np.array(ENEMY_RED_HSV_HIGH_1, dtype=np.uint8),
-        )
-        upper_mask = cv2.inRange(
-            hsv,
-            np.array(ENEMY_RED_HSV_LOW_2, dtype=np.uint8),
-            np.array(ENEMY_RED_HSV_HIGH_2, dtype=np.uint8),
-        )
-        color_mask = cv2.bitwise_or(lower_mask, upper_mask)
-        color_ratio = _measure_red_ratio(health_bar, True)
-    else:
-        color_mask = cv2.inRange(
-            hsv,
-            np.array(ALLY_CYAN_HSV_LOW, dtype=np.uint8),
-            np.array(ALLY_CYAN_HSV_HIGH, dtype=np.uint8),
-        )
-        color_ratio = _measure_cyan_ratio(health_bar)
-        if color_ratio < HEALTH_BAR_BROADER_BLUE_RATIO_THRESHOLD:
-            broader_blue_mask = cv2.inRange(
-                hsv,
-                np.array(ALLY_BROADER_BLUE_HSV_LOW, dtype=np.uint8),
-                np.array(ALLY_BROADER_BLUE_HSV_HIGH, dtype=np.uint8),
-            )
-            broader_blue_ratio = float(broader_blue_mask.mean() / 255.0)
-            if broader_blue_ratio > color_ratio:
-                color_mask = broader_blue_mask
-                color_ratio = broader_blue_ratio
-
-    kernel = np.ones((3, 3), dtype=np.uint8)
-    color_mask = cv2.morphologyEx(color_mask, cv2.MORPH_OPEN, kernel)
-    color_mask = cv2.morphologyEx(color_mask, cv2.MORPH_CLOSE, kernel)
-
-    contours, _ = cv2.findContours(color_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    largest_area = 0.0
-    horizontal_continuity = 0.0
-
-    if contours:
-        largest = max(contours, key=cv2.contourArea)
-        largest_area = float(cv2.contourArea(largest))
-        x, y, w, h = cv2.boundingRect(largest)
-        active_columns = np.count_nonzero(color_mask.max(axis=0) > 0)
-        horizontal_continuity = active_columns / max(fill.shape[1], 1)
-
-    gray = cv2.cvtColor(health_bar, cv2.COLOR_BGR2GRAY)
-    edge_mask = cv2.Canny(gray, 60, 160)
-    gray_std = float(gray.std())
-    edge_density = float((edge_mask > 0).mean())
-    horizontal_edge_peak = float((edge_mask > 0).mean(axis=1).max())
-    low_texture = gray_std < 12.0 and edge_density < 0.02
-    is_top_ui_bar = int(bar["y1"]) < 150
-    strong_color_bar = (
-        color_ratio >= 0.22
-        and horizontal_continuity >= 0.30
-        and largest_area >= 60.0
-    )
-    grayscale_bar = (
-        aspect_ratio >= 3.2
-        and gray_std >= 45.0
-        and edge_density >= 0.08
-        and horizontal_edge_peak >= 0.6
-    )
-
-    is_probable_health_bar = (
-        not is_top_ui_bar
-        and not low_texture
-        and aspect_ratio >= 1.5
-        and (strong_color_bar or grayscale_bar)
-    )
-    
-    return is_probable_health_bar
-
-'''
-    print(
-        "health bar check:",
-        {
-            "team": team,
-            "is_probable_health_bar": is_probable_health_bar,
-            "aspect_ratio": round(aspect_ratio, 3),
-            "color_ratio": round(color_ratio, 3),
-            "horizontal_continuity": round(horizontal_continuity, 3),
-            "largest_area": round(largest_area, 3),
-            "gray_std": round(gray_std, 3),
-            "edge_density": round(edge_density, 3),
-            "horizontal_edge_peak": round(horizontal_edge_peak, 3),
-            "is_top_ui_bar": is_top_ui_bar,
-        },
-    )
-'''
