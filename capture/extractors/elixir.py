@@ -1,22 +1,23 @@
 import cv2
+from pathlib import Path
 
 from image_utils import crop, estimate_slot_fraction, preprocess_digit
 from rois import ELIXIR_SLOT_ROIS, ROIS
 
+TEMPLATE_DIR = Path(__file__).resolve().parents[1] / "templates"
+
+
+def read_template(path: Path):
+    template = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+    if template is None:
+        raise FileNotFoundError(f"Failed to read elixir template: {path}")
+    return template
+
 
 def load_templates():
     return {
-        0: cv2.imread("templates/elixir_0.png", cv2.IMREAD_GRAYSCALE),
-        1: cv2.imread("templates/elixir_1.png", cv2.IMREAD_GRAYSCALE),
-        2: cv2.imread("templates/elixir_2.png", cv2.IMREAD_GRAYSCALE),
-        3: cv2.imread("templates/elixir_3.png", cv2.IMREAD_GRAYSCALE),
-        4: cv2.imread("templates/elixir_4.png", cv2.IMREAD_GRAYSCALE),
-        5: cv2.imread("templates/elixir_5.png", cv2.IMREAD_GRAYSCALE),
-        6: cv2.imread("templates/elixir_6.png", cv2.IMREAD_GRAYSCALE),
-        7: cv2.imread("templates/elixir_7.png", cv2.IMREAD_GRAYSCALE),
-        8: cv2.imread("templates/elixir_8.png", cv2.IMREAD_GRAYSCALE),
-        9: cv2.imread("templates/elixir_9.png", cv2.IMREAD_GRAYSCALE),
-        10: cv2.imread("templates/elixir_10.png", cv2.IMREAD_GRAYSCALE),
+        digit: read_template(TEMPLATE_DIR / f"elixir_{digit}.png")
+        for digit in range(11)
     }
 
 def build_digit_templates():

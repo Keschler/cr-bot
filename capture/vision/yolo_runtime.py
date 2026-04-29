@@ -93,7 +93,7 @@ def remap_boxes_to_frame(boxes, arena_shape, crop_xywh):
 def convert_yolo(boxes):
     troops = []
     bars = []
-    not_troops = ["bar-level", "tower-bar", "queen-tower", "emote", "evolution-symbol", "elixir", "king-tower-bar", "clock"]
+    not_troops = ["bar-level", "tower-bar", "queen-tower", "emote", "evolution-symbol", "elixir", "king-tower-bar", "clock", "king-tower", "dagger-duchess-tower-bar"]
     _, _, idx2unit = load_yolo_runtime()
     for box in boxes:
         x1, y1, x2, y2, track_id, conf, cls, team = parse_box_row(box)

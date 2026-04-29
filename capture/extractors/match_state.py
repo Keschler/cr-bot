@@ -189,6 +189,47 @@ def in_game(frame) -> bool:
     score += int(_count_distinct_hand_cards(hand_state) >= 3)
     return score >= IN_GAME_SCORE_THRESHOLD
 
+def game_end_from_result(result) -> bool:
+    timer_seconds = _parse_timer(result["time"])
+    if timer_seconds is None:
+      return True
+
+    elixir = result["elixir"]
+    digit, digit_score = elixir["displayed_digit"]
+    estimated_elixir = float(elixir["estimated_value"]) + float(digit)
+    plausible_elixir = (
+      digit_score >= ELIXIR_DIGIT_SCORE_THRESHOLD
+      and 0.0 <= estimated_elixir <= MAX_ELIXIR
+    )
+
+    hand_state = result["state"]
+    confident_hand_cards = _count_confident_hand_cards(hand_state)
+    distinct_hand_cards = _count_distinct_hand_cards(hand_state)
+    next_card_confident = _is_confident_card(
+      hand_state.get("next_card"),
+      CARD_CONFIDENCE_THRESHOLD,
+    )
+
+    visible_tower_bars = any(hp is not None and hp > 0 for hp in result["towers_hp"].values())
+
+    score = 0
+    if confident_hand_cards >= 4:
+      score += 2
+    elif confident_hand_cards >= 3 and next_card_confident:
+      score += 1
+
+    if distinct_hand_cards >= 3:
+      score += 1
+
+    if plausible_elixir:
+      score += 1
+
+    if visible_tower_bars:
+      score += 1
+
+    return score < IN_GAME_SCORE_THRESHOLD
+
+
 
 if __name__ == "__main__":
     frame1 = cv2.imread("/home/keschler/Documents/Coding/python/cr-bot/dataset_generation/data/frame_states/clip/frames3/010280.jpg")

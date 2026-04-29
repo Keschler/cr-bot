@@ -64,6 +64,8 @@ def normalize_tower_hp_triplet(values) -> tuple[float, float, float]:
     )
 
 def card_to_id(card_name):
+    if not card_name:
+        return None
     key = card_name.strip().lower().replace(" ", "-")
     metadata = CARD_METADATA.get(key)
     if metadata is None:

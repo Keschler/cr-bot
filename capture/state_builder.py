@@ -1,6 +1,12 @@
 from constants import KING_TOWER_HP
 from game_state import GameState, HudState, PrincessTowerState
 
+
+def card_name(card):
+    if isinstance(card, (tuple, list)) and len(card) >= 1:
+        return card[0]
+    return card
+
 def build_game_state(result, *, seen_enemy_cards=None, elixir_enemy_est=None, game_started=None):
     towers_hp = result["towers_hp"]
     hand = result["state"]
@@ -23,12 +29,12 @@ def build_game_state(result, *, seen_enemy_cards=None, elixir_enemy_est=None, ga
           overtime=result["overtime"],
           elixir_self=result["elixir"]["estimated_value"] + result["elixir"]["displayed_digit"][0],
           hand_cards=[
-              hand["card_1"],
-              hand["card_2"],
-              hand["card_3"],
-              hand["card_4"],
+              card_name(hand["card_1"]),
+              card_name(hand["card_2"]),
+              card_name(hand["card_3"]),
+              card_name(hand["card_4"]),
           ],
-          next_card=hand["next_card"],
+          next_card=card_name(hand["next_card"]),
           tower_hp_self=[
               towers_hp["own_support_left"],
               towers_hp["own_king"],

@@ -37,12 +37,12 @@ def main():
 
 
     train_dataset = datasets.ImageFolder(
-        "data/card_classifier/imagefolder/hand/train",
+        ROOT / "data/card_classifier/imagefolder/hand/train",
         transform=train_tf,
         allow_empty=True,
     )
     val_dataset = datasets.ImageFolder(
-        "data/card_classifier/imagefolder/hand/val",
+        ROOT / "data/card_classifier/imagefolder/hand/val",
         transform=eval_tf,
         allow_empty=True,
     )

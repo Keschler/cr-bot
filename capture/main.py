@@ -11,7 +11,7 @@ from extractors.timer import extract_time, is_overtime, parse_time_left_s, total
 from extractors.tower_hp import extract_tower_hp
 from extractors.health import estimate_health
 from extractors.units import match_troops_to_bars, match_from_dict
-from extractors.match_state import game_start, game_end
+from extractors.match_state import game_start, game_end_from_result
 from image_utils import draw_rois
 from rois import ROIS
 from state_builder import build_game_state
@@ -198,10 +198,14 @@ def main(debug: bool):
     enemy_card_tracker = EnemyCardTracker()
 
     if debug:
-        frame = cv2.imread("/home/keschler/Documents/Coding/python/cr-bot/dataset_generation/data/frame_states/clip/frames2/009240.jpg")
+        debug_frame = os.environ.get("DEBUG_FRAME")
+        if not debug_frame:
+            raise RuntimeError("Set DEBUG_FRAME to a frame image path before running main(debug=True).")
+
+        frame = cv2.imread(debug_frame)
         if frame is None:
-            raise FileNotFoundError(f"Failed to read {frame}")
-        result = process_frame(frame, detector, draw_boxes, show_rois=False)
+            raise FileNotFoundError(f"Failed to read debug frame: {debug_frame}")
+        result = process_frame(frame, detector, show_rois=False)
         game_state = build_game_state(result)
         has_display = os.environ.get("SHOW_DEBUG_WINDOW") == "1"
         if has_display:
@@ -289,13 +293,15 @@ def main(debug: bool):
         elif game_started:
             result = process_frame(frame, detector, show_rois=False)
             enemy_card_tracker.update(result["total_remaining_s"], result["matches"])
-            if game_end(frame):
-                if not_in_game_streak == 20:
+            if game_end_from_result(result):
+                not_in_game_streak += 1
+                if not_in_game_streak >= 20:
                     game_started = False
+                    not_in_game_streak = 0
                     enemy_card_tracker = EnemyCardTracker()
                     continue
-                else:
-                    not_in_game_streak += 1
+            else:
+                not_in_game_streak = 0
         else:
             print("not in game")
             continue

@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+from pathlib import Path
 import re
 
 from constants import (
@@ -21,19 +22,30 @@ from image_utils import (
     _measure_red_ratio,
 )
 
+TEMPLATE_DIR = Path(__file__).resolve().parents[1] / "templates" / "numbers"
+
+
+def read_template(name: str):
+    path = TEMPLATE_DIR / name
+    template = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+    if template is None:
+        raise FileNotFoundError(f"Failed to read timer template: {path}")
+    return template
+
+
 def load_templates():
     raw_templates = {
-        0: cv2.imread("templates/numbers/0.png", cv2.IMREAD_GRAYSCALE),
-        1: cv2.imread("templates/numbers/1.png", cv2.IMREAD_GRAYSCALE),
-        2: cv2.imread("templates/numbers/2.png", cv2.IMREAD_GRAYSCALE),
-        3: cv2.imread("templates/numbers/3.png", cv2.IMREAD_GRAYSCALE),
-        4: cv2.imread("templates/numbers/4.png", cv2.IMREAD_GRAYSCALE),
-        5: cv2.imread("templates/numbers/5.png", cv2.IMREAD_GRAYSCALE),
-        6: cv2.imread("templates/numbers/6.png", cv2.IMREAD_GRAYSCALE),
-        7: cv2.imread("templates/numbers/7.png", cv2.IMREAD_GRAYSCALE),
-        8: cv2.imread("templates/numbers/8.png", cv2.IMREAD_GRAYSCALE),
-        9: cv2.imread("templates/numbers/9.png", cv2.IMREAD_GRAYSCALE),
-        ":": cv2.imread("templates/numbers/semi_colon.png", cv2.IMREAD_GRAYSCALE),
+        0: read_template("0.png"),
+        1: read_template("1.png"),
+        2: read_template("2.png"),
+        3: read_template("3.png"),
+        4: read_template("4.png"),
+        5: read_template("5.png"),
+        6: read_template("6.png"),
+        7: read_template("7.png"),
+        8: read_template("8.png"),
+        9: read_template("9.png"),
+        ":": read_template("semi_colon.png"),
     }
 
     return {
