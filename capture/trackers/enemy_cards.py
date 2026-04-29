@@ -6,7 +6,7 @@ from trackers.direct_unit_to_card import DIRECT_UNIT_TO_CARD
 
 CONFIRM_FRAMES = 3
 STALE_AFTER_SECONDS = 2.0
-STARTING_ELIXIR_EST = 5
+STARTING_ELIXIR_EST = 6
 MAX_ELIXIR = 10.0
 ELIXIR_PER_SECOND_NORMAL = 1.0 / 2.8
 ELIXIR_PER_SECOND_DOUBLE = 1.0 / 1.4
@@ -79,15 +79,20 @@ class EnemyCardTracker:
         self.detected_card_plays: list[dict] = []
         self.elixir_enemy_est: float | None = None
         self.last_time_left_s: float | None = None
+        self.last_update_monotonic_s: float | None = None
 
-    def start_match(self, time_left_s, total_remaining_s):
+    def start_match(self, time_left_s, total_remaining_s, now_s=None):
         opening_elapsed = max(0.0, 180.0 - time_left_s)
-        self.elixir_enemy_est = min(MAX_ELIXIR, 5.0 + opening_elapsed * ELIXIR_PER_SECOND_NORMAL)
+        self.elixir_enemy_est = min(
+            MAX_ELIXIR,
+            STARTING_ELIXIR_EST + opening_elapsed * ELIXIR_PER_SECOND_NORMAL,
+        )
         self.last_time_left_s = total_remaining_s
+        self.last_update_monotonic_s = now_s
 
 
-    def update(self, time_left_s, enemy_matches):
-        self._regen_elixir(time_left_s)
+    def update(self, time_left_s, enemy_matches, now_s=None):
+        self._regen_elixir(time_left_s, now_s=now_s)
 
         for match in enemy_matches:
             troop = match.troop
@@ -140,9 +145,9 @@ class EnemyCardTracker:
             return False
         if memory.best_team_ratio < 0.8:
             return False 
-        if memory.avg_confidence < 0.8:
+        if memory.avg_confidence < 0.7:
             return False
-        if memory.seen_frames < 5:
+        if memory.seen_frames < 3:
             return False
         if memory.best_class is None:
             return False
@@ -176,13 +181,35 @@ class EnemyCardTracker:
         self.elixir_enemy_est = max(0.0, self.elixir_enemy_est - cost)
         memory.counted_as_card = True
         
-    def _regen_elixir(self, time_left_s):
+    def _regen_elixir(self, time_left_s, now_s=None):
         if self.last_time_left_s is None:
+            self.last_time_left_s = time_left_s
+            self.last_update_monotonic_s = now_s
+            return
+
+        if now_s is not None:
+            if self.last_update_monotonic_s is None:
+                self.last_update_monotonic_s = now_s
+                self.last_time_left_s = time_left_s
+                return
+
+            elapsed = now_s - self.last_update_monotonic_s
+            if elapsed <= 0 or elapsed > 2.0:
+                self.last_update_monotonic_s = now_s
+                self.last_time_left_s = time_left_s
+                return
+
+            rate = self._elixir_rate(time_left_s)
+            self.elixir_enemy_est = min(
+                MAX_ELIXIR,
+                self.elixir_enemy_est + elapsed * rate,
+            )
+            self.last_update_monotonic_s = now_s
             self.last_time_left_s = time_left_s
             return
         
         elapsed = self.last_time_left_s - time_left_s
-        if elapsed <= 0:
+        if elapsed <= 0 or elapsed > 2.0:
             self.last_time_left_s = time_left_s
             return
         

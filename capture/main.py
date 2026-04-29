@@ -3,6 +3,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import time
 
 
 from extractors.cards import extract_hand_state
@@ -14,10 +15,12 @@ from extractors.units import match_troops_to_bars, match_from_dict
 from extractors.match_state import game_start, game_end_from_result
 from image_utils import draw_rois
 from rois import ROIS
+from scripts.run_seed_inference import filter_excluded_classes
 from state_builder import build_game_state
 from vision.yolo_runtime import load_yolo_runtime, build_detector, summarize_detections, remap_boxes_to_frame, convert_yolo
 from trackers.enemy_cards import EnemyCardTracker 
 from katacr.build_dataset.utils.split_part import process_part, ratio2name
+from trackers.match_clock import MatchClockFilter
 
 
 
@@ -196,6 +199,7 @@ def main(debug: bool):
     detector = build_detector()
     print("detector sucessfully built!")
     enemy_card_tracker = EnemyCardTracker()
+    match_clock_filter = MatchClockFilter()
 
     if debug:
         debug_frame = os.environ.get("DEBUG_FRAME")
@@ -289,10 +293,31 @@ def main(debug: bool):
             game_started = True
 
             result = process_frame(frame, detector, show_rois=False)
-            enemy_card_tracker.start_match(result["time_left_s"], result["total_remaining_s"])
+
+            now = time.monotonic()
+            filtered_time_left_s = match_clock_filter.update(result["time_left_s"], now)
+            result["time_left_s"] = filtered_time_left_s
+            result["total_remaining_s"] = total_remaining_seconds(filtered_time_left_s, result["overtime"])
+
+
+            enemy_card_tracker.start_match(
+                result["time_left_s"],
+                result["total_remaining_s"],
+                now_s=time.monotonic(),
+            )
         elif game_started:
             result = process_frame(frame, detector, show_rois=False)
-            enemy_card_tracker.update(result["total_remaining_s"], result["matches"])
+
+            now = time.monotonic()
+            filtered_time_left_s = match_clock_filter.update(result["time_left_s"], now)
+            result["time_left_s"] = filtered_time_left_s
+            result["total_remaining_s"] = total_remaining_seconds(filtered_time_left_s, result["overtime"])
+
+            enemy_card_tracker.update(
+                result["total_remaining_s"],
+                result["matches"],
+                now_s=now,
+            )
             if game_end_from_result(result):
                 not_in_game_streak += 1
                 if not_in_game_streak >= 20:
