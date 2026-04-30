@@ -23,6 +23,15 @@ from katacr.build_dataset.utils.split_part import process_part, ratio2name
 from trackers.match_clock import MatchClockFilter
 
 
+PROCESSING_RESOLUTION = (1080, 2400)  # width, height
+
+
+def normalize_frame(frame: np.ndarray) -> np.ndarray:
+    height, width = frame.shape[:2]
+    if (width, height) == PROCESSING_RESOLUTION:
+        return frame
+    return cv2.resize(frame, PROCESSING_RESOLUTION, interpolation=cv2.INTER_AREA)
+
 
 
 def get_default_video_device() -> str:
@@ -195,20 +204,23 @@ def render_match_debug(frame: np.ndarray, matches) -> np.ndarray:
     return np.vstack(rows)
 
 
-def main(debug: bool):
+
+def main(debug: bool, normalize: bool = True, debug_frame_path: str | None = None):
     detector = build_detector()
     print("detector sucessfully built!")
     enemy_card_tracker = EnemyCardTracker()
     match_clock_filter = MatchClockFilter()
 
     if debug:
-        debug_frame = os.environ.get("DEBUG_FRAME")
-        if not debug_frame:
-            raise RuntimeError("Set DEBUG_FRAME to a frame image path before running main(debug=True).")
+        if not debug_frame_path:
+            raise RuntimeError("Pass a debug frame path when running main(debug=True).")
 
-        frame = cv2.imread(debug_frame)
+        frame = cv2.imread(debug_frame_path)
         if frame is None:
-            raise FileNotFoundError(f"Failed to read debug frame: {debug_frame}")
+            raise FileNotFoundError(f"Failed to read debug frame: {debug_frame_path}")
+        if normalize:
+            frame = normalize_frame(frame)
+
         result = process_frame(frame, detector, show_rois=False)
         game_state = build_game_state(result)
         has_display = os.environ.get("SHOW_DEBUG_WINDOW") == "1"
@@ -272,6 +284,8 @@ def main(debug: bool):
     ok, warmup_frame = cap.read()
     if not ok:
       raise RuntimeError("Could not read warmup frame")
+    if normalize:
+        warmup_frame = normalize_frame(warmup_frame)
 
     process_frame(warmup_frame, detector, show_rois=False)
 
@@ -288,6 +302,8 @@ def main(debug: bool):
             print("no frame")
             break
 
+        if normalize:
+            frame = normalize_frame(frame)
         
         if not game_started and game_start(frame):
             game_started = True
@@ -378,7 +394,3 @@ def main(debug: bool):
 
     cap.release()
     cv2.destroyAllWindows()
-
-
-if __name__ == "__main__":
-    main(False)
