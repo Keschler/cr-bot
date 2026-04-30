@@ -53,8 +53,10 @@ cd capture
 python3.12 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-cd ..
+./bin/patch_katacr.sh
 ```
+
+Run `./bin/patch_katacr.sh` once after a fresh clone with submodules. It applies a small local patch to the KataCR submodule so it uses this repo's vendored Clash Royale dataset path instead of the original author's hardcoded dataset path.
 
 The repository uses Git submodules for external projects:
 
@@ -107,59 +109,9 @@ VIDEO_DEVICE=/dev/video37 python capture.py
 
 Frames are normalized to `1080x2400` internally by default so the existing ROIs keep matching the game UI. Use `--no-normalize` only when you intentionally want to process the raw capture size.
 
-## Setup
-
-Create and activate a Python environment:
-
-```bash
-cd capture
-python3.12 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-```
-
 The runtime expects trained detector and classifier weights in `capture/models/`. The current default detector paths are configured in `capture/vision/yolo_runtime.py` and use the KataCR best-performance combo detector weights `detector1_v0.7.13.pt` and `detector2_v0.7.13.pt`.
 
 Hand-card and next-card recognition use two self-trained classifiers, `hand_classifier_best.pt` and `next_classifier_best.pt`. The training script in `capture/scripts/train_card_classifier.py` fine-tunes `mobilenet_v3_small` with a replacement classifier head for the local Clash Royale card classes.
-
-## Run Live Capture
-
-Start your screen capture pipeline so that Clash Royale frames are available through a video device. By default the project looks for a dummy video device, or falls back to `/dev/video37`.
-
-Create a V4L2 loopback device first:
-
-```bash
-sudo modprobe v4l2loopback video_nr=37 card_label=scrcpy exclusive_caps=1
-```
-
-Start the phone stream with the included helper:
-
-```bash
-cd capture
-./bin/start_stream.sh
-```
-
-The helper uses `scrcpy` and sends the phone screen into the loopback video device. It auto-detects a dummy video device when possible, otherwise it uses `/dev/video37`.
-
-In another terminal, run the vision pipeline:
-
-```bash
-cd capture
-source venv/bin/activate
-python capture.py
-```
-
-To choose a specific video device:
-
-```bash
-VIDEO_DEVICE=/dev/video37 python capture.py
-```
-
-You can also pass the same device to the stream helper:
-
-```bash
-VIDEO_DEVICE=/dev/video37 ./bin/start_stream.sh
-```
 
 ## Run Dataset Generation
 
