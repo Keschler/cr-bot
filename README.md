@@ -50,7 +50,7 @@ Create and activate a Python environment:
 
 ```bash
 cd capture
-python -m venv venv
+python3.12 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 cd ..
@@ -113,7 +113,7 @@ Create and activate a Python environment:
 
 ```bash
 cd capture
-python -m venv venv
+python3.12 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 ```
@@ -158,7 +158,7 @@ VIDEO_DEVICE=/dev/video37 python capture.py
 You can also pass the same device to the stream helper:
 
 ```bash
-VIDEO_DEVICE=/dev/video37 ./start_stream.sh
+VIDEO_DEVICE=/dev/video37 ./bin/start_stream.sh
 ```
 
 ## Run Dataset Generation
