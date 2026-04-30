@@ -3,26 +3,108 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+import torch
+import torchvision
+
 from constants import YOLO_CONF_THRESHOLD, YOLO_IOU_THRESHOLD
 
 ROOT = Path(__file__).resolve().parents[1]
 KATACR_ROOT = ROOT / "vendor/external/KataCR"
-SEED_ROOT = ROOT / "data/seed_dataset"
+KATACR_DATASET_ROOT = ROOT / "vendor/external/Clash-Royale-Detection-Dataset"
 MODELS_DIR = ROOT / "models"
+CACHE_ROOT = ROOT / ".cache"
+MPLCONFIGDIR = CACHE_ROOT / "matplotlib"
+ULTRALYTICS_CONFIG_DIR = CACHE_ROOT / "ultralytics"
 
 if str(KATACR_ROOT) not in sys.path:
     sys.path.insert(0, str(KATACR_ROOT))
 
-os.environ.setdefault("KATACR_DATASET_PATH", str(SEED_ROOT))
+MPLCONFIGDIR.mkdir(parents=True, exist_ok=True)
+ULTRALYTICS_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+
+katacr_dataset_env = os.environ.get("KATACR_DATASET_PATH")
+if not katacr_dataset_env or not Path(katacr_dataset_env).exists():
+    os.environ["KATACR_DATASET_PATH"] = str(KATACR_DATASET_ROOT)
+os.environ.setdefault("MPLCONFIGDIR", str(MPLCONFIGDIR))
+os.environ.setdefault("YOLO_CONFIG_DIR", str(ULTRALYTICS_CONFIG_DIR))
 os.environ.setdefault("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "1")
 
-from katacr.yolov8.combo_detect import ComboDetector
+if not hasattr(np, "trapz") and hasattr(np, "trapezoid"):
+    np.trapz = np.trapezoid
+
+from katacr.constants.label_list import idx2unit, unit2idx
+from katacr.yolov8.custom_result import CRResults
+from katacr.yolov8.custom_trackers import cr_on_predict_postprocess_end, cr_on_predict_start
+from katacr.yolov8.train import YOLO_CR
 
 
 DEFAULT_DETECTOR_WEIGHTS = [
     MODELS_DIR / "detector1_v0.7.13.pt",
     MODELS_DIR / "detector2_v0.7.13.pt",
 ]
+
+
+class AppDetector:
+    """Inference-only detector for the app runtime."""
+
+    def __init__(
+        self,
+        path_detectors,
+        show_conf=True,
+        conf=0.7,
+        iou_thre=0.6,
+        tracker="bytetrack",
+    ):
+        self.models = [YOLO_CR(str(path)) for path in path_detectors]
+        self.show_conf = show_conf
+        self.conf = conf
+        self.iou_thre = iou_thre
+        self.device = os.environ.get("YOLO_DEVICE") or ("0" if torch.cuda.is_available() else "cpu")
+        self.tracker = None
+        if tracker == "bytetrack":
+            self.conf = 0.1
+            self.tracker_cfg_path = str(KATACR_ROOT / "katacr/yolov8/bytetrack.yaml")
+            cr_on_predict_start(self, persist=True)
+
+    def infer(self, frame, pil=False):
+        if pil:
+            frame = frame[..., ::-1]
+
+        results = [
+            model.predict(
+                frame,
+                verbose=False,
+                conf=self.conf,
+                device=self.device,
+                imgsz=896,
+            )[0]
+            for model in self.models
+        ]
+
+        preds = []
+        for result in results:
+            boxes = result.orig_boxes.clone()
+            for index in range(len(boxes)):
+                boxes[index, 5] = unit2idx[result.names[int(boxes[index, 5])]]
+                preds.append(boxes[index])
+
+        if not preds:
+            preds = torch.zeros((0, 7))
+        else:
+            preds = torch.cat(preds, 0).reshape(-1, 7)
+            keep = torchvision.ops.nms(preds[:, :4], preds[:, 4], iou_threshold=self.iou_thre)
+            preds = preds[keep]
+
+        self.result = CRResults(frame, path="", names=idx2unit, boxes=preds)
+        if self.tracker is not None:
+            cr_on_predict_postprocess_end(self, persist=True)
+
+        data = self.result.get_data()
+        self.result.boxes.data = data[
+            ~(((data[:, 0] > 390) & (data[:, 3] < 120)) | ((data[:, 2] < 280) & (data[:, 3] < 80)))
+        ]
+        return self.result
 
 
 
@@ -41,7 +123,7 @@ def load_yolo_runtime():
 
 
 def build_detector() -> Any:
-    return ComboDetector(
+    return AppDetector(
             DEFAULT_DETECTOR_WEIGHTS,
             show_conf=True,
             conf=YOLO_CONF_THRESHOLD,

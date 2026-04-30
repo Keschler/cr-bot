@@ -17,11 +17,14 @@ import torchvision
 ROOT = Path(__file__).resolve().parents[1]
 KATACR_ROOT = ROOT / "vendor/external/KataCR"
 SEED_ROOT = ROOT / "data/seed_dataset"
+MPLCONFIGDIR = ROOT / ".cache/matplotlib"
 ULTRALYTICS_CONFIG_DIR = ROOT / ".cache/ultralytics"
 
 os.environ.setdefault("KATACR_DATASET_PATH", str(SEED_ROOT))
+os.environ.setdefault("MPLCONFIGDIR", str(MPLCONFIGDIR))
 os.environ.setdefault("YOLO_CONFIG_DIR", str(ULTRALYTICS_CONFIG_DIR))
 os.environ.setdefault("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "1")
+MPLCONFIGDIR.mkdir(parents=True, exist_ok=True)
 ULTRALYTICS_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 sys.path.insert(0, str(KATACR_ROOT))
 
@@ -94,9 +97,13 @@ class CombinedDetector:
         self.models = [YOLO_CR(str(path)) for path in weights]
         self.conf = conf
         self.iou = iou
+        self.device = os.environ.get("YOLO_DEVICE") or ("0" if torch.cuda.is_available() else "cpu")
 
     def infer(self, frame: np.ndarray) -> torch.Tensor:
-        results = [model.predict(frame, verbose=False, conf=self.conf, device=0, imgsz=896)[0] for model in self.models]
+        results = [
+            model.predict(frame, verbose=False, conf=self.conf, device=self.device, imgsz=896)[0]
+            for model in self.models
+        ]
         preds = []
         for result in results:
             boxes = result.orig_boxes.clone()
