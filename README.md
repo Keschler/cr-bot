@@ -17,11 +17,7 @@ Clash Royale Vision Bot is a computer vision project that reads Clash Royale gam
 
 ## Demo
 
-Add your shipped demo link here:
-
-```text
-Demo: https://example.com/your-demo
-```
+[▶ Watch the demo](https://youtu.be/qxFdI4DDtCA)
 
 The recommended demo is a short video showing the project running on a Clash Royale match, with detections and extracted state visible on screen.
 
