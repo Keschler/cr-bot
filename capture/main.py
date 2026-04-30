@@ -6,6 +6,7 @@ import numpy as np
 import time
 
 
+from extractors import tower_hp
 from extractors.cards import extract_hand_state
 from extractors.elixir import extract_elixir
 from extractors.timer import extract_time, is_overtime, parse_time_left_s, total_remaining_seconds
@@ -50,7 +51,7 @@ def get_default_video_device() -> str:
 
 
 
-def process_frame(frame, detector, show_rois: bool = False):
+def process_frame(frame, detector, show_rois: bool = False, yolo_tower_hp_detections: bool = False):
     _, draw_boxes, _ = load_yolo_runtime()
     frame_to_analyze = draw_rois(frame, ROIS) if show_rois else frame
     ratio_name = ratio2name(frame)
@@ -80,7 +81,10 @@ def process_frame(frame, detector, show_rois: bool = False):
     rendered = draw_boxes(frame_to_analyze, yolo_boxes)
     elixir = extract_elixir(frame)
     tower_hp_debug_steps = {}
-    towers_hp = extract_tower_hp(frame, yolo_boxes, debug_steps_by_tower=tower_hp_debug_steps)
+    if yolo_tower_hp_detections:
+        towers_hp = extract_tower_hp(frame, yolo_boxes, debug_steps_by_tower=tower_hp_debug_steps)
+    else:
+        towers_hp = extract_tower_hp(frame, debug_steps_by_tower=tower_hp_debug_steps)
 
 
     timer_debug_steps = {}

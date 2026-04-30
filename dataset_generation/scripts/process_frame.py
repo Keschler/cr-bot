@@ -62,9 +62,9 @@ def state_to_row(video_id, frame_idx, video_time_s, image_path, state):
 
 
 def main():
-  video_path = ROOT / "dataset_generation/data/video_clips/2.6 Hog Cycle.mp4"
-  out_path = ROOT / "dataset_generation/data/frame_states/clip/states2.jsonl"
-  frames_dir = ROOT / "dataset_generation/data/frame_states/clip/frames2"
+  video_path = ROOT / "dataset_generation/data/video_clips/first_10_seconds.mp4"
+  out_path = ROOT / "dataset_generation/data/frame_states/clip/states4.jsonl"
+  frames_dir = ROOT / "dataset_generation/data/frame_states/clip/frames4"
 
   out_path.parent.mkdir(parents=True, exist_ok=True)
   frames_dir.mkdir(parents=True, exist_ok=True)

@@ -169,6 +169,29 @@ def _tower_digit_override(best_digit, scores, norm_digit):
     ):
         return 4
 
+    if (
+        best_digit == 0
+        and scores.get(4, -1.0) > 0.25
+        and scores.get(4, -1.0) > scores.get(0, -1.0) - 0.22
+        and top_mid > 0.95
+        and left_mid > 0.95
+        and right_mid > 0.95
+        and 0.30 < center_mid < 0.75
+        and 0.45 < bottom_mid < 0.60
+    ):
+        return 4
+
+    if (
+        best_digit == 3
+        and scores.get(1, -1.0) > scores.get(3, -1.0) - 0.08
+        and top_mid > 0.90
+        and center_mid > 0.95
+        and 0.40 < left_mid < 0.70
+        and right_mid > 0.95
+        and bottom_mid > 0.95
+    ):
+        return 1
+
     # Tower-font 6 often gets matched as 5 when the left wall and inner bowl are
     # visible but the lower-right curve is a bit weak after thresholding.
     if (
@@ -472,12 +495,35 @@ def _measure_red_ratio(bar_img, king: bool):
     return float(red_mask.mean() / 255.0)
 
 
+def _measure_white_ratio(bar_img, king: bool):
+    if king:
+        fill = _extract_king_bar_fill(bar_img)
+    else:
+        fill = bar_img
+
+    hsv = cv2.cvtColor(fill, cv2.COLOR_BGR2HSV)
+    white_mask = cv2.inRange(
+        hsv,
+        np.array((0, 0, 185), dtype=np.uint8),
+        np.array((179, 55, 255), dtype=np.uint8),
+    )
+    kernel = np.ones((2, 2), dtype=np.uint8)
+    white_mask = cv2.morphologyEx(white_mask, cv2.MORPH_OPEN, kernel)
+    return float(white_mask.mean() / 255.0)
+
+
 def detect_if_king_tower_activated(img):
     own_king_hp_bar = crop(img, ROIS["player_king_health_bar"])
     enemy_king_hp_bar = crop(img, ROIS["opponent_king_health_bar"])
 
-    own_king = _measure_cyan_ratio(own_king_hp_bar) >= TOWER_BAR_VISIBLE_RATIO_THRESHOLD
-    enemy_king = _measure_red_ratio(enemy_king_hp_bar, True) >= TOWER_BAR_VISIBLE_RATIO_THRESHOLD
+    own_king = (
+        _measure_cyan_ratio(own_king_hp_bar) >= TOWER_BAR_VISIBLE_RATIO_THRESHOLD
+        or _measure_white_ratio(own_king_hp_bar, True) >= TOWER_BAR_VISIBLE_RATIO_THRESHOLD
+    )
+    enemy_king = (
+        _measure_red_ratio(enemy_king_hp_bar, True) >= TOWER_BAR_VISIBLE_RATIO_THRESHOLD
+        or _measure_white_ratio(enemy_king_hp_bar, True) >= TOWER_BAR_VISIBLE_RATIO_THRESHOLD
+    )
 
     return {
         "own_king_activated": own_king,
@@ -491,11 +537,23 @@ def detect_if_support_tower_alive(img):
     enemy_support_left_bar = crop(img, ROIS["opponent_left_support_health_bar"])
     enemy_support_right_bar = crop(img, ROIS["opponent_right_support_health_bar"])
 
-    support_left = _measure_cyan_ratio(own_support_left_bar) >= TOWER_BAR_VISIBLE_RATIO_THRESHOLD
-    support_right = _measure_cyan_ratio(own_support_right_bar) >= TOWER_BAR_VISIBLE_RATIO_THRESHOLD
+    support_left = (
+        _measure_cyan_ratio(own_support_left_bar) >= TOWER_BAR_VISIBLE_RATIO_THRESHOLD
+        or _measure_white_ratio(own_support_left_bar, False) >= TOWER_BAR_VISIBLE_RATIO_THRESHOLD
+    )
+    support_right = (
+        _measure_cyan_ratio(own_support_right_bar) >= TOWER_BAR_VISIBLE_RATIO_THRESHOLD
+        or _measure_white_ratio(own_support_right_bar, False) >= TOWER_BAR_VISIBLE_RATIO_THRESHOLD
+    )
 
-    enemy_support_right = _measure_red_ratio(enemy_support_right_bar, True) >= TOWER_BAR_VISIBLE_RATIO_THRESHOLD
-    enemy_support_left = _measure_red_ratio(enemy_support_left_bar, True) >= TOWER_BAR_VISIBLE_RATIO_THRESHOLD
+    enemy_support_right = (
+        _measure_red_ratio(enemy_support_right_bar, True) >= TOWER_BAR_VISIBLE_RATIO_THRESHOLD
+        or _measure_white_ratio(enemy_support_right_bar, False) >= TOWER_BAR_VISIBLE_RATIO_THRESHOLD
+    )
+    enemy_support_left = (
+        _measure_red_ratio(enemy_support_left_bar, True) >= TOWER_BAR_VISIBLE_RATIO_THRESHOLD
+        or _measure_white_ratio(enemy_support_left_bar, False) >= TOWER_BAR_VISIBLE_RATIO_THRESHOLD
+    )
 
     return {
             "support_left_activated": support_left,

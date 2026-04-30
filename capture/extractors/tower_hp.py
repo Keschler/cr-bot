@@ -70,7 +70,7 @@ def extract_tower_hp(frame, yolo_boxes=None, debug_steps_by_tower=None):
 
         for tower_name, tower_data in towers_hp.items():
             tower_debug = {} if debug_steps_by_tower is not None else None
-            tower_data["value"] = read_number_from_roi(tower_data["image"], TEMPLATES, debug_steps=tower_debug)
+            tower_data["value"] = read_number_from_roi(tower_data["image"], TEMPLATES, debug_steps=tower_debug, digit_mode="tower")
             if debug_steps_by_tower is not None:
                 debug_steps_by_tower[tower_name] = tower_debug
 
@@ -192,7 +192,7 @@ def extract_tower_hp(frame, yolo_boxes=None, debug_steps_by_tower=None):
             if value in (None, 0):
                 value = FULL_TOWER_HP[tower_name]
             if len(str(value)) > 4:
-                value = str(value)[-4:]
+                value = int(str(value)[-4:])
 
             result[tower_name] = value
             if debug_steps_by_tower is not None:

@@ -19,7 +19,7 @@ from features.action_space import (
     RIVER_MASK,
 )
 from features.channels import DYNAMIC_CHANNELS, DYNAMIC_CHANNEL_IDX, STATIC_CHANNELS, STATIC_CHANNEL_IDX
-from troop_hp_level16 import get_troop_hp_level16
+from troop_hp_level16 import get_unit_hp_level16
 from card_metadata import CARD_METADATA
 
 if TYPE_CHECKING:
@@ -120,7 +120,7 @@ def estimate_hp_fraction(match: Match):
     if 0.0 <= hp <= 1.0:
         return float(hp)
     
-    max_hp = get_troop_hp_level16(match.troop.class_name)
+    max_hp = get_unit_hp_level16(match.troop.class_name)
     if max_hp:
         return min(1.0, max(0.0, float(hp) / max_hp))
     
