@@ -4,8 +4,9 @@ Clash Royale Vision Bot is a computer vision project that reads Clash Royale gam
 
 ## Features
 
-- Detects battlefield objects with a YOLO/KataCR-based detector.
+- Detects battlefield objects with KataCR's best-performance dual YOLO detector setup.
 - Reads important HUD values such as timer, elixir, hand cards, next card, and tower HP.
+- Classifies hand cards and the next card with two self-trained MobileNetV3-Small models.
 - Tracks visible units, teams, positions, confidence scores, and estimated HP.
 - Estimates enemy card plays and enemy unit HP from detected troops, buildings, health bars, and spell effects.
 - Estimates enemy elixir over time from match clock and confirmed enemy plays.
@@ -27,11 +28,101 @@ The recommended demo is a short video showing the project running on a Clash Roy
 
 The project processes each frame in a few steps:
 
-1. It crops the arena and runs the object detector.
+1. It crops the arena and runs the KataCR dual-detector model.
 2. It remaps detections back onto the full game frame.
-3. It extracts HUD information with OCR and template matching.
+3. It extracts HUD information with OCR, template matching, and card classifiers.
 4. It builds a structured `GameState`.
 5. It updates trackers for enemy cards, enemy elixir, and match state.
+
+## Run Locally From A Fresh Clone
+
+Clone the repository and enter it:
+
+```bash
+git clone <repo-url>
+cd cr-bot
+```
+
+Install the system tools needed for live Android capture on Linux:
+
+```bash
+sudo apt install scrcpy v4l2loopback-dkms v4l2loopback-utils
+```
+
+Create and activate a Python environment:
+
+```bash
+cd capture
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+cd ..
+```
+
+Make sure the external project folders are present. The current repository tracks these folders as gitlinks, but `.gitmodules` is missing, so a fresh clone may not fetch them automatically:
+
+```text
+capture/vendor/external/KataCR
+capture/vendor/external/Clash-Royale-Detection-Dataset
+capture/templates/cr-api-assets
+capture/data/seed_labels/cvat
+```
+
+For runtime, `capture/vendor/external/KataCR` is required. `capture/templates/cr-api-assets` is used by the card template fallback path. The Clash Royale detection dataset and CVAT checkout are mainly needed for dataset/training workflows.
+
+If those folders are missing or empty after cloning, restore at least the runtime dependencies manually:
+
+```bash
+git clone https://github.com/wty-yy/KataCR.git capture/vendor/external/KataCR
+git clone https://github.com/RoyaleAPI/cr-api-assets.git capture/templates/cr-api-assets
+```
+
+Optional training/dataset dependencies:
+
+```bash
+git clone https://github.com/wty-yy/Clash-Royale-Detection-Dataset.git capture/vendor/external/Clash-Royale-Detection-Dataset
+git clone https://github.com/cvat-ai/cvat capture/data/seed_labels/cvat
+```
+
+The model weights are committed in `capture/models/`:
+
+```text
+detector1_v0.7.13.pt
+detector2_v0.7.13.pt
+hand_classifier_best.pt
+next_classifier_best.pt
+```
+
+Run a single debug frame:
+
+```bash
+cd capture
+source venv/bin/activate
+python capture.py --debug-frame pictures/screen.png
+```
+
+Run live capture in two terminals. First, create the loopback video device:
+
+```bash
+sudo modprobe v4l2loopback video_nr=37 card_label=scrcpy exclusive_caps=1
+```
+
+Then start the phone stream:
+
+```bash
+cd capture
+VIDEO_DEVICE=/dev/video37 ./bin/start_stream.sh
+```
+
+In a second terminal, run the vision pipeline:
+
+```bash
+cd capture
+source venv/bin/activate
+VIDEO_DEVICE=/dev/video37 python capture.py
+```
+
+Frames are normalized to `1080x2400` internally by default so the existing ROIs keep matching the game UI. Use `--no-normalize` only when you intentionally want to process the raw capture size.
 
 ## Setup
 
@@ -44,7 +135,9 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-The runtime expects trained detector weights in `capture/models/`. The current default paths are configured in `capture/vision/yolo_runtime.py`.
+The runtime expects trained detector and classifier weights in `capture/models/`. The current default detector paths are configured in `capture/vision/yolo_runtime.py` and use the KataCR best-performance combo detector weights `detector1_v0.7.13.pt` and `detector2_v0.7.13.pt`.
+
+Hand-card and next-card recognition use two self-trained classifiers, `hand_classifier_best.pt` and `next_classifier_best.pt`. The training script in `capture/scripts/train_card_classifier.py` fine-tunes `mobilenet_v3_small` with a replacement classifier head for the local Clash Royale card classes.
 
 ## Run Live Capture
 
@@ -60,7 +153,7 @@ Start the phone stream with the included helper:
 
 ```bash
 cd capture
-./start_stream.sh
+./bin/start_stream.sh
 ```
 
 The helper uses `scrcpy` and sends the phone screen into the loopback video device. It auto-detects a dummy video device when possible, otherwise it uses `/dev/video37`.
@@ -70,13 +163,13 @@ In another terminal, run the vision pipeline:
 ```bash
 cd capture
 source venv/bin/activate
-python main.py
+python capture.py
 ```
 
 To choose a specific video device:
 
 ```bash
-VIDEO_DEVICE=/dev/video37 python main.py
+VIDEO_DEVICE=/dev/video37 python capture.py
 ```
 
 You can also pass the same device to the stream helper:
@@ -135,8 +228,7 @@ dataset_generation/
   scripts/process_frame.py    offline frame-state dataset generation
   data/                       local generated dataset outputs
 
-docs/
-  DEVLOG.md                   local development notes
+docs/                         documentation
 ```
 
 ## Devlogs
@@ -144,10 +236,9 @@ docs/
 Development logs are available online:
 
 ```text
-Devlogs: https://example.com/your-devlogs
+Devlogs: https://flavortown.hackclub.com/projects/16627
 ```
 
-There is also a local development summary in `docs/DEVLOG.md`.
 
 ## Planned Work
 
@@ -158,11 +249,13 @@ There is also a local development summary in `docs/DEVLOG.md`.
 
 ## Current Limitations
 
-- Live capture depends on the correct screen resolution and video device setup.
+- The hand-card and next-card UI classifiers reached 100% accuracy on the tested 2.6 Hog Cycle workflow, but have not been fully validated across every other deck and troop/card combination.
+- Heroes/champions are not currently included in detection, either in the YOLO battlefield detector setup or in the self-trained hand-card and next-card UI classifiers.
+- Goblinstein and Three Musketeers are not added to the hand-card and next-card detection model.
 - Timer, elixir, and tower HP extraction can still be noisy in some frames.
 - Enemy elixir is an estimate, not a value shown by the game.
-- Spell and spawned-unit detection can be ambiguous.
-- Model weights and large datasets may need to be provided separately from the repository.
+- Spell detection can be ambiguous.
+- Large generated datasets may need to be provided separately from the repository.
 
 ## Tech Stack
 
@@ -173,3 +266,8 @@ There is also a local development summary in `docs/DEVLOG.md`.
 - KataCR
 - NumPy
 - v4l2loopback / live video capture tooling
+
+## Credits
+
+- Battlefield unit, tower, spell, and health-bar detection is based on the KataCR project and its best-performance dual YOLO detector setup.
+- Hand-card and next-card classifiers are self-trained project models based on `mobilenet_v3_small`.
