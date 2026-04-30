@@ -175,29 +175,6 @@ python dataset_generation/scripts/process_frame.py
 
 The script currently uses paths inside `dataset_generation/data/`. Edit those paths in `dataset_generation/scripts/process_frame.py` for your own clips.
 
-## Training And Inference Scripts
-
-Most detector workflow scripts live in `capture/scripts/`.
-
-Common commands:
-
-```bash
-cd capture
-source .venv-train/bin/activate
-python scripts/setup_seed_detectors.py
-python scripts/train_seed_baseline.py --detector 1 --device 0
-python scripts/train_seed_baseline.py --detector 2 --device 0
-```
-
-Run detector inference:
-
-```bash
-python scripts/run_seed_inference.py \
-  --weights runs/detector1_baseline_seed/weights/best.pt runs/detector2_baseline_seed/weights/best.pt \
-  --source data/video_clips/clip.mp4 \
-  --video-interval 3
-```
-
 ## Project Structure
 
 ```text
@@ -255,5 +232,5 @@ Devlogs: https://flavortown.hackclub.com/projects/16627
 
 ## Credits
 
-- Battlefield unit, tower, spell, and health-bar detection is based on the KataCR project and its best-performance dual YOLO detector setup.
+- Battlefield unit, tower, spell, and part of the health-bar detection is based on the KataCR project and its best-performance dual YOLO detector setup.
 - Hand-card and next-card classifiers are self-trained project models based on `mobilenet_v3_small`.
