@@ -1,0 +1,15 @@
+[submodule "capture/templates/cr-api-assets"]
+	path = capture/templates/cr-api-assets
+	url = https://github.com/RoyaleAPI/cr-api-assets.git
+
+[submodule "capture/vendor/external/Clash-Royale-Detection-Dataset"]
+	path = capture/vendor/external/Clash-Royale-Detection-Dataset
+	url = https://github.com/wty-yy/Clash-Royale-Detection-Dataset.git
+
+[submodule "capture/vendor/external/KataCR"]
+	path = capture/vendor/external/KataCR
+	url = https://github.com/wty-yy/KataCR.git
+
+[submodule "capture/data/seed_labels/cvat"]
+	path = capture/data/seed_labels/cvat
+	url = https://github.com/cvat-ai/cvat.git

@@ -39,7 +39,7 @@ The project processes each frame in a few steps:
 Clone the repository and enter it:
 
 ```bash
-git clone <repo-url>
+git clone --recurse-submodules https://github.com/Keschler/cr-bot.git
 cd cr-bot
 ```
 
@@ -59,7 +59,7 @@ pip install -r requirements.txt
 cd ..
 ```
 
-Make sure the external project folders are present. The current repository tracks these folders as gitlinks, but `.gitmodules` is missing, so a fresh clone may not fetch them automatically:
+The repository uses Git submodules for external projects:
 
 ```text
 capture/vendor/external/KataCR
@@ -69,20 +69,6 @@ capture/data/seed_labels/cvat
 ```
 
 For runtime, `capture/vendor/external/KataCR` is required. `capture/templates/cr-api-assets` is used by the card template fallback path. The Clash Royale detection dataset and CVAT checkout are mainly needed for dataset/training workflows.
-
-If those folders are missing or empty after cloning, restore at least the runtime dependencies manually:
-
-```bash
-git clone https://github.com/wty-yy/KataCR.git capture/vendor/external/KataCR
-git clone https://github.com/RoyaleAPI/cr-api-assets.git capture/templates/cr-api-assets
-```
-
-Optional training/dataset dependencies:
-
-```bash
-git clone https://github.com/wty-yy/Clash-Royale-Detection-Dataset.git capture/vendor/external/Clash-Royale-Detection-Dataset
-git clone https://github.com/cvat-ai/cvat capture/data/seed_labels/cvat
-```
 
 The model weights are committed in `capture/models/`:
 
