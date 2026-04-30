@@ -107,7 +107,7 @@ source venv/bin/activate
 VIDEO_DEVICE=/dev/video37 python capture.py
 ```
 
-Frames are normalized to `1080x2400` internally by default so the existing ROIs keep matching the game UI. Use `--no-normalize` only when you intentionally want to process the raw capture size.
+Frames are normalized to `1080x2400` internally by default so the existing ROIs keep matching the game UI. Use `--no-normalize` only when you intentionally want to process the raw capture size. **Sadly, only `1080x2400` or resolutions with the same aspect ratio currently work.**
 
 The runtime expects trained detector and classifier weights in `capture/models/`. The current default detector paths are configured in `capture/vision/yolo_runtime.py` and use the KataCR best-performance combo detector weights `detector1_v0.7.13.pt` and `detector2_v0.7.13.pt`.
 
