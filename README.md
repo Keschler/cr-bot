@@ -17,9 +17,9 @@ Clash Royale Vision Bot is a computer vision project that reads Clash Royale gam
 
 ## Demo
 
-[▶ Watch the demo](https://youtu.be/qxFdI4DDtCA)
+[Download the executable demo from GitHub Releases](https://github.com/keschler/cr-bot/releases/latest)
 
-The recommended demo is a short video showing the project running on a Clash Royale match, with detections and extracted state visible on screen.
+The release asset is a Linux CPU executable bundle. It does not require setting up Python, installing project dependencies, or cloning the repository.
 
 ## How It Works
 
@@ -31,98 +31,47 @@ The project processes each frame in a few steps:
 4. It builds a structured `GameState`.
 5. It updates trackers for enemy cards, enemy elixir, and match state.
 
-## Run Locally From A Fresh Clone
+## Use The Executable
 
-Clone the repository and enter it:
+Download `cr-bot-linux-cpu.zip` from the latest GitHub Release:
+
+```text
+https://github.com/keschler/cr-bot/releases/latest
+```
+
+Unzip it:
 
 ```bash
-git clone --recurse-submodules https://github.com/Keschler/cr-bot.git
+unzip cr-bot-linux-cpu.zip
 cd cr-bot
+chmod +x cr-bot
 ```
 
-Install the system tools needed for live Android capture on Linux:
+Run it on a screenshot:
 
 ```bash
-sudo apt install scrcpy v4l2loopback-dkms v4l2loopback-utils
+./cr-bot --debug-frame /path/to/screenshot.png
 ```
 
-Create and activate a Python environment:
+Run it on live video from a Linux video device:
 
 ```bash
-cd capture
-python3.12 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-./bin/patch_katacr.sh
+VIDEO_DEVICE=/dev/video37 ./cr-bot
 ```
 
-Run `./bin/patch_katacr.sh` once after a fresh clone with submodules. It applies a small local patch to the KataCR submodule so it uses this repo's vendored Clash Royale dataset path instead of the original author's hardcoded dataset path.
-
-The repository uses Git submodules for external projects:
-
-```text
-capture/vendor/external/KataCR
-capture/vendor/external/Clash-Royale-Detection-Dataset
-capture/templates/cr-api-assets
-capture/data/seed_labels/cvat
-```
-
-For runtime, `capture/vendor/external/KataCR` is required. `capture/templates/cr-api-assets` is used by the card template fallback path. The Clash Royale detection dataset and CVAT checkout are mainly needed for dataset/training workflows.
-
-The model weights are committed in `capture/models/`:
-
-```text
-detector1_v0.7.13.pt
-detector2_v0.7.13.pt
-hand_classifier_best.pt
-next_classifier_best.pt
-```
-
-Run a single debug frame:
-
-```bash
-cd capture
-source venv/bin/activate
-python capture.py --debug-frame pictures/screen.png
-```
-
-Run live capture in two terminals. First, create the loopback video device:
+For Android live capture on Linux, create a loopback device first:
 
 ```bash
 sudo modprobe v4l2loopback video_nr=37 card_label=scrcpy exclusive_caps=1
 ```
 
-Then start the phone stream:
+Then stream the phone screen into that device with `scrcpy`:
 
 ```bash
-cd capture
-VIDEO_DEVICE=/dev/video37 ./bin/start_stream.sh
+scrcpy --video-source=display --v4l2-sink=/dev/video37
 ```
 
-In a second terminal, run the vision pipeline:
-
-```bash
-cd capture
-source venv/bin/activate
-VIDEO_DEVICE=/dev/video37 python capture.py
-```
-
-Frames are normalized to `1080x2400` internally by default so the existing ROIs keep matching the game UI. Use `--no-normalize` only when you intentionally want to process the raw capture size. **Sadly, only `1080x2400` or resolutions with the same aspect ratio currently work.**
-
-The runtime expects trained detector and classifier weights in `capture/models/`. The current default detector paths are configured in `capture/vision/yolo_runtime.py` and use the KataCR best-performance combo detector weights `detector1_v0.7.13.pt` and `detector2_v0.7.13.pt`.
-
-Hand-card and next-card recognition use two self-trained classifiers, `hand_classifier_best.pt` and `next_classifier_best.pt`. The training script in `capture/scripts/train_card_classifier.py` fine-tunes `mobilenet_v3_small` with a replacement classifier head for the local Clash Royale card classes.
-
-## Run Dataset Generation
-
-The dataset generation script reads a gameplay clip, processes sampled frames, saves frame images, and writes JSONL state rows.
-
-```bash
-source capture/venv/bin/activate
-python dataset_generation/scripts/process_frame.py
-```
-
-The script currently uses paths inside `dataset_generation/data/`. Edit those paths in `dataset_generation/scripts/process_frame.py` for your own clips.
+Frames are normalized to `1080x2400` internally by default so the existing ROIs keep matching the game UI. Use `--no-normalize` only when intentionally processing the raw capture size. Currently, only `1080x2400` or resolutions with the same aspect ratio are expected to work.
 
 ## Project Structure
 

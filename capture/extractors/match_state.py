@@ -1,16 +1,13 @@
 from __future__ import annotations
 
-import os
 import re
 import sys
 from pathlib import Path
 import cv2
 
 
-ROOT = Path(__file__).resolve().parents[2]
-CAPTURE_ROOT = ROOT / "capture"
+CAPTURE_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CAPTURE_ROOT))
-os.chdir(CAPTURE_ROOT)
 
 from constants import (
     CARD_CONFIDENCE_THRESHOLD,
