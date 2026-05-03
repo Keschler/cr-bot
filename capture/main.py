@@ -372,7 +372,7 @@ def main(debug: bool, normalize: bool = True, debug_frame_path: str | None = Non
 
         elixir = result["elixir"]
         detection_summary = summarize_detections(result["yolo_boxes"])
-        print(f"time:   {result['time']}")
+        print(f"time:   {result['time_left_s']}")
         print(f"elixir: {elixir['estimated_value'] + elixir['displayed_digit'][0]}")
         print(f"yolo:   {detection_summary}")
 
