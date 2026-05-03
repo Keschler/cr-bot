@@ -15,8 +15,10 @@ os.chdir(CAPTURE_ROOT)
 from main import process_frame
 from state_builder import build_game_state
 from vision.yolo_runtime import build_detector
-from image_utils import draw_rois
-from rois import ROIS
+from extractors.match_state import in_game, game_end_from_result
+from extractors.timer import total_remaining_seconds
+from trackers.enemy_cards import EnemyCardTracker
+from trackers.match_clock import MatchClockFilter
 
 
 def unit_to_dict(match):
@@ -45,6 +47,7 @@ def state_to_row(video_id, frame_idx, video_time_s, image_path, state):
       "frame_idx": frame_idx,
       "video_time_s": video_time_s,
       "image_path": str(image_path),
+      "started": state.started,
       "match_time_s": state.total_remaining_s,
       "hand": state.hud.hand_cards,
       "next_card": state.hud.next_card,
@@ -76,6 +79,10 @@ def main():
 
   fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
   frame_idx = 0
+  game_started = False
+  not_in_game_streak = 0
+  enemy_card_tracker = EnemyCardTracker()
+  match_clock_filter = MatchClockFilter()
 
   with out_path.open("w", encoding="utf-8") as f:
       while True:
@@ -89,9 +96,52 @@ def main():
               frame_idx += 1
               continue
           frame = cv2.resize(frame, (1080, 2400), interpolation=cv2.INTER_LINEAR)
+          video_time_s = frame_idx / fps
 
-          result = process_frame(frame, detector, show_rois=False)
-          state = build_game_state(result)
+          if not game_started and not in_game(frame):
+              frame_idx += 1
+              continue
+
+          result = process_frame(frame, detector, show_rois=False, yolo_tower_hp_detections=True)
+          filtered_time_left_s = match_clock_filter.update(result["time_left_s"], video_time_s)
+          if filtered_time_left_s is None:
+              frame_idx += 1
+              continue
+          result["time_left_s"] = filtered_time_left_s
+          result["total_remaining_s"] = total_remaining_seconds(filtered_time_left_s, result["overtime"])
+
+          if not game_started:
+              game_started = True
+              enemy_card_tracker.start_match(
+                  result["time_left_s"],
+                  result["total_remaining_s"],
+                  now_s=video_time_s,
+              )
+          else:
+              enemy_card_tracker.update(
+                  result["total_remaining_s"],
+                  result["matches"],
+                  now_s=video_time_s,
+              )
+
+          if game_end_from_result(result):
+              not_in_game_streak += 1
+              if not_in_game_streak >= 20:
+                  game_started = False
+                  not_in_game_streak = 0
+                  enemy_card_tracker = EnemyCardTracker()
+                  match_clock_filter = MatchClockFilter()
+                  frame_idx += 1
+                  continue
+          else:
+              not_in_game_streak = 0
+
+          state = build_game_state(
+              result,
+              seen_enemy_cards=list(enemy_card_tracker.confirmed_seen_cards),
+              elixir_enemy_est=enemy_card_tracker.elixir_enemy_est,
+              game_started=game_started,
+          )
 
           image_path = frames_dir / f"{frame_idx:06d}.jpg"
           cv2.imwrite(str(image_path), frame)
@@ -99,10 +149,11 @@ def main():
           row = state_to_row(
               video_id="clip",
               frame_idx=frame_idx,
-              video_time_s=frame_idx / fps,
+              video_time_s=video_time_s,
               image_path=image_path.relative_to(ROOT),
               state=state,
           )
+          row["arena_px"] = result["arena_px"]
 
           f.write(json.dumps(row) + "\n")
           frame_idx += 1
