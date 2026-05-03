@@ -21,6 +21,16 @@ from trackers.enemy_cards import EnemyCardTracker
 from trackers.match_clock import MatchClockFilter
 
 
+def jpeg_roundtrip(frame):
+  ok, encoded = cv2.imencode(".jpg", frame)
+  if not ok:
+      raise RuntimeError("Failed to encode frame as JPEG")
+  decoded = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+  if decoded is None:
+      raise RuntimeError("Failed to decode JPEG frame")
+  return decoded, encoded
+
+
 def unit_to_dict(match):
   troop = match.troop
   return {
@@ -65,9 +75,9 @@ def state_to_row(video_id, frame_idx, video_time_s, image_path, state):
 
 
 def main():
-  video_path = ROOT / "dataset_generation/data/video_clips/first_10_seconds.mp4"
-  out_path = ROOT / "dataset_generation/data/frame_states/clip/states4.jsonl"
-  frames_dir = ROOT / "dataset_generation/data/frame_states/clip/frames4"
+  video_path = ROOT / "dataset_generation/data/video_clips/output_2m00s_2m30s_h264.mp4"
+  out_path = ROOT / "dataset_generation/data/frame_states/clip/states.jsonl"
+  frames_dir = ROOT / "dataset_generation/data/frame_states/clip/frames"
 
   out_path.parent.mkdir(parents=True, exist_ok=True)
   frames_dir.mkdir(parents=True, exist_ok=True)
@@ -96,6 +106,7 @@ def main():
               frame_idx += 1
               continue
           frame = cv2.resize(frame, (1080, 2400), interpolation=cv2.INTER_LINEAR)
+          frame, encoded_frame = jpeg_roundtrip(frame)
           video_time_s = frame_idx / fps
 
           if not game_started and not in_game(frame):
@@ -103,6 +114,10 @@ def main():
               continue
 
           result = process_frame(frame, detector, show_rois=False, yolo_tower_hp_detections=True)
+
+          if not match_clock_filter.initialised:
+              match_clock_filter.initialise(result["time_left_s"], video_time_s)
+
           filtered_time_left_s = match_clock_filter.update(result["time_left_s"], video_time_s)
           if filtered_time_left_s is None:
               frame_idx += 1
@@ -144,7 +159,7 @@ def main():
           )
 
           image_path = frames_dir / f"{frame_idx:06d}.jpg"
-          cv2.imwrite(str(image_path), frame)
+          image_path.write_bytes(encoded_frame.tobytes())
 
           row = state_to_row(
               video_id="clip",

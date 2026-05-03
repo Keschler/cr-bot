@@ -215,22 +215,33 @@ def center(det):
 
 
 def match_bars_to_towers(towers, bars):
-      matches = {}
-      remaining_bars = bars.copy()
+      max_match_distance_sq = 300 ** 2
+      candidates = []
 
-      for tower in towers:
-          candidates = [
-              bar for bar in remaining_bars
-              if bar["team"] == tower["team"]
-          ]
+      for tower_idx, tower in enumerate(towers):
+          for bar_idx, bar in enumerate(bars):
+              if bar["team"] != tower["team"]:
+                  continue
 
-          if not candidates:
-              matches[id(tower)] = None
+              distance = squared_distance(tower, bar)
+              if distance > max_match_distance_sq:
+                  continue
+
+              candidates.append((distance, tower_idx, bar_idx))
+
+      candidates.sort(key=lambda x: x[0])
+
+      used_towers = set()
+      used_bars = set()
+      matches = {id(tower): None for tower in towers}
+
+      for _, tower_idx, bar_idx in candidates:
+          if tower_idx in used_towers or bar_idx in used_bars:
               continue
 
-          best_bar = min(candidates, key=lambda bar: squared_distance(tower, bar))
-          matches[id(tower)] = best_bar
-          remaining_bars.remove(best_bar)
+          matches[id(towers[tower_idx])] = bars[bar_idx]
+          used_towers.add(tower_idx)
+          used_bars.add(bar_idx)
 
       return matches
 

@@ -6,7 +6,6 @@ import numpy as np
 import time
 
 
-from extractors import tower_hp
 from extractors.cards import extract_hand_state
 from extractors.elixir import extract_elixir
 from extractors.timer import extract_time, is_overtime, parse_time_left_s, total_remaining_seconds
@@ -69,26 +68,35 @@ def process_frame(frame, detector, show_rois: bool = False, yolo_tower_hp_detect
     crop_y = int(frame_h * fy)
     crop_w = int(frame_w * fw)
     crop_h = int(frame_h * fh)
+    arena_px = (crop_x, crop_y, crop_w, crop_h)
 
     result = detector.infer(arena)
     yolo_boxes = result.get_data()
+    tower_hp_yolo_boxes = getattr(result, "untracked_data", yolo_boxes)
     yolo_boxes = remap_boxes_to_frame(
       yolo_boxes,
       arena.shape,
-      (crop_x, crop_y, crop_w, crop_h),
+      arena_px,
+    )
+    tower_hp_yolo_boxes = remap_boxes_to_frame(
+      tower_hp_yolo_boxes,
+      arena.shape,
+      arena_px,
     )
 
     rendered = draw_boxes(frame_to_analyze, yolo_boxes)
     elixir = extract_elixir(frame)
+
     tower_hp_debug_steps = {}
+    timer_debug_steps = {}
     if yolo_tower_hp_detections:
-        towers_hp = extract_tower_hp(frame, yolo_boxes, debug_steps_by_tower=tower_hp_debug_steps)
+        towers_hp = extract_tower_hp(frame, tower_hp_yolo_boxes, debug_steps_by_tower=tower_hp_debug_steps)
+        current_time_text = extract_time(frame, debug_steps=timer_debug_steps)
     else:
         towers_hp = extract_tower_hp(frame, debug_steps_by_tower=tower_hp_debug_steps)
+        current_time_text = extract_time(frame, debug_steps=timer_debug_steps, yolo_templates=yolo_tower_hp_detections)
 
 
-    timer_debug_steps = {}
-    current_time_text = extract_time(frame, debug_steps=timer_debug_steps)
     overtime = is_overtime(frame)
     time_left_s = parse_time_left_s(current_time_text)
     total_remaining_s = total_remaining_seconds(time_left_s, overtime)
@@ -110,6 +118,7 @@ def process_frame(frame, detector, show_rois: bool = False, yolo_tower_hp_detect
         "state": state,
         "yolo_boxes": yolo_boxes,
         "matches": typed_matches,
+        "arena_px": arena_px,
         "tower_hp_debug_steps": tower_hp_debug_steps,
         "timer_debug_steps": timer_debug_steps,
     }
@@ -209,7 +218,7 @@ def render_match_debug(frame: np.ndarray, matches) -> np.ndarray:
 
 
 
-def main(debug: bool, normalize: bool = True, debug_frame_path: str | None = None):
+def main(debug: bool, normalize: bool = True, debug_frame_path: str | None = None, yolo_detections: bool = False):
     detector = build_detector()
     print("detector sucessfully built!")
     enemy_card_tracker = EnemyCardTracker()
@@ -225,7 +234,7 @@ def main(debug: bool, normalize: bool = True, debug_frame_path: str | None = Non
         if normalize:
             frame = normalize_frame(frame)
 
-        result = process_frame(frame, detector, show_rois=False)
+        result = process_frame(frame, detector, show_rois=False, yolo_tower_hp_detections=yolo_detections)
         game_state = build_game_state(result)
         has_display = os.environ.get("SHOW_DEBUG_WINDOW") == "1"
         if has_display:
@@ -309,15 +318,13 @@ def main(debug: bool, normalize: bool = True, debug_frame_path: str | None = Non
         if normalize:
             frame = normalize_frame(frame)
         
-        if not game_started and game_start(frame):
+        if not game_started and game_start(frame): # First frame of game_start
             game_started = True
 
             result = process_frame(frame, detector, show_rois=False)
 
             now = time.monotonic()
-            filtered_time_left_s = match_clock_filter.update(result["time_left_s"], now)
-            result["time_left_s"] = filtered_time_left_s
-            result["total_remaining_s"] = total_remaining_seconds(filtered_time_left_s, result["overtime"])
+            match_clock_filter.initialise(result["time_left_s"], now)
 
 
             enemy_card_tracker.start_match(
@@ -329,9 +336,12 @@ def main(debug: bool, normalize: bool = True, debug_frame_path: str | None = Non
             result = process_frame(frame, detector, show_rois=False)
 
             now = time.monotonic()
-            filtered_time_left_s = match_clock_filter.update(result["time_left_s"], now)
-            result["time_left_s"] = filtered_time_left_s
-            result["total_remaining_s"] = total_remaining_seconds(filtered_time_left_s, result["overtime"])
+            if match_clock_filter.initialised:
+                filtered_time_left_s = match_clock_filter.update(result["time_left_s"], now)
+                result["time_left_s"] = filtered_time_left_s
+                result["total_remaining_s"] = total_remaining_seconds(filtered_time_left_s, result["overtime"])
+            else:
+                match_clock_filter.initialise(result["time_left_s"], now)
 
             enemy_card_tracker.update(
                 result["total_remaining_s"],
@@ -344,6 +354,7 @@ def main(debug: bool, normalize: bool = True, debug_frame_path: str | None = Non
                     game_started = False
                     not_in_game_streak = 0
                     enemy_card_tracker = EnemyCardTracker()
+                    match_clock_filter = MatchClockFilter()
                     continue
             else:
                 not_in_game_streak = 0

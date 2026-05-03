@@ -11,6 +11,7 @@ from constants import (
     OVERTIME_SECONDS,
     OVERTIME_RED_RATIO_THRESHOLD,
 )
+from extractors.tower_hp import EXPERT_TEMPLATES
 from rois import ROIS
 from image_utils import (
     build_digit_debug_views,
@@ -23,6 +24,8 @@ from image_utils import (
 )
 
 TEMPLATE_DIR = Path(__file__).resolve().parents[1] / "templates" / "numbers"
+EXPERT_TEMPLATE_DIR = Path(__file__).resolve().parents[1] / "templates" / "expert_numbers"
+
 
 
 def read_template(name: str):
@@ -216,13 +219,17 @@ def _read_timer_from_roi_red(img: np.ndarray, debug_steps=None) -> str | None:
     return "".join(chars)
 
 
-def _read_timer_from_roi(img: np.ndarray, debug_steps=None) -> str | None:
+def _read_timer_from_roi(img: np.ndarray, debug_steps=None, yolo_templates=None) -> str | None:
     if _measure_timer_digit_red_presence(img) >= 0.02:
         return _read_timer_from_roi_red(img, debug_steps=debug_steps)
+    if yolo_templates:
+        templates = TEMPLATES
+    else:
+        templates = EXPERT_TEMPLATES
 
     return read_number_from_roi(
         img,
-        TEMPLATES,
+        templates,
         semicolon=True,
         debug_steps=debug_steps,
         digit_mode="timer",
@@ -364,10 +371,10 @@ def _locate_timer(frame, debug_steps=None):
     }
 
 
-def extract_time(frame, debug_steps=None):
+def extract_time(frame, debug_steps=None, yolo_templates=None):
     located = _locate_timer(frame, debug_steps=debug_steps)
     timer_debug = debug_steps if debug_steps is not None else None
-    time = _read_timer_from_roi(located["timer_frame"], debug_steps=timer_debug)
+    time = _read_timer_from_roi(located["timer_frame"], debug_steps=timer_debug, yolo_templates=None)
     normalized = _normalize_timer_text(located["time"])
     reread_normalized = _normalize_timer_text(time)
     if reread_normalized is not None:

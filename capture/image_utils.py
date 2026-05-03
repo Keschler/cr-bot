@@ -67,7 +67,7 @@ def preprocess_digit(img):
     else:
         img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    _, thresholded = cv2.threshold(img_gray, 200, 255, cv2.THRESH_BINARY)
+    _, thresholded = cv2.threshold(img_gray, 195, 255, cv2.THRESH_BINARY)
     return thresholded
 
 
@@ -126,12 +126,18 @@ def _binary_region_mean(binary_img, y0, y1, x0, x1):
     return float((binary_img[ys0:ys1, xs0:xs1] > 0).mean())
 
 
-def _tower_digit_override(best_digit, scores, norm_digit):
+def _tower_digit_override(best_digit, scores, norm_digit, source_digit=None):
     top_mid = _binary_region_mean(norm_digit, 0.00, 0.25, 0.35, 0.65)
     center_mid = _binary_region_mean(norm_digit, 0.35, 0.65, 0.40, 0.60)
     left_mid = _binary_region_mean(norm_digit, 0.35, 0.65, 0.15, 0.35)
     right_mid = _binary_region_mean(norm_digit, 0.35, 0.65, 0.65, 0.85)
     bottom_mid = _binary_region_mean(norm_digit, 0.75, 1.00, 0.35, 0.65)
+    center_column = _binary_region_mean(norm_digit, 0.10, 0.90, 0.42, 0.58)
+    right_column = _binary_region_mean(norm_digit, 0.10, 0.90, 0.72, 0.92)
+    source_aspect = None
+    if source_digit is not None:
+        source_h, source_w = source_digit.shape[:2]
+        source_aspect = source_w / max(1, source_h)
 
     # Tower-font 4 often gets matched as 0 when the open bottom and tall side rails
     # are preserved but the template correlation still prefers the rounded glyph.
@@ -182,6 +188,18 @@ def _tower_digit_override(best_digit, scores, norm_digit):
         return 4
 
     if (
+        best_digit == 0
+        and scores.get(4, -1.0) > scores.get(0, -1.0) - 0.25
+        and top_mid > 0.90
+        and center_mid < 0.35
+        and 0.60 < left_mid < 0.90
+        and right_mid > 0.95
+        and bottom_mid < 0.40
+        and _binary_region_mean(norm_digit, 0.75, 1.00, 0.00, 0.35) < 0.25
+    ):
+        return 4
+
+    if (
         best_digit == 3
         and scores.get(1, -1.0) > scores.get(3, -1.0) - 0.08
         and top_mid > 0.90
@@ -189,6 +207,30 @@ def _tower_digit_override(best_digit, scores, norm_digit):
         and 0.40 < left_mid < 0.70
         and right_mid > 0.95
         and bottom_mid > 0.95
+    ):
+        return 1
+
+    if (
+        best_digit == 3
+        and source_aspect is not None
+        and source_aspect < 0.40
+        and center_column > 0.90
+        and left_mid > 0.90
+        and right_mid > 0.90
+        and bottom_mid > 0.90
+    ):
+        return 1
+
+    # A narrow tower-font 1 can correlate with 3 because of its top and bottom
+    # caps. Do not apply this when the right edge is filled like an actual 3.
+    if (
+        best_digit == 3
+        and scores.get(1, -1.0) > scores.get(3, -1.0) - 0.20
+        and center_column > 0.55
+        and right_column < 0.55
+        and right_mid < 0.75
+        and center_mid > 0.55
+        and bottom_mid > 0.45
     ):
         return 1
 
@@ -204,10 +246,44 @@ def _tower_digit_override(best_digit, scores, norm_digit):
     ):
         return 6
 
+    if (
+        best_digit == 6
+        and scores.get(5, -1.0) > scores.get(6, -1.0) - 0.06
+        and left_mid < 0.90
+        and right_mid < 0.75
+        and center_mid > 0.55
+        and bottom_mid > 0.70
+    ):
+        return 5
+
+    if (
+        best_digit == 6
+        and scores.get(5, -1.0) > scores.get(6, -1.0) - 0.09
+        and top_mid > 0.75
+        and center_mid > 0.70
+        and left_mid < 0.75
+        and right_mid < 0.75
+        and bottom_mid > 0.75
+        and _binary_region_mean(norm_digit, 0.00, 0.25, 0.00, 0.35) > 0.90
+    ):
+        return 5
+
+    if (
+        best_digit == 6
+        and scores.get(0, -1.0) > scores.get(6, -1.0) - 0.05
+        and center_mid < 0.10
+        and center_column < 0.30
+        and left_mid > 0.75
+        and right_mid > 0.60
+        and bottom_mid > 0.75
+    ):
+        return 0
+
     return best_digit
 
 
 def classify_digit(digit_img, templates, out_size=(32,48), mode="default"):
+    source_digit = digit_img
     digit_img = cv2.resize(digit_img, out_size)
 
     best_digit = None
@@ -227,7 +303,7 @@ def classify_digit(digit_img, templates, out_size=(32,48), mode="default"):
         return 0, best_score
 
     if mode == "tower" or mode == "timer":
-        best_digit = _tower_digit_override(best_digit, scores, digit_img)
+        best_digit = _tower_digit_override(best_digit, scores, digit_img, source_digit=source_digit)
 
     return best_digit, best_score 
 
