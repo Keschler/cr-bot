@@ -7,29 +7,32 @@ from vision.yolo_runtime import parse_box_row, load_yolo_runtime
 from rois import ROIS
 
 TEMPLATE_DIR = Path(__file__).resolve().parents[1] / "templates" / "numbers"
+EXPERT_TEMPLATE_DIR = Path(__file__).resolve().parents[1] / "templates" / "expert_numbers"
 
 
-def read_template(name: str):
-    path = TEMPLATE_DIR / name
+def read_template(name: str, expert: bool):
+    if expert:
+        path = EXPERT_TEMPLATE_DIR / name
+    else:
+        path = TEMPLATE_DIR / name
     template = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
     if template is None:
         raise FileNotFoundError(f"Failed to read tower HP template: {path}")
     return template
 
-
-def load_templates():
+def load_templates(expert: bool):
     raw_templates = {
-        0: read_template("0.png"),
-        1: read_template("1.png"),
-        2: read_template("2.png"),
-        3: read_template("3.png"),
-        4: read_template("4.png"),
-        5: read_template("5.png"),
-        6: read_template("6.png"),
-        7: read_template("7.png"),
-        8: read_template("8.png"),
-        9: read_template("9.png"),
-    }
+        0: read_template("0.png", expert),
+        1: read_template("1.png", expert),
+        2: read_template("2.png", expert),
+        3: read_template("3.png", expert),
+        4: read_template("4.png", expert),
+        5: read_template("5.png", expert),
+        6: read_template("6.png", expert),
+        7: read_template("7.png", expert),
+        8: read_template("8.png", expert),
+        9: read_template("9.png", expert),
+        }
 
     return {
         digit: preprocess_digit(template)
@@ -37,10 +40,11 @@ def load_templates():
     }
 
 
-TEMPLATES = load_templates()
+TEMPLATES = load_templates(False)
+EXPERT_TEMPLATES = load_templates(True)
 
 def extract_tower_hp(frame, yolo_boxes=None, debug_steps_by_tower=None):
-    if yolo_boxes is None:
+    if yolo_boxes is None: # Live gameplay
         towers_hp = {
             "enemy_king": {
                 "image": crop(frame, ROIS["opponent_king_health_text"]),
@@ -97,7 +101,7 @@ def extract_tower_hp(frame, yolo_boxes=None, debug_steps_by_tower=None):
             tower_name: tower_data["value"]
             for tower_name, tower_data in towers_hp.items()
         }
-    else:
+    else: # expert gameplay
         _, _, idx2unit = load_yolo_runtime()
 
         king_towers = []
@@ -188,7 +192,7 @@ def extract_tower_hp(frame, yolo_boxes=None, debug_steps_by_tower=None):
             )
             bar_img = crop(frame, bar_roi)
             text_img = crop_tower_hp_text_area(bar_img, tower_name)
-            value = read_number_from_roi(text_img, TEMPLATES, debug_steps=tower_debug, digit_mode="tower")
+            value = read_number_from_roi(text_img, EXPERT_TEMPLATES, debug_steps=tower_debug, digit_mode="tower")
             if value in (None, 0):
                 value = FULL_TOWER_HP[tower_name]
             if len(str(value)) > 4:
