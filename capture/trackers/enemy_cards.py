@@ -11,6 +11,28 @@ MAX_ELIXIR = 10.0
 ELIXIR_PER_SECOND_NORMAL = 1.0 / 2.8
 ELIXIR_PER_SECOND_DOUBLE = 1.0 / 1.4
 ELIXIR_PER_SECOND_TRIPLE = 1.0 / 0.9
+FRAME_CONFIRM_CLASSES = {
+    "arrows",
+    "barbarian-barrel",
+    "clone",
+    "earthquake",
+    "electro-wizard",
+    "fireball",
+    "freeze",
+    "giant-snowball",
+    "goblin-barrel",
+    "graveyard",
+    "lightning",
+    "poison",
+    "rage",
+    "rocket",
+    "royal-delivery",
+    "skeleton-king-skill",
+    "tesla-evolution-shock",
+    "the-log",
+    "tornado",
+    "zap",
+}
 
 @dataclass
 class TrackMemory:
@@ -26,7 +48,8 @@ class TrackMemory:
     team_votes: dict[str, int] = field(default_factory=dict)
     confidence_sum: float = 0.0
     seen_frames: int = 0
-    confirmed: bool = False
+    clock_confirmed: bool = False
+    frame_confirmed: bool = False
     counted_as_card: bool = False
 
     def add_observation(self, class_name, team, confidence, total_remaining_s):
@@ -42,11 +65,6 @@ class TrackMemory:
             return None
         return max(self.class_votes, key=self.class_votes.get)
 
-    @property
-    def avg_confidence(self):
-        if self.seen_frames == 0.0:
-            return None
-        return self.confidence_sum / self.seen_frames
 
     @property
     def best_team(self):
@@ -54,17 +72,22 @@ class TrackMemory:
             return None
         return max(self.team_votes, key=self.team_votes.get)
 
-    @property 
+    @property
+    def avg_confidence(self):
+        if self.seen_frames == 0:
+            return 0.0
+        return self.confidence_sum / self.seen_frames
+
+    @property
     def best_team_ratio(self):
         if self.seen_frames == 0:
             return 0.0
-        
+
         best_team = self.best_team
         if best_team is None:
             return 0.0
-        
-        return self.team_votes[best_team] / self.seen_frames
 
+        return self.team_votes[best_team] / self.seen_frames
 
 class EnemyCardTracker:
     """
@@ -91,7 +114,8 @@ class EnemyCardTracker:
         self.last_update_monotonic_s = now_s
 
 
-    def update(self, time_left_s, enemy_matches, now_s=None):
+    def update(self, time_left_s, enemy_matches, clock_boxes=None, now_s=None):
+        clock_boxes = clock_boxes or []
         self._regen_elixir(time_left_s, now_s=now_s)
 
         for match in enemy_matches:
@@ -117,37 +141,50 @@ class EnemyCardTracker:
                 time_left_s,
             )
 
-            if self._should_confirm(memory):
-                memory.confirmed = True
+            if self._has_nearby_clock(troop, clock_boxes):
+                memory.clock_confirmed = True
 
-            if memory.confirmed and not memory.counted_as_card:
+            if self._should_frame_confirm(memory):
+                memory.frame_confirmed = True
+
+            if (memory.clock_confirmed or memory.frame_confirmed) and not memory.counted_as_card:
                 self._maybe_record_play(memory, time_left_s)
 
         self._drop_stale_tracks(time_left_s)
 
-        
-    def _should_confirm(self, memory):
-        if memory.confirmed:
-            return True
+    def _has_nearby_clock(self, troop, clock_boxes):
+        for clock in clock_boxes:
+            if clock["confidence"] < 0.5:
+                continue
+            if clock["team"] != "enemy":
+                continue
+            horizontal_gap = abs(clock["center_x"] - troop.center_x)
+            vertical_gap = clock["center_y"] - troop.center_y
+
+            if horizontal_gap <= 90 and -80 <= vertical_gap <= 180:
+              return True
+        return False 
+
+    def _should_frame_confirm(self, memory):
+        best_class = memory.best_class
+        if best_class not in FRAME_CONFIRM_CLASSES:
+            return False
         if memory.seen_frames < CONFIRM_FRAMES:
             return False
         if memory.avg_confidence < 0.65:
             return False
 
-        best_class = memory.best_class
-        if best_class is None:
-            return False
-
         best_votes = memory.class_votes[best_class]
-        return best_votes / memory.seen_frames >= 0.6 # Did at least 60% of this track's observations agree on the same class?
+        return best_votes / memory.seen_frames >= 0.6
+
     def _is_reliable_enemy_play(self, memory):
+        if not memory.clock_confirmed and not memory.frame_confirmed:
+            return False
         if memory.best_team != "enemy":
             return False
-        if memory.best_team_ratio < 0.8:
-            return False 
-        if memory.avg_confidence < 0.7:
+        if memory.frame_confirmed and memory.best_team_ratio < 0.8:
             return False
-        if memory.seen_frames < 3:
+        if memory.frame_confirmed and memory.avg_confidence < 0.7:
             return False
         if memory.best_class is None:
             return False

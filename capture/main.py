@@ -17,7 +17,7 @@ from image_utils import draw_rois
 from rois import ROIS
 from scripts.run_seed_inference import filter_excluded_classes
 from state_builder import build_game_state
-from vision.yolo_runtime import load_yolo_runtime, build_detector, summarize_detections, remap_boxes_to_frame, convert_yolo
+from vision.yolo_runtime import load_yolo_runtime, build_detector, summarize_detections, remap_boxes_to_frame, convert_yolo, extract_clock_boxes
 from trackers.enemy_cards import EnemyCardTracker 
 from katacr.build_dataset.utils.split_part import process_part, ratio2name
 from trackers.match_clock import MatchClockFilter
@@ -78,6 +78,7 @@ def process_frame(frame, detector, show_rois: bool = False, yolo_tower_hp_detect
       arena.shape,
       arena_px,
     )
+    clock_boxes = extract_clock_boxes(yolo_boxes)
     tower_hp_yolo_boxes = remap_boxes_to_frame(
       tower_hp_yolo_boxes,
       arena.shape,
@@ -117,6 +118,7 @@ def process_frame(frame, detector, show_rois: bool = False, yolo_tower_hp_detect
         "overtime": overtime,
         "state": state,
         "yolo_boxes": yolo_boxes,
+        "clock_boxes": clock_boxes,
         "matches": typed_matches,
         "arena_px": arena_px,
         "tower_hp_debug_steps": tower_hp_debug_steps,
@@ -235,6 +237,23 @@ def main(debug: bool, normalize: bool = True, debug_frame_path: str | None = Non
             frame = normalize_frame(frame)
 
         result = process_frame(frame, detector, show_rois=False, yolo_tower_hp_detections=yolo_detections)
+
+        enemy_card_tracker.start_match(
+          result["time_left_s"],
+          result["total_remaining_s"],
+          now_s=time.monotonic(),
+      )
+
+        enemy_card_tracker.update(
+        result["total_remaining_s"],
+        result["matches"],
+        clock_boxes=result["clock_boxes"],
+        now_s=time.monotonic(),
+        )
+
+
+
+
         game_state = build_game_state(result)
         has_display = os.environ.get("SHOW_DEBUG_WINDOW") == "1"
         if has_display:
@@ -272,6 +291,15 @@ def main(debug: bool, normalize: bool = True, debug_frame_path: str | None = Non
               f"conf={m.troop.confidence:.3f} "
               f"hp={m.troop.estimated_hp}"
             )
+
+        print("enemy plays:")
+        for play in enemy_card_tracker.detected_card_plays:
+          print(
+              f"  card={play['card']:<20} "
+              f"cost={play['cost']} "
+              f"time_left={play['time_left_s']} "
+              f"track_id={play['track_id']}"
+          )
         print()
 
 
@@ -347,6 +375,7 @@ def main(debug: bool, normalize: bool = True, debug_frame_path: str | None = Non
                 result["total_remaining_s"],
                 result["matches"],
                 now_s=now,
+                clock_boxes=result["clock_boxes"]
             )
             if game_end_from_result(result):
                 not_in_game_streak += 1

@@ -210,3 +210,25 @@ def convert_yolo(boxes):
                 })
 
     return troops, bars
+
+def extract_clock_boxes(boxes):
+      clocks = []
+      _, _, idx2unit = load_yolo_runtime()
+
+      for box in boxes:
+          x1, y1, x2, y2, track_id, conf, cls, team = parse_box_row(box)
+          if idx2unit[int(cls)] != "clock":
+              continue
+
+          clocks.append({
+              "team": "enemy" if int(team) == 1 else "ally",
+              "confidence": conf,
+              "x1": x1,
+              "y1": y1,
+              "x2": x2,
+              "y2": y2,
+              "center_x": (x1 + x2) / 2,
+              "center_y": (y1 + y2) / 2,
+          })
+
+      return clocks
