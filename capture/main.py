@@ -405,7 +405,14 @@ def main(debug: bool, normalize: bool = True, debug_frame_path: str | None = Non
         else:
             print(f"enemy elixir est: {enemy_card_tracker.elixir_enemy_est:.2f}")
         print(f"seen enemy cards: {sorted(enemy_card_tracker.confirmed_seen_cards)}")
-        print(f"enemy plays: {enemy_card_tracker.detected_card_plays[-5:]}")
+        print("enemy plays:")
+        for play in enemy_card_tracker.detected_card_plays:
+          print(
+              f"  card={play['card']:<20} "
+              f"cost={play['cost']} "
+              f"time_left={play['time_left_s']} "
+              f"track_id={play['track_id']}"
+          )
         print()
 
         cv2.imshow("feed", result["rendered"])
