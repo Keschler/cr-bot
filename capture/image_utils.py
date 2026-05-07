@@ -515,6 +515,9 @@ def read_number_from_roi(img, templates, semicolon=False, debug_steps=None, digi
 
         dimg = binary[y:y + h, x:x + w]
         digit, score = classify_digit(dimg, templates, mode=digit_mode)
+        ratio = w/h
+        if score <= 0.1 or ratio > 1:
+            continue
         chars.append(str(digit)) # Classify each digit separately
         digit_views.append((str(digit), dimg))
 
@@ -526,8 +529,10 @@ def read_number_from_roi(img, templates, semicolon=False, debug_steps=None, digi
     value = "".join(chars)
     if semicolon:
         return value
-
-    return int(value)
+    if value:
+        return int(value)
+    else:
+        return None
 
 def _extract_king_bar_fill(bar_img):
     height, width = bar_img.shape[:2]
