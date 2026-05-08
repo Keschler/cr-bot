@@ -1,2 +1,11 @@
 capture/runs/inference/
 **/__pycache__/
+*.pyc
+.codex
+capture/.cache/
+capture/.pyinstaller-cache/
+capture/build/
+capture/dist/
+capture/venv/
+capture/venv-cpu/
+*.log

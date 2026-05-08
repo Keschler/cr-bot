@@ -8,14 +8,10 @@ import torch
 import torchvision
 
 from constants import YOLO_CONF_THRESHOLD, YOLO_IOU_THRESHOLD
+from paths import CACHE_DIR, KATACR_DATASET_ROOT, KATACR_ROOT, MODELS_DIR
 
-ROOT = Path(__file__).resolve().parents[1]
-KATACR_ROOT = ROOT / "vendor/external/KataCR"
-KATACR_DATASET_ROOT = ROOT / "vendor/external/Clash-Royale-Detection-Dataset"
-MODELS_DIR = ROOT / "models"
-CACHE_ROOT = ROOT / ".cache"
-MPLCONFIGDIR = CACHE_ROOT / "matplotlib"
-ULTRALYTICS_CONFIG_DIR = CACHE_ROOT / "ultralytics"
+MPLCONFIGDIR = CACHE_DIR / "matplotlib"
+ULTRALYTICS_CONFIG_DIR = CACHE_DIR / "ultralytics"
 
 if str(KATACR_ROOT) not in sys.path:
     sys.path.insert(0, str(KATACR_ROOT))

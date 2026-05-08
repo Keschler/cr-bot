@@ -1,6 +1,5 @@
 import cv2
 import numpy as np
-from pathlib import Path
 import re
 
 from constants import (
@@ -22,9 +21,10 @@ from image_utils import (
     segment_digits,
     _measure_red_ratio,
 )
+from paths import TEMPLATES_DIR
 
-TEMPLATE_DIR = Path(__file__).resolve().parents[1] / "templates" / "numbers"
-EXPERT_TEMPLATE_DIR = Path(__file__).resolve().parents[1] / "templates" / "expert_numbers"
+TEMPLATE_DIR = TEMPLATES_DIR / "numbers"
+EXPERT_TEMPLATE_DIR = TEMPLATES_DIR / "expert_numbers"
 
 
 

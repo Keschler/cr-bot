@@ -2,7 +2,8 @@ import json
 from pathlib import Path
 
 
-CARDS_DIR = Path("templates/cr-api-assets/cards-150")
+ROOT = Path(__file__).resolve().parents[1]
+CARDS_DIR = ROOT / "assets/templates/cr-api-assets/cards-150"
 OUTPUT_FILE = Path("seed_labels/cvat_cards_150_labels.json")
 PALETTE = [
     "#e6194b",

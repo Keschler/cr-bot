@@ -2,7 +2,7 @@
 from PyInstaller.utils.hooks import collect_submodules
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('models', 'models'), ('templates', 'templates'), ('vendor/external/KataCR/katacr/yolov8', 'vendor/external/KataCR/katacr/yolov8'), ('vendor/external/KataCR/katacr/utils/fonts', 'vendor/external/KataCR/katacr/utils/fonts')]
+datas = [('assets/models', 'assets/models'), ('assets/templates', 'assets/templates'), ('vendor/external/KataCR/katacr/yolov8', 'vendor/external/KataCR/katacr/yolov8'), ('vendor/external/KataCR/katacr/utils/fonts', 'vendor/external/KataCR/katacr/utils/fonts')]
 binaries = []
 hiddenimports = []
 hiddenimports += collect_submodules('katacr')

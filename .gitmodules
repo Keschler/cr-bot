@@ -1,5 +1,5 @@
-[submodule "capture/templates/cr-api-assets"]
-	path = capture/templates/cr-api-assets
+[submodule "capture/assets/templates/cr-api-assets"]
+	path = capture/assets/templates/cr-api-assets
 	url = https://github.com/RoyaleAPI/cr-api-assets.git
 
 [submodule "capture/vendor/external/Clash-Royale-Detection-Dataset"]

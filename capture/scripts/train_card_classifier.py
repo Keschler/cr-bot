@@ -9,7 +9,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MODELS_DIR = ROOT / "models"
+MODELS_DIR = ROOT / "assets/models"
 HAND_CLASSIFIER_PATH = MODELS_DIR / "hand_classifier_best.pt"
 
 

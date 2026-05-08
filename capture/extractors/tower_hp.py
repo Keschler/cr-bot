@@ -1,13 +1,13 @@
 import cv2
-from pathlib import Path
 from constants import FULL_TOWER_HP, KING_TOWER_HP
 from image_utils import crop, read_number_from_roi, preprocess_digit, detect_if_king_tower_activated, detect_if_support_tower_alive
+from paths import TEMPLATES_DIR
 from vision.yolo_runtime import parse_box_row, load_yolo_runtime
 
 from rois import ROIS
 
-TEMPLATE_DIR = Path(__file__).resolve().parents[1] / "templates" / "numbers"
-EXPERT_TEMPLATE_DIR = Path(__file__).resolve().parents[1] / "templates" / "expert_numbers"
+TEMPLATE_DIR = TEMPLATES_DIR / "numbers"
+EXPERT_TEMPLATE_DIR = TEMPLATES_DIR / "expert_numbers"
 
 
 def read_template(name: str, expert: bool):

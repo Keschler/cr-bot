@@ -2,9 +2,10 @@ import cv2
 from pathlib import Path
 
 from image_utils import crop, estimate_slot_fraction, preprocess_digit
+from paths import TEMPLATES_DIR
 from rois import ELIXIR_SLOT_ROIS, ROIS
 
-TEMPLATE_DIR = Path(__file__).resolve().parents[1] / "templates"
+TEMPLATE_DIR = TEMPLATES_DIR
 
 
 def read_template(path: Path):

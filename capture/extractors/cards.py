@@ -1,12 +1,11 @@
-from pathlib import Path
-
 import cv2
 
 from image_utils import crop, classify_card_for_slot
+from paths import TEMPLATES_DIR
 from rois import ROIS
 
 
-CARDS_TEMPLATE_DIR = Path(__file__).resolve().parents[1] / "templates/cr-api-assets/cards-150"
+CARDS_TEMPLATE_DIR = TEMPLATES_DIR / "cr-api-assets/cards-150"
 
 
 def _is_supported_template(template_path):
