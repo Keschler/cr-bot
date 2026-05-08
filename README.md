@@ -35,30 +35,22 @@ The project processes each frame in a few steps:
 
 ## Use The Executable
 
-Download `cr-bot-linux-cpu.zip` from the latest GitHub Release:
+Download `capture` from the latest GitHub Release:
 
 ```text
 https://github.com/keschler/cr-bot/releases/latest
 ```
 
-Unzip it:
-
-```bash
-unzip cr-bot-linux-cpu.zip
-cd cr-bot
-chmod +x cr-bot
-```
-
 Run it on a screenshot:
 
 ```bash
-./cr-bot --debug-frame /path/to/screenshot.png
+./capture --debug-frame /path/to/screenshot.png
 ```
 
 Run it on live video from a Linux video device:
 
 ```bash
-VIDEO_DEVICE=/dev/video37 ./cr-bot
+VIDEO_DEVICE=/dev/video37 ./capture
 ```
 
 For Android live capture on Linux, create a loopback device first:
@@ -72,6 +64,8 @@ Then stream the phone screen into that device with `scrcpy`:
 ```bash
 scrcpy --video-source=display --v4l2-sink=/dev/video37
 ```
+
+**Use** `--yolo-detections` if screenshot or phone screen isn't `1080x2400` -> uses yolo dections for the extraction of tower-hp
 
 Frames are normalized to `1080x2400` internally by default so the existing ROIs keep matching the game UI. Use `--no-normalize` only when intentionally processing the raw capture size. Currently, only `1080x2400` or resolutions with the same aspect ratio are expected to work.
 
@@ -118,7 +112,6 @@ Devlogs: https://flavortown.hackclub.com/projects/16627
 - Timer, elixir, and tower HP extraction can still be noisy in some frames.
 - Enemy elixir is an estimate, not a value shown by the game.
 - Spell detection can be ambiguous.
-- Large generated datasets may need to be provided separately from the repository.
 
 ## Tech Stack
 
