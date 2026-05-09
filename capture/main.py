@@ -50,7 +50,12 @@ def get_default_video_device() -> str:
 
 
 
-def process_frame(frame, detector, show_rois: bool = False, yolo_tower_hp_detections: bool = False):
+def process_frame(
+    frame,
+    detector,
+    show_rois: bool = False,
+    yolo_tower_hp_detections: bool = False,
+):
     _, draw_boxes, _ = load_yolo_runtime()
     frame_to_analyze = draw_rois(frame, ROIS) if show_rois else frame
     ratio_name = ratio2name(frame)
@@ -218,9 +223,51 @@ def render_match_debug(frame: np.ndarray, matches) -> np.ndarray:
 
     return np.vstack(rows)
 
+def print_frame_result(result, enemy_card_tracker):
+    if enemy_card_tracker.elixir_enemy_est is None:
+        print("enemy elixir is undefined")
+    else:
+        print(f"enemy elixir est: {enemy_card_tracker.elixir_enemy_est:.2f}")
+    print(f"seen enemy cards: {sorted(enemy_card_tracker.confirmed_seen_cards)}")
+    print("enemy plays:")
+    for play in enemy_card_tracker.detected_card_plays:
+        print(
+            f"  card={play['card']:<20} "
+            f"cost={play['cost']} "
+            f"time_left={play['time_left_s']} "
+            f"track_id={play['track_id']}"
+        )
+    print()
+
+    elixir = result["elixir"]
+    detection_summary = summarize_detections(result["yolo_boxes"])
+    print(f"time:   {result['time_left_s']}")
+    print(f"elixir: {elixir['estimated_value'] + elixir['displayed_digit'][0]}")
+    print(f"yolo:   {detection_summary}")
+
+    print("towers:")
+    for name, hp in result["towers_hp"].items():
+        print(f"{name}: {hp}")
+
+    print("state:")
+    for slot, value in result["state"].items():
+        print(f"  {slot}: {value}")
+    print("matches:")
+    for m in result["matches"]:
+        print(
+            f"  troop={m.troop.class_name:<18} "
+            f"team={m.troop.team:<5} "
+            f"conf={m.troop.confidence:.3f} "
+            f"hp={m.troop.estimated_hp}"
+        )
+    print()
 
 
-def main(debug: bool, normalize: bool = True, debug_frame_path: str | None = None, yolo_detections: bool = False):
+def has_visible_match_timer(result) -> bool:
+    return ":" in str(result.get("time") or "")
+
+
+def main(debug: bool, video: str | None = None, normalize: bool = True, debug_frame_path: str | None = None, yolo_detections: bool = False):
     detector = build_detector()
     print("detector sucessfully built!")
     enemy_card_tracker = EnemyCardTracker()
@@ -272,7 +319,7 @@ def main(debug: bool, normalize: bool = True, debug_frame_path: str | None = Non
         print(f"Overtime {result['overtime']}")
 
         detection_summary = summarize_detections(result["yolo_boxes"])
-        print(f"time:   {result['time']} time_left {result["total_remaining_s"]}")
+        print(f"time:   {result['time']} time_left {result['total_remaining_s']}")
         print(f"yolo:   {detection_summary}")
 
         print("towers:")
@@ -305,6 +352,96 @@ def main(debug: bool, normalize: bool = True, debug_frame_path: str | None = Non
 
         if has_display:
             cv2.waitKey(0)
+            cv2.destroyAllWindows()
+        return
+
+    if video:
+        video_path = Path(video)
+        if not video_path.exists():
+            raise FileNotFoundError(f"Missing video file: {video_path}")
+
+        cap = cv2.VideoCapture(str(video_path))
+        if not cap.isOpened():
+            raise RuntimeError(f"Could not open video file: {video_path}")
+
+        game_started = False
+        not_in_game_streak = 0
+        has_display = os.environ.get("SHOW_DEBUG_WINDOW") == "1"
+        if has_display:
+            cv2.namedWindow("feed", cv2.WINDOW_NORMAL)
+
+        frame_idx = 0
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+
+            frame_idx += 1
+            if normalize:
+                frame = normalize_frame(frame)
+
+            result = process_frame(
+                frame,
+                detector,
+                show_rois=False,
+                yolo_tower_hp_detections=yolo_detections,
+            )
+            video_time_s = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
+
+            if not game_started and (game_start(frame) or has_visible_match_timer(result)):
+                game_started = True
+                match_clock_filter.initialise(result["time_left_s"], video_time_s)
+                enemy_card_tracker.start_match(
+                    result["time_left_s"],
+                    result["total_remaining_s"],
+                    now_s=video_time_s,
+                )
+            elif game_started:
+                if match_clock_filter.initialised:
+                    filtered_time_left_s = match_clock_filter.update(result["time_left_s"], video_time_s)
+                    result["time_left_s"] = filtered_time_left_s
+                    result["total_remaining_s"] = total_remaining_seconds(filtered_time_left_s, result["overtime"])
+                else:
+                    match_clock_filter.initialise(result["time_left_s"], video_time_s)
+
+                enemy_card_tracker.update(
+                    result["total_remaining_s"],
+                    result["matches"],
+                    now_s=video_time_s,
+                    clock_boxes=result["clock_boxes"],
+                )
+
+                if game_end_from_result(result):
+                    not_in_game_streak += 1
+                    if not_in_game_streak >= 20:
+                        game_started = False
+                        not_in_game_streak = 0
+                        enemy_card_tracker = EnemyCardTracker()
+                        match_clock_filter = MatchClockFilter()
+                        continue
+                else:
+                    not_in_game_streak = 0
+            else:
+                print(f"frame {frame_idx}: not in game")
+                continue
+
+            build_game_state(
+                result,
+                seen_enemy_cards=list(enemy_card_tracker.confirmed_seen_cards),
+                elixir_enemy_est=enemy_card_tracker.elixir_enemy_est,
+                game_started=game_started,
+            )
+
+            print(f"frame {frame_idx} video_time={video_time_s:.2f}s")
+            print_frame_result(result, enemy_card_tracker)
+
+            if has_display:
+                cv2.imshow("feed", result["rendered"])
+                if cv2.waitKey(1) == 27:
+                    break
+
+        cap.release()
+        if has_display:
             cv2.destroyAllWindows()
         return
 
@@ -400,45 +537,9 @@ def main(debug: bool, normalize: bool = True, debug_frame_path: str | None = Non
         )
 
         print()
-        if enemy_card_tracker.elixir_enemy_est is None:
-            print("enemy elixir is undefined")
-        else:
-            print(f"enemy elixir est: {enemy_card_tracker.elixir_enemy_est:.2f}")
-        print(f"seen enemy cards: {sorted(enemy_card_tracker.confirmed_seen_cards)}")
-        print("enemy plays:")
-        for play in enemy_card_tracker.detected_card_plays:
-          print(
-              f"  card={play['card']:<20} "
-              f"cost={play['cost']} "
-              f"time_left={play['time_left_s']} "
-              f"track_id={play['track_id']}"
-          )
-        print()
+        print_frame_result(result, enemy_card_tracker)
 
         cv2.imshow("feed", result["rendered"])
-
-        elixir = result["elixir"]
-        detection_summary = summarize_detections(result["yolo_boxes"])
-        print(f"time:   {result['time_left_s']}")
-        print(f"elixir: {elixir['estimated_value'] + elixir['displayed_digit'][0]}")
-        print(f"yolo:   {detection_summary}")
-
-        print("towers:")
-        for name, hp in result["towers_hp"].items():
-            print(f"{name}: {hp}")
-
-        print("state:")
-        for slot, value in result["state"].items():
-            print(f"  {slot}: {value}")
-        print("matches:")
-        for m in result["matches"]:
-            print(
-              f"  troop={m.troop.class_name:<18} "
-              f"team={m.troop.team:<5} "
-              f"conf={m.troop.confidence:.3f} "
-              f"hp={m.troop.estimated_hp}"
-            )
-        print()
 
         if cv2.waitKey(1) == 27:
             break
