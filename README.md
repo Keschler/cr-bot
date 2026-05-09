@@ -73,13 +73,21 @@ Frames are normalized to `1080x2400` internally by default so the existing ROIs 
 
 ```text
 capture/
-  main.py                     live capture loop
+  cli.py                      command-line entry point
+  main.py                     live capture and video replay loops
+  bin/                        helper scripts for live capture setup
   extractors/                 timer, elixir, card, unit, tower HP extraction
   trackers/                   enemy cards, match clock, and stateful tracking
   vision/                     YOLO/KataCR runtime helpers
   features/                   board and global feature builders
   scripts/                    training, inference, and dataset helper scripts
-  models/                     detector and classifier checkpoints
+  assets/
+    models/                   detector and classifier checkpoints
+    templates/                OCR and elixir templates
+    pictures/                 debug images and local test media
+  configs/                    detector training configs
+  data/                       local capture datasets and video clips
+  vendor/                     external KataCR dependency
 
 dataset_generation/
   scripts/process_frame.py    offline frame-state dataset generation
