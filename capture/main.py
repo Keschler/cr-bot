@@ -312,18 +312,20 @@ def main(
           now_s=time.monotonic(),
       )
 
-        enemy_card_tracker.update(
-        result["total_remaining_s"],
-        result["matches"],
-        clock_boxes=result["clock_boxes"],
-        now_s=time.monotonic(),
-        )
-
-
-
-
         game_state = build_game_state(result)
         own_action_tracker.update(game_state, result["arena_px"])
+        enemy_card_tracker.reconcile_own_actions(
+            own_action_tracker.actions,
+            arena_px=result["arena_px"],
+        )
+        enemy_card_tracker.update(
+            result["total_remaining_s"],
+            result["matches"],
+            clock_boxes=result["clock_boxes"],
+            now_s=time.monotonic(),
+            own_actions=own_action_tracker.actions,
+            arena_px=result["arena_px"],
+        )
         has_display = os.environ.get("SHOW_DEBUG_WINDOW") == "1"
         if has_display:
             cv2.namedWindow("debug", cv2.WINDOW_NORMAL)
@@ -429,6 +431,17 @@ def main(
                     result["total_remaining_s"],
                     now_s=video_time_s,
                 )
+                game_state = build_game_state(
+                    result,
+                    seen_enemy_cards=list(enemy_card_tracker.confirmed_seen_cards),
+                    elixir_enemy_est=enemy_card_tracker.elixir_enemy_est,
+                    game_started=game_started,
+                )
+                own_action_tracker.update(game_state, result["arena_px"])
+                enemy_card_tracker.reconcile_own_actions(
+                    own_action_tracker.actions,
+                    arena_px=result["arena_px"],
+                )
             elif game_started:
                 if match_clock_filter.initialised:
                     filtered_time_left_s = match_clock_filter.update(result["time_left_s"], video_time_s)
@@ -437,11 +450,24 @@ def main(
                 else:
                     match_clock_filter.initialise(result["time_left_s"], video_time_s)
 
+                game_state = build_game_state(
+                    result,
+                    seen_enemy_cards=list(enemy_card_tracker.confirmed_seen_cards),
+                    elixir_enemy_est=enemy_card_tracker.elixir_enemy_est,
+                    game_started=game_started,
+                )
+                own_action_tracker.update(game_state, result["arena_px"])
+                enemy_card_tracker.reconcile_own_actions(
+                    own_action_tracker.actions,
+                    arena_px=result["arena_px"],
+                )
                 enemy_card_tracker.update(
                     result["total_remaining_s"],
                     result["matches"],
                     now_s=video_time_s,
                     clock_boxes=result["clock_boxes"],
+                    own_actions=own_action_tracker.actions,
+                    arena_px=result["arena_px"],
                 )
 
                 if game_end_from_result(result):
@@ -458,14 +484,6 @@ def main(
             else:
                 print(f"frame {frame_idx}: not in game")
                 continue
-
-            game_state = build_game_state(
-                result,
-                seen_enemy_cards=list(enemy_card_tracker.confirmed_seen_cards),
-                elixir_enemy_est=enemy_card_tracker.elixir_enemy_est,
-                game_started=game_started,
-            )
-            own_action_tracker.update(game_state, result["arena_px"])
 
             print(f"frame {frame_idx} video_time={video_time_s:.2f}s")
             print_frame_result(result, enemy_card_tracker, own_action_tracker)
@@ -532,6 +550,13 @@ def main(
                 result["total_remaining_s"],
                 now_s=time.monotonic(),
             )
+            game_state = build_game_state(
+                result,
+                seen_enemy_cards=list(enemy_card_tracker.confirmed_seen_cards),
+                elixir_enemy_est=enemy_card_tracker.elixir_enemy_est,
+                game_started=game_started
+            )
+            own_action_tracker.update(game_state, result["arena_px"])
         elif game_started:
             result = process_frame(frame, detector, show_rois=False)
 
@@ -543,11 +568,24 @@ def main(
             else:
                 match_clock_filter.initialise(result["time_left_s"], now)
 
+            game_state = build_game_state(
+                result,
+                seen_enemy_cards=list(enemy_card_tracker.confirmed_seen_cards),
+                elixir_enemy_est=enemy_card_tracker.elixir_enemy_est,
+                game_started=game_started
+            )
+            own_action_tracker.update(game_state, result["arena_px"])
+            enemy_card_tracker.reconcile_own_actions(
+                own_action_tracker.actions,
+                arena_px=result["arena_px"],
+            )
             enemy_card_tracker.update(
                 result["total_remaining_s"],
                 result["matches"],
                 now_s=now,
-                clock_boxes=result["clock_boxes"]
+                clock_boxes=result["clock_boxes"],
+                own_actions=own_action_tracker.actions,
+                arena_px=result["arena_px"],
             )
             if game_end_from_result(result):
                 not_in_game_streak += 1
@@ -564,14 +602,6 @@ def main(
             print("not in game")
             continue
         
-
-        game_state = build_game_state(
-            result, 
-            seen_enemy_cards=list(enemy_card_tracker.confirmed_seen_cards), 
-            elixir_enemy_est=enemy_card_tracker.elixir_enemy_est,
-            game_started=game_started
-        )
-        own_action_tracker.update(game_state, result["arena_px"])
 
         print()
         print_frame_result(result, enemy_card_tracker, own_action_tracker)

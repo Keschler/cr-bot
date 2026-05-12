@@ -4,7 +4,9 @@ from game_state import GameState, HudState, PrincessTowerState
 
 def card_name(card):
     if isinstance(card, (tuple, list)) and len(card) >= 1:
-        return card[0]
+        card = card[0]
+    if isinstance(card, str) and card.lower() == "none":
+        return None
     return card
 
 def build_game_state(result, *, seen_enemy_cards=None, elixir_enemy_est=None, game_started=None):

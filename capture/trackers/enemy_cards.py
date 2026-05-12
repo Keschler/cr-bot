@@ -6,13 +6,24 @@ from constants import (
     ELIXIR_PER_SECOND_NORMAL,
     ELIXIR_PER_SECOND_TRIPLE,
     ENEMY_CARD_CONFIRM_FRAMES,
+    ENEMY_SPELL_DISTINCT_CELL_DISTANCE,
+    ENEMY_SPELL_OWN_ACTION_VETO_WINDOW_S,
     ENEMY_CARD_STALE_AFTER_SECONDS,
     FRAME_CONFIRM_CLASSES,
+    FRAME_CONFIRM_MOVING_SPELLS,
+    FRAME_CONFIRM_STATIONARY_SPELLS,
     MAX_ELIXIR,
     STARTING_ELIXIR_EST,
 )
+from features.action_space import ACTION_GRID
 from features.global_features import card_to_id
 from trackers.direct_unit_to_card import DIRECT_UNIT_TO_CARD
+
+SPELL_CARD_NAMES = {
+    card
+    for unit_name in FRAME_CONFIRM_MOVING_SPELLS | FRAME_CONFIRM_STATIONARY_SPELLS
+    if (card := DIRECT_UNIT_TO_CARD.get(unit_name)) is not None
+}
 
 @dataclass
 class TrackMemory:
@@ -31,6 +42,8 @@ class TrackMemory:
     clock_confirmed: bool = False
     frame_confirmed: bool = False
     counted_as_card: bool = False
+    center_x: float | None = None
+    center_y: float | None = None
 
     def add_observation(self, class_name, team, confidence, total_remaining_s):
         self.class_votes[class_name] = self.class_votes.get(class_name, 0) + 1
@@ -94,7 +107,15 @@ class EnemyCardTracker:
         self.last_update_monotonic_s = now_s
 
 
-    def update(self, time_left_s, enemy_matches, clock_boxes=None, now_s=None):
+    def update(
+        self,
+        time_left_s,
+        enemy_matches,
+        clock_boxes=None,
+        now_s=None,
+        own_actions=None,
+        arena_px=None,
+    ):
         clock_boxes = clock_boxes or []
         self._regen_elixir(time_left_s, now_s=now_s)
 
@@ -120,6 +141,8 @@ class EnemyCardTracker:
                 troop.confidence,
                 time_left_s,
             )
+            memory.center_x = troop.center_x
+            memory.center_y = troop.center_y
 
             if self._has_nearby_clock(troop, clock_boxes):
                 memory.clock_confirmed = True
@@ -128,7 +151,12 @@ class EnemyCardTracker:
                 memory.frame_confirmed = True
 
             if (memory.clock_confirmed or memory.frame_confirmed) and not memory.counted_as_card:
-                self._maybe_record_play(memory, time_left_s)
+                self._maybe_record_play(
+                    memory,
+                    time_left_s,
+                    own_actions=own_actions,
+                    arena_px=arena_px,
+                )
 
         self._drop_stale_tracks(time_left_s)
 
@@ -171,7 +199,7 @@ class EnemyCardTracker:
         
         return True
 
-    def _maybe_record_play(self, memory, time_left_s):
+    def _maybe_record_play(self, memory, time_left_s, own_actions=None, arena_px=None):
         if not self._is_reliable_enemy_play(memory):
             return
         
@@ -179,6 +207,16 @@ class EnemyCardTracker:
         card_name = DIRECT_UNIT_TO_CARD.get(unit_name)
 
         if card_name is None:
+            memory.counted_as_card = True
+            return
+
+        if self._is_recent_own_spell_duplicate(
+            card_name,
+            time_left_s,
+            memory,
+            own_actions or [],
+            arena_px,
+        ):
             memory.counted_as_card = True
             return
         
@@ -197,6 +235,83 @@ class EnemyCardTracker:
 
         self.elixir_enemy_est = max(0.0, self.elixir_enemy_est - cost)
         memory.counted_as_card = True
+
+    def reconcile_own_actions(self, own_actions, arena_px=None):
+        if not own_actions or not self.detected_card_plays:
+            return
+
+        kept_plays = []
+        removed_cost = 0
+        for play in self.detected_card_plays:
+            memory = self.tracks.get(play["track_id"])
+            if self._is_recent_own_spell_duplicate(
+                play["card"],
+                play["time_left_s"],
+                memory,
+                own_actions,
+                arena_px,
+            ):
+                removed_cost += play["cost"]
+                if memory is not None:
+                    memory.counted_as_card = True
+                continue
+
+            kept_plays.append(play)
+
+        if len(kept_plays) == len(self.detected_card_plays):
+            return
+
+        self.detected_card_plays = kept_plays
+        self.confirmed_seen_cards = {
+            card_id
+            for play in self.detected_card_plays
+            if (card_id := card_to_id(play["card"])) is not None
+        }
+        self.elixir_enemy_est = min(MAX_ELIXIR, self.elixir_enemy_est + removed_cost)
+
+    def _is_recent_own_spell_duplicate(
+        self,
+        card_name,
+        time_left_s,
+        memory,
+        own_actions,
+        arena_px,
+    ):
+        if card_name not in SPELL_CARD_NAMES:
+            return False
+
+        enemy_cell = self._memory_cell(memory, arena_px)
+        for action in reversed(own_actions):
+            if action["card"] != card_name:
+                continue
+
+            elapsed_s = action["time_left_s"] - time_left_s
+            if elapsed_s < 0:
+                continue
+            if elapsed_s > ENEMY_SPELL_OWN_ACTION_VETO_WINDOW_S:
+                return False
+
+            own_cell = action.get("cell")
+            if self._has_distinct_spell_cell(own_cell, enemy_cell):
+                continue
+            return True
+
+        return False
+
+    def _memory_cell(self, memory, arena_px):
+        if memory is None:
+            return None
+        if arena_px is None or memory.center_x is None or memory.center_y is None:
+            return None
+        return ACTION_GRID.pixel_to_cell(memory.center_x, memory.center_y, arena_px)
+
+    def _has_distinct_spell_cell(self, own_cell, enemy_cell):
+        if own_cell is None or enemy_cell is None:
+            return False
+
+        dx = abs(own_cell[0] - enemy_cell[0])
+        dy = abs(own_cell[1] - enemy_cell[1])
+        return max(dx, dy) > ENEMY_SPELL_DISTINCT_CELL_DISTANCE
         
     def _regen_elixir(self, time_left_s, now_s=None):
         if self.last_time_left_s is None:
