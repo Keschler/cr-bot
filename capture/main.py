@@ -16,11 +16,12 @@ from extractors.match_state import game_start, game_end_from_result
 from image_utils import draw_rois
 from rois import ROIS
 from scripts.run_seed_inference import filter_excluded_classes
+from katacr.build_dataset.utils.split_part import process_part, ratio2name
 from state_builder import build_game_state
 from vision.yolo_runtime import load_yolo_runtime, build_detector, summarize_detections, remap_boxes_to_frame, convert_yolo, extract_clock_boxes
 from trackers.enemy_cards import EnemyCardTracker 
-from katacr.build_dataset.utils.split_part import process_part, ratio2name
 from trackers.match_clock import MatchClockFilter
+from trackers.own_actions import OwnActionTracker
 
 
 PROCESSING_RESOLUTION = (1080, 2400)  # width, height
@@ -223,7 +224,7 @@ def render_match_debug(frame: np.ndarray, matches) -> np.ndarray:
 
     return np.vstack(rows)
 
-def print_frame_result(result, enemy_card_tracker):
+def print_frame_result(result, enemy_card_tracker, own_action_tracker=None):
     if enemy_card_tracker.elixir_enemy_est is None:
         print("enemy elixir is undefined")
     else:
@@ -237,6 +238,15 @@ def print_frame_result(result, enemy_card_tracker):
             f"time_left={play['time_left_s']} "
             f"track_id={play['track_id']}"
         )
+    if own_action_tracker is not None:
+        print("own plays:")
+        for action in own_action_tracker.actions:
+            print(
+                f"  card={action['card']:<20} "
+                f"slot={action['slot_idx']} "
+                f"cell={action['cell']} "
+                f"time_left={action['time_left_s']}"
+            )
     print()
 
     elixir = result["elixir"]
@@ -267,10 +277,21 @@ def has_visible_match_timer(result) -> bool:
     return ":" in str(result.get("time") or "")
 
 
-def main(debug: bool, video: str | None = None, normalize: bool = True, debug_frame_path: str | None = None, yolo_detections: bool = False):
+def main(
+    debug: bool,
+    video: str | None = None,
+    frame_stride: int = 1,
+    normalize: bool = True,
+    debug_frame_path: str | None = None,
+    yolo_detections: bool = False,
+):
+    if frame_stride < 1:
+        raise ValueError("frame_stride must be at least 1")
+
     detector = build_detector()
     print("detector sucessfully built!")
     enemy_card_tracker = EnemyCardTracker()
+    own_action_tracker = OwnActionTracker()
     match_clock_filter = MatchClockFilter()
 
     if debug:
@@ -302,6 +323,7 @@ def main(debug: bool, video: str | None = None, normalize: bool = True, debug_fr
 
 
         game_state = build_game_state(result)
+        own_action_tracker.update(game_state, result["arena_px"])
         has_display = os.environ.get("SHOW_DEBUG_WINDOW") == "1"
         if has_display:
             cv2.namedWindow("debug", cv2.WINDOW_NORMAL)
@@ -347,6 +369,14 @@ def main(debug: bool, video: str | None = None, normalize: bool = True, debug_fr
               f"time_left={play['time_left_s']} "
               f"track_id={play['track_id']}"
           )
+        print("own plays:")
+        for action in own_action_tracker.actions:
+          print(
+              f"  card={action['card']:<20} "
+              f"slot={action['slot_idx']} "
+              f"cell={action['cell']} "
+              f"time_left={action['time_left_s']}"
+          )
         print()
 
 
@@ -377,6 +407,9 @@ def main(debug: bool, video: str | None = None, normalize: bool = True, debug_fr
                 break
 
             frame_idx += 1
+            if (frame_idx - 1) % frame_stride != 0:
+                continue
+
             if normalize:
                 frame = normalize_frame(frame)
 
@@ -417,6 +450,7 @@ def main(debug: bool, video: str | None = None, normalize: bool = True, debug_fr
                         game_started = False
                         not_in_game_streak = 0
                         enemy_card_tracker = EnemyCardTracker()
+                        own_action_tracker = OwnActionTracker()
                         match_clock_filter = MatchClockFilter()
                         continue
                 else:
@@ -425,15 +459,16 @@ def main(debug: bool, video: str | None = None, normalize: bool = True, debug_fr
                 print(f"frame {frame_idx}: not in game")
                 continue
 
-            build_game_state(
+            game_state = build_game_state(
                 result,
                 seen_enemy_cards=list(enemy_card_tracker.confirmed_seen_cards),
                 elixir_enemy_est=enemy_card_tracker.elixir_enemy_est,
                 game_started=game_started,
             )
+            own_action_tracker.update(game_state, result["arena_px"])
 
             print(f"frame {frame_idx} video_time={video_time_s:.2f}s")
-            print_frame_result(result, enemy_card_tracker)
+            print_frame_result(result, enemy_card_tracker, own_action_tracker)
 
             if has_display:
                 cv2.imshow("feed", result["rendered"])
@@ -520,6 +555,7 @@ def main(debug: bool, video: str | None = None, normalize: bool = True, debug_fr
                     game_started = False
                     not_in_game_streak = 0
                     enemy_card_tracker = EnemyCardTracker()
+                    own_action_tracker = OwnActionTracker()
                     match_clock_filter = MatchClockFilter()
                     continue
             else:
@@ -535,9 +571,10 @@ def main(debug: bool, video: str | None = None, normalize: bool = True, debug_fr
             elixir_enemy_est=enemy_card_tracker.elixir_enemy_est,
             game_started=game_started
         )
+        own_action_tracker.update(game_state, result["arena_px"])
 
         print()
-        print_frame_result(result, enemy_card_tracker)
+        print_frame_result(result, enemy_card_tracker, own_action_tracker)
 
         cv2.imshow("feed", result["rendered"])
 
