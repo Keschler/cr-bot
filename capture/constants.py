@@ -5,6 +5,10 @@ OVERTIME_SECONDS = 120
 TOTAL_MATCH_SECONDS = NORMAL_SECONDS + OVERTIME_SECONDS
 
 MAX_ELIXIR = 10.0
+STARTING_ELIXIR_EST = 6
+ELIXIR_PER_SECOND_NORMAL = 1.0 / 2.8
+ELIXIR_PER_SECOND_DOUBLE = 1.0 / 1.4
+ELIXIR_PER_SECOND_TRIPLE = 1.0 / 0.9
 
 PRINCESS_TOWER_HP = 4424
 KING_TOWER_HP = 7032
@@ -45,3 +49,39 @@ GAME_START_MIN_SECONDS = 170
 
 YOLO_CONF_THRESHOLD = 0.7
 YOLO_IOU_THRESHOLD = 0.6
+
+ENEMY_CARD_CONFIRM_FRAMES = 3
+ENEMY_CARD_STALE_AFTER_SECONDS = 2.0
+
+FRAME_CONFIRM_TROOPS = {
+    "electro-wizard",
+}
+
+FRAME_CONFIRM_MOVING_SPELLS = {
+    "arrows",
+    "barbarian-barrel",
+    "fireball",
+    "giant-snowball",
+    "goblin-barrel",
+    "rocket",
+    "royal-delivery",
+    "the-log",
+}
+
+FRAME_CONFIRM_STATIONARY_SPELLS = {
+    "clone",
+    "earthquake",
+    "freeze",
+    "graveyard",
+    "lightning",
+    "poison",
+    "rage",
+    "tornado",
+    "zap",
+}
+
+FRAME_CONFIRM_CLASSES = (
+    FRAME_CONFIRM_TROOPS
+    | FRAME_CONFIRM_MOVING_SPELLS
+    | FRAME_CONFIRM_STATIONARY_SPELLS
+)

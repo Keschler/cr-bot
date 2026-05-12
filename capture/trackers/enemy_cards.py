@@ -1,38 +1,18 @@
 from dataclasses import dataclass, field
 
 from card_metadata import CARD_METADATA
+from constants import (
+    ELIXIR_PER_SECOND_DOUBLE,
+    ELIXIR_PER_SECOND_NORMAL,
+    ELIXIR_PER_SECOND_TRIPLE,
+    ENEMY_CARD_CONFIRM_FRAMES,
+    ENEMY_CARD_STALE_AFTER_SECONDS,
+    FRAME_CONFIRM_CLASSES,
+    MAX_ELIXIR,
+    STARTING_ELIXIR_EST,
+)
 from features.global_features import card_to_id
 from trackers.direct_unit_to_card import DIRECT_UNIT_TO_CARD
-
-CONFIRM_FRAMES = 3
-STALE_AFTER_SECONDS = 2.0
-STARTING_ELIXIR_EST = 6
-MAX_ELIXIR = 10.0
-ELIXIR_PER_SECOND_NORMAL = 1.0 / 2.8
-ELIXIR_PER_SECOND_DOUBLE = 1.0 / 1.4
-ELIXIR_PER_SECOND_TRIPLE = 1.0 / 0.9
-FRAME_CONFIRM_CLASSES = {
-    "arrows",
-    "barbarian-barrel",
-    "clone",
-    "earthquake",
-    "electro-wizard",
-    "fireball",
-    "freeze",
-    "giant-snowball",
-    "goblin-barrel",
-    "graveyard",
-    "lightning",
-    "poison",
-    "rage",
-    "rocket",
-    "royal-delivery",
-    "skeleton-king-skill",
-    "tesla-evolution-shock",
-    "the-log",
-    "tornado",
-    "zap",
-}
 
 @dataclass
 class TrackMemory:
@@ -169,7 +149,7 @@ class EnemyCardTracker:
         best_class = memory.best_class
         if best_class not in FRAME_CONFIRM_CLASSES:
             return False
-        if memory.seen_frames < CONFIRM_FRAMES:
+        if memory.seen_frames < ENEMY_CARD_CONFIRM_FRAMES:
             return False
         if memory.avg_confidence < 0.65:
             return False
@@ -268,7 +248,7 @@ class EnemyCardTracker:
         stale_ids = [
             track_id
             for track_id, memory in self.tracks.items()
-            if memory.last_seen_time - time_left_s > STALE_AFTER_SECONDS
+            if memory.last_seen_time - time_left_s > ENEMY_CARD_STALE_AFTER_SECONDS
         ]
 
         for track_id in stale_ids:
