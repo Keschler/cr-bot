@@ -22,6 +22,7 @@ from vision.yolo_runtime import load_yolo_runtime, build_detector, summarize_det
 from trackers.enemy_cards import EnemyCardTracker 
 from trackers.match_clock import MatchClockFilter
 from trackers.own_actions import OwnActionTracker
+from trackers.tower_hp_filter import TowerHPFilter
 
 
 PROCESSING_RESOLUTION = (1080, 2400)  # width, height
@@ -293,6 +294,7 @@ def main(
     enemy_card_tracker = EnemyCardTracker()
     own_action_tracker = OwnActionTracker()
     match_clock_filter = MatchClockFilter()
+    tower_hp_filter = TowerHPFilter()
 
     if debug:
         if not debug_frame_path:
@@ -305,6 +307,7 @@ def main(
             frame = normalize_frame(frame)
 
         result = process_frame(frame, detector, show_rois=False, yolo_tower_hp_detections=yolo_detections)
+        result["towers_hp"] = tower_hp_filter.update(result["towers_hp"])
 
         enemy_card_tracker.start_match(
           result["time_left_s"],
@@ -425,6 +428,7 @@ def main(
 
             if not game_started and (game_start(frame) or has_visible_match_timer(result)):
                 game_started = True
+                result["towers_hp"] = tower_hp_filter.update(result["towers_hp"])
                 match_clock_filter.initialise(result["time_left_s"], video_time_s)
                 enemy_card_tracker.start_match(
                     result["time_left_s"],
@@ -450,6 +454,7 @@ def main(
                 else:
                     match_clock_filter.initialise(result["time_left_s"], video_time_s)
 
+                result["towers_hp"] = tower_hp_filter.update(result["towers_hp"])
                 game_state = build_game_state(
                     result,
                     seen_enemy_cards=list(enemy_card_tracker.confirmed_seen_cards),
@@ -478,6 +483,7 @@ def main(
                         enemy_card_tracker = EnemyCardTracker()
                         own_action_tracker = OwnActionTracker()
                         match_clock_filter = MatchClockFilter()
+                        tower_hp_filter = TowerHPFilter()
                         continue
                 else:
                     not_in_game_streak = 0
@@ -540,6 +546,7 @@ def main(
             game_started = True
 
             result = process_frame(frame, detector, show_rois=False)
+            result["towers_hp"] = tower_hp_filter.update(result["towers_hp"])
 
             now = time.monotonic()
             match_clock_filter.initialise(result["time_left_s"], now)
@@ -559,6 +566,7 @@ def main(
             own_action_tracker.update(game_state, result["arena_px"])
         elif game_started:
             result = process_frame(frame, detector, show_rois=False)
+            result["towers_hp"] = tower_hp_filter.update(result["towers_hp"])
 
             now = time.monotonic()
             if match_clock_filter.initialised:
@@ -595,6 +603,7 @@ def main(
                     enemy_card_tracker = EnemyCardTracker()
                     own_action_tracker = OwnActionTracker()
                     match_clock_filter = MatchClockFilter()
+                    tower_hp_filter = TowerHPFilter()
                     continue
             else:
                 not_in_game_streak = 0
