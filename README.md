@@ -1,6 +1,6 @@
 # Clash Royale Vision Bot
 
-Clash Royale Vision Bot is a computer vision project that reads Clash Royale gameplay from video or live capture and turns it into structured game state.
+Clash Royale Vision Bot is a computer vision project that reads Clash Royale gameplay from video or live capture and turns it into structured game state. Planned is to extract state and action from expert 2.6 hog cycle gameplay and use that to do behavior cloning and reinforcement learning.
 <img width="1600" height="900" alt="cr-bot-banner-v1-dashboard" src="https://github.com/user-attachments/assets/1d225b86-79a3-4477-b524-2274faa92692" />
 
 ## Features
