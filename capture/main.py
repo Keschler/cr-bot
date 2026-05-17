@@ -316,7 +316,12 @@ def main(
       )
 
         game_state = build_game_state(result)
-        own_action_tracker.update(game_state, result["arena_px"])
+        own_action_tracker.update(
+            game_state,
+            result["arena_px"],
+            frame=frame,
+            clock_boxes=result["clock_boxes"],
+        )
         enemy_card_tracker.reconcile_own_actions(
             own_action_tracker.actions,
             arena_px=result["arena_px"],
@@ -441,7 +446,12 @@ def main(
                     elixir_enemy_est=enemy_card_tracker.elixir_enemy_est,
                     game_started=game_started,
                 )
-                own_action_tracker.update(game_state, result["arena_px"])
+                own_action_tracker.update(
+                    game_state,
+                    result["arena_px"],
+                    frame=frame,
+                    clock_boxes=result["clock_boxes"],
+                )
                 enemy_card_tracker.reconcile_own_actions(
                     own_action_tracker.actions,
                     arena_px=result["arena_px"],
@@ -461,7 +471,12 @@ def main(
                     elixir_enemy_est=enemy_card_tracker.elixir_enemy_est,
                     game_started=game_started,
                 )
-                own_action_tracker.update(game_state, result["arena_px"])
+                own_action_tracker.update(
+                    game_state,
+                    result["arena_px"],
+                    frame=frame,
+                    clock_boxes=result["clock_boxes"],
+                )
                 enemy_card_tracker.reconcile_own_actions(
                     own_action_tracker.actions,
                     arena_px=result["arena_px"],
@@ -563,7 +578,12 @@ def main(
                 elixir_enemy_est=enemy_card_tracker.elixir_enemy_est,
                 game_started=game_started
             )
-            own_action_tracker.update(game_state, result["arena_px"])
+            own_action_tracker.update(
+                game_state,
+                result["arena_px"],
+                frame=frame,
+                clock_boxes=result["clock_boxes"],
+            )
         elif game_started:
             result = process_frame(frame, detector, show_rois=False)
             result["towers_hp"] = tower_hp_filter.update(result["towers_hp"])
@@ -582,7 +602,12 @@ def main(
                 elixir_enemy_est=enemy_card_tracker.elixir_enemy_est,
                 game_started=game_started
             )
-            own_action_tracker.update(game_state, result["arena_px"])
+            own_action_tracker.update(
+                game_state,
+                result["arena_px"],
+                frame=frame,
+                clock_boxes=result["clock_boxes"],
+            )
             enemy_card_tracker.reconcile_own_actions(
                 own_action_tracker.actions,
                 arena_px=result["arena_px"],

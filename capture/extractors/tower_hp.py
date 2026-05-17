@@ -195,8 +195,6 @@ def extract_tower_hp(frame, yolo_boxes=None, debug_steps_by_tower=None):
             value = read_number_from_roi(text_img, EXPERT_TEMPLATES, debug_steps=tower_debug, digit_mode="tower")
             if value in (None, 0):
                 value = FULL_TOWER_HP[tower_name]
-            if len(str(value)) > 4:
-                value = int(str(value)[-4:])
 
             result[tower_name] = value
             if debug_steps_by_tower is not None:

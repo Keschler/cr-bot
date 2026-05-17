@@ -19,6 +19,7 @@ from extractors.match_state import in_game, game_end_from_result
 from extractors.timer import total_remaining_seconds
 from trackers.enemy_cards import EnemyCardTracker
 from trackers.match_clock import MatchClockFilter
+from trackers.tower_hp_filter import TowerHPFilter
 
 
 def jpeg_roundtrip(frame):
@@ -93,6 +94,7 @@ def main():
   not_in_game_streak = 0
   enemy_card_tracker = EnemyCardTracker()
   match_clock_filter = MatchClockFilter()
+  tower_hp_filter = TowerHPFilter()
 
   with out_path.open("w", encoding="utf-8") as f:
       while True:
@@ -114,6 +116,7 @@ def main():
               continue
 
           result = process_frame(frame, detector, show_rois=False, yolo_tower_hp_detections=True)
+          result["towers_hp"] = tower_hp_filter.update(result["towers_hp"])
 
           if not match_clock_filter.initialised:
               match_clock_filter.initialise(result["time_left_s"], video_time_s)
@@ -146,6 +149,7 @@ def main():
                   not_in_game_streak = 0
                   enemy_card_tracker = EnemyCardTracker()
                   match_clock_filter = MatchClockFilter()
+                  tower_hp_filter = TowerHPFilter()
                   frame_idx += 1
                   continue
           else:

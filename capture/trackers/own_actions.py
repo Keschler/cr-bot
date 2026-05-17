@@ -5,8 +5,12 @@ from card_metadata import CARD_METADATA
 from constants import (
     OWN_ACTION_DUPLICATE_WINDOW_S,
     OWN_ACTION_RECENT_HAND_WINDOW_S,
+    OWN_ACTION_RECENT_TRACK_WINDOW_S,
     OWN_ACTION_START_TIME_LEFT_S,
+    OWN_ACTION_TRACK_AFTER_DROP_WINDOW_S,
+    OWN_ACTION_TRACK_FALLBACK_CARDS,
 )
+from extractors.spell_deploy import SpellDeployLocator
 from features.action_space import ACTION_GRID
 from trackers.direct_unit_to_card import DIRECT_UNIT_TO_CARD
 
@@ -19,21 +23,32 @@ class PendingOwnPlay:
     elixir_before: float
     confirmed: bool = False
 
+
+@dataclass
+class RecentAllyTrack:
+    match: object
+    first_seen_s: float
+    last_seen_s: float
+
+
 class OwnActionTracker:
     def __init__(self) -> None:
         self.last_hand: list[str | None] = [None, None, None, None]
         self.last_elixir: float | None = None
         self.pending: list[PendingOwnPlay] = []
         self.seen_ally_tracks: set[int] = set()
+        self.recent_ally_tracks: dict[int, RecentAllyTrack] = {}
         self.actions: list[dict] = []
         self.recent_hand_seen: dict[str, float] = {}
+        self.spell_deploy_locator = SpellDeployLocator()
         self.debug = os.environ.get("DEBUG_OWN_ACTIONS") == "1"
 
     def _debug(self, message: str) -> None:
         if self.debug:
             print(f"[own_actions] {message}")
 
-    def update(self, game_state, arena_px):
+    def update(self, game_state, arena_px, frame=None, clock_boxes=None):
+        clock_boxes = clock_boxes or []
         now = game_state.total_remaining_s
         hand = game_state.hud.hand_cards
         elixir = game_state.hud.elixir_self
@@ -41,11 +56,19 @@ class OwnActionTracker:
             f"update now={now} elixir={elixir:.2f} "
             f"last_elixir={self.last_elixir} hand={hand} "
             f"last_hand={self.last_hand} pending={len(self.pending)} "
-            f"own_units={len(game_state.own_units)}"
+            f"own_units={len(game_state.own_units)} "
+            f"clocks={len(clock_boxes)}"
         )
 
         self._detect_slot_drops(hand, elixir, now)
-        self._confirm_pending(game_state, arena_px, elixir, now)
+        self._confirm_pending(
+            game_state,
+            arena_px,
+            elixir,
+            now,
+            frame=frame,
+            clock_boxes=clock_boxes,
+        )
         self._remember_hand(hand, now)
         self.last_hand = hand[:]
         self.last_elixir = elixir
@@ -87,7 +110,8 @@ class OwnActionTracker:
         for card in stale_cards:
             del self.recent_hand_seen[card]
 
-    def _confirm_pending(self, game_state, arena_px, elixir, now):
+    def _confirm_pending(self, game_state, arena_px, elixir, now, frame=None, clock_boxes=None):
+        clock_boxes = clock_boxes or []
         new_tracks = []
         for match in game_state.own_units:
             track_id = match.troop.track_id
@@ -101,19 +125,15 @@ class OwnActionTracker:
                     f"class={match.troop.class_name} "
                     f"center=({match.troop.center_x:.1f}, {match.troop.center_y:.1f})"
                 )
+            self._remember_ally_track(match, now)
         if not new_tracks:
             self._debug("no new ally tracks")
+        self._forget_stale_ally_tracks(now)
 
         had_pending = bool(self.pending)
         still_pending = []
         for pending in self.pending:
-            if pending.started_at_s - now > 1.5:
-                self._debug(
-                    f"pending expired card={pending.card} slot={pending.slot_idx} "
-                    f"age={pending.started_at_s - now:.2f}s"
-                )
-                continue
-
+            is_spell = self._is_spell_card(pending.card)
             cost = CARD_METADATA.get(pending.card, {}).get("elixir_cost")
             elixir_drop = None if self.last_elixir is None else self.last_elixir - elixir
             required_drop = None if cost is None else max(1.0, cost - 1.0)
@@ -122,19 +142,26 @@ class OwnActionTracker:
                 and cost is not None
                 and elixir_drop >= required_drop
             )
-            placed_cell = self._infer_cell(new_tracks, arena_px)
+            placed_cell = self._infer_pending_cell(
+                pending,
+                self._recent_tracks_for_pending(pending, now),
+                arena_px,
+                frame,
+                clock_boxes,
+            )
             self._debug(
                 f"pending check card={pending.card} slot={pending.slot_idx} "
                 f"cost={cost} elixir_drop={elixir_drop} "
                 f"required_drop={required_drop} elixir_confirms={elixir_confirms} "
                 f"placed_cell={placed_cell}"
             )
-            if elixir_confirms or placed_cell is not None:
+            confirms = placed_cell is not None
+            if confirms:
                 reasons = []
-                if elixir_confirms:
+                if elixir_confirms and not is_spell:
                     reasons.append("elixir")
                 if placed_cell is not None:
-                    reasons.append("cell")
+                    reasons.append("deploy_ui" if is_spell else "cell")
                 self._debug(
                     f"confirmed own action card={pending.card} "
                     f"slot={pending.slot_idx} reasons={'+'.join(reasons)}"
@@ -153,15 +180,97 @@ class OwnActionTracker:
 
         self.pending = still_pending
         if not had_pending and not self.pending:
-            self._record_new_track_actions(new_tracks, game_state.hud.hand_cards, arena_px, now)
+            self._record_new_track_actions(
+                new_tracks,
+                game_state.hud.hand_cards,
+                arena_px,
+                now,
+                clock_boxes,
+            )
 
-    def _record_new_track_actions(self, new_tracks, hand, arena_px, now):
+    def _remember_ally_track(self, match, now):
+        track_id = match.troop.track_id
+        existing = self.recent_ally_tracks.get(track_id)
+        first_seen_s = now
+        if existing is not None:
+            previous_class = existing.match.troop.class_name
+            current_class = match.troop.class_name
+            if previous_class == current_class:
+                first_seen_s = existing.first_seen_s
+            else:
+                self._debug(
+                    f"ally track id={track_id} class changed "
+                    f"{previous_class}->{current_class}; refreshing recent track"
+                )
+        self.recent_ally_tracks[track_id] = RecentAllyTrack(
+            match=match,
+            first_seen_s=first_seen_s,
+            last_seen_s=now,
+        )
+
+    def _forget_stale_ally_tracks(self, now):
+        stale_track_ids = [
+            track_id
+            for track_id, memory in self.recent_ally_tracks.items()
+            if memory.last_seen_s - now > OWN_ACTION_RECENT_TRACK_WINDOW_S
+        ]
+        for track_id in stale_track_ids:
+            del self.recent_ally_tracks[track_id]
+
+    def _recent_tracks_for_pending(self, pending, now):
+        candidates = []
+        for memory in self.recent_ally_tracks.values():
+            if memory.last_seen_s - now > OWN_ACTION_RECENT_TRACK_WINDOW_S:
+                continue
+            if memory.first_seen_s > pending.started_at_s:
+                continue
+            if pending.started_at_s - memory.first_seen_s > OWN_ACTION_TRACK_AFTER_DROP_WINDOW_S:
+                continue
+            candidates.append(memory.match)
+        return candidates
+
+    def _infer_pending_cell(self, pending, candidate_tracks, arena_px, frame, clock_boxes):
+        if self._is_spell_card(pending.card):
+            cost = CARD_METADATA.get(pending.card, {}).get("elixir_cost")
+            deploy = self.spell_deploy_locator.locate(
+                frame,
+                arena_px,
+                pending.card,
+                cost,
+            )
+            if deploy is None:
+                self._debug(
+                    f"spell deploy locator found no cell for card={pending.card}"
+                )
+                return None
+
+            cell = ACTION_GRID.pixel_to_cell(deploy.center_x, deploy.center_y, arena_px)
+            self._debug(
+                f"inferred spell cell from deploy UI card={pending.card}: {cell}"
+            )
+            return cell
+
+        return self._infer_cell_from_clock(candidate_tracks, arena_px, clock_boxes, pending.card)
+
+    def _record_new_track_actions(self, new_tracks, hand, arena_px, now, clock_boxes):
         for match in new_tracks:
             card = DIRECT_UNIT_TO_CARD.get(match.troop.class_name)
             if card is None:
                 self._debug(
                     f"new ally track not mapped to playable card: "
                     f"class={match.troop.class_name}"
+                )
+                continue
+            if self._is_spell_card(card):
+                self._debug(
+                    f"new ally spell track ignored; spell actions require HUD drop "
+                    f"and deploy UI locator: class={match.troop.class_name} card={card}"
+                )
+                continue
+            if not self._allows_track_fallback(card):
+                self._debug(
+                    f"new ally track ignored for card={card}; "
+                    "direct track fallback is not enabled for this card"
                 )
                 continue
 
@@ -173,11 +282,7 @@ class OwnActionTracker:
                 )
                 continue
 
-            cell = ACTION_GRID.pixel_to_cell(
-                match.troop.center_x,
-                match.troop.center_y,
-                arena_px,
-            )
+            cell = self._infer_cell_from_clock([match], arena_px, clock_boxes, card)
             self._debug(
                 f"recording own action from new ally track "
                 f"card={card} slot={slot_idx} cell={cell}"
@@ -240,14 +345,72 @@ class OwnActionTracker:
             or slot_idx is None
         )
 
-    def _infer_cell(self, new_tracks, arena_px):
-        if not new_tracks:
+    def _infer_cell(self, tracks, arena_px):
+        if not tracks:
             return None
 
-        troop = new_tracks[0].troop
+        troop = tracks[0].troop
         cell = ACTION_GRID.pixel_to_cell(troop.center_x, troop.center_y, arena_px)
         self._debug(
             f"inferred cell from track id={troop.track_id} "
             f"class={troop.class_name}: {cell}"
         )
         return cell
+
+    def _infer_cell_from_clock(self, tracks, arena_px, clock_boxes, card=None):
+        best = None
+        matching_tracks = [
+            match
+            for match in tracks
+            if card is not None and DIRECT_UNIT_TO_CARD.get(match.troop.class_name) == card
+        ]
+        if card is not None and self._has_direct_unit_mapping(card) and not matching_tracks:
+            self._debug(
+                f"no matching recent ally track for pending card={card}; "
+                "not using unrelated deploy clock"
+            )
+            return None
+        candidate_tracks = matching_tracks or tracks
+
+        for match in candidate_tracks:
+            troop = match.troop
+            for clock in clock_boxes:
+                if clock["team"] != "ally":
+                    continue
+                if clock["confidence"] < 0.5:
+                    continue
+
+                horizontal_gap = abs(clock["center_x"] - troop.center_x)
+                vertical_gap = clock["center_y"] - troop.center_y
+                if horizontal_gap > 100 or not (-40 <= vertical_gap <= 220):
+                    continue
+
+                score = horizontal_gap + abs(vertical_gap - 80) * 0.5
+                if best is None or score < best[0]:
+                    best = (score, clock, troop)
+
+        if best is None:
+            if self._allows_track_fallback(card):
+                return self._infer_cell(candidate_tracks, arena_px)
+            self._debug(
+                f"no matching ally deploy clock for card={card}; "
+                "not falling back to troop center"
+            )
+            return None
+
+        _, clock, troop = best
+        cell = ACTION_GRID.pixel_to_cell(clock["center_x"], clock["center_y"], arena_px)
+        self._debug(
+            f"inferred cell from ally clock near track id={troop.track_id} "
+            f"class={troop.class_name}: {cell}"
+        )
+        return cell
+
+    def _is_spell_card(self, card):
+        return CARD_METADATA.get(card, {}).get("kind") == "spell"
+
+    def _has_direct_unit_mapping(self, card):
+        return any(mapped_card == card for mapped_card in DIRECT_UNIT_TO_CARD.values())
+
+    def _allows_track_fallback(self, card):
+        return card in OWN_ACTION_TRACK_FALLBACK_CARDS
