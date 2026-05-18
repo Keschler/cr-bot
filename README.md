@@ -19,7 +19,7 @@ Clash Royale Vision Bot is a computer vision project that reads Clash Royale gam
 
 [Download the executable demo from GitHub Releases](https://github.com/keschler/cr-bot/releases/latest)
 
-[Demo Video](https://youtu.be/qxFdI4DDtCA)
+[Demo Video](https://youtu.be/QRP_nLJWApM)
 
 The release asset is a Linux CPU executable bundle. It does not require setting up Python, installing project dependencies, or cloning the repository.
 
