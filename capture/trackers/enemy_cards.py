@@ -9,7 +9,6 @@ from constants import (
     ENEMY_SPELL_DISTINCT_CELL_DISTANCE,
     ENEMY_SPELL_OWN_ACTION_VETO_WINDOW_S,
     ENEMY_CARD_STALE_AFTER_SECONDS,
-    FRAME_CONFIRM_CLASSES,
     FRAME_CONFIRM_MOVING_SPELLS,
     FRAME_CONFIRM_STATIONARY_SPELLS,
     MAX_ELIXIR,
@@ -24,6 +23,11 @@ SPELL_CARD_NAMES = {
     for unit_name in FRAME_CONFIRM_MOVING_SPELLS | FRAME_CONFIRM_STATIONARY_SPELLS
     if (card := DIRECT_UNIT_TO_CARD.get(unit_name)) is not None
 }
+
+FRAME_CONFIRM_SPELL_CLASSES = (
+    FRAME_CONFIRM_MOVING_SPELLS
+    | FRAME_CONFIRM_STATIONARY_SPELLS
+)
 
 @dataclass
 class TrackMemory:
@@ -174,8 +178,9 @@ class EnemyCardTracker:
         return False 
 
     def _should_frame_confirm(self, memory):
+        """Allow frame-only confirmation for spell-like classes, not normal troops."""
         best_class = memory.best_class
-        if best_class not in FRAME_CONFIRM_CLASSES:
+        if best_class not in FRAME_CONFIRM_SPELL_CLASSES:
             return False
         if memory.seen_frames < ENEMY_CARD_CONFIRM_FRAMES:
             return False
