@@ -15,10 +15,8 @@ class SpellDeployCandidate:
     radius_x_px: float | None = None
     radius_y_px: float | None = None
     confidence: float = 0.0
-    elixir_cost_confirmed: bool = False
     arc_score: float = 0.0
     radius_score: float = 0.0
-    purple_score: float = 0.0
 
 
 class SpellDeployLocator:
@@ -27,8 +25,6 @@ class SpellDeployLocator:
     The intended flow is:
     1. A hand-slot HUD change creates a pending spell action.
     2. The white spell radius is detected and provides the deploy center.
-    3. The purple elixir-used display confirms the correct candidate when
-       several deploy effects are visible at once.
 
     The white radius is projected as an ellipse because arena cells are not
     square in screen space.
@@ -39,6 +35,29 @@ class SpellDeployLocator:
         if not candidates:
             return None
         return candidates[0]
+
+    def locate_released(self, frame, arena_px, card_name: str, elixir_cost: int | float | None):
+        """Return the aimed spell ellipse only when the purple release marker is present."""
+        candidates, masks = self.detect(frame, arena_px, card_name, elixir_cost)
+        if not candidates:
+            return None
+
+        purple_mask = masks.get("purple_mask")
+        if purple_mask is None:
+            return None
+
+        best = None
+        for candidate in candidates[:5]:
+            purple_score = self._purple_release_score(purple_mask, arena_px, candidate)
+            if purple_score < 0.18:
+                continue
+            score = (purple_score, candidate.confidence)
+            if best is None or score > best[0]:
+                best = (score, candidate)
+
+        if best is None:
+            return None
+        return best[1]
 
     def detect(
         self,
@@ -61,26 +80,14 @@ class SpellDeployLocator:
         if not candidates:
             return [], masks
 
-        return self._score_candidates(candidates, masks, arena_px, elixir_cost), masks
+        return self._score_candidates(candidates), masks
 
-    def _score_candidates(self, candidates, masks, arena_px, elixir_cost):
+    def _score_candidates(self, candidates):
         scored = []
         for candidate in candidates:
-            purple_score = 0.0
-            confirmed = False
-            if elixir_cost is not None:
-                purple_score = self._purple_elixir_score(
-                    masks["purple_mask"],
-                    arena_px,
-                    candidate,
-                    elixir_cost,
-                )
-                confirmed = purple_score >= 0.35
-
             confidence = (
                 0.70 * candidate.arc_score
                 + 0.25 * candidate.radius_score
-                + 0.05 * purple_score
             )
             scored.append(SpellDeployCandidate(
                 center_x=candidate.center_x,
@@ -89,10 +96,8 @@ class SpellDeployLocator:
                 radius_x_px=candidate.radius_x_px,
                 radius_y_px=candidate.radius_y_px,
                 confidence=confidence,
-                elixir_cost_confirmed=confirmed,
                 arc_score=candidate.arc_score,
                 radius_score=candidate.radius_score,
-                purple_score=purple_score,
             ))
 
         scored.sort(key=lambda candidate: candidate.confidence, reverse=True)
@@ -109,31 +114,48 @@ class SpellDeployLocator:
         expected_radii_px: tuple[float, float] | None,
         masks,
     ):
+        """Find candidate spell centers from a fast ellipse-template response map."""
         if expected_radii_px is None:
             return []
 
         arena_x, arena_y, arena_w, arena_h = self._arena_rect(arena_px, frame.shape)
-        edges = masks["edges"]
+        edge_hits = masks["edge_hits"]
         radius_x = int(round(expected_radii_px[0]))
         radius_y = int(round(expected_radii_px[1]))
+
+        # Restrict the search to the playable area
         grid_x0 = max(0, int(round(ACTION_GRID.x0 * arena_w)))
         grid_y0 = max(0, int(round(ACTION_GRID.y0 * arena_h)))
         grid_x1 = min(arena_w - 1, int(round(ACTION_GRID.x1 * arena_w)))
         grid_y1 = min(arena_h - 1, int(round(ACTION_GRID.y1 * arena_h)))
 
-        coarse_step = 6
-        coarse = []
-        for cy in range(grid_y0, grid_y1 + 1, coarse_step):
-            for cx in range(grid_x0, grid_x1 + 1, coarse_step):
-                arc_score = self._ellipse_arc_score(edges, cx, cy, radius_x, radius_y)
-                if arc_score >= 0.14:
-                    coarse.append((arc_score, cx, cy))
+        response, template_center, scale = self._ellipse_match_response(
+            edge_hits,
+            radius_x,
+            radius_y,
+            grid_x0,
+            grid_y0,
+            grid_x1,
+            grid_y1,
+        )
+        if response is None:
+            return []
 
-        coarse.sort(reverse=True)
-        refined = []
+        coarse = self._response_candidates(response, template_center, grid_x0, grid_y0, scale)
+        if not coarse:
+            return []
+
         dedupe_distance = max(18, min(radius_x, radius_y) * 0.35)
+        refined = []
         for _, cx, cy in self._dedupe_centers(coarse, min_distance=dedupe_distance, limit=12):
-            best = self._refine_fixed_radius_center(edges, cx, cy, radius_x, radius_y, coarse_step)
+            best = self._refine_fixed_radius_center(
+                edge_hits,
+                cx,
+                cy,
+                radius_x,
+                radius_y,
+                coarse_step=4,
+            )
             refined.append(best)
 
         refined.sort(reverse=True)
@@ -155,7 +177,8 @@ class SpellDeployLocator:
             ))
         return candidates
 
-    def _refine_fixed_radius_center(self, edges, cx, cy, radius_x, radius_y, coarse_step):
+    def _refine_fixed_radius_center(self, edge_hits, cx, cy, radius_x, radius_y, coarse_step):
+        """Refine one proposal with a tiny local search around the coarse center."""
         best_score = -1.0
         best = (cx, cy)
         for step in (2, 1):
@@ -164,9 +187,9 @@ class SpellDeployLocator:
                 for dx in search:
                     tx = best[0] + dx
                     ty = best[1] + dy
-                    if not (0 <= tx < edges.shape[1] and 0 <= ty < edges.shape[0]):
+                    if not (0 <= tx < edge_hits.shape[1] and 0 <= ty < edge_hits.shape[0]):
                         continue
-                    score = self._ellipse_arc_score(edges, tx, ty, radius_x, radius_y)
+                    score = self._ellipse_arc_score(edge_hits, tx, ty, radius_x, radius_y)
                     if score > best_score:
                         best_score = score
                         best = (tx, ty)
@@ -182,20 +205,6 @@ class SpellDeployLocator:
                 break
         return kept
 
-    def _confirm_with_elixir_used_display(
-        self,
-        frame,
-        arena_px,
-        candidates: list[SpellDeployCandidate],
-        elixir_cost: int | float,
-    ):
-        """Pick the candidate confirmed by the purple elixir-used display.
-
-        TODO: Detect/template-match the purple elixir cost and associate it
-        with the closest radius candidate.
-        """
-        return None
-
     def _expected_radii_px(self, arena_px, card_name: str):
         radius_tiles = CARD_METADATA.get(card_name, {}).get("radius")
         if radius_tiles is None:
@@ -207,10 +216,11 @@ class SpellDeployLocator:
         return float(radius_tiles) * cell_w, float(radius_tiles) * cell_h
 
     def _build_masks(self, frame, arena_px):
+        """Build the thresholded arena masks once so later stages stay in OpenCV/NumPy."""
         arena_x, arena_y, arena_w, arena_h = self._arena_rect(arena_px, frame.shape)
         roi = frame[arena_y:arena_y + arena_h, arena_x:arena_x + arena_w]
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-        h, s, v = cv2.split(hsv)
+        _, _, v = cv2.split(hsv)
 
         white_mask = cv2.inRange(hsv, np.array([0, 0, 150]), np.array([179, 72, 255]))
         bright = cv2.inRange(v, 170, 255)
@@ -220,7 +230,7 @@ class SpellDeployLocator:
         white_mask = cv2.morphologyEx(white_mask, cv2.MORPH_OPEN, kernel3)
         white_mask = cv2.morphologyEx(white_mask, cv2.MORPH_CLOSE, kernel3)
         edges = cv2.Canny(white_mask, 40, 120)
-
+        edge_hits = cv2.dilate(edges, kernel3)
         purple_mask = cv2.inRange(hsv, np.array([118, 55, 70]), np.array([168, 255, 255]))
         purple_mask = cv2.morphologyEx(purple_mask, cv2.MORPH_OPEN, kernel3)
 
@@ -228,84 +238,175 @@ class SpellDeployLocator:
             "roi": roi,
             "white_mask": white_mask,
             "edges": edges,
+            "edge_hits": edge_hits,
             "purple_mask": purple_mask,
         }
 
-    def _purple_elixir_score(self, purple_mask, arena_px, candidate, elixir_cost):
-        arena_x, arena_y = int(round(arena_px[0])), int(round(arena_px[1]))
-        arena_h, arena_w = purple_mask.shape[:2]
-        cx = int(round(candidate.center_x - arena_x))
-        cy = int(round(candidate.center_y - arena_y))
-        radius = int(round(candidate.radius_px or 0))
+    def _ellipse_match_response(self, edge_hits, radius_x, radius_y, grid_x0, grid_y0, grid_x1, grid_y1):
+        """Score the whole search region in one OpenCV call using an ellipse perimeter template."""
+        template, template_center = self._ellipse_template(radius_x, radius_y)
+        search = edge_hits[grid_y0:grid_y1 + 1, grid_x0:grid_x1 + 1]
+        if (
+            search.shape[0] < template.shape[0]
+            or search.shape[1] < template.shape[1]
+        ):
+            return None, template_center, 1.0
 
-        search_radius_x = max(35, int(radius * 0.75))
-        y0 = max(0, cy - max(40, int(radius * 0.90)))
-        y1 = min(arena_h, cy + max(35, int(radius * 0.45)))
-        x0 = max(0, cx - search_radius_x)
-        x1 = min(arena_w, cx + search_radius_x)
+        scale = 0.5
+        if min(search.shape[:2]) < 160 or min(template.shape[:2]) < 24:
+            scale = 1.0
+
+        if scale != 1.0:
+            search = cv2.resize(
+                search,
+                (max(1, int(round(search.shape[1] * scale))), max(1, int(round(search.shape[0] * scale)))),
+                interpolation=cv2.INTER_AREA,
+            )
+            template = cv2.resize(
+                template,
+                (max(1, int(round(template.shape[1] * scale))), max(1, int(round(template.shape[0] * scale)))),
+                interpolation=cv2.INTER_AREA,
+            )
+            _, template = cv2.threshold(template, 1, 255, cv2.THRESH_BINARY)
+            template_center = (
+                int(round(template_center[0] * scale)),
+                int(round(template_center[1] * scale)),
+            )
+
+        response = cv2.matchTemplate(search, template, cv2.TM_CCORR_NORMED)
+        return response, template_center, scale
+
+    def _response_candidates(self, response, template_center, grid_x0, grid_y0, scale):
+        """Extract a small set of local maxima from the template response map."""
+        if response.size == 0:
+            return []
+
+        peak_threshold = 0.18
+        maxima = cv2.dilate(response, np.ones((9, 9), np.float32))
+        ys, xs = np.where((response >= peak_threshold) & (response >= maxima - 1e-6))
+        if ys.size == 0:
+            flat_idx = np.argpartition(response.ravel(), -8)[-8:]
+            ys, xs = np.unravel_index(flat_idx, response.shape)
+
+        scored = []
+        center_x, center_y = template_center
+        inv_scale = 1.0 / scale
+        for y, x in zip(ys.tolist(), xs.tolist()):
+            score = float(response[y, x])
+            scored.append((
+                score,
+                int(round(grid_x0 + (x + center_x) * inv_scale)),
+                int(round(grid_y0 + (y + center_y) * inv_scale)),
+            ))
+        scored.sort(reverse=True)
+        return scored
+
+    def _ellipse_template(self, radius_x, radius_y):
+        """Create a cached binary perimeter template for the spell-radius ellipse."""
+        key = (radius_x, radius_y)
+        cache = getattr(self, "_ellipse_template_cache", None)
+        if cache is None:
+            cache = {}
+            self._ellipse_template_cache = cache
+        if key in cache:
+            return cache[key]
+
+        pad = 3
+        width = radius_x * 2 + pad * 2 + 1
+        height = radius_y * 2 + pad * 2 + 1
+        center = (radius_x + pad, radius_y + pad)
+        template = np.zeros((height, width), dtype=np.uint8)
+        cv2.ellipse(template, center, (radius_x, radius_y), 0, 0, 360, 255, 2)
+        template = cv2.dilate(template, np.ones((3, 3), np.uint8))
+        result = (template, center)
+        cache[key] = result
+        return result
+
+    def _ellipse_sample_offsets(self, radius_x, radius_y):
+        """Precompute integer ellipse perimeter offsets so arc scoring is vectorized."""
+        key = (radius_x, radius_y)
+        cache = getattr(self, "_ellipse_offset_cache", None)
+        if cache is None:
+            cache = {}
+            self._ellipse_offset_cache = cache
+        if key in cache:
+            return cache[key]
+
+        angles = np.linspace(0.0, 2.0 * np.pi, 96, endpoint=False)
+        dx = np.rint(np.cos(angles) * radius_x).astype(np.int16)
+        dy = np.rint(np.sin(angles) * radius_y).astype(np.int16)
+        offsets = np.stack((dx, dy), axis=1)
+        cache[key] = offsets
+        return offsets
+
+    def _ellipse_arc_score(self, edge_hits, cx, cy, radius_x, radius_y):
+        """Measure how much of the expected ellipse perimeter lands on detected edge pixels."""
+        offsets = self._ellipse_sample_offsets(radius_x, radius_y)
+        xs = cx + offsets[:, 0]
+        ys = cy + offsets[:, 1]
+        valid = (
+            (xs >= 0)
+            & (ys >= 0)
+            & (xs < edge_hits.shape[1])
+            & (ys < edge_hits.shape[0])
+        )
+        if not np.any(valid):
+            return 0.0
+        hits = edge_hits[ys[valid], xs[valid]] > 0
+        return float(np.count_nonzero(hits) / offsets.shape[0])
+
+    def _purple_release_score(self, purple_mask, arena_px, candidate):
+        """Score purple blobs above the ellipse where the release elixir marker appears."""
+        arena_x = int(round(arena_px[0]))
+        arena_y = int(round(arena_px[1]))
+        cx = float(candidate.center_x - arena_x)
+        cy = float(candidate.center_y - arena_y)
+        radius_x = float(candidate.radius_x_px or candidate.radius_px or 0.0)
+        radius_y = float(candidate.radius_y_px or candidate.radius_px or 0.0)
+
+        x0 = max(0, int(round(cx - radius_x * 0.58)))
+        x1 = min(purple_mask.shape[1], int(round(cx + radius_x * 0.58)))
+        y0 = max(0, int(round(cy - radius_y * 1.35)))
+        y1 = min(purple_mask.shape[0], int(round(cy - radius_y * 0.02)))
         if x1 <= x0 or y1 <= y0:
             return 0.0
 
         roi = purple_mask[y0:y1, x0:x1]
         contours, _ = cv2.findContours(roi, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return 0.0
+
         best = 0.0
-        expected_digit = str(int(elixir_cost))
+        target_x = (x1 - x0) * 0.5
+        target_y = (y1 - y0) * 0.58
+        norm_x = max(1.0, (x1 - x0) * 0.5)
+        norm_y = max(1.0, (y1 - y0) * 0.8)
+
         for contour in contours:
             area = cv2.contourArea(contour)
-            if not 12 <= area <= 1800:
+            if not 12 <= area <= 2500:
                 continue
+
             x, y, w, h = cv2.boundingRect(contour)
             if h < 8 or w < 5:
                 continue
+
             aspect = w / max(1, h)
-            if not 0.25 <= aspect <= 1.8:
+            if not 0.2 <= aspect <= 1.8:
                 continue
 
-            patch = roi[max(0, y - 3):min(roi.shape[0], y + h + 3), max(0, x - 3):min(roi.shape[1], x + w + 3)]
-            template_score = self._digit_template_score(patch, expected_digit)
-            area_score = min(1.0, area / 140.0)
-            contour_cx = x0 + x + w / 2.0
-            contour_cy = y0 + y + h / 2.0
-            distance = np.hypot((contour_cx - cx) / max(1, search_radius_x), (contour_cy - cy) / max(1, y1 - y0))
+            contour_cx = x + w / 2.0
+            contour_cy = y + h / 2.0
+            distance = np.hypot(
+                (contour_cx - target_x) / norm_x,
+                (contour_cy - target_y) / norm_y,
+            )
             proximity = max(0.0, 1.0 - distance)
-            best = max(best, 0.45 * template_score + 0.30 * area_score + 0.25 * proximity)
+            area_score = min(1.0, area / 140.0)
+            upper_score = max(0.0, 1.0 - contour_cy / max(1.0, roi.shape[0]))
+            best = max(best, 0.50 * area_score + 0.35 * proximity + 0.15 * upper_score)
 
         return best
-
-    def _digit_template_score(self, patch, digit: str):
-        if patch.size == 0:
-            return 0.0
-        patch = cv2.resize(patch, (24, 32), interpolation=cv2.INTER_AREA)
-        _, patch = cv2.threshold(patch, 1, 255, cv2.THRESH_BINARY)
-        template = np.zeros((32, 24), dtype=np.uint8)
-        cv2.putText(
-            template,
-            digit,
-            (3, 27),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.95,
-            255,
-            2,
-            cv2.LINE_AA,
-        )
-        _, template = cv2.threshold(template, 20, 255, cv2.THRESH_BINARY)
-        result = cv2.matchTemplate(patch, template, cv2.TM_CCOEFF_NORMED)
-        score = float(result[0, 0])
-        if np.isnan(score):
-            return 0.0
-        return max(0.0, score)
-
-    def _ellipse_arc_score(self, edges, cx, cy, radius_x, radius_y):
-        samples = 96
-        hits = 0
-        for angle in np.linspace(0.0, 2.0 * np.pi, samples, endpoint=False):
-            x = int(round(cx + np.cos(angle) * radius_x))
-            y = int(round(cy + np.sin(angle) * radius_y))
-            if x < 1 or y < 1 or x >= edges.shape[1] - 1 or y >= edges.shape[0] - 1:
-                continue
-            if edges[y - 1:y + 2, x - 1:x + 2].any():
-                hits += 1
-        return hits / samples
 
     def render_debug(
         self,
@@ -328,7 +429,7 @@ class SpellDeployLocator:
             cv2.drawMarker(overlay, center, color, cv2.MARKER_CROSS, 18, 2)
             cv2.putText(
                 overlay,
-                f"{idx} {candidate.confidence:.2f} a{candidate.arc_score:.2f} p{candidate.purple_score:.2f}",
+                f"{idx} {candidate.confidence:.2f} a{candidate.arc_score:.2f}",
                 (center[0] - 50, max(20, center[1] - radius_y - 8)),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.45,
