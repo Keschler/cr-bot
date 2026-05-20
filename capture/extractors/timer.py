@@ -394,15 +394,16 @@ def is_overtime(frame):
         return False
 
 def parse_time_left_s(timer_text) -> float:
-      text = str(timer_text)
-      if ":" not in text:
-          return 0.0
+      normalized = _normalize_timer_text(timer_text)
+      if normalized is None: # When normal extraction fails
+          matches = re.findall(r"\d{1,2}:\d{2}", str(timer_text)) # extract the last valid M:SS substring
+          if not matches:
+              return 0.0
+          normalized = _normalize_timer_text(matches[-1])
+          if normalized is None:
+              return 0.0
 
-      minutes, seconds = text.split(":", 1)
-      if minutes is None or minutes == '':
-        minutes = 0
-      if seconds is None:
-        seconds = 0
+      minutes, seconds = normalized.split(":", 1)
       return int(minutes) * 60 + int(seconds)
 
 

@@ -6,9 +6,12 @@ from constants import (
     ELIXIR_PER_SECOND_NORMAL,
     ELIXIR_PER_SECOND_TRIPLE,
     ENEMY_CARD_CONFIRM_FRAMES,
+    ENEMY_RECENT_CLOCK_CONFIRM_SECONDS,
+    ENEMY_RECENT_CLOCK_DUPLICATE_WINDOW_S,
     ENEMY_SPELL_DISTINCT_CELL_DISTANCE,
     ENEMY_SPELL_OWN_ACTION_VETO_WINDOW_S,
     ENEMY_CARD_STALE_AFTER_SECONDS,
+    FRAME_CONFIRM_TROOPS,
     FRAME_CONFIRM_MOVING_SPELLS,
     FRAME_CONFIRM_STATIONARY_SPELLS,
     MAX_ELIXIR,
@@ -39,6 +42,7 @@ class TrackMemory:
     track_id: int | None
     first_seen_time: float
     last_seen_time: float
+    first_seen_now_s: float | None = None
     class_votes: dict[str, int] = field(default_factory=dict)
     team_votes: dict[str, int] = field(default_factory=dict)
     confidence_sum: float = 0.0
@@ -86,6 +90,13 @@ class TrackMemory:
 
         return self.team_votes[best_team] / self.seen_frames
 
+
+@dataclass
+class RecentEnemyClock:
+    seen_at_s: float | None
+    center_x: float
+    center_y: float
+
 class EnemyCardTracker:
     """
       Infers enemy card plays from tracked battlefield objects.
@@ -100,6 +111,7 @@ class EnemyCardTracker:
         self.elixir_enemy_est: float | None = None
         self.last_time_left_s: float | None = None
         self.last_update_monotonic_s: float | None = None
+        self.recent_enemy_clocks: list[RecentEnemyClock] = []
 
     def start_match(self, time_left_s, total_remaining_s, now_s=None):
         opening_elapsed = max(0.0, 180.0 - time_left_s)
@@ -122,6 +134,7 @@ class EnemyCardTracker:
     ):
         clock_boxes = clock_boxes or []
         self._regen_elixir(time_left_s, now_s=now_s)
+        self._remember_recent_enemy_clocks(clock_boxes, now_s)
 
         for match in enemy_matches:
             troop = match.troop
@@ -136,6 +149,7 @@ class EnemyCardTracker:
                     track_id=track_id,
                     first_seen_time=time_left_s,
                     last_seen_time=time_left_s,
+                    first_seen_now_s=now_s,
                 )
                 self.tracks[track_id] = memory
 
@@ -148,13 +162,15 @@ class EnemyCardTracker:
             memory.center_x = troop.center_x
             memory.center_y = troop.center_y
 
-            if self._has_nearby_clock(troop, clock_boxes):
+            if self._has_nearby_clock(memory, troop, clock_boxes, now_s=now_s):
                 memory.clock_confirmed = True
 
             if self._should_frame_confirm(memory):
                 memory.frame_confirmed = True
 
-            if (memory.clock_confirmed or memory.frame_confirmed) and not memory.counted_as_card:
+            if memory.counted_as_card:
+                self._maybe_revise_recorded_play(memory)
+            elif memory.clock_confirmed or memory.frame_confirmed:
                 self._maybe_record_play(
                     memory,
                     time_left_s,
@@ -164,18 +180,70 @@ class EnemyCardTracker:
 
         self._drop_stale_tracks(time_left_s)
 
-    def _has_nearby_clock(self, troop, clock_boxes):
+    def _remember_recent_enemy_clocks(self, clock_boxes, now_s):
+        if now_s is None:
+            self.recent_enemy_clocks = []
+            return
+
+        fresh_clocks = []
         for clock in clock_boxes:
             if clock["confidence"] < 0.5:
                 continue
             if clock["team"] != "enemy":
                 continue
-            horizontal_gap = abs(clock["center_x"] - troop.center_x)
-            vertical_gap = clock["center_y"] - troop.center_y
+            fresh_clocks.append(
+                RecentEnemyClock(
+                    seen_at_s=now_s,
+                    center_x=clock["center_x"],
+                    center_y=clock["center_y"],
+                )
+            )
 
-            if horizontal_gap <= 90 and -80 <= vertical_gap <= 180:
-              return True
-        return False 
+        self.recent_enemy_clocks.extend(fresh_clocks)
+        self.recent_enemy_clocks = [
+            clock
+            for clock in self.recent_enemy_clocks
+            if clock.seen_at_s is not None
+            and now_s - clock.seen_at_s <= ENEMY_RECENT_CLOCK_CONFIRM_SECONDS
+        ]
+
+    def _has_nearby_clock(self, memory, troop, clock_boxes, now_s=None):
+        for clock in clock_boxes:
+            if clock["confidence"] < 0.5:
+                continue
+            if clock["team"] != "enemy":
+                continue
+            if self._clock_matches_troop(
+                clock["center_x"],
+                clock["center_y"],
+                troop,
+            ):
+                return True
+
+        card_name = DIRECT_UNIT_TO_CARD.get(troop.class_name)
+        if (
+            now_s is None
+            or memory.first_seen_now_s is None
+            or card_name is None
+            or troop.class_name in FRAME_CONFIRM_SPELL_CLASSES
+            or troop.class_name in FRAME_CONFIRM_TROOPS
+            or now_s > memory.first_seen_now_s + ENEMY_RECENT_CLOCK_CONFIRM_SECONDS
+        ):
+            return False
+
+        for clock in self.recent_enemy_clocks:
+            if clock.seen_at_s is None:
+                continue
+            if now_s - clock.seen_at_s > ENEMY_RECENT_CLOCK_CONFIRM_SECONDS:
+                continue
+            if self._clock_matches_troop(clock.center_x, clock.center_y, troop):
+                return True
+        return False
+
+    def _clock_matches_troop(self, clock_center_x, clock_center_y, troop):
+        horizontal_gap = abs(clock_center_x - troop.center_x)
+        vertical_gap = clock_center_y - troop.center_y
+        return horizontal_gap <= 90 and -80 <= vertical_gap <= 180
 
     def _should_frame_confirm(self, memory):
         """Allow frame-only confirmation for spell-like classes, not normal troops."""
@@ -224,15 +292,26 @@ class EnemyCardTracker:
         ):
             memory.counted_as_card = True
             return
+
+        if self._is_recent_duplicate_play(
+            card_name,
+            time_left_s,
+            memory,
+            arena_px,
+        ):
+            memory.counted_as_card = True
+            return
         
         cost = CARD_METADATA[card_name]["elixir_cost"]
         card_id = card_to_id(card_name)
+        cell = self._memory_cell(memory, arena_px)
 
         self.detected_card_plays.append({
             "time_left_s": time_left_s,
             "card": card_name,
             "cost": cost,
             "track_id": memory.track_id,
+            "cell": cell,
         })
         
         if card_id is not None:
@@ -273,6 +352,68 @@ class EnemyCardTracker:
             if (card_id := card_to_id(play["card"])) is not None
         }
         self.elixir_enemy_est = min(MAX_ELIXIR, self.elixir_enemy_est + removed_cost)
+
+    def _maybe_revise_recorded_play(self, memory):
+        if memory.track_id is None:
+            return
+        if not self._is_reliable_enemy_play(memory):
+            return
+
+        play_idx = self._find_detected_play_index(memory.track_id)
+        if play_idx is None:
+            return
+
+        updated_card = DIRECT_UNIT_TO_CARD.get(memory.best_class)
+        if updated_card is None:
+            return
+
+        play = self.detected_card_plays[play_idx]
+        old_card = play["card"]
+        if updated_card == old_card:
+            return
+
+        old_cost = play["cost"]
+        new_cost = CARD_METADATA[updated_card]["elixir_cost"]
+        play["card"] = updated_card
+        play["cost"] = new_cost
+        self.confirmed_seen_cards = {
+            card_id
+            for tracked_play in self.detected_card_plays
+            if (card_id := card_to_id(tracked_play["card"])) is not None
+        }
+        self.elixir_enemy_est = min(
+            MAX_ELIXIR,
+            max(0.0, self.elixir_enemy_est + old_cost - new_cost),
+        )
+
+    def _find_detected_play_index(self, track_id):
+        for idx, play in enumerate(self.detected_card_plays):
+            if play["track_id"] == track_id:
+                return idx
+        return None
+
+    def _is_recent_duplicate_play(
+        self,
+        card_name,
+        time_left_s,
+        memory,
+        arena_px,
+    ):
+        enemy_cell = self._memory_cell(memory, arena_px)
+        for play in reversed(self.detected_card_plays):
+            if play["card"] != card_name:
+                continue
+            elapsed_s = play["time_left_s"] - time_left_s
+            if elapsed_s < 0:
+                continue
+            if elapsed_s > ENEMY_RECENT_CLOCK_DUPLICATE_WINDOW_S:
+                return False
+            play_cell = play.get("cell")
+            if play_cell is None or enemy_cell is None:
+                return True
+            if not self._has_distinct_spell_cell(play_cell, enemy_cell):
+                return True
+        return False
 
     def _is_recent_own_spell_duplicate(
         self,

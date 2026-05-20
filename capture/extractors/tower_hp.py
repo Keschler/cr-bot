@@ -168,7 +168,10 @@ def extract_tower_hp(frame, yolo_boxes=None, debug_steps_by_tower=None):
         for tower_name, tower in towers.items():
             tower_debug = {} if debug_steps_by_tower is not None else None
             if tower is None:
-                result[tower_name] = FULL_TOWER_HP[tower_name]
+                if "support" in tower_name:
+                    result[tower_name] = 0
+                else:
+                    result[tower_name] = FULL_TOWER_HP[tower_name]
                 if debug_steps_by_tower is not None:
                     debug_steps_by_tower[tower_name] = tower_debug
                 continue
@@ -179,7 +182,10 @@ def extract_tower_hp(frame, yolo_boxes=None, debug_steps_by_tower=None):
                 bar = queen_matches.get(id(tower))
 
             if bar is None:
-                result[tower_name] = FULL_TOWER_HP[tower_name]
+                if "support" in tower_name:
+                    result[tower_name] = 0
+                else:
+                    result[tower_name] = FULL_TOWER_HP[tower_name]
                 if debug_steps_by_tower is not None:
                     debug_steps_by_tower[tower_name] = tower_debug
                 continue

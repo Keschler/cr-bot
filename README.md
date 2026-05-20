@@ -11,6 +11,7 @@ Clash Royale Vision Bot is a computer vision project that reads Clash Royale gam
 - Tracks visible units, teams, positions, confidence scores, and estimated HP.
 - Estimates enemy card plays and enemy unit HP from detected troops, buildings, health bars, and spell effects.
 - Estimates enemy elixir over time from match clock and confirmed enemy plays.
+- Extracts own card plays from hand-slot changes and confirms deploy locations from troop clocks and spell elixir-cost overlays.
 - Supports live capture through a video device such as `v4l2loopback`.
 - Supports offline dataset generation from recorded gameplay clips.
 - Includes scripts for detector training, inference, annotation preparation, and dataset processing.
@@ -31,7 +32,14 @@ The project processes each frame in a few steps:
 2. It remaps detections back onto the full game frame.
 3. It extracts HUD information with OCR, template matching, and card classifiers.
 4. It builds a structured `GameState`.
-5. It updates trackers for enemy cards, enemy elixir, and match state.
+5. It updates trackers for own actions, enemy cards, enemy elixir, and match state.
+
+Own action extraction is based on the card hand changing first, then confirming the deploy location from the best available in-game cue:
+
+- Normal troops and buildings use deploy-clock detections when available.
+- Recent allied unit tracks are kept briefly so a unit can still be matched after the clock has disappeared.
+- Circle/radius spells use the white spell radius ellipse only as an aiming candidate.
+- The purple elixir-cost overlay is required to confirm that a spell was actually released. It is scored from the middle of the top half of the detected spell ellipse, so the crop is tied to the actual spell-radius candidate rather than a loose rectangle around the approximate center.
 
 ## Use The Executable
 
@@ -81,6 +89,7 @@ capture/
   vision/                     YOLO/KataCR runtime helpers
   features/                   board and global feature builders
   scripts/                    training, inference, and dataset helper scripts
+  scripts/debug/              local debug renderers for action and spell detection
   assets/
     models/                   detector and classifier checkpoints
     templates/                OCR and elixir templates
@@ -95,6 +104,30 @@ dataset_generation/
 
 docs/                         documentation
 ```
+
+## Debugging
+
+Most local visual debugging scripts live under `capture/scripts/debug/`.
+
+Examples:
+
+```bash
+cd capture
+
+# Render purple elixir-cost detector crops for failed spell confirmations.
+venv/bin/python scripts/debug/debug_spell_purple_detector.py \
+  --preset failed-wrong-detections \
+  --video assets/pictures/10_fps_wrong_detections.mp4 \
+  --output-dir debug_output/spell_purple_failed_wrong_detections
+
+# Render the confirmed purple elixir-cost cases from the wrong-detections clip.
+venv/bin/python scripts/debug/debug_spell_purple_detector.py \
+  --preset confirmed-wrong-detections \
+  --video assets/pictures/10_fps_wrong_detections.mp4 \
+  --output-dir debug_output/spell_purple_confirmed_wrong_detections
+```
+
+Debug outputs are written to `capture/debug_output/` and are intentionally not part of the runtime pipeline.
 
 ## Devlogs
 
@@ -119,7 +152,8 @@ Devlogs: https://flavortown.hackclub.com/projects/16627
 - Goblinstein and Three Musketeers are not added to the hand-card and next-card detection model.
 - Timer, elixir, and tower HP extraction can still be noisy in some frames.
 - Enemy elixir is an estimate, not a value shown by the game.
-- Spell detection can be ambiguous.
+- Spell detection can be ambiguous when multiple radius effects overlap or when the purple elixir-cost overlay is outside the selected spell ellipse crop.
+- Linear spells such as The Log and Barbarian Barrel do not use the circle/radius spell locator yet.
 
 ## Tech Stack
 

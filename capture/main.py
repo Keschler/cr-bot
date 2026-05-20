@@ -15,7 +15,6 @@ from extractors.units import match_troops_to_bars, match_from_dict
 from extractors.match_state import game_start, game_end_from_result
 from image_utils import draw_rois
 from rois import ROIS
-from scripts.run_seed_inference import filter_excluded_classes
 from katacr.build_dataset.utils.split_part import process_part, ratio2name
 from state_builder import build_game_state
 from vision.yolo_runtime import load_yolo_runtime, build_detector, summarize_detections, remap_boxes_to_frame, convert_yolo, extract_clock_boxes
