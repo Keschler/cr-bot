@@ -9,3 +9,11 @@ capture/dist/
 capture/venv/
 capture/venv-cpu/
 *.log
+capture/assets/pictures/
+capture/debug_output/
+capture/video_output/
+capture/gameplay_output.txt
+dataset_generation/data/
+dataset_generation/videos_training
+tmp_recent_track_output.txt
+docs/.$*.bkp
