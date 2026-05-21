@@ -16,6 +16,9 @@ from features.action_space import ACTION_GRID
 from trackers.direct_unit_to_card import DIRECT_UNIT_TO_CARD
 
 
+LOG_YOLO_AFTER_PENDING_WINDOW_S = 1.0
+
+
 @dataclass
 class PendingOwnPlay:
     card: str
@@ -27,6 +30,9 @@ class PendingOwnPlay:
     spell_elixir_confirmed: bool = False
     spell_release_seen: bool = False
     spell_target_cell: tuple[int, int] | None = None
+    log_first_cell: tuple[int, int] | None = None
+    log_first_seen_s: float | None = None
+    log_first_track_id: int | None = None
 
 
 @dataclass
@@ -45,6 +51,7 @@ class OwnActionTracker:
         self.last_elixir: float | None = None
         self.pending: list[PendingOwnPlay] = []
         self.seen_ally_tracks: set[int] = set()
+        self.consumed_log_track_ids: set[int] = set()
         self.recent_ally_tracks: dict[int, RecentAllyTrack] = {}
         self.actions: list[dict] = []
         self.recent_hand_seen: dict[str, float] = {}
@@ -102,6 +109,19 @@ class OwnActionTracker:
                     elixir_before=elixir,
                 ))
             elif prev is not None and cur != prev:
+                dropped_card = self._resolve_drop_card(idx, prev)
+                if dropped_card == "log":
+                    self._debug(
+                        f"slot {idx} log change detected: prev={prev} cur={cur} "
+                        f"started_at={now} elixir_before={elixir:.2f}"
+                    )
+                    self.pending.append(PendingOwnPlay(
+                        card=dropped_card,
+                        slot_idx=idx,
+                        started_at_s=now,
+                        elixir_before=elixir,
+                    ))
+                    continue
                 self._debug(
                     f"slot {idx} changed but not treated as drop: "
                     f"prev={prev} cur={cur}"
@@ -167,23 +187,36 @@ class OwnActionTracker:
 
         had_pending = bool(self.pending)
         still_pending = []
+        log_match = self._first_visible_own_log(game_state.own_units)
+        log_pending_to_confirm = self._log_pending_for_detection(log_match, now)
+        elixir_pending_to_confirm = self._pending_for_current_elixir_drop(
+            elixir,
+            now,
+            preferred_pending=log_pending_to_confirm,
+        )
         for pending in self.pending:
             is_spell = self._is_spell_card(pending.card)
             cost = CARD_METADATA.get(pending.card, {}).get("elixir_cost")
             elixir_drop = None if self.last_elixir is None else self.last_elixir - elixir
             required_drop = None if cost is None else max(1.0, cost - 1.0)
-            elixir_confirms = (
-                self.last_elixir is not None
-                and cost is not None
-                and elixir_drop >= required_drop
-            )
+            elixir_confirms = pending is elixir_pending_to_confirm
             if is_spell:
-                placed_cell, keep_pending = self._confirm_pending_spell(
-                    pending,
-                    arena_px,
-                    frame,
-                    elixir_confirms,
-                )
+                if pending.card == "log":
+                    placed_cell, keep_pending = self._confirm_pending_log(
+                        pending,
+                        log_match,
+                        pending is log_pending_to_confirm,
+                        elixir_confirms or pending.spell_elixir_confirmed,
+                        arena_px,
+                        now,
+                    )
+                else:
+                    placed_cell, keep_pending = self._confirm_pending_spell(
+                        pending,
+                        arena_px,
+                        frame,
+                        elixir_confirms,
+                    )
             else:
                 placed_cell = self._infer_pending_cell(
                     pending,
@@ -216,6 +249,8 @@ class OwnActionTracker:
                     slot_idx=pending.slot_idx,
                     cell=placed_cell,
                 )
+                if pending.card == "log" and pending.log_first_track_id is not None:
+                    self.consumed_log_track_ids.add(pending.log_first_track_id)
             else:
                 if keep_pending:
                     self._debug(
@@ -348,6 +383,104 @@ class OwnActionTracker:
             return None, False
 
         return None, True
+
+    def _confirm_pending_log(
+        self,
+        pending,
+        log_match,
+        selected_for_detection,
+        log_elixir_confirmed,
+        arena_px,
+        now,
+    ):
+        if arena_px is None:
+            return None, True
+
+        if log_elixir_confirmed:
+            pending.spell_elixir_confirmed = True
+
+        if log_match is not None and pending.log_first_cell is None:
+            if not selected_for_detection:
+                return None, False
+            troop = log_match.troop
+            pending.log_first_cell = self._log_placement_cell(troop, arena_px)
+            pending.log_first_seen_s = now
+            pending.log_first_track_id = troop.track_id
+            self._debug(
+                f"first visible own log detected track={troop.track_id} "
+                f"center=({troop.center_x:.1f}, {troop.center_y:.1f}) "
+                f"cell={pending.log_first_cell}"
+            )
+
+        if pending.log_first_cell is not None and pending.spell_elixir_confirmed:
+            return pending.log_first_cell, False
+
+        if pending.started_at_s - now > OWN_ACTION_TRACK_AFTER_DROP_WINDOW_S:
+            return None, False
+
+        return None, True
+
+    def _first_visible_own_log(self, own_units):
+        candidates = [
+            match
+            for match in own_units
+            if match.troop.class_name == "the-log"
+            and match.troop.team == "ally"
+            and match.troop.track_id not in self.consumed_log_track_ids
+        ]
+        if not candidates:
+            return None
+
+        return max(candidates, key=lambda match: match.troop.confidence)
+
+    def _log_pending_for_detection(self, log_match, now):
+        if log_match is None:
+            return None
+
+        candidates = []
+        for pending in self.pending:
+            if pending.card != "log":
+                continue
+            elapsed_s = pending.started_at_s - now
+            if not 0 <= elapsed_s <= LOG_YOLO_AFTER_PENDING_WINDOW_S:
+                continue
+            candidates.append((elapsed_s, pending))
+
+        if not candidates:
+            return None
+
+        return min(candidates, key=lambda item: item[0])[1]
+
+    def _pending_for_current_elixir_drop(self, elixir, now, preferred_pending=None):
+        if self.last_elixir is None:
+            return None
+
+        elixir_drop = self.last_elixir - elixir
+        candidates = []
+        for pending in self.pending:
+            if pending.spell_elixir_confirmed:
+                continue
+            cost = CARD_METADATA.get(pending.card, {}).get("elixir_cost")
+            if cost is None:
+                continue
+            required_drop = 1.5 if pending.card == "log" else max(1.0, cost - 1.0)
+            if elixir_drop < required_drop:
+                continue
+            elapsed_s = pending.started_at_s - now
+            if not 0 <= elapsed_s <= OWN_ACTION_TRACK_AFTER_DROP_WINDOW_S:
+                continue
+            candidates.append((pending is preferred_pending, elapsed_s, pending))
+
+        if not candidates:
+            return None
+
+        candidates.sort(key=lambda item: (not item[0], item[1]))
+        return candidates[0][2]
+
+    def _log_placement_cell(self, troop, arena_px):
+        # The detector exposes an axis-aligned box at runtime; its center is the
+        # same placement estimate we need from the first visible vertical Log.
+        return ACTION_GRID.pixel_to_cell(troop.center_x, troop.center_y, arena_px)
 
     def _record_new_track_actions(self, new_tracks, hand, arena_px, now, clock_boxes):
         for match in new_tracks:
