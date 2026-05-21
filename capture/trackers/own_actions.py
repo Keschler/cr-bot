@@ -62,11 +62,23 @@ class OwnActionTracker:
         if self.debug:
             print(f"[own_actions] {message}")
 
-    def update(self, game_state, arena_px, frame=None, clock_boxes=None):
+    def update(self, game_state, arena_px, frame=None, clock_boxes=None, own_actions_blocked=False):
         clock_boxes = clock_boxes or []
         now = game_state.total_remaining_s
         hand = game_state.hud.hand_cards
         elixir = game_state.hud.elixir_self
+        if own_actions_blocked:
+            if self.pending:
+                self._debug(
+                    f"own action detection blocked; clearing pending={len(self.pending)}"
+                )
+            self.pending.clear()
+            self.last_hand = hand[:]
+            self.last_elixir = elixir
+            self._remember_hand(hand, now)
+            self._remember_slot_history(hand)
+            return
+
         self._debug(
             f"update now={now} elixir={elixir:.2f} "
             f"last_elixir={self.last_elixir} hand={hand} "

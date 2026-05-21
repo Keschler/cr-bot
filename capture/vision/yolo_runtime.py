@@ -228,3 +228,26 @@ def extract_clock_boxes(boxes):
           })
 
       return clocks
+
+
+def extract_emote_boxes(boxes):
+      emotes = []
+      _, _, idx2unit = load_yolo_runtime()
+
+      for box in boxes:
+          x1, y1, x2, y2, track_id, conf, cls, team = parse_box_row(box)
+          if idx2unit[int(cls)] != "emote":
+              continue
+
+          emotes.append({
+              "team": "enemy" if int(team) == 1 else "ally",
+              "confidence": conf,
+              "x1": x1,
+              "y1": y1,
+              "x2": x2,
+              "y2": y2,
+              "center_x": (x1 + x2) / 2,
+              "center_y": (y1 + y2) / 2,
+          })
+
+      return emotes
