@@ -1,7 +1,7 @@
 import cv2
 from pathlib import Path
 
-from image_utils import crop, estimate_slot_fraction, preprocess_digit
+from image_utils import crop, estimate_slot_fraction, preprocess_digit, purple_amount
 from paths import TEMPLATES_DIR
 from rois import ELIXIR_SLOT_ROIS, ROIS
 
@@ -49,7 +49,7 @@ def detect_elixir_digit(digit_img, templates=DIGIT_TEMPLATES):
 
 
 def read_elixir_value(displayed_digit, frame, slot_rois=ELIXIR_SLOT_ROIS):
-    number = displayed_digit[0]
+    number = displayed_digit
 
     if number >= 10:
         return 0.0
@@ -57,11 +57,22 @@ def read_elixir_value(displayed_digit, frame, slot_rois=ELIXIR_SLOT_ROIS):
     next_slot = crop(frame, slot_rois[number])
     return estimate_slot_fraction(next_slot)
 
+def estimate_total_slots(frame):
+    purple_fractions = [purple_amount(crop(frame, roi)) for roi in ELIXIR_SLOT_ROIS]
+    for idx, fraction in enumerate(purple_fractions):
+        if fraction >= 0.7:
+            purple_fractions[idx] = 1
+        else:
+            purple_fractions[idx] = 0
+    fraction_sum = sum(purple_fractions)
+    return fraction_sum
+
 
 def extract_elixir(frame, templates=DIGIT_TEMPLATES):
-    elixir_digit = crop(frame, ROIS["elixir_digit"])
-    displayed_digit = detect_elixir_digit(elixir_digit, templates)
-    elixir_estimate = read_elixir_value(displayed_digit, frame)
+    full_elixir_slots = estimate_total_slots(frame)
+    elixir_digit = full_elixir_slots
+    elixir_estimate = read_elixir_value(full_elixir_slots, frame)
+    displayed_digit = full_elixir_slots
     return {
         "digit_image": elixir_digit,
         "displayed_digit": displayed_digit,

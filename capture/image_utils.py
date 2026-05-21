@@ -96,6 +96,21 @@ def estimate_slot_fraction(slot_img):
     return float(np.clip(fraction, 0.0, 1.0))
 
 
+def purple_amount(slot_img):
+      hsv = cv2.cvtColor(slot_img, cv2.COLOR_BGR2HSV)
+
+      lower = np.array([125, 40, 80])
+      upper = np.array([170, 255, 255])
+      mask = cv2.inRange(hsv, lower, upper)
+
+      col_ratio = mask.mean(axis=0) / 255.0
+      purple_cols = np.where(col_ratio > 0.15)[0]
+
+      if len(purple_cols) == 0:
+          return 0.0
+
+      rightmost = purple_cols[-1]
+      return (rightmost + 1) / mask.shape[1]
 
 def segment_digits(binary_img):
     contours, _ = cv2.findContours(binary_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)

@@ -252,7 +252,7 @@ def print_frame_result(result, enemy_card_tracker, own_action_tracker=None):
     elixir = result["elixir"]
     detection_summary = summarize_detections(result["yolo_boxes"])
     print(f"time:   {result['time_left_s']}")
-    print(f"elixir: {elixir['estimated_value'] + elixir['displayed_digit'][0]}")
+    print(f"elixir: {elixir['estimated_value'] + elixir['displayed_digit']}")
     print(f"yolo:   {detection_summary}")
 
     print("towers:")
@@ -346,7 +346,7 @@ def main(
             cv2.imshow("match_debug", render_match_debug(frame, result["matches"]))
 
         elixir = result["elixir"]
-        print(f"Estimated elixir {elixir['estimated_value'] + elixir['displayed_digit'][0]}")
+        print(f"Estimated elixir {elixir['estimated_value'] + elixir['displayed_digit']}")
         print(f"Overtime {result['overtime']}")
 
         detection_summary = summarize_detections(result["yolo_boxes"])

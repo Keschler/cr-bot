@@ -11,7 +11,6 @@ sys.path.insert(0, str(CAPTURE_ROOT))
 
 from constants import (
     CARD_CONFIDENCE_THRESHOLD,
-    ELIXIR_DIGIT_SCORE_THRESHOLD,
     GAME_START_MIN_SECONDS,
     IN_GAME_SCORE_THRESHOLD,
     MAX_ELIXIR,
@@ -63,9 +62,9 @@ def _count_distinct_hand_cards(hand_state: dict) -> int:
 
 def _has_plausible_elixir(frame) -> bool:
     elixir = extract_elixir(frame)
-    digit, digit_score = elixir["displayed_digit"]
+    digit = elixir["displayed_digit"]
     estimated_value = float(elixir["estimated_value"]) + float(digit)
-    return digit_score >= ELIXIR_DIGIT_SCORE_THRESHOLD and 0.0 <= estimated_value <= MAX_ELIXIR
+    return 0.0 <= estimated_value <= MAX_ELIXIR
 
 
 def _has_visible_tower_bars(frame) -> bool:
@@ -83,12 +82,9 @@ def _extract_non_card_signals(frame) -> dict:
     timer_seconds = _parse_timer(timer_text)
 
     elixir = extract_elixir(frame)
-    elixir_digit, elixir_digit_score = elixir["displayed_digit"]
+    elixir_digit = elixir["displayed_digit"]
     estimated_elixir = float(elixir["estimated_value"]) + float(elixir_digit)
-    plausible_elixir = (
-        elixir_digit_score >= ELIXIR_DIGIT_SCORE_THRESHOLD
-        and 0.0 <= estimated_elixir <= MAX_ELIXIR
-    )
+    plausible_elixir = 0.0 <= estimated_elixir <= MAX_ELIXIR
 
     king_state = detect_if_king_tower_activated(frame)
     support_state = detect_if_support_tower_alive(frame)
@@ -100,7 +96,6 @@ def _extract_non_card_signals(frame) -> dict:
         "timer_text": timer_text,
         "timer_seconds": timer_seconds,
         "elixir_digit": elixir_digit,
-        "elixir_digit_score": float(elixir_digit_score),
         "estimated_elixir": estimated_elixir,
         "plausible_elixir": plausible_elixir,
         "king_state": king_state,
@@ -192,12 +187,9 @@ def game_end_from_result(result) -> bool:
       return True
 
     elixir = result["elixir"]
-    digit, digit_score = elixir["displayed_digit"]
+    digit = elixir["displayed_digit"]
     estimated_elixir = float(elixir["estimated_value"]) + float(digit)
-    plausible_elixir = (
-      digit_score >= ELIXIR_DIGIT_SCORE_THRESHOLD
-      and 0.0 <= estimated_elixir <= MAX_ELIXIR
-    )
+    plausible_elixir = 0.0 <= estimated_elixir <= MAX_ELIXIR
 
     hand_state = result["state"]
     confident_hand_cards = _count_confident_hand_cards(hand_state)
@@ -244,7 +236,7 @@ if __name__ == "__main__":
         print(f"  timer={debug['timer_text']!r} parsed={debug['timer_seconds']}")
         print(f"  score={debug['score']}/{debug['threshold']} reasons={debug['score_reasons']}")
         print(f"  confident_hand_cards={debug['confident_hand_cards']} distinct={debug['distinct_hand_cards']} next={debug['next_card_confident']}")
-        print(f"  elixir digit={debug['elixir_digit']} score={debug['elixir_digit_score']:.3f} est={debug['estimated_elixir']:.2f} plausible={debug['plausible_elixir']}")
+        print(f"  elixir digit={debug['elixir_digit']} est={debug['estimated_elixir']:.2f} plausible={debug['plausible_elixir']}")
         print(f"  king_state={debug['king_state']}")
         print(f"  support_state={debug['support_state']}")
         print()
