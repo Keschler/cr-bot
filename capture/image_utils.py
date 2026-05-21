@@ -483,7 +483,7 @@ def build_digit_debug_views(binary_img, boxes, digit_views):
         cv2.rectangle(box_view, (x, y), (x + w, y + h), (0, 0, 255), 1)
 
     tile_h = 56
-    tile_w = 40
+    tile_w = 72
     if not digit_views:
         digits_view = np.zeros((tile_h, tile_w, 3), dtype=np.uint8)
         cv2.putText(digits_view, "none", (4, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1, cv2.LINE_AA)
@@ -495,8 +495,8 @@ def build_digit_debug_views(binary_img, boxes, digit_views):
         if len(digit_img.shape) == 2:
             digit_img = cv2.cvtColor(digit_img, cv2.COLOR_GRAY2BGR)
         resized = cv2.resize(digit_img, (24, 36), interpolation=cv2.INTER_NEAREST)
-        tile[4:40, 8:32] = resized
-        cv2.putText(tile, label, (8, 52), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
+        tile[4:40, 24:48] = resized
+        cv2.putText(tile, label, (4, 52), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1, cv2.LINE_AA)
         tiles.append(tile)
 
     return box_view, np.hstack(tiles)
@@ -514,6 +514,7 @@ def read_number_from_roi(img, templates, semicolon=False, debug_steps=None, digi
             box_view, digits_view = build_digit_debug_views(binary, [], [])
             debug_steps["boxes"] = box_view
             debug_steps["digits"] = digits_view
+            debug_steps["ocr_missing_reason"] = "no_digit_boxes"
         return None
 
     max_width = max(w for _, _, w, _ in boxes)
@@ -521,10 +522,16 @@ def read_number_from_roi(img, templates, semicolon=False, debug_steps=None, digi
 
     chars = []
     digit_views = []
+    digit_scores = []
     for x, y, w, h in boxes:
         if semicolon and w < max_width * 0.5 and h < max_height * 0.5:
             chars.append(":")
             digit_views.append((":", binary[y:y + h, x:x + w]))
+            digit_scores.append({
+                "char": ":",
+                "score": None,
+                "box": (x, y, w, h),
+            })
             continue
 
         dimg = binary[y:y + h, x:x + w]
@@ -533,19 +540,33 @@ def read_number_from_roi(img, templates, semicolon=False, debug_steps=None, digi
         if score <= 0.1 or ratio > 1:
             continue
         chars.append(str(digit)) # Classify each digit separately
-        digit_views.append((str(digit), dimg))
+        digit_views.append((f"{digit}:{score:.2f}", dimg))
+        digit_scores.append({
+            "char": str(digit),
+            "score": float(score),
+            "box": (x, y, w, h),
+        })
 
     if debug_steps is not None:
         box_view, digits_view = build_digit_debug_views(binary, boxes, digit_views)
         debug_steps["boxes"] = box_view
         debug_steps["digits"] = digits_view
+        debug_steps["digit_scores"] = digit_scores
 
     value = "".join(chars)
+    if debug_steps is not None:
+        debug_steps["ocr_value"] = value
     if semicolon:
         return value
+    if digit_mode == "tower" and len(value) > 1 and value.startswith("0"):
+        if debug_steps is not None:
+            debug_steps["ocr_rejected_reason"] = "leading_zero"
+        return None
     if value:
         return int(value)
     else:
+        if debug_steps is not None:
+            debug_steps["ocr_missing_reason"] = "no_accepted_digits"
         return None
 
 def _extract_king_bar_fill(bar_img):

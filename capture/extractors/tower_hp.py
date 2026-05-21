@@ -42,9 +42,11 @@ def load_templates(expert: bool):
 
 TEMPLATES = load_templates(False)
 EXPERT_TEMPLATES = load_templates(True)
+OWN_TOWER_NAMES = {"own_king", "own_support_left", "own_support_right"}
 
-def extract_tower_hp(frame, yolo_boxes=None, debug_steps_by_tower=None):
+def extract_tower_hp(frame, yolo_boxes=None, debug_steps_by_tower=None, support_tower_yolo_boxes=None):
     if yolo_boxes is None: # Live gameplay
+        pause_own_tower_hp = has_blocking_emotes(support_tower_yolo_boxes)
         towers_hp = {
             "enemy_king": {
                 "image": crop(frame, ROIS["opponent_king_health_text"]),
@@ -74,23 +76,31 @@ def extract_tower_hp(frame, yolo_boxes=None, debug_steps_by_tower=None):
 
         for tower_name, tower_data in towers_hp.items():
             tower_debug = {} if debug_steps_by_tower is not None else None
-            tower_data["value"] = read_number_from_roi(tower_data["image"], TEMPLATES, debug_steps=tower_debug, digit_mode="tower")
+            if pause_own_tower_hp and tower_name in OWN_TOWER_NAMES:
+                tower_data["value"] = None
+                if tower_debug is not None:
+                    tower_debug["ocr_missing_reason"] = "blocked_by_emote"
+            else:
+                tower_data["value"] = read_number_from_roi(tower_data["image"], TEMPLATES, debug_steps=tower_debug, digit_mode="tower")
             if debug_steps_by_tower is not None:
                 debug_steps_by_tower[tower_name] = tower_debug
 
 
         king_tower_activated = detect_if_king_tower_activated(frame)
 
-        if not king_tower_activated["own_king_activated"]:
+        if not pause_own_tower_hp and not king_tower_activated["own_king_activated"]:
             towers_hp["own_king"]["value"] = KING_TOWER_HP
         if not king_tower_activated["enemy_king_activated"]:
             towers_hp["enemy_king"]["value"] = KING_TOWER_HP
 
-        support_tower_alive = detect_if_support_tower_alive(frame)
+        if support_tower_yolo_boxes is not None:
+            support_tower_alive = detect_if_support_tower_alive_from_yolo(support_tower_yolo_boxes)
+        else:
+            support_tower_alive = detect_if_support_tower_alive(frame)
 
-        if not support_tower_alive["support_left_activated"]:
+        if not pause_own_tower_hp and not support_tower_alive["support_left_activated"]:
             towers_hp["own_support_left"]["value"] = 0
-        if not support_tower_alive["support_right_activated"]:
+        if not pause_own_tower_hp and not support_tower_alive["support_right_activated"]:
             towers_hp["own_support_right"]["value"] = 0
         if not support_tower_alive["enemy_support_left_activated"]:
             towers_hp["enemy_support_left"]["value"] = 0
@@ -103,6 +113,7 @@ def extract_tower_hp(frame, yolo_boxes=None, debug_steps_by_tower=None):
         }
     else: # expert gameplay
         _, _, idx2unit = load_yolo_runtime()
+        pause_own_tower_hp = has_blocking_emotes(yolo_boxes, idx2unit=idx2unit)
 
         king_towers = []
         queen_towers = []
@@ -139,18 +150,19 @@ def extract_tower_hp(frame, yolo_boxes=None, debug_steps_by_tower=None):
         ally_king = [d for d in king_towers if d["team"] == "ally"]
         enemy_king = [d for d in king_towers if d["team"] == "enemy"]
 
-        ally_queens = sorted(
-          [d for d in queen_towers if d["team"] == "ally"],
-          key=lambda d: d["cx"],
-      )
-        enemy_queens = sorted(
-          [d for d in queen_towers if d["team"] == "enemy"],
-          key=lambda d: d["cx"],
-      )
-        own_support_left = ally_queens[0] if len(ally_queens) > 0 else None
-        own_support_right = ally_queens[1] if len(ally_queens) > 1 else None
-        enemy_support_left = enemy_queens[0] if len(enemy_queens) > 0 else None
-        enemy_support_right = enemy_queens[1] if len(enemy_queens) > 1 else None
+        ally_queens = [d for d in queen_towers if d["team"] == "ally"]
+        enemy_queens = [d for d in queen_towers if d["team"] == "enemy"]
+
+        own_support_left, own_support_right = assign_support_towers_by_position(
+            ally_queens,
+            ROIS["player_left_support_tower"],
+            ROIS["player_right_support_tower"],
+        )
+        enemy_support_left, enemy_support_right = assign_support_towers_by_position(
+            enemy_queens,
+            ROIS["opponent_left_support_tower"],
+            ROIS["opponent_right_support_tower"],
+        )
 
         towers = {
                 "own_king": ally_king[0] if ally_king else None,
@@ -167,12 +179,20 @@ def extract_tower_hp(frame, yolo_boxes=None, debug_steps_by_tower=None):
 
         for tower_name, tower in towers.items():
             tower_debug = {} if debug_steps_by_tower is not None else None
+            if pause_own_tower_hp and tower_name in OWN_TOWER_NAMES:
+                result[tower_name] = None
+                if debug_steps_by_tower is not None:
+                    tower_debug["ocr_missing_reason"] = "blocked_by_emote"
+                    debug_steps_by_tower[tower_name] = tower_debug
+                continue
+
             if tower is None:
                 if "support" in tower_name:
                     result[tower_name] = 0
                 else:
                     result[tower_name] = FULL_TOWER_HP[tower_name]
                 if debug_steps_by_tower is not None:
+                    tower_debug["ocr_missing_reason"] = "no_tower_detection"
                     debug_steps_by_tower[tower_name] = tower_debug
                 continue
 
@@ -182,11 +202,9 @@ def extract_tower_hp(frame, yolo_boxes=None, debug_steps_by_tower=None):
                 bar = queen_matches.get(id(tower))
 
             if bar is None:
-                if "support" in tower_name:
-                    result[tower_name] = 0
-                else:
-                    result[tower_name] = FULL_TOWER_HP[tower_name]
+                result[tower_name] = FULL_TOWER_HP[tower_name]
                 if debug_steps_by_tower is not None:
+                    tower_debug["ocr_missing_reason"] = "no_bar_detection"
                     debug_steps_by_tower[tower_name] = tower_debug
                 continue
 
@@ -200,12 +218,95 @@ def extract_tower_hp(frame, yolo_boxes=None, debug_steps_by_tower=None):
             text_img = crop_tower_hp_text_area(bar_img, tower_name)
             value = read_number_from_roi(text_img, EXPERT_TEMPLATES, debug_steps=tower_debug, digit_mode="tower")
             if value in (None, 0):
-                value = FULL_TOWER_HP[tower_name]
+                value = None if "support" in tower_name else FULL_TOWER_HP[tower_name]
 
             result[tower_name] = value
             if debug_steps_by_tower is not None:
                 debug_steps_by_tower[tower_name] = tower_debug
         return result
+
+
+def has_blocking_emotes(yolo_boxes, idx2unit=None):
+    if yolo_boxes is None:
+        return False
+
+    if idx2unit is None:
+        _, _, idx2unit = load_yolo_runtime()
+
+    emote_count = 0
+    for row in yolo_boxes:
+        x1, y1, x2, y2, track_id, conf, cls, team = parse_box_row(row)
+        if idx2unit[int(cls)] == "emote":
+            emote_count += 1
+            if emote_count >= 2:
+                return True
+
+    return False
+
+
+def detect_if_support_tower_alive_from_yolo(yolo_boxes):
+    _, _, idx2unit = load_yolo_runtime()
+
+    ally_queens = []
+    enemy_queens = []
+
+    for row in yolo_boxes:
+        x1, y1, x2, y2, track_id, conf, cls, team = parse_box_row(row)
+        class_name = idx2unit[int(cls)]
+        if class_name != "queen-tower":
+            continue
+
+        det = {
+            "team": "enemy" if int(team) == 1 else "ally",
+            "cx": float((x1 + x2) / 2.0),
+        }
+        if det["team"] == "ally":
+            ally_queens.append(det)
+        else:
+            enemy_queens.append(det)
+
+    own_left, own_right = assign_support_towers_by_position(
+        ally_queens,
+        ROIS["player_left_support_tower"],
+        ROIS["player_right_support_tower"],
+    )
+    enemy_left, enemy_right = assign_support_towers_by_position(
+        enemy_queens,
+        ROIS["opponent_left_support_tower"],
+        ROIS["opponent_right_support_tower"],
+    )
+
+    return {
+        "support_left_activated": own_left is not None,
+        "support_right_activated": own_right is not None,
+        "enemy_support_left_activated": enemy_left is not None,
+        "enemy_support_right_activated": enemy_right is not None,
+    }
+
+
+def assign_support_towers_by_position(detections, left_roi, right_roi):
+    left_cx = left_roi[0] + left_roi[2] / 2.0
+    right_cx = right_roi[0] + right_roi[2] / 2.0
+
+    left_det = None
+    right_det = None
+    left_distance = None
+    right_distance = None
+
+    for det in detections:
+        dist_left = abs(det["cx"] - left_cx)
+        dist_right = abs(det["cx"] - right_cx)
+
+        if dist_left <= dist_right:
+            if left_distance is None or dist_left < left_distance:
+                left_det = det
+                left_distance = dist_left
+        else:
+            if right_distance is None or dist_right < right_distance:
+                right_det = det
+                right_distance = dist_right
+
+    return left_det, right_det
 
 
 def squared_distance(a, b):
