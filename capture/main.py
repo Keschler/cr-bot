@@ -6,6 +6,13 @@ import numpy as np
 import time
 
 
+from debug_output import (
+    print_debug_frame_result,
+    print_frame_result,
+    render_match_debug,
+    render_timer_debug,
+    render_tower_hp_debug,
+)
 from extractors.cards import extract_hand_state
 from extractors.elixir import extract_elixir
 from extractors.timer import extract_time, is_overtime, parse_time_left_s, total_remaining_seconds
@@ -17,11 +24,12 @@ from image_utils import draw_rois
 from rois import ROIS
 from katacr.build_dataset.utils.split_part import process_part, ratio2name
 from state_builder import build_game_state
-from vision.yolo_runtime import load_yolo_runtime, build_detector, summarize_detections, remap_boxes_to_frame, convert_yolo, extract_clock_boxes
+from vision.yolo_runtime import load_yolo_runtime, build_detector, remap_boxes_to_frame, convert_yolo, extract_clock_boxes, extract_emote_boxes
 from trackers.enemy_cards import EnemyCardTracker 
 from trackers.match_clock import MatchClockFilter
 from trackers.own_actions import OwnActionTracker
 from trackers.tower_hp_filter import TowerHPFilter
+from trackers.hand_state_filter import HandStateFilter
 
 
 PROCESSING_RESOLUTION = (1080, 2400)  # width, height
@@ -85,6 +93,7 @@ def process_frame(
       arena_px,
     )
     clock_boxes = extract_clock_boxes(yolo_boxes)
+    emote_boxes = extract_emote_boxes(yolo_boxes)
     tower_hp_yolo_boxes = remap_boxes_to_frame(
       tower_hp_yolo_boxes,
       arena.shape,
@@ -97,10 +106,19 @@ def process_frame(
     tower_hp_debug_steps = {}
     timer_debug_steps = {}
     if yolo_tower_hp_detections:
-        towers_hp = extract_tower_hp(frame, tower_hp_yolo_boxes, debug_steps_by_tower=tower_hp_debug_steps)
+        towers_hp = extract_tower_hp(
+            frame,
+            tower_hp_yolo_boxes,
+            debug_steps_by_tower=tower_hp_debug_steps,
+            support_tower_yolo_boxes=tower_hp_yolo_boxes,
+        )
         current_time_text = extract_time(frame, debug_steps=timer_debug_steps)
     else:
-        towers_hp = extract_tower_hp(frame, debug_steps_by_tower=tower_hp_debug_steps)
+        towers_hp = extract_tower_hp(
+            frame,
+            debug_steps_by_tower=tower_hp_debug_steps,
+            support_tower_yolo_boxes=tower_hp_yolo_boxes,
+        )
         current_time_text = extract_time(frame, debug_steps=timer_debug_steps, yolo_templates=yolo_tower_hp_detections)
 
 
@@ -125,152 +143,12 @@ def process_frame(
         "state": state,
         "yolo_boxes": yolo_boxes,
         "clock_boxes": clock_boxes,
+        "emote_boxes": emote_boxes,
         "matches": typed_matches,
         "arena_px": arena_px,
         "tower_hp_debug_steps": tower_hp_debug_steps,
         "timer_debug_steps": timer_debug_steps,
     }
-
-
-def render_debug_panel(img: np.ndarray | None, label: str, tile_w: int, tile_h: int) -> np.ndarray:
-    tile = np.zeros((tile_h, tile_w, 3), dtype=np.uint8)
-    cv2.putText(tile, label, (8, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
-    if img is None or img.size == 0:
-        cv2.putText(tile, "missing", (8, tile_h // 2), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2, cv2.LINE_AA)
-        return tile
-
-    if len(img.shape) == 2:
-        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-    scale = min((tile_w - 10) / img.shape[1], (tile_h - 26) / img.shape[0])
-    resized = cv2.resize(
-        img,
-        (max(1, int(img.shape[1] * scale)), max(1, int(img.shape[0] * scale))),
-        interpolation=cv2.INTER_NEAREST,
-    )
-    y0 = 22 + (tile_h - 22 - resized.shape[0]) // 2
-    x0 = (tile_w - resized.shape[1]) // 2
-    tile[y0:y0 + resized.shape[0], x0:x0 + resized.shape[1]] = resized
-    return tile
-
-
-def render_tower_hp_debug(steps_by_tower: dict[str, dict[str, np.ndarray]]) -> np.ndarray:
-    order = [
-        "enemy_king",
-        "enemy_support_left",
-        "enemy_support_right",
-        "own_king",
-        "own_support_left",
-        "own_support_right",
-    ]
-    step_order = ["raw", "binary", "boxes", "digits"]
-    cell_w = 180
-    cell_h = 90
-    rows = []
-
-    for tower_name in order:
-        row_tiles = []
-        steps = steps_by_tower.get(tower_name) or {}
-        for step_name in step_order:
-            row_tiles.append(render_debug_panel(steps.get(step_name), f"{tower_name}:{step_name}", cell_w, cell_h))
-        rows.append(np.hstack(row_tiles))
-
-    return np.vstack(rows)
-
-
-
-def render_timer_debug(steps: dict[str, np.ndarray]) -> np.ndarray:
-    step_order = ["raw", "binary", "boxes", "digits"]
-    cell_w = 220
-    cell_h = 110
-    tiles = [render_debug_panel(steps.get(step_name), f"timer:{step_name}", cell_w, cell_h) for step_name in step_order]
-    return np.hstack(tiles)
-
-
-def crop_detection(frame: np.ndarray, detection, pad: int = 6) -> np.ndarray | None:
-    if detection is None:
-        return None
-
-    h, w = frame.shape[:2]
-    x1 = max(0, int(detection.x1) - pad)
-    y1 = max(0, int(detection.y1) - pad)
-    x2 = min(w, int(detection.x2) + pad)
-    y2 = min(h, int(detection.y2) + pad)
-    if x2 <= x1 or y2 <= y1:
-        return None
-    return frame[y1:y2, x1:x2]
-
-
-def render_match_debug(frame: np.ndarray, matches) -> np.ndarray:
-    cell_w = 180
-    cell_h = 110
-    rows = []
-
-    for idx, match in enumerate(matches):
-        troop_label = f"{idx}:{match.troop.class_name}:{match.troop.team}"
-        bar_label = f"bar:{match.bar.team}" if match.bar is not None else "bar:missing"
-        troop_crop = crop_detection(frame, match.troop, pad=12)
-        bar_crop = crop_detection(frame, match.bar, pad=6)
-        row = np.hstack([
-            render_debug_panel(troop_crop, troop_label, cell_w, cell_h),
-            render_debug_panel(bar_crop, bar_label, cell_w, cell_h),
-        ])
-        rows.append(row)
-
-    if not rows:
-        return np.hstack([
-            render_debug_panel(None, "troop", cell_w, cell_h),
-            render_debug_panel(None, "bar", cell_w, cell_h),
-        ])
-
-    return np.vstack(rows)
-
-def print_frame_result(result, enemy_card_tracker, own_action_tracker=None):
-    if enemy_card_tracker.elixir_enemy_est is None:
-        print("enemy elixir is undefined")
-    else:
-        print(f"enemy elixir est: {enemy_card_tracker.elixir_enemy_est:.2f}")
-    print(f"seen enemy cards: {sorted(enemy_card_tracker.confirmed_seen_cards)}")
-    print("enemy plays:")
-    for play in enemy_card_tracker.detected_card_plays:
-        print(
-            f"  card={play['card']:<20} "
-            f"cost={play['cost']} "
-            f"time_left={play['time_left_s']} "
-            f"track_id={play['track_id']}"
-        )
-    if own_action_tracker is not None:
-        print("own plays:")
-        for action in own_action_tracker.actions:
-            print(
-                f"  card={action['card']:<20} "
-                f"slot={action['slot_idx']} "
-                f"cell={action['cell']} "
-                f"time_left={action['time_left_s']}"
-            )
-    print()
-
-    elixir = result["elixir"]
-    detection_summary = summarize_detections(result["yolo_boxes"])
-    print(f"time:   {result['time_left_s']}")
-    print(f"elixir: {elixir['estimated_value'] + elixir['displayed_digit']}")
-    print(f"yolo:   {detection_summary}")
-
-    print("towers:")
-    for name, hp in result["towers_hp"].items():
-        print(f"{name}: {hp}")
-
-    print("state:")
-    for slot, value in result["state"].items():
-        print(f"  {slot}: {value}")
-    print("matches:")
-    for m in result["matches"]:
-        print(
-            f"  troop={m.troop.class_name:<18} "
-            f"team={m.troop.team:<5} "
-            f"conf={m.troop.confidence:.3f} "
-            f"hp={m.troop.estimated_hp}"
-        )
-    print()
 
 
 def has_visible_match_timer(result) -> bool:
@@ -294,6 +172,7 @@ def main(
     own_action_tracker = OwnActionTracker()
     match_clock_filter = MatchClockFilter()
     tower_hp_filter = TowerHPFilter()
+    hand_state_filter = HandStateFilter()
 
     if debug:
         if not debug_frame_path:
@@ -306,7 +185,12 @@ def main(
             frame = normalize_frame(frame)
 
         result = process_frame(frame, detector, show_rois=False, yolo_tower_hp_detections=yolo_detections)
-        result["towers_hp"] = tower_hp_filter.update(result["towers_hp"])
+        result["state"] = hand_state_filter.update(result["state"])
+        debug_output_dir = Path(__file__).resolve().parent / "video_output"
+        debug_output_dir.mkdir(exist_ok=True)
+        tower_debug_path = debug_output_dir / "tower_hp_debug.png"
+        cv2.imwrite(str(tower_debug_path), render_tower_hp_debug(result["tower_hp_debug_steps"]))
+        print(f"tower hp debug image: {tower_debug_path}")
 
         enemy_card_tracker.start_match(
           result["time_left_s"],
@@ -320,6 +204,7 @@ def main(
             result["arena_px"],
             frame=frame,
             clock_boxes=result["clock_boxes"],
+            own_actions_blocked=len(result["emote_boxes"]) >= 2,
         )
         enemy_card_tracker.reconcile_own_actions(
             own_action_tracker.actions,
@@ -345,49 +230,7 @@ def main(
             cv2.namedWindow("match_debug", cv2.WINDOW_NORMAL)
             cv2.imshow("match_debug", render_match_debug(frame, result["matches"]))
 
-        elixir = result["elixir"]
-        print(f"Estimated elixir {elixir['estimated_value'] + elixir['displayed_digit']}")
-        print(f"Overtime {result['overtime']}")
-
-        detection_summary = summarize_detections(result["yolo_boxes"])
-        print(f"time:   {result['time']} time_left {result['total_remaining_s']}")
-        print(f"yolo:   {detection_summary}")
-
-        print("towers:")
-        for name, hp in result["towers_hp"].items():
-            print(f"{name}: {hp}")
-
-        print("state:")
-        for slot, value in result["state"].items():
-            print(f"  {slot}: {value}")
-
-        print("matches:")
-        for m in result["matches"]:
-            print(
-              f"  troop={m.troop.class_name:<18} "
-              f"team={m.troop.team:<5} "
-              f"conf={m.troop.confidence:.3f} "
-              f"hp={m.troop.estimated_hp}"
-            )
-
-        print("enemy plays:")
-        for play in enemy_card_tracker.detected_card_plays:
-          print(
-              f"  card={play['card']:<20} "
-              f"cost={play['cost']} "
-              f"time_left={play['time_left_s']} "
-              f"track_id={play['track_id']}"
-          )
-        print("own plays:")
-        for action in own_action_tracker.actions:
-          print(
-              f"  card={action['card']:<20} "
-              f"slot={action['slot_idx']} "
-              f"cell={action['cell']} "
-              f"time_left={action['time_left_s']}"
-          )
-        print()
-
+        print_debug_frame_result(result, enemy_card_tracker, own_action_tracker)
 
         if has_display:
             cv2.waitKey(0)
@@ -428,6 +271,7 @@ def main(
                 show_rois=False,
                 yolo_tower_hp_detections=yolo_detections,
             )
+            result["state"] = hand_state_filter.update(result["state"])
             video_time_s = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
 
             if not game_started and (game_start(frame) or has_visible_match_timer(result)):
@@ -450,6 +294,7 @@ def main(
                     result["arena_px"],
                     frame=frame,
                     clock_boxes=result["clock_boxes"],
+                    own_actions_blocked=len(result["emote_boxes"]) >= 2,
                 )
                 enemy_card_tracker.reconcile_own_actions(
                     own_action_tracker.actions,
@@ -475,6 +320,7 @@ def main(
                     result["arena_px"],
                     frame=frame,
                     clock_boxes=result["clock_boxes"],
+                    own_actions_blocked=len(result["emote_boxes"]) >= 2,
                 )
                 enemy_card_tracker.reconcile_own_actions(
                     own_action_tracker.actions,
@@ -498,6 +344,7 @@ def main(
                         own_action_tracker = OwnActionTracker()
                         match_clock_filter = MatchClockFilter()
                         tower_hp_filter = TowerHPFilter()
+                        hand_state_filter = HandStateFilter()
                         continue
                 else:
                     not_in_game_streak = 0
@@ -560,6 +407,7 @@ def main(
             game_started = True
 
             result = process_frame(frame, detector, show_rois=False)
+            result["state"] = hand_state_filter.update(result["state"])
             result["towers_hp"] = tower_hp_filter.update(result["towers_hp"])
 
             now = time.monotonic()
@@ -582,9 +430,11 @@ def main(
                 result["arena_px"],
                 frame=frame,
                 clock_boxes=result["clock_boxes"],
+                own_actions_blocked=len(result["emote_boxes"]) >= 2,
             )
         elif game_started:
             result = process_frame(frame, detector, show_rois=False)
+            result["state"] = hand_state_filter.update(result["state"])
             result["towers_hp"] = tower_hp_filter.update(result["towers_hp"])
 
             now = time.monotonic()
@@ -606,6 +456,7 @@ def main(
                 result["arena_px"],
                 frame=frame,
                 clock_boxes=result["clock_boxes"],
+                own_actions_blocked=len(result["emote_boxes"]) >= 2,
             )
             enemy_card_tracker.reconcile_own_actions(
                 own_action_tracker.actions,
@@ -628,6 +479,7 @@ def main(
                     own_action_tracker = OwnActionTracker()
                     match_clock_filter = MatchClockFilter()
                     tower_hp_filter = TowerHPFilter()
+                    hand_state_filter = HandStateFilter()
                     continue
             else:
                 not_in_game_streak = 0
