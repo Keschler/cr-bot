@@ -70,11 +70,10 @@ def estimate_total_slots(frame):
 
 def extract_elixir(frame, templates=DIGIT_TEMPLATES):
     full_elixir_slots = estimate_total_slots(frame)
-    elixir_digit = full_elixir_slots
     elixir_estimate = read_elixir_value(full_elixir_slots, frame)
+
     displayed_digit = full_elixir_slots
     return {
-        "digit_image": elixir_digit,
         "displayed_digit": displayed_digit,
         "estimated_value": elixir_estimate,
     }

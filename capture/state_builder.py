@@ -27,9 +27,9 @@ def build_game_state(result, *, seen_enemy_cards=None, elixir_enemy_est=None, ga
     )
 
     hud = HudState(
-        time_left_s=result["time_left_s"],
+          time_left_s=result["time_left_s"],
           overtime=result["overtime"],
-          elixir_self=result["elixir"]["estimated_value"] + result["elixir"]["displayed_digit"][0],
+          elixir_self=result["elixir"]["estimated_value"] + result["elixir"]["displayed_digit"],
           hand_cards=[
               card_name(hand["card_1"]),
               card_name(hand["card_2"]),
