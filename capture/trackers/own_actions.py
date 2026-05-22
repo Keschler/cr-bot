@@ -70,9 +70,8 @@ class OwnActionTracker:
         if own_actions_blocked:
             if self.pending:
                 self._debug(
-                    f"own action detection blocked; clearing pending={len(self.pending)}"
+                    f"own action detection blocked; preserving pending={len(self.pending)}"
                 )
-            self.pending.clear()
             self.last_hand = hand[:]
             self.last_elixir = elixir
             self._remember_hand(hand, now)
