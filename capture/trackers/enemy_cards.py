@@ -243,7 +243,7 @@ class EnemyCardTracker:
     def _clock_matches_troop(self, clock_center_x, clock_center_y, troop):
         horizontal_gap = abs(clock_center_x - troop.center_x)
         vertical_gap = clock_center_y - troop.center_y
-        return horizontal_gap <= 90 and -80 <= vertical_gap <= 180
+        return horizontal_gap <= 90 and 10 <= vertical_gap <= 140 
 
     def _should_frame_confirm(self, memory):
         """Allow frame-only confirmation for spell-like classes, not normal troops."""
