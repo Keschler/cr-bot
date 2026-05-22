@@ -141,7 +141,7 @@ def print_frame_result(result, enemy_card_tracker, own_action_tracker=None):
                 f"  card={action['card']:<20} "
                 f"slot={action['slot_idx']} "
                 f"cell={action['cell']} "
-                f"time_left={action['time_left_s']}, {action['time_left_s'] - 300}"
+                f"time_left={action['time_left_s']} "
             )
     print()
 
