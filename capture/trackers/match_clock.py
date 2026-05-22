@@ -4,6 +4,7 @@ class MatchClockFilter:
         self.last_seen_monotonic_s = None
         self.initialised = False
         self.initial_seen_values = []
+        self.last_overtime = False
 
     def initialise(self, detected_time_left_s, now_s) -> None:
         if not self.initialised and detected_time_left_s is not None:
@@ -14,7 +15,9 @@ class MatchClockFilter:
                 self.initialised = True
         
         
-    def update(self, detected_time_left_s, now_s):
+    def update(self, detected_time_left_s, now_s, overtime):
+        entering_overtime = overtime and not self.last_overtime
+        self.last_overtime = overtime
         if self.last_time_left_s is None or self.last_seen_monotonic_s is None:
             if detected_time_left_s is not None:
                 self.last_time_left_s = detected_time_left_s
@@ -27,7 +30,7 @@ class MatchClockFilter:
         if detected_time_left_s is None:
             return predicted_time_left_s
 
-        if abs(detected_time_left_s - predicted_time_left_s) <= 1.5:
+        if abs(detected_time_left_s - predicted_time_left_s) <= 1.5 or (entering_overtime and detected_time_left_s > predicted_time_left_s + 30):
             self.last_time_left_s = detected_time_left_s
             self.last_seen_monotonic_s = now_s
             return detected_time_left_s

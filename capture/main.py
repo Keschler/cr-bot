@@ -302,7 +302,7 @@ def main(
                 )
             elif game_started:
                 if match_clock_filter.initialised:
-                    filtered_time_left_s = match_clock_filter.update(result["time_left_s"], video_time_s)
+                    filtered_time_left_s = match_clock_filter.update(result["time_left_s"], video_time_s, result["overtime"])
                     result["time_left_s"] = filtered_time_left_s
                     result["total_remaining_s"] = total_remaining_seconds(filtered_time_left_s, result["overtime"])
                 else:
@@ -439,7 +439,7 @@ def main(
 
             now = time.monotonic()
             if match_clock_filter.initialised:
-                filtered_time_left_s = match_clock_filter.update(result["time_left_s"], now)
+                filtered_time_left_s = match_clock_filter.update(result["time_left_s"], now, result["overtime"])
                 result["time_left_s"] = filtered_time_left_s
                 result["total_remaining_s"] = total_remaining_seconds(filtered_time_left_s, result["overtime"])
             else:
