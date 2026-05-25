@@ -208,6 +208,8 @@ def run(video_path: Path, output_dir: Path):
             result["arena_px"],
             frame=frame,
             clock_boxes=result["clock_boxes"],
+            elixir_change=result["elixir_change"],
+            video_time_s=video_time_s,
         )
         new_actions = own_action_tracker.actions[before_len:]
 

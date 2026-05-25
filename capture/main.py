@@ -20,7 +20,7 @@ from extractors.tower_hp import extract_tower_hp
 from extractors.health import estimate_health
 from extractors.units import match_troops_to_bars, match_from_dict
 from extractors.match_state import game_start, game_end_from_result
-from image_utils import draw_rois
+from image_utils import detect_elixir_change, draw_rois
 from rois import ROIS
 from katacr.build_dataset.utils.split_part import process_part, ratio2name
 from state_builder import build_game_state
@@ -102,6 +102,7 @@ def process_frame(
 
     rendered = draw_boxes(frame_to_analyze, yolo_boxes)
     elixir = extract_elixir(frame)
+    elixir_change = detect_elixir_change(frame)
 
     tower_hp_debug_steps = {}
     timer_debug_steps = {}
@@ -135,6 +136,7 @@ def process_frame(
     return {
         "rendered": rendered,
         "elixir": elixir,
+        "elixir_change": elixir_change,
         "towers_hp": towers_hp,
         "time": current_time_text,
         "time_left_s": time_left_s,
@@ -159,12 +161,15 @@ def main(
     debug: bool,
     video: str | None = None,
     frame_stride: int = 1,
+    video_duration_s: float | None = None,
     normalize: bool = True,
     debug_frame_path: str | None = None,
     yolo_detections: bool = False,
 ):
     if frame_stride < 1:
         raise ValueError("frame_stride must be at least 1")
+    if video_duration_s is not None and video_duration_s <= 0:
+        raise ValueError("video_duration_s must be greater than 0")
 
     detector = build_detector()
     print("detector sucessfully built!")
@@ -205,6 +210,7 @@ def main(
             frame=frame,
             clock_boxes=result["clock_boxes"],
             own_actions_blocked=len(result["emote_boxes"]) >= 2,
+            elixir_change=result["elixir_change"],
         )
         enemy_card_tracker.reconcile_own_actions(
             own_action_tracker.actions,
@@ -259,6 +265,10 @@ def main(
                 break
 
             frame_idx += 1
+            video_time_s = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
+            if video_duration_s is not None and video_time_s > video_duration_s:
+                break
+
             if (frame_idx - 1) % frame_stride != 0:
                 continue
 
@@ -272,7 +282,6 @@ def main(
                 yolo_tower_hp_detections=yolo_detections,
             )
             result["state"] = hand_state_filter.update(result["state"])
-            video_time_s = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
 
             if not game_started and (game_start(frame) or has_visible_match_timer(result)):
                 game_started = True
@@ -295,6 +304,8 @@ def main(
                     frame=frame,
                     clock_boxes=result["clock_boxes"],
                     own_actions_blocked=len(result["emote_boxes"]) >= 2,
+                    elixir_change=result["elixir_change"],
+                    video_time_s=video_time_s,
                 )
                 enemy_card_tracker.reconcile_own_actions(
                     own_action_tracker.actions,
@@ -321,6 +332,8 @@ def main(
                     frame=frame,
                     clock_boxes=result["clock_boxes"],
                     own_actions_blocked=len(result["emote_boxes"]) >= 2,
+                    elixir_change=result["elixir_change"],
+                    video_time_s=video_time_s,
                 )
                 enemy_card_tracker.reconcile_own_actions(
                     own_action_tracker.actions,
@@ -431,6 +444,7 @@ def main(
                 frame=frame,
                 clock_boxes=result["clock_boxes"],
                 own_actions_blocked=len(result["emote_boxes"]) >= 2,
+                elixir_change=result["elixir_change"],
             )
         elif game_started:
             result = process_frame(frame, detector, show_rois=False)
@@ -457,6 +471,7 @@ def main(
                 frame=frame,
                 clock_boxes=result["clock_boxes"],
                 own_actions_blocked=len(result["emote_boxes"]) >= 2,
+                elixir_change=result["elixir_change"],
             )
             enemy_card_tracker.reconcile_own_actions(
                 own_action_tracker.actions,

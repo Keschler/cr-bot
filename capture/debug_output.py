@@ -137,10 +137,17 @@ def print_frame_result(result, enemy_card_tracker, own_action_tracker=None):
     if own_action_tracker is not None:
         print("own plays:")
         for action in own_action_tracker.actions:
+            video_time = action.get("video_time_s")
+            video_time_text = (
+                f"video_time={video_time:.2f} "
+                if video_time is not None
+                else ""
+            )
             print(
                 f"  card={action['card']:<20} "
                 f"slot={action['slot_idx']} "
                 f"cell={action['cell']} "
+                f"{video_time_text}"
                 f"time_left={action['time_left_s']} "
             )
     print()

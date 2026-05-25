@@ -17,6 +17,20 @@ from trackers.direct_unit_to_card import DIRECT_UNIT_TO_CARD
 
 
 LOG_YOLO_AFTER_PENDING_WINDOW_S = 1.0
+ELIXIR_CHANGE_VIDEO_TIME_OFFSET_S = 0.1
+ROLLING_SPELL_UNIT_LABELS = {
+    "barbarian-barrel": "barbarian-barrel",
+    "log": "the-log",
+}
+CARD_ALIASES = {
+    "old-musketeer": "musketeer",
+}
+PENDING_UNIT_LABELS = {
+    "barbarians": {"barbarian", "barbarian-evolution"},
+    "goblins": {"goblin"},
+    "minions": {"minion"},
+    "skeletons": {"skeleton", "skeleton-evolution"},
+}
 
 
 @dataclass
@@ -30,9 +44,11 @@ class PendingOwnPlay:
     spell_elixir_confirmed: bool = False
     spell_release_seen: bool = False
     spell_target_cell: tuple[int, int] | None = None
-    log_first_cell: tuple[int, int] | None = None
-    log_first_seen_s: float | None = None
-    log_first_track_id: int | None = None
+    elixir_change_time_s: float | None = None
+    elixir_change_video_time_s: float | None = None
+    rolling_spell_first_cell: tuple[int, int] | None = None
+    rolling_spell_first_seen_s: float | None = None
+    rolling_spell_first_track_id: int | None = None
 
 
 @dataclass
@@ -62,11 +78,21 @@ class OwnActionTracker:
         if self.debug:
             print(f"[own_actions] {message}")
 
-    def update(self, game_state, arena_px, frame=None, clock_boxes=None, own_actions_blocked=False):
+    def update(
+        self,
+        game_state,
+        arena_px,
+        frame=None,
+        clock_boxes=None,
+        own_actions_blocked=False,
+        elixir_change=None,
+        video_time_s=None,
+    ):
         clock_boxes = clock_boxes or []
         now = game_state.total_remaining_s
         hand = game_state.hud.hand_cards
         elixir = game_state.hud.elixir_self
+        elixir_change_detected = bool((elixir_change or {}).get("covered"))
         if own_actions_blocked:
             if self.pending:
                 self._debug(
@@ -86,7 +112,19 @@ class OwnActionTracker:
             f"clocks={len(clock_boxes)}"
         )
 
-        self._detect_slot_drops(hand, elixir, now)
+        self._detect_slot_drops(
+            hand,
+            elixir,
+            now,
+            elixir_change_time_s=now if elixir_change_detected else None,
+            elixir_change_video_time_s=(
+                self._calibrated_elixir_change_video_time(video_time_s)
+                if elixir_change_detected
+                else None
+            ),
+        )
+        if elixir_change_detected:
+            self._attach_elixir_change_to_pending(now, video_time_s)
         self._confirm_pending(
             game_state,
             arena_px,
@@ -104,11 +142,19 @@ class OwnActionTracker:
             f"last_elixir={self.last_elixir:.2f} actions={len(self.actions)}"
         )
 
-    def _detect_slot_drops(self, hand, elixir, now):
+    def _detect_slot_drops(
+        self,
+        hand,
+        elixir,
+        now,
+        elixir_change_time_s=None,
+        elixir_change_video_time_s=None,
+    ):
         for idx, (prev, cur) in enumerate(zip(self.last_hand, hand)):
             self._debug(f"slot {idx}: prev={prev} cur={cur}")
             if prev is not None and cur is None:
                 dropped_card = self._resolve_drop_card(idx, prev)
+                dropped_card = self._normalize_card(dropped_card)
                 self._debug(
                     f"slot {idx} drop detected: card={dropped_card} "
                     f"started_at={now} elixir_before={elixir:.2f}"
@@ -118,12 +164,16 @@ class OwnActionTracker:
                     slot_idx=idx,
                     started_at_s=now,
                     elixir_before=elixir,
+                    elixir_change_time_s=elixir_change_time_s,
+                    elixir_change_video_time_s=elixir_change_video_time_s,
                 ))
             elif prev is not None and cur != prev:
                 dropped_card = self._resolve_drop_card(idx, prev)
-                if dropped_card == "log":
+                dropped_card = self._normalize_card(dropped_card)
+                if self._is_rolling_spell(dropped_card):
                     self._debug(
-                        f"slot {idx} log change detected: prev={prev} cur={cur} "
+                        f"slot {idx} rolling spell change detected: prev={prev} cur={cur} "
+                        f"card={dropped_card} "
                         f"started_at={now} elixir_before={elixir:.2f}"
                     )
                     self.pending.append(PendingOwnPlay(
@@ -131,12 +181,42 @@ class OwnActionTracker:
                         slot_idx=idx,
                         started_at_s=now,
                         elixir_before=elixir,
+                        elixir_change_time_s=elixir_change_time_s,
+                        elixir_change_video_time_s=elixir_change_video_time_s,
                     ))
                     continue
                 self._debug(
                     f"slot {idx} changed but not treated as drop: "
                     f"prev={prev} cur={cur}"
                 )
+
+    def _attach_elixir_change_to_pending(self, now, video_time_s):
+        candidates = []
+        for pending in self.pending:
+            if pending.elixir_change_time_s is not None:
+                continue
+            elapsed_s = pending.started_at_s - now
+            if not 0 <= elapsed_s <= OWN_ACTION_TRACK_AFTER_DROP_WINDOW_S:
+                continue
+            candidates.append((elapsed_s, pending))
+
+        if not candidates:
+            return
+
+        pending = min(candidates, key=lambda item: item[0])[1]
+        pending.elixir_change_time_s = now
+        pending.elixir_change_video_time_s = self._calibrated_elixir_change_video_time(
+            video_time_s
+        )
+        self._debug(
+            f"attached elixir-change time card={pending.card} "
+            f"slot={pending.slot_idx} time_left={now} video_time={video_time_s}"
+        )
+
+    def _calibrated_elixir_change_video_time(self, video_time_s):
+        if video_time_s is None:
+            return None
+        return video_time_s + ELIXIR_CHANGE_VIDEO_TIME_OFFSET_S
 
     def _resolve_drop_card(self, slot_idx, prev):
         """Use recent per-slot labels to recover the pre-drop card after brief OCR misreads."""
@@ -158,6 +238,9 @@ class OwnActionTracker:
             )
             return dominant_card
         return prev
+
+    def _normalize_card(self, card):
+        return CARD_ALIASES.get(card, card)
 
     def _remember_slot_history(self, hand):
         for idx, card in enumerate(hand):
@@ -198,12 +281,15 @@ class OwnActionTracker:
 
         had_pending = bool(self.pending)
         still_pending = []
-        log_match = self._first_visible_own_log(game_state.own_units)
-        log_pending_to_confirm = self._log_pending_for_detection(log_match, now)
+        rolling_spell_matches = self._first_visible_rolling_spells(game_state.own_units)
+        rolling_spell_pending_to_confirm = self._rolling_spell_pending_for_detection(
+            rolling_spell_matches,
+            now,
+        )
         elixir_pending_to_confirm = self._pending_for_current_elixir_drop(
             elixir,
             now,
-            preferred_pending=log_pending_to_confirm,
+            preferred_pending=rolling_spell_pending_to_confirm,
         )
         for pending in self.pending:
             is_spell = self._is_spell_card(pending.card)
@@ -212,11 +298,11 @@ class OwnActionTracker:
             required_drop = None if cost is None else max(1.0, cost - 1.0)
             elixir_confirms = pending is elixir_pending_to_confirm
             if is_spell:
-                if pending.card == "log":
-                    placed_cell, keep_pending = self._confirm_pending_log(
+                if self._is_rolling_spell(pending.card):
+                    placed_cell, keep_pending = self._confirm_pending_rolling_spell(
                         pending,
-                        log_match,
-                        pending is log_pending_to_confirm,
+                        rolling_spell_matches.get(pending.card),
+                        pending is rolling_spell_pending_to_confirm,
                         elixir_confirms or pending.spell_elixir_confirmed,
                         arena_px,
                         now,
@@ -237,6 +323,8 @@ class OwnActionTracker:
                     clock_boxes,
                 )
                 keep_pending = placed_cell is None
+                if pending.started_at_s - now > OWN_ACTION_TRACK_AFTER_DROP_WINDOW_S:
+                    keep_pending = False
             self._debug(
                 f"pending check card={pending.card} slot={pending.slot_idx} "
                 f"cost={cost} elixir_drop={elixir_drop} "
@@ -245,6 +333,24 @@ class OwnActionTracker:
             )
             confirms = placed_cell is not None
             if confirms:
+                has_elixir_evidence = (
+                    is_spell
+                    or pending.elixir_change_time_s is not None
+                    or elixir_confirms
+                )
+                if not has_elixir_evidence:
+                    if pending.started_at_s - now > OWN_ACTION_TRACK_AFTER_DROP_WINDOW_S:
+                        self._debug(
+                            f"pending cancelled card={pending.card} "
+                            f"slot={pending.slot_idx}; cell found but no elixir evidence"
+                        )
+                    else:
+                        self._debug(
+                            f"pending kept card={pending.card} slot={pending.slot_idx}; "
+                            "cell found but no elixir evidence"
+                        )
+                        still_pending.append(pending)
+                    continue
                 reasons = []
                 if elixir_confirms and not is_spell:
                     reasons.append("elixir")
@@ -255,13 +361,21 @@ class OwnActionTracker:
                     f"slot={pending.slot_idx} reasons={'+'.join(reasons)}"
                 )
                 self._append_action(
-                    now=now,
+                    now=(
+                        pending.elixir_change_time_s
+                        if pending.elixir_change_time_s is not None
+                        else now
+                    ),
                     card=pending.card,
                     slot_idx=pending.slot_idx,
                     cell=placed_cell,
+                    video_time_s=pending.elixir_change_video_time_s,
                 )
-                if pending.card == "log" and pending.log_first_track_id is not None:
-                    self.consumed_log_track_ids.add(pending.log_first_track_id)
+                if (
+                    self._is_rolling_spell(pending.card)
+                    and pending.rolling_spell_first_track_id is not None
+                ):
+                    self.consumed_log_track_ids.add(pending.rolling_spell_first_track_id)
             else:
                 if keep_pending:
                     self._debug(
@@ -395,62 +509,64 @@ class OwnActionTracker:
 
         return None, True
 
-    def _confirm_pending_log(
+    def _confirm_pending_rolling_spell(
         self,
         pending,
-        log_match,
+        rolling_spell_match,
         selected_for_detection,
-        log_elixir_confirmed,
+        rolling_spell_elixir_confirmed,
         arena_px,
         now,
     ):
         if arena_px is None:
             return None, True
 
-        if log_elixir_confirmed:
+        if rolling_spell_elixir_confirmed:
             pending.spell_elixir_confirmed = True
 
-        if log_match is not None and pending.log_first_cell is None:
+        if rolling_spell_match is not None and pending.rolling_spell_first_cell is None:
             if not selected_for_detection:
                 return None, False
-            troop = log_match.troop
-            pending.log_first_cell = self._log_placement_cell(troop, arena_px)
-            pending.log_first_seen_s = now
-            pending.log_first_track_id = troop.track_id
+            troop = rolling_spell_match.troop
+            pending.rolling_spell_first_cell = self._rolling_spell_placement_cell(troop, arena_px)
+            pending.rolling_spell_first_seen_s = now
+            pending.rolling_spell_first_track_id = troop.track_id
             self._debug(
-                f"first visible own log detected track={troop.track_id} "
+                f"first visible own rolling spell detected card={pending.card} "
+                f"track={troop.track_id} "
                 f"center=({troop.center_x:.1f}, {troop.center_y:.1f}) "
-                f"cell={pending.log_first_cell}"
+                f"cell={pending.rolling_spell_first_cell}"
             )
 
-        if pending.log_first_cell is not None and pending.spell_elixir_confirmed:
-            return pending.log_first_cell, False
+        if pending.rolling_spell_first_cell is not None and pending.spell_elixir_confirmed:
+            return pending.rolling_spell_first_cell, False
 
         if pending.started_at_s - now > OWN_ACTION_TRACK_AFTER_DROP_WINDOW_S:
             return None, False
 
         return None, True
 
-    def _first_visible_own_log(self, own_units):
-        candidates = [
-            match
-            for match in own_units
-            if match.troop.class_name == "the-log"
-            and match.troop.team == "ally"
-            and match.troop.track_id not in self.consumed_log_track_ids
-        ]
-        if not candidates:
-            return None
+    def _first_visible_rolling_spells(self, own_units):
+        matches_by_card = {}
+        for card, unit_label in ROLLING_SPELL_UNIT_LABELS.items():
+            candidates = [
+                match
+                for match in own_units
+                if match.troop.class_name == unit_label
+                and match.troop.team == "ally"
+                and match.troop.track_id not in self.consumed_log_track_ids
+            ]
+            if candidates:
+                matches_by_card[card] = max(candidates, key=lambda match: match.troop.confidence)
+        return matches_by_card
 
-        return max(candidates, key=lambda match: match.troop.confidence)
-
-    def _log_pending_for_detection(self, log_match, now):
-        if log_match is None:
+    def _rolling_spell_pending_for_detection(self, rolling_spell_matches, now):
+        if not rolling_spell_matches:
             return None
 
         candidates = []
         for pending in self.pending:
-            if pending.card != "log":
+            if pending.card not in rolling_spell_matches:
                 continue
             elapsed_s = pending.started_at_s - now
             if not 0 <= elapsed_s <= LOG_YOLO_AFTER_PENDING_WINDOW_S:
@@ -474,7 +590,11 @@ class OwnActionTracker:
             cost = CARD_METADATA.get(pending.card, {}).get("elixir_cost")
             if cost is None:
                 continue
-            required_drop = 1.5 if pending.card == "log" else max(1.0, cost - 1.0)
+            required_drop = (
+                1.5
+                if self._is_rolling_spell(pending.card)
+                else max(1.0, cost - 1.0)
+            )
             if elixir_drop < required_drop:
                 continue
             elapsed_s = pending.started_at_s - now
@@ -488,10 +608,13 @@ class OwnActionTracker:
         candidates.sort(key=lambda item: (not item[0], item[1]))
         return candidates[0][2]
 
-    def _log_placement_cell(self, troop, arena_px):
+    def _rolling_spell_placement_cell(self, troop, arena_px):
         # The detector exposes an axis-aligned box at runtime; its center is the
-        # same placement estimate we need from the first visible vertical Log.
+        # same placement estimate we need from the first visible rolling spell.
         return ACTION_GRID.pixel_to_cell(troop.center_x, troop.center_y, arena_px)
+
+    def _is_rolling_spell(self, card):
+        return card in ROLLING_SPELL_UNIT_LABELS
 
     def _record_new_track_actions(self, new_tracks, hand, arena_px, now, clock_boxes):
         for match in new_tracks:
@@ -544,7 +667,7 @@ class OwnActionTracker:
                 return idx
         return None
 
-    def _append_action(self, *, now, card, slot_idx, cell):
+    def _append_action(self, *, now, card, slot_idx, cell, video_time_s=None):
         if now > OWN_ACTION_START_TIME_LEFT_S:
             self._debug(
                 f"own action ignored before start threshold card={card} "
@@ -561,6 +684,7 @@ class OwnActionTracker:
 
         self.actions.append({
             "time_left_s": now,
+            "video_time_s": video_time_s,
             "card": card,
             "slot_idx": slot_idx,
             "cell": cell,
@@ -600,12 +724,8 @@ class OwnActionTracker:
 
     def _infer_cell_from_clock(self, tracks, arena_px, clock_boxes, card=None):
         best = None
-        matching_tracks = [
-            match
-            for match in tracks
-            if card is not None and DIRECT_UNIT_TO_CARD.get(match.troop.class_name) == card
-        ]
-        if card is not None and self._has_direct_unit_mapping(card) and not matching_tracks:
+        matching_tracks = self._matching_pending_tracks(tracks, card)
+        if card is not None and self._requires_matching_track(card) and not matching_tracks:
             self._debug(
                 f"no matching recent ally track for pending card={card}; "
                 "not using unrelated deploy clock"
@@ -652,6 +772,27 @@ class OwnActionTracker:
 
     def _has_direct_unit_mapping(self, card):
         return any(mapped_card == card for mapped_card in DIRECT_UNIT_TO_CARD.values())
+
+    def _matching_pending_tracks(self, tracks, card):
+        if card is None:
+            return []
+
+        pending_labels = PENDING_UNIT_LABELS.get(card)
+        if pending_labels is not None: # If card doesn't have a direct unit to card
+            return [
+                match
+                for match in tracks
+                if match.troop.class_name in pending_labels
+            ]
+
+        return [
+            match
+            for match in tracks
+            if DIRECT_UNIT_TO_CARD.get(match.troop.class_name) == card
+        ]
+
+    def _requires_matching_track(self, card):
+        return card in PENDING_UNIT_LABELS or self._has_direct_unit_mapping(card)
 
     def _allows_track_fallback(self, card):
         return card in OWN_ACTION_TRACK_FALLBACK_CARDS
