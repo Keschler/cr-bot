@@ -11,9 +11,10 @@ Clash Royale Vision Bot is a computer vision project that reads Clash Royale gam
 - Tracks visible units, teams, positions, confidence scores, and estimated HP.
 - Estimates enemy card plays and enemy unit HP from detected troops, buildings, health bars, and spell effects.
 - Estimates enemy elixir over time from match clock and confirmed enemy plays.
-- Extracts own card plays from hand-slot changes and confirms deploy locations from troop clocks and spell elixir-cost overlays.
+- Extracts own card plays from hand-slot changes and confirms deploy locations from elixir-change flashes, troop clocks, spell elixir-cost overlays, and rolling spell tracks.
 - Supports live capture through a video device such as `v4l2loopback`.
 - Supports offline dataset generation from recorded gameplay clips.
+- Includes an action-evaluation harness with ground-truth JSON, timing error reports, and cell visualization overlays.
 - Includes scripts for detector training, inference, annotation preparation, and dataset processing.
 
 ## Demo
@@ -38,8 +39,10 @@ Own action extraction is based on the card hand changing first, then confirming 
 
 - Normal troops and buildings use deploy-clock detections when available.
 - Recent allied unit tracks are kept briefly so a unit can still be matched after the clock has disappeared.
+- The elixir digit flash is used as the action placement timestamp, then the action is emitted only after later confirmation. This avoids reporting the later confirmation frame as the placement time.
 - Circle/radius spells use the white spell radius ellipse only as an aiming candidate.
 - The purple elixir-cost overlay is required to confirm that a spell was actually released. It is scored from the middle of the top half of the detected spell ellipse, so the crop is tied to the actual spell-radius candidate rather than a loose rectangle around the approximate center.
+- Rolling spells such as The Log and Barbarian Barrel use their first visible rolling unit track plus elixir confirmation.
 
 ## Use The Executable
 
@@ -59,6 +62,18 @@ Run it on live video from a Linux video device:
 
 ```bash
 VIDEO_DEVICE=/dev/video37 ./capture
+```
+
+Run it on a recorded video:
+
+```bash
+./capture --video /path/to/gameplay.mp4
+```
+
+Limit recorded-video analysis to the first N seconds:
+
+```bash
+./capture --video /path/to/gameplay.mp4 --video-duration 198
 ```
 
 For Android live capture on Linux, create a loopback device first:
@@ -86,6 +101,7 @@ capture/
   bin/                        helper scripts for live capture setup
   extractors/                 timer, elixir, card, unit, tower HP extraction
   trackers/                   enemy cards, match clock, and stateful tracking
+  eval/                       action evaluation, ground truth, and cell visualizer
   vision/                     YOLO/KataCR runtime helpers
   features/                   board and global feature builders
   scripts/                    training, inference, and dataset helper scripts
@@ -129,6 +145,16 @@ venv/bin/python scripts/debug/debug_spell_purple_detector.py \
 
 Debug outputs are written to `capture/debug_output/` and are intentionally not part of the runtime pipeline.
 
+## Action Evaluation
+
+The evaluation tools compare detected own and enemy actions against hand-labeled
+ground truth. They report precision, recall, F1, missed actions, false
+positives, timing error, and placement-cell distance.
+
+The cell visualizer renders the action grid over labeled frames so ground-truth
+cells can be checked or filled in from video frames. See `capture/eval/README.md`
+for the ground-truth format and script options.
+
 ## Devlogs
 
 Development logs are available online:
@@ -153,7 +179,7 @@ Devlogs: https://flavortown.hackclub.com/projects/16627
 - Timer, elixir, and tower HP extraction can still be noisy in some frames.
 - Enemy elixir is an estimate, not a value shown by the game.
 - Spell detection can be ambiguous when multiple radius effects overlap or when the purple elixir-cost overlay is outside the selected spell ellipse crop.
-- Linear spells such as The Log and Barbarian Barrel do not use the circle/radius spell locator yet.
+- The current action ground truth is strongest for the 2.6 Hog Cycle champion clip; enemy-action labels and broader deck coverage are still incomplete.
 
 ## Tech Stack
 
