@@ -8,15 +8,12 @@ from torchvision import models, transforms
 from PIL import Image
 
 from constants import (
-    ALLY_BROADER_BLUE_HSV_HIGH,
-    ALLY_BROADER_BLUE_HSV_LOW,
     ALLY_CYAN_HSV_HIGH,
     ALLY_CYAN_HSV_LOW,
     ENEMY_RED_HSV_HIGH_1,
     ENEMY_RED_HSV_HIGH_2,
     ENEMY_RED_HSV_LOW_1,
     ENEMY_RED_HSV_LOW_2,
-    HEALTH_BAR_BROADER_BLUE_RATIO_THRESHOLD,
     TOWER_BAR_VISIBLE_RATIO_THRESHOLD,
 )
 from paths import MODELS_DIR
@@ -96,7 +93,37 @@ def estimate_slot_fraction(slot_img):
     return float(np.clip(fraction, 0.0, 1.0))
 
 
-def purple_amount(slot_img):
+def purple_pixel_ratio(img):
+      hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+      lower = np.array([125, 40, 80])
+      upper = np.array([170, 255, 255])
+      mask = cv2.inRange(hsv, lower, upper)
+      return mask.mean() / 255.0
+
+
+def white_digit_ratio(img):
+      hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+      lower = np.array([0, 0, 170])
+      upper = np.array([179, 80, 255])
+      mask = cv2.inRange(hsv, lower, upper)
+      return mask.mean() / 255.0
+
+
+def pink_overlay_ratio(img):
+      hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+      lower = np.array([135, 40, 120])
+      upper = np.array([175, 255, 255])
+      mask = cv2.inRange(hsv, lower, upper)
+      return mask.mean() / 255.0
+
+
+def edge_ratio(img):
+      gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+      edges = cv2.Canny(gray, 80, 160)
+      return edges.mean() / 255.0
+
+
+def pink_amount(slot_img):
       hsv = cv2.cvtColor(slot_img, cv2.COLOR_BGR2HSV)
 
       lower = np.array([125, 40, 80])
@@ -104,12 +131,12 @@ def purple_amount(slot_img):
       mask = cv2.inRange(hsv, lower, upper)
 
       col_ratio = mask.mean(axis=0) / 255.0
-      purple_cols = np.where(col_ratio > 0.15)[0]
+      pink_cols = np.where(col_ratio > 0.15)[0]
 
-      if len(purple_cols) == 0:
+      if len(pink_cols) == 0:
           return 0.0
 
-      rightmost = purple_cols[-1]
+      rightmost = pink_cols[-1]
       return (rightmost + 1) / mask.shape[1]
 
 def segment_digits(binary_img):
@@ -676,4 +703,19 @@ def detect_if_support_tower_alive(img):
             "support_right_activated": support_right,
             "enemy_support_left_activated": enemy_support_left,
             "enemy_support_right_activated": enemy_support_right
+            }
+
+def detect_elixir_change(img):
+    "Detect elixir change through for example troop placement by checking if the elixir digit is covered up"
+    elixir_digit_crop = crop(img, ROIS["elixir_digit"])
+    elixir_digit_bottom = elixir_digit_crop[elixir_digit_crop.shape[0] // 2 :, :]
+    white = white_digit_ratio(elixir_digit_bottom)
+    pink = pink_overlay_ratio(elixir_digit_bottom)
+    edges = edge_ratio(elixir_digit_bottom)
+    covered = pink > 0.35 and edges < 0.08
+    return {
+            "covered": bool(covered),
+            "white": float(white),
+            "pink": float(pink),
+            "edges": float(edges),
             }

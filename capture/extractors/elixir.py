@@ -1,7 +1,7 @@
 import cv2
 from pathlib import Path
 
-from image_utils import crop, estimate_slot_fraction, preprocess_digit, purple_amount
+from image_utils import crop, estimate_slot_fraction, preprocess_digit, pink_amount
 from paths import TEMPLATES_DIR
 from rois import ELIXIR_SLOT_ROIS, ROIS
 
@@ -58,13 +58,13 @@ def read_elixir_value(displayed_digit, frame, slot_rois=ELIXIR_SLOT_ROIS):
     return estimate_slot_fraction(next_slot)
 
 def estimate_total_slots(frame):
-    purple_fractions = [purple_amount(crop(frame, roi)) for roi in ELIXIR_SLOT_ROIS]
-    for idx, fraction in enumerate(purple_fractions):
+    pink_fractions = [pink_amount(crop(frame, roi)) for roi in ELIXIR_SLOT_ROIS]
+    for idx, fraction in enumerate(pink_fractions):
         if fraction >= 0.7:
-            purple_fractions[idx] = 1
+            pink_fractions[idx] = 1
         else:
-            purple_fractions[idx] = 0
-    fraction_sum = sum(purple_fractions)
+            pink_fractions[idx] = 0
+    fraction_sum = sum(pink_fractions)
     return fraction_sum
 
 
