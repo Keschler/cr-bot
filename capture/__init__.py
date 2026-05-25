@@ -1,0 +1,2 @@
+"""Capture pipeline package."""
+
