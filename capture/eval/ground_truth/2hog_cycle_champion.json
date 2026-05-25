@@ -1,7 +1,7 @@
 {
   "video": "2hog_cycle_champion.mp4",
   "fps": 10,
-  "notes": "First-pass own-action labels. frame_index is the frame where the action appears to be placed. Own-action cells are labeled from visual inspection. Enemy actions are not labeled yet.",
+  "notes": "First-pass own-action labels. frame_index is the frame where the action appears to be placed. Own-action cells are labeled from visual inspection. Enemy actions are labeled from 2hog_cycle_champion_enemy.txt.",
   "events": [
     {"side": "own", "card": "ice-spirit", "frame_index": 29, "cell": [2, 17]},
     {"side": "own", "card": "hog-rider", "frame_index": 31, "cell": [1, 17]},
@@ -43,6 +43,33 @@
     {"side": "own", "card": "log", "frame_index": 1817, "cell": [3, 17]},
     {"side": "own", "card": "old-musketeer", "frame_index": 1843, "cell": [8, 24]},
     {"side": "own", "card": "skeletons", "frame_index": 1847, "cell": [8, 17]},
-    {"side": "own", "card": "hog-rider", "frame_index": 1889, "cell": [1, 17]}
+    {"side": "own", "card": "hog-rider", "frame_index": 1889, "cell": [1, 17]},
+    {"side": "enemy", "card": "hog-rider", "frame_index": 37},
+    {"side": "enemy", "card": "mega-knight", "frame_index": 84},
+    {"side": "enemy", "card": "knight", "frame_index": 173},
+    {"side": "enemy", "card": "the-log", "frame_index": 380},
+    {"side": "enemy", "card": "dart-goblin", "frame_index": 421},
+    {"side": "enemy", "card": "fireball", "frame_index": 435},
+    {"side": "enemy", "card": "mega-knight", "frame_index": 654},
+    {"side": "enemy", "card": "minion-hord", "frame_index": 768},
+    {"side": "enemy", "card": "hog-rider", "frame_index": 870},
+    {"side": "enemy", "card": "dart-goblin", "frame_index": 997},
+    {"side": "enemy", "card": "knight", "frame_index": 1039},
+    {"side": "enemy", "card": "fireball", "frame_index": 1195},
+    {"side": "enemy", "card": "ice-spirit", "frame_index": 1232},
+    {"side": "enemy", "card": "mega-knight", "frame_index": 1312},
+    {"side": "enemy", "card": "hog-rider", "frame_index": 1338},
+    {"side": "enemy", "card": "evo-dart-goblin", "frame_index": 1401},
+    {"side": "enemy", "card": "evo-knight", "frame_index": 1421},
+    {"side": "enemy", "card": "fireball", "frame_index": 1541},
+    {"side": "enemy", "card": "minion-hord", "frame_index": 1573},
+    {"side": "enemy", "card": "the-log", "frame_index": 1585},
+    {"side": "enemy", "card": "ice-spirit", "frame_index": 1621},
+    {"side": "enemy", "card": "hog-rider", "frame_index": 1699},
+    {"side": "enemy", "card": "mega-knight", "frame_index": 1743},
+    {"side": "enemy", "card": "dart-goblin", "frame_index": 1807},
+    {"side": "enemy", "card": "knight", "frame_index": 1829},
+    {"side": "enemy", "card": "ice-spirit", "frame_index": 1864},
+    {"side": "enemy", "card": "fireball", "frame_index": 1930}
   ]
 }
