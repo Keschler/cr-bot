@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cr-bot"
+version = "0.1.0"
+description = "Clash Royale vision, tracking, and feature generation bot."
+requires-python = ">=3.12"
+dynamic = ["dependencies"]
+
+[project.scripts]
+cr-bot = "cr_bot.app.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}

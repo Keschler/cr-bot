@@ -2,24 +2,22 @@ from __future__ import annotations
 
 import json
 import sys
-import os
 from pathlib import Path
 
 import cv2
 
 ROOT = Path(__file__).resolve().parents[2]
-CAPTURE_ROOT = ROOT / "capture"
-sys.path.insert(0, str(CAPTURE_ROOT))
-os.chdir(CAPTURE_ROOT)
+SRC_ROOT = ROOT / "src"
+sys.path.insert(0, str(SRC_ROOT))
 
-from main import process_frame
-from state_builder import build_game_state
-from vision.yolo_runtime import build_detector
-from extractors.match_state import in_game, game_end_from_result
-from extractors.timer import total_remaining_seconds
-from trackers.enemy_cards import EnemyCardTracker
-from trackers.match_clock import MatchClockFilter
-from trackers.tower_hp_filter import TowerHPFilter
+from cr_bot.app.pipeline import process_frame
+from cr_bot.app.state_builder import build_game_state
+from cr_bot.vision.yolo_runtime import build_detector
+from cr_bot.vision.match_state import in_game, game_end_from_result
+from cr_bot.vision.timer import total_remaining_seconds
+from cr_bot.trackers.enemy_cards import EnemyCardTracker
+from cr_bot.trackers.match_clock import MatchClockFilter
+from cr_bot.trackers.tower_hp_filter import TowerHPFilter
 
 
 def jpeg_roundtrip(frame):

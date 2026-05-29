@@ -1,1 +1,0 @@
-bin/start_stream.sh

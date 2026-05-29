@@ -95,24 +95,24 @@ Frames are normalized to `1080x2400` internally by default so the existing ROIs 
 ## Project Structure
 
 ```text
-capture/
-  cli.py                      command-line entry point
-  main.py                     live capture and video replay loops
-  bin/                        helper scripts for live capture setup
-  extractors/                 timer, elixir, card, unit, tower HP extraction
+src/cr_bot/
+  app/                        CLI, live capture, video replay, frame pipeline
+  domain/                     game state, constants, ROIs, card metadata
+  vision/                     YOLO runtime and frame extractors
   trackers/                   enemy cards, match clock, and stateful tracking
-  eval/                       action evaluation, ground truth, and cell visualizer
-  vision/                     YOLO/KataCR runtime helpers
   features/                   board and global feature builders
-  scripts/                    training, inference, and dataset helper scripts
-  scripts/debug/              local debug renderers for action and spell detection
-  assets/
-    models/                   detector and classifier checkpoints
-    templates/                OCR and elixir templates
-    pictures/                 debug images and local test media
-  configs/                    detector training configs
-  data/                       local capture datasets and video clips
-  vendor/                     external KataCR dependency
+  audio/                      audio classifier support
+  eval/                       action evaluation and cell visualizer
+  debug/                      debug rendering and reporting helpers
+
+assets/                       detector/classifier checkpoints, templates, local media
+configs/                      detector training configs
+data/                         local datasets, labels, and evaluation ground truth
+scripts/                      training, inference, and dataset helper scripts
+scripts/debug/                local debug renderers for action and spell detection
+vendor/                       external KataCR dependency
+outputs/                      generated runs, caches, debug images, and videos
+capture/                      temporary compatibility wrappers for old entrypoints
 
 dataset_generation/
   scripts/process_frame.py    offline frame-state dataset generation
@@ -123,27 +123,25 @@ docs/                         documentation
 
 ## Debugging
 
-Most local visual debugging scripts live under `capture/scripts/debug/`.
+Most local visual debugging scripts live under `scripts/debug/`.
 
 Examples:
 
 ```bash
-cd capture
-
 # Render purple elixir-cost detector crops for failed spell confirmations.
-venv/bin/python scripts/debug/debug_spell_purple_detector.py \
+outputs/venv/bin/python scripts/debug/debug_spell_purple_detector.py \
   --preset failed-wrong-detections \
   --video assets/pictures/10_fps_wrong_detections.mp4 \
-  --output-dir debug_output/spell_purple_failed_wrong_detections
+  --output-dir outputs/debug/spell_purple_failed_wrong_detections
 
 # Render the confirmed purple elixir-cost cases from the wrong-detections clip.
-venv/bin/python scripts/debug/debug_spell_purple_detector.py \
+outputs/venv/bin/python scripts/debug/debug_spell_purple_detector.py \
   --preset confirmed-wrong-detections \
   --video assets/pictures/10_fps_wrong_detections.mp4 \
-  --output-dir debug_output/spell_purple_confirmed_wrong_detections
+  --output-dir outputs/debug/spell_purple_confirmed_wrong_detections
 ```
 
-Debug outputs are written to `capture/debug_output/` and are intentionally not part of the runtime pipeline.
+Debug outputs are written under `outputs/debug/` and are intentionally not part of the runtime pipeline.
 
 ## Action Evaluation
 
@@ -152,7 +150,7 @@ ground truth. They report precision, recall, F1, missed actions, false
 positives, timing error, and placement-cell distance.
 
 The cell visualizer renders the action grid over labeled frames so ground-truth
-cells can be checked or filled in from video frames. See `capture/eval/README.md`
+cells can be checked or filled in from video frames. See `docs/eval/README.md`
 for the ground-truth format and script options.
 
 ## Devlogs

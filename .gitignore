@@ -1,3 +1,4 @@
+outputs/
 capture/runs/inference/
 **/__pycache__/
 *.pyc

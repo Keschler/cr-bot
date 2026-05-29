@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from capture.eval.action_eval import (
+from cr_bot.eval.action_eval import (
     ActionEvent,
     evaluate,
     load_ground_truth,

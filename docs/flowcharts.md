@@ -8,36 +8,36 @@ Generated CVAT serverless functions, vendored code, and virtualenv files are int
 
 | Script | Diagram section |
 | --- | --- |
-| `capture/capture.py` | `capture/cli.py` and `capture/capture.py` |
-| `capture/cli.py` | `capture/cli.py` and `capture/capture.py` |
-| `capture/main.py` | `capture/main.py`: Top-Level Runtime, `capture/main.py`: `process_frame()` |
-| `capture/scripts/build_card_classifier_imagefolder.py` | Card Classifier Dataset Scripts |
-| `capture/scripts/build_seed_annotations.py` | Seed Detector Dataset And Training Scripts |
-| `capture/scripts/clean_preannotations.py` | Seed Detector Dataset And Training Scripts |
-| `capture/scripts/download_ryleycr1_archive.py` | Utility Scripts |
-| `capture/scripts/fetch_royaleapi_data.py` | Utility Scripts |
-| `capture/scripts/generate_cvat_labels.py` | Utility Scripts |
-| `capture/scripts/import_card_classifier_frames.py` | Card Classifier Dataset Scripts |
-| `capture/scripts/prepare_card_classifier_dataset.py` | Card Classifier Dataset Scripts |
-| `capture/scripts/prepare_seed_dataset.py` | Seed Detector Dataset And Training Scripts |
-| `capture/scripts/propose_card_classifier_split.py` | Card Classifier Dataset Scripts |
-| `capture/scripts/run_seed_inference.py` | Seed Detector Dataset And Training Scripts |
-| `capture/scripts/setup_seed_detectors.py` | Seed Detector Dataset And Training Scripts |
-| `capture/scripts/train_card_classifier.py` | Card Classifier Dataset Scripts |
-| `capture/scripts/train_seed_baseline.py` | Seed Detector Dataset And Training Scripts |
-| `capture/scripts/debug/debug_actions_output_selected_actions.py` | Debug Scripts |
-| `capture/scripts/debug/debug_own_action_clock_cells.py` | Debug Scripts |
-| `capture/scripts/debug/debug_skeleton_clock_cell.py` | Debug Scripts |
-| `capture/scripts/debug/debug_spell_purple_detector.py` | Debug Scripts |
+| `capture/capture.py` | `src/cr_bot/app/cli.py` and `capture/capture.py` |
+| `src/cr_bot/app/cli.py` | `src/cr_bot/app/cli.py` and `capture/capture.py` |
+| `src/cr_bot/app/main.py` | `src/cr_bot/app/main.py`: Top-Level Runtime, `src/cr_bot/app/pipeline.py`: `process_frame()` |
+| `scripts/build_card_classifier_imagefolder.py` | Card Classifier Dataset Scripts |
+| `scripts/build_seed_annotations.py` | Seed Detector Dataset And Training Scripts |
+| `scripts/clean_preannotations.py` | Seed Detector Dataset And Training Scripts |
+| `scripts/download_ryleycr1_archive.py` | Utility Scripts |
+| `scripts/fetch_royaleapi_data.py` | Utility Scripts |
+| `scripts/generate_cvat_labels.py` | Utility Scripts |
+| `scripts/import_card_classifier_frames.py` | Card Classifier Dataset Scripts |
+| `scripts/prepare_card_classifier_dataset.py` | Card Classifier Dataset Scripts |
+| `scripts/prepare_seed_dataset.py` | Seed Detector Dataset And Training Scripts |
+| `scripts/propose_card_classifier_split.py` | Card Classifier Dataset Scripts |
+| `scripts/run_seed_inference.py` | Seed Detector Dataset And Training Scripts |
+| `scripts/setup_seed_detectors.py` | Seed Detector Dataset And Training Scripts |
+| `scripts/train_card_classifier.py` | Card Classifier Dataset Scripts |
+| `scripts/train_seed_baseline.py` | Seed Detector Dataset And Training Scripts |
+| `scripts/debug/debug_actions_output_selected_actions.py` | Debug Scripts |
+| `scripts/debug/debug_own_action_clock_cells.py` | Debug Scripts |
+| `scripts/debug/debug_skeleton_clock_cell.py` | Debug Scripts |
+| `scripts/debug/debug_spell_purple_detector.py` | Debug Scripts |
 | `dataset_generation/scripts/detect_in_game.py` | Data Generation Scripts |
 | `dataset_generation/scripts/download_videos.py` | Data Generation Scripts |
 | `dataset_generation/scripts/process_frame.py` | Data Generation Scripts |
 
-## `capture/cli.py` And `capture/capture.py`
+## `src/cr_bot/app/cli.py` And `capture/capture.py`
 
 ```mermaid
 flowchart TD
-    A["python capture/capture.py or python capture/cli.py"] --> B["parse CLI args"]
+    A["python capture/capture.py or PYTHONPATH=src python -m cr_bot.app.cli"] --> B["parse CLI args"]
     B --> C{"mode"}
     C -->|"--debug or --debug-frame"| D["main(debug=True, debug_frame_path=...)"]
     C -->|"--video"| E["main(debug=False, video=..., frame_stride=...)"]
@@ -48,7 +48,7 @@ flowchart TD
     G --> F
 ```
 
-## `capture/main.py`: Top-Level Runtime
+## `src/cr_bot/app/main.py`: Top-Level Runtime
 
 ```mermaid
 flowchart TD
@@ -92,7 +92,7 @@ flowchart TD
     AI --> AJ["same started/in-game tracker loop as video mode"]
 ```
 
-## `capture/main.py`: `process_frame()`
+## `src/cr_bot/app/pipeline.py`: `process_frame()`
 
 ```mermaid
 flowchart TD

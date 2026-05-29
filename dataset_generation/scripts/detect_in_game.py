@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import re
 import sys
 from pathlib import Path
@@ -8,11 +7,10 @@ import cv2
 
 
 ROOT = Path(__file__).resolve().parents[2]
-CAPTURE_ROOT = ROOT / "capture"
-sys.path.insert(0, str(CAPTURE_ROOT))
-os.chdir(CAPTURE_ROOT)
+SRC_ROOT = ROOT / "src"
+sys.path.insert(0, str(SRC_ROOT))
 
-from constants import (
+from cr_bot.domain.constants import (
     CARD_CONFIDENCE_THRESHOLD,
     ELIXIR_DIGIT_SCORE_THRESHOLD,
     GAME_START_MIN_SECONDS,
@@ -20,10 +18,10 @@ from constants import (
     MAX_ELIXIR,
     HAND_CARD_CONFIDENCE_THRESHOLD,
 )
-from extractors.cards import extract_hand_state
-from extractors.elixir import extract_elixir
-from extractors.timer import extract_time
-from image_utils import detect_if_king_tower_activated, detect_if_support_tower_alive
+from cr_bot.vision.cards import extract_hand_state
+from cr_bot.vision.elixir import extract_elixir
+from cr_bot.vision.timer import extract_time
+from cr_bot.vision.image_utils import detect_if_king_tower_activated, detect_if_support_tower_alive
 
 
 _TIMER_RE = re.compile(r"^\d{1,2}:\d{2}$")

@@ -5,13 +5,13 @@ from unittest.mock import MagicMock
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CAPTURE_ROOT = ROOT / "capture"
-if str(CAPTURE_ROOT) not in sys.path:
-    sys.path.append(str(CAPTURE_ROOT))
+SRC_ROOT = ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.append(str(SRC_ROOT))
 
 sys.modules.setdefault("cv2", MagicMock())
 
-from trackers.own_actions import OwnActionTracker, PendingOwnPlay
+from cr_bot.trackers.own_actions import OwnActionTracker, PendingOwnPlay
 
 
 def _match(class_name, *, track_id=1, center_x=500.0, center_y=1000.0):

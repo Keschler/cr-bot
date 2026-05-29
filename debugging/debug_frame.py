@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -10,21 +9,15 @@ import cv2
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CAPTURE_ROOT = ROOT / "capture"
+SRC_ROOT = ROOT / "src"
 INVOCATION_CWD = Path.cwd()
-sys.path.insert(0, str(CAPTURE_ROOT))
-os.chdir(CAPTURE_ROOT)
+sys.path.insert(0, str(SRC_ROOT))
 
-from image_utils import draw_rois  # noqa: E402
-from main import (  # noqa: E402
-    normalize_frame,
-    process_frame,
-    render_match_debug,
-    render_timer_debug,
-    render_tower_hp_debug,
-)
-from rois import ROIS  # noqa: E402
-from vision.yolo_runtime import build_detector, summarize_detections  # noqa: E402
+from cr_bot.vision.image_utils import draw_rois  # noqa: E402
+from cr_bot.app.pipeline import normalize_frame, process_frame  # noqa: E402
+from cr_bot.debug.output import render_match_debug, render_timer_debug, render_tower_hp_debug  # noqa: E402
+from cr_bot.domain.rois import ROIS  # noqa: E402
+from cr_bot.vision.yolo_runtime import build_detector, summarize_detections  # noqa: E402
 
 
 def default_output_dir(frame_path: Path) -> Path:
