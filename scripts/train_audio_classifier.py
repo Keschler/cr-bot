@@ -23,6 +23,7 @@ from cr_bot.audio.dataset import (
     split_sfx_samples,
 )
 from cr_bot.audio.features import AudioFeatureConfig
+from cr_bot.audio.labels import audio_card_classes
 from cr_bot.audio.model import AudioCardCNN
 from cr_bot.domain.card_metadata import CARD_METADATA
 
@@ -30,6 +31,11 @@ from cr_bot.domain.card_metadata import CARD_METADATA
 DEFAULT_BACKGROUND = ROOT / "dataset_generation/data/video_clips/2.6Hog_Cycle_broken.wav"
 DEFAULT_GROUND_TRUTH = ROOT / "data/eval/ground_truth/2hog_cycle_champion.json"
 DEFAULT_CHECKPOINT = ROOT / "assets/models/audio_card_classifier_best.pt"
+OVERTIME_BACKGROUND_RANGES_S = [
+    (2 * 60 + 54, 3 * 60 + 16),
+    (6 * 60 + 15, 6 * 60 + 31),
+    (12 * 60 + 16, 13 * 60 + 30),
+]
 
 
 def main() -> None:
@@ -51,7 +57,8 @@ def main() -> None:
 
     torch.manual_seed(args.seed)
     config = AudioFeatureConfig()
-    known_cards = set(CARD_METADATA)
+    classes = [NO_EVENT_CLASS] + audio_card_classes(CARD_METADATA, raw_sfx_dir=args.raw_sfx_dir)
+    known_cards = set(classes)
     samples, _, _ = collect_sfx_files(
         args.raw_sfx_dir,
         deploy_only=not args.include_all_sfx,
@@ -61,9 +68,13 @@ def main() -> None:
     if not samples:
         raise SystemExit(f"No SFX samples found in {args.raw_sfx_dir}")
 
-    train_samples, val_samples = split_sfx_samples(samples, seed=args.seed)
-    classes = [NO_EVENT_CLASS] + sorted(CARD_METADATA)
-
+    train_samples, val_samples = split_sfx_samples(
+        samples,
+        samples_per_sfx=args.samples_per_sfx,
+        seed=args.seed,
+    )
+    val_no_event_count = int(round(len(samples) * 0.2))
+    train_no_event_count = len(samples) - val_no_event_count
     background_paths = [args.background_audio] if args.background_audio.exists() else []
     background = None
     if background_paths:
@@ -71,22 +82,27 @@ def main() -> None:
             background_paths,
             config,
             ground_truth_path=args.ground_truth if args.ground_truth.exists() else None,
+            overtime_ranges_s=OVERTIME_BACKGROUND_RANGES_S,
         )
 
     train_dataset = MixedSFXCardDataset(
-        train_samples,
+        samples,
         classes,
         config,
         background=background,
         samples_per_sfx=args.samples_per_sfx,
+        positive_samples=train_samples,
+        no_event_count=train_no_event_count,
         seed=args.seed,
     )
     val_dataset = MixedSFXCardDataset(
-        val_samples,
+        samples,
         classes,
         config,
         background=background,
-        samples_per_sfx=max(1, args.samples_per_sfx // 2),
+        samples_per_sfx=args.samples_per_sfx,
+        positive_samples=val_samples,
+        no_event_count=val_no_event_count,
         seed=args.seed + 100_000,
     )
 
@@ -109,7 +125,10 @@ def main() -> None:
     loss_fn = nn.CrossEntropyLoss()
     best_val_acc = -1.0
 
-    print(f"classes={len(classes)} train_sfx={len(train_samples)} val_sfx={len(val_samples)}")
+    print(
+        f"classes={len(classes)} source_sfx={len(samples)} "
+        f"train_generated={len(train_samples)} val_generated={len(val_samples)}"
+    )
     print(f"background={'yes' if background is not None and background.available else 'no'}")
     for epoch in range(args.epochs):
         train_loss, train_acc = run_epoch(

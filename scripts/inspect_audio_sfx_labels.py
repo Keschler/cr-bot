@@ -11,7 +11,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from cr_bot.audio.dataset import collect_sfx_files, is_deploy_like
-from cr_bot.audio.labels import folder_to_card_keys
+from cr_bot.audio.labels import audio_card_classes, sfx_path_to_card_keys
 from cr_bot.domain.card_metadata import CARD_METADATA
 
 
@@ -24,7 +24,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    known_cards = set(CARD_METADATA)
+    known_cards = set(audio_card_classes(CARD_METADATA, raw_sfx_dir=args.raw_sfx_dir))
     samples, skipped, unmapped = collect_sfx_files(
         args.raw_sfx_dir,
         deploy_only=True,
@@ -36,12 +36,12 @@ def main() -> None:
     for folder in sorted(args.raw_sfx_dir.iterdir()):
         if not folder.is_dir():
             continue
-        cards = [card for card in folder_to_card_keys(folder) if card in known_cards]
-        if not cards:
-            continue
-        deploy_like = sum(1 for path in folder.glob("*.wav") if is_deploy_like(path))
-        for card in cards:
-            deploy_counts[card] += deploy_like
+        for path in folder.glob("*.wav"):
+            if not is_deploy_like(path):
+                continue
+            cards = [card for card in sfx_path_to_card_keys(path) if card in known_cards]
+            for card in cards:
+                deploy_counts[card] += 1
 
     print(f"mapped_classes={len(all_counts)}")
     print(f"metadata_classes={len(known_cards)}")

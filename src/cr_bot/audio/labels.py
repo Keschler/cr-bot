@@ -22,6 +22,7 @@ FOLDER_ALIASES = {
     "bat": "bats",
     "bats": "bats",
     "battleram": "battle-ram",
+    "belectrix": "electro-dragon",
     "blowdart_goblin": "dart-goblin",
     "bombtower": "bomb-tower",
     "dark_witch": "night-witch",
@@ -73,12 +74,16 @@ FOLDER_MULTI_ALIASES = {
 }
 
 GROUND_TRUTH_ALIASES = {
-    "evo-dart-goblin": "dart-goblin",
-    "evo-knight": "knight",
     "minion-hord": "minion-horde",
     "old-musketeer": "musketeer",
     "the-log": "log",
 }
+
+SPIRIT_EMPRESS_KEY = "spirit-empress"
+SPIRIT_EMPRESS_VARIANT_KEYS = (
+    "spirit-empress-3-elixir",
+    "spirit-empress-6-elixir",
+)
 
 
 def folder_to_card_key(folder: str | Path) -> str | None:
@@ -99,8 +104,39 @@ def folder_to_card_keys(folder: str | Path) -> list[str]:
     return []
 
 
+def folder_to_audio_card_keys(folder: str | Path) -> list[str]:
+    folder = Path(folder)
+    if folder.name.startswith("card_evolution_"):
+        raw = folder.name.removeprefix("card_evolution_")
+        card = FOLDER_ALIASES.get(raw, raw.replace("_", "-"))
+        return [f"evo-{card}"]
+    return folder_to_card_keys(folder)
+
+
+def sfx_path_to_card_keys(path: str | Path) -> list[str]:
+    path = Path(path)
+    keys = folder_to_audio_card_keys(path.parent)
+    if keys != [SPIRIT_EMPRESS_KEY]:
+        return keys
+
+    name = path.stem.lower()
+    if "3elixir" in name or "3cost" in name:
+        return [SPIRIT_EMPRESS_VARIANT_KEYS[0]]
+    if "6elixir" in name or "6cost" in name:
+        return [SPIRIT_EMPRESS_VARIANT_KEYS[1]]
+    return []
+
+
+def audio_card_classes(card_keys, *, raw_sfx_dir: str | Path | None = None) -> list[str]:
+    classes = set(card_keys)
+    classes.discard(SPIRIT_EMPRESS_KEY)
+    classes.update(SPIRIT_EMPRESS_VARIANT_KEYS)
+    if raw_sfx_dir is not None:
+        for folder in Path(raw_sfx_dir).glob("card_evolution_*"):
+            classes.update(folder_to_audio_card_keys(folder))
+    return sorted(classes)
+
+
 def normalize_card_key(card: str) -> str:
     card = card.strip().lower().replace("_", "-")
-    if card.startswith("evo-"):
-        card = card.removeprefix("evo-")
     return GROUND_TRUTH_ALIASES.get(card, card)

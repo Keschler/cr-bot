@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict
 from pathlib import Path
 
@@ -16,16 +17,12 @@ from .features import (
     resample_audio,
     waveform_to_log_mel,
 )
-from .labels import folder_to_card_keys, normalize_card_key
+from .labels import folder_to_card_keys, normalize_card_key, sfx_path_to_card_keys
 
-DEPLOY_NAME_PARTS = (
-    "deploy",
-    "dep",
-    "spawn",
-    "summon",
-    "cast",
-    "land",
-)
+DEPLOY_NAME_PATTERN = re.compile(r"(^|_)(deploy|deloy|dep|place)(_|$)")
+DEPLOY_FILE_EXCEPTIONS = {
+    ("card_epic_witch", "summon_witch_01"),
+}
 
 NO_EVENT_CLASS = "no_event"
 
@@ -44,28 +41,38 @@ def collect_sfx_files(
     for folder in sorted(raw_sfx_dir.iterdir()):
         if not folder.is_dir():
             continue
-        cards = folder_to_card_keys(folder)
-        if not cards:
+        folder_cards = folder_to_card_keys(folder)
+        if not folder_cards:
             unmapped.append(folder)
             continue
-        cards = [card for card in cards if known_cards is None or card in known_cards]
-        if not cards:
-            for card in folder_to_card_keys(folder):
+        wavs = sorted(folder.glob("*.wav"))
+        available_cards = {
+            card
+            for path in wavs
+            for card in sfx_path_to_card_keys(path)
+        }
+        if known_cards is not None and not any(card in known_cards for card in available_cards):
+            for card in folder_cards:
                 skipped_by_folder.setdefault(card, []).append(folder)
             continue
 
-        wavs = sorted(folder.glob("*.wav"))
         deploy_wavs = [path for path in wavs if is_deploy_like(path)]
-        selected = deploy_wavs if deploy_only and deploy_wavs else wavs
-        for card in cards:
-            samples.extend((card, path) for path in selected)
+        selected = deploy_wavs if deploy_only else wavs
+        for path in selected:
+            cards = sfx_path_to_card_keys(path)
+            cards = [card for card in cards if known_cards is None or card in known_cards]
+            samples.extend((card, path) for card in cards)
 
     return samples, skipped_by_folder, unmapped
 
 
 def is_deploy_like(path: str | Path) -> bool:
-    name = Path(path).stem.lower()
-    return any(part in name for part in DEPLOY_NAME_PARTS)
+    path = Path(path)
+    name = path.stem.lower()
+    return (
+        DEPLOY_NAME_PATTERN.search(name) is not None
+        or (path.parent.name, name) in DEPLOY_FILE_EXCEPTIONS
+    )
 
 
 class GameplayBackground:
@@ -78,10 +85,12 @@ class GameplayBackground:
         fps: float = 10.0,
         exclude_before_s: float = 1.0,
         exclude_after_s: float = 1.5,
+        overtime_ranges_s: list[tuple[float, float]] | None = None,
     ):
         self.config = config
         self.tracks: list[np.ndarray] = []
         self.allowed_windows: list[tuple[int, int, int]] = []
+        self.overtime_windows: list[tuple[int, int, int]] = []
 
         excluded = []
         if ground_truth_path is not None:
@@ -106,6 +115,18 @@ class GameplayBackground:
                     track_idx=track_idx,
                 )
             )
+            self.overtime_windows.extend(
+                allowed_sample_ranges(
+                    len(waveform),
+                    config.sample_rate,
+                    excluded,
+                    config.num_samples,
+                    track_idx=track_idx,
+                    included_s=overtime_ranges_s,
+                )
+                if overtime_ranges_s
+                else []
+            )
 
     @property
     def available(self) -> bool:
@@ -114,7 +135,10 @@ class GameplayBackground:
     def sample_window(self, rng: np.random.Generator) -> np.ndarray:
         if not self.allowed_windows:
             raise ValueError("No background windows available")
-        track_idx, start, end = self.allowed_windows[int(rng.integers(0, len(self.allowed_windows)))]
+        windows = self.allowed_windows
+        if self.overtime_windows and rng.random() < 0.5:
+            windows = self.overtime_windows
+        track_idx, start, end = windows[int(rng.integers(0, len(windows)))]
         max_start = end - self.config.num_samples
         offset = int(rng.integers(start, max_start + 1))
         return self.tracks[track_idx][offset : offset + self.config.num_samples].copy()
@@ -129,6 +153,7 @@ class MixedSFXCardDataset(Dataset):
         *,
         background: GameplayBackground | None = None,
         samples_per_sfx: int = 8,
+        positive_samples: list[tuple[str, Path]] | None = None,
         no_event_count: int | None = None,
         seed: int = 0,
     ):
@@ -140,11 +165,20 @@ class MixedSFXCardDataset(Dataset):
         self.config = config
         self.background = background
         self.samples_per_sfx = max(1, int(samples_per_sfx))
+        self.positive_samples = (
+            list(positive_samples)
+            if positive_samples is not None
+            else [
+                sample
+                for sample in self.sfx_samples
+                for _ in range(self.samples_per_sfx)
+            ]
+        )
         self.no_event_count = (
             len(self.sfx_samples) if no_event_count is None else max(0, int(no_event_count))
         )
         self.seed = int(seed)
-        self.positive_count = len(self.sfx_samples) * self.samples_per_sfx
+        self.positive_count = len(self.positive_samples)
 
     def __len__(self) -> int:
         return self.positive_count + self.no_event_count
@@ -156,7 +190,7 @@ class MixedSFXCardDataset(Dataset):
             label = self.class_to_idx[NO_EVENT_CLASS]
             return waveform_to_log_mel(waveform, self.config), label
 
-        card, path = self.sfx_samples[index // self.samples_per_sfx]
+        card, path = self.positive_samples[index]
         sfx = load_audio_window(path, self.config, random_offset=False, rng=rng)
         background = self._background_or_noise(rng)
 
@@ -181,8 +215,10 @@ def split_sfx_samples(
     samples: list[tuple[str, Path]],
     *,
     val_fraction: float = 0.2,
+    samples_per_sfx: int = 8,
     seed: int = 0,
 ) -> tuple[list[tuple[str, Path]], list[tuple[str, Path]]]:
+    """Split generated mixtures while retaining every source WAV in training."""
     rng = np.random.default_rng(seed)
     by_class: dict[str, list[Path]] = {}
     for card, path in samples:
@@ -193,11 +229,19 @@ def split_sfx_samples(
     for card, paths in sorted(by_class.items()):
         paths = list(paths)
         rng.shuffle(paths)
-        val_count = 1 if len(paths) > 1 else 0
-        val_count = max(val_count, int(round(len(paths) * val_fraction)))
-        val_count = min(val_count, max(0, len(paths) - 1))
-        val.extend((card, path) for path in paths[:val_count])
-        train.extend((card, path) for path in paths[val_count:])
+        train.extend((card, path) for path in paths)
+        remaining = [
+            (card, path)
+            for path in paths
+            for _ in range(max(0, samples_per_sfx - 1))
+        ]
+        rng.shuffle(remaining)
+        val_count = min(
+            len(remaining),
+            int(round(len(paths) * samples_per_sfx * val_fraction)),
+        )
+        val.extend(remaining[:val_count])
+        train.extend(remaining[val_count:])
     return train, val
 
 
@@ -267,6 +311,7 @@ def allowed_sample_ranges(
     window_samples: int,
     *,
     track_idx: int,
+    included_s: list[tuple[float, float]] | None = None,
 ) -> list[tuple[int, int, int]]:
     excluded = sorted(
         (
@@ -276,13 +321,29 @@ def allowed_sample_ranges(
         for start, end in excluded_s
     )
     allowed = []
-    cursor = 0
-    for start, end in excluded:
-        if start - cursor >= window_samples:
-            allowed.append((track_idx, cursor, start))
-        cursor = max(cursor, end)
-    if num_samples - cursor >= window_samples:
-        allowed.append((track_idx, cursor, num_samples))
+    included = (
+        [(0, num_samples)]
+        if included_s is None
+        else [
+            (
+                max(0, int(round(start * sample_rate))),
+                min(num_samples, int(round(end * sample_rate))),
+            )
+            for start, end in included_s
+        ]
+    )
+    for included_start, included_end in included:
+        cursor = included_start
+        for start, end in excluded:
+            if end <= included_start or start >= included_end:
+                continue
+            start = max(start, included_start)
+            end = min(end, included_end)
+            if start - cursor >= window_samples:
+                allowed.append((track_idx, cursor, start))
+            cursor = max(cursor, end)
+        if included_end - cursor >= window_samples:
+            allowed.append((track_idx, cursor, included_end))
     return allowed
 
 
