@@ -15,13 +15,13 @@ def test_parse_predictions_txt_deduplicates_and_keeps_first_added_time(tmp_path:
             [
                 "frame 1 video_time=10.00s",
                 "enemy plays:",
-                "  card=dart-goblin          cost=3 time_left=250 track_id=7",
+                "  card=dart-goblin          cost=3 time_left=250 track_id=7 cell=(6, 6)",
                 "own plays:",
                 "  card=ice-golem            slot=1 cell=(7, 19) time_left=160 ",
                 "",
                 "frame 2 video_time=10.10s",
                 "enemy plays:",
-                "  card=dart-goblin          cost=3 time_left=250 track_id=7",
+                "  card=dart-goblin          cost=3 time_left=250 track_id=7 cell=(6, 6)",
                 "own plays:",
                 "  card=ice-golem            slot=1 cell=(7, 19) time_left=160 ",
             ]
@@ -32,6 +32,7 @@ def test_parse_predictions_txt_deduplicates_and_keeps_first_added_time(tmp_path:
 
     assert len(events) == 2
     assert events[0].side == "enemy"
+    assert events[0].cell == (6, 6)
     assert events[0].video_time_s == 10.0
     assert events[1].side == "own"
     assert events[1].cell == (7, 19)

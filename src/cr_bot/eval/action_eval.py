@@ -13,6 +13,7 @@ FRAME_RE = re.compile(r"^frame\s+\d+\s+video_time=(?P<video_time>[0-9.]+)s")
 ENEMY_RE = re.compile(
     r"^\s+card=(?P<card>\S+)\s+cost=(?P<cost>\d+)\s+"
     r"time_left=(?P<time_left>[0-9.]+)\s+track_id=(?P<track_id>-?\d+)"
+    r"(?:\s+cell=(?:(?:\((?P<cell_x>-?\d+),\s*(?P<cell_y>-?\d+)\))|None|unknown))?"
 )
 OWN_RE = re.compile(
     r"^\s+card=(?P<card>\S+)\s+slot=(?P<slot>\d+)\s+"
@@ -123,11 +124,15 @@ def parse_predictions_txt(path: Path) -> list[ActionEvent]:
             match = ENEMY_RE.match(line)
             if not match:
                 continue
+            cell = None
+            if match.group("cell_x") is not None:
+                cell = (int(match.group("cell_x")), int(match.group("cell_y")))
             event = ActionEvent(
                 side="enemy",
                 card=match.group("card"),
                 time_left_s=float(match.group("time_left")),
                 video_time_s=current_video_time,
+                cell=cell,
                 track_id=int(match.group("track_id")),
                 source=str(path),
             )

@@ -132,7 +132,8 @@ def print_frame_result(result, enemy_card_tracker, own_action_tracker=None):
             f"  card={play['card']:<20} "
             f"cost={play['cost']} "
             f"time_left={play['time_left_s']} "
-            f"track_id={play['track_id']}"
+            f"track_id={play['track_id']} "
+            f"cell={play.get('cell')}"
         )
     if own_action_tracker is not None:
         print("own plays:")
@@ -212,7 +213,8 @@ def print_debug_frame_result(result, enemy_card_tracker, own_action_tracker):
             f"  card={play['card']:<20} "
             f"cost={play['cost']} "
             f"time_left={play['time_left_s']} "
-            f"track_id={play['track_id']}"
+            f"track_id={play['track_id']} "
+            f"cell={play.get('cell')}"
         )
     print("own plays:")
     for action in own_action_tracker.actions:
