@@ -7,7 +7,7 @@ class MatchClockFilter:
         self.last_overtime = False
 
     def initialise(self, detected_time_left_s, now_s) -> None:
-        if not self.initialised and detected_time_left_s is not None:
+        if not self.initialised and detected_time_left_s is not None and detected_time_left_s > 0:
             self.initial_seen_values.append(detected_time_left_s)
             if len(self.initial_seen_values) >= 10: 
                 self.last_seen_monotonic_s = now_s

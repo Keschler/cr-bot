@@ -41,7 +41,8 @@ def get_default_video_device() -> str:
 
 
 def has_visible_match_timer(result) -> bool:
-    return ":" in str(result.get("time") or "")
+    time_left_s = result.get("time_left_s")
+    return time_left_s is not None and float(time_left_s) > 0.0
 
 
 def main(
