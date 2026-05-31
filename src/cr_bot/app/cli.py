@@ -37,6 +37,11 @@ def main():
         action="store_true",
         help="Use YOLO tower health bar detections instead of fixed ROIS",
     )
+    parser.add_argument(
+        "--alternative-rois",
+        action="store_true",
+        help="Use the alternative bottom-HUD ROI profile for shifted video layouts.",
+    )
     args = parser.parse_args()
     if args.frame_stride < 1:
         parser.error("--frame-stride must be at least 1")
@@ -44,6 +49,11 @@ def main():
         parser.error("--video-duration must be greater than 0")
 
     debug = args.debug or args.debug_frame is not None
+    if args.alternative_rois:
+        from cr_bot.domain.video_constants import activate_alternative_video_rois
+
+        activate_alternative_video_rois()
+
     from cr_bot.app.main import main as run_capture
 
     run_capture(
