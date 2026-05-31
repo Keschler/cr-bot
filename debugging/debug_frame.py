@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 import cv2
+import numpy as np
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -76,6 +77,8 @@ def main() -> None:
     cv2.imwrite(str(out_dir / "05_match_debug.jpg"), render_match_debug(frame, result["matches"]))
 
     for name, image in result["timer_debug_steps"].items():
+        if not isinstance(image, np.ndarray):
+            continue
         cv2.imwrite(str(out_dir / f"timer_step_{name}.jpg"), image)
 
     summary = {
@@ -85,7 +88,7 @@ def main() -> None:
         "time_left_s": result["time_left_s"],
         "total_remaining_s": result["total_remaining_s"],
         "overtime": result["overtime"],
-        "elixir": result["elixir"]["estimated_value"] + result["elixir"]["displayed_digit"][0],
+        "elixir": result["elixir"]["estimated_value"] + result["elixir"]["displayed_digit"],
         "elixir_digit": result["elixir"]["displayed_digit"],
         "state": result["state"],
         "towers": result["towers_hp"],
