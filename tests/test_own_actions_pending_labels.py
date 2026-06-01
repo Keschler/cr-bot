@@ -126,6 +126,59 @@ def test_pending_cell_without_elixir_evidence_does_not_append_action():
     assert len(tracker.pending) == 1
 
 
+def test_pending_troop_reuses_latched_numeric_elixir_drop_when_cell_arrives_later():
+    tracker = OwnActionTracker()
+    tracker.last_elixir = 6.08
+    tracker.pending.append(
+        PendingOwnPlay(
+            card="ice-spirit",
+            slot_idx=2,
+            started_at_s=200.0,
+            elixir_before=6.08,
+        )
+    )
+    cells = iter([None, (14, 21)])
+    tracker._infer_pending_cell = lambda *args, **kwargs: next(cells)
+    tracker._recent_tracks_for_pending = lambda *args, **kwargs: []
+
+    game_state = SimpleNamespace(
+        own_units=[],
+        hud=SimpleNamespace(hand_cards=["fireball", "log", "ice-spirit", "skeletons"]),
+    )
+
+    tracker._confirm_pending(
+        game_state,
+        arena_px=(0, 0, 1080, 2400),
+        elixir=4.86,
+        now=199.9,
+        frame=None,
+        clock_boxes=[],
+        video_time_s=12.83,
+    )
+
+    assert tracker.actions == []
+    assert len(tracker.pending) == 1
+    assert tracker.pending[0].numeric_elixir_drop_time_s == 199.9
+    assert tracker.pending[0].numeric_elixir_drop_video_time_s == 12.83
+
+    tracker.last_elixir = 4.86
+    tracker._confirm_pending(
+        game_state,
+        arena_px=(0, 0, 1080, 2400),
+        elixir=4.88,
+        now=198.7,
+        frame=None,
+        clock_boxes=[],
+        video_time_s=14.0,
+    )
+
+    assert len(tracker.actions) == 1
+    assert tracker.actions[0]["card"] == "ice-spirit"
+    assert tracker.actions[0]["cell"] == (14, 21)
+    assert tracker.actions[0]["time_left_s"] == 199.9
+    assert tracker.actions[0]["video_time_s"] == 12.83
+
+
 def test_old_musketeer_drop_is_normalized_to_musketeer():
     tracker = OwnActionTracker()
     tracker.last_hand = ["old-musketeer", None, None, None]

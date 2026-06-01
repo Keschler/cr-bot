@@ -46,6 +46,8 @@ class PendingOwnPlay:
     spell_target_cell: tuple[int, int] | None = None
     elixir_change_time_s: float | None = None
     elixir_change_video_time_s: float | None = None
+    numeric_elixir_drop_time_s: float | None = None
+    numeric_elixir_drop_video_time_s: float | None = None
     rolling_spell_first_cell: tuple[int, int] | None = None
     rolling_spell_first_seen_s: float | None = None
     rolling_spell_first_track_id: int | None = None
@@ -132,6 +134,7 @@ class OwnActionTracker:
             now,
             frame=frame,
             clock_boxes=clock_boxes,
+            video_time_s=video_time_s,
         )
         self._remember_hand(hand, now)
         self._remember_slot_history(hand)
@@ -259,7 +262,16 @@ class OwnActionTracker:
         for card in stale_cards:
             del self.recent_hand_seen[card]
 
-    def _confirm_pending(self, game_state, arena_px, elixir, now, frame=None, clock_boxes=None):
+    def _confirm_pending(
+        self,
+        game_state,
+        arena_px,
+        elixir,
+        now,
+        frame=None,
+        clock_boxes=None,
+        video_time_s=None,
+    ):
         clock_boxes = clock_boxes or []
         new_tracks = []
         for match in game_state.own_units:
@@ -297,6 +309,13 @@ class OwnActionTracker:
             elixir_drop = None if self.last_elixir is None else self.last_elixir - elixir
             required_drop = None if cost is None else max(1.0, cost - 1.0)
             elixir_confirms = pending is elixir_pending_to_confirm
+            if elixir_confirms and pending.numeric_elixir_drop_time_s is None:
+                pending.numeric_elixir_drop_time_s = now
+                pending.numeric_elixir_drop_video_time_s = video_time_s
+                self._debug(
+                    f"latched numeric elixir drop card={pending.card} "
+                    f"slot={pending.slot_idx} time_left={now} video_time={video_time_s}"
+                )
             if is_spell:
                 if self._is_rolling_spell(pending.card):
                     placed_cell, keep_pending = self._confirm_pending_rolling_spell(
@@ -336,6 +355,7 @@ class OwnActionTracker:
                 has_elixir_evidence = (
                     is_spell
                     or pending.elixir_change_time_s is not None
+                    or pending.numeric_elixir_drop_time_s is not None
                     or elixir_confirms
                 )
                 if not has_elixir_evidence:
@@ -364,12 +384,20 @@ class OwnActionTracker:
                     now=(
                         pending.elixir_change_time_s
                         if pending.elixir_change_time_s is not None
-                        else now
+                        else (
+                            pending.numeric_elixir_drop_time_s
+                            if pending.numeric_elixir_drop_time_s is not None
+                            else now
+                        )
                     ),
                     card=pending.card,
                     slot_idx=pending.slot_idx,
                     cell=placed_cell,
-                    video_time_s=pending.elixir_change_video_time_s,
+                    video_time_s=(
+                        pending.elixir_change_video_time_s
+                        if pending.elixir_change_video_time_s is not None
+                        else pending.numeric_elixir_drop_video_time_s
+                    ),
                 )
                 if (
                     self._is_rolling_spell(pending.card)
