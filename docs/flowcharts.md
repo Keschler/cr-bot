@@ -144,50 +144,114 @@ flowchart TD
 
 ## Own Action Tracking
 
+`OwnActionTracker` detects the player's actions incrementally. A hand-slot change
+creates a `PendingOwnPlay`; later frames attach timing evidence and a placement
+cell. The action is emitted only when the evidence required by that card type is
+available.
+
 ```mermaid
 flowchart TD
-    A["OwnActionTracker.update(game_state, arena_px, frame, clock_boxes)"] --> B["read hand, elixir, now"]
-    B --> C["_detect_slot_drops()"]
-    C --> D{"slot changed"}
-    D -->|"prev -> None"| E["append PendingOwnPlay"]
-    D -->|"prev log -> other card"| F["append Log PendingOwnPlay"]
-    D -->|"other change"| G["ignore as OCR churn"]
+    subgraph Inputs["Per-frame inputs"]
+        I1["game_state<br/>hud.hand_cards: list[str | None]<br/>hud.elixir_self: float<br/>total_remaining_s: float<br/>own_units: list[Match]"]
+        I2["arena_px<br/>(x, y, width, height)"]
+        I3["frame<br/>BGR image or None"]
+        I4["clock_boxes<br/>list[{team, confidence,<br/>center_x, center_y, ...}]"]
+        I5["elixir_change<br/>{covered, white, pink, edges}<br/>from digit-overlay detector"]
+        I6["video_time_s<br/>float or None"]
+        I7["own_actions_blocked<br/>bool, true during emote clutter"]
+    end
 
-    E --> H["_confirm_pending()"]
-    F --> H
-    G --> H
+    I1 --> U["OwnActionTracker.update(...)"]
+    I2 --> U
+    I3 --> U
+    I4 --> U
+    I5 --> U
+    I6 --> U
+    I7 --> U
 
-    H --> I["collect new ally YOLO tracks"]
-    I --> J{"pending card kind"}
-    J -->|"normal troop/building"| K["infer cell from deploy clock near matching track"]
-    J -->|"spell"| L["SpellDeployLocator aim ellipse + release marker"]
-    J -->|"log"| M["first visible ally the-log YOLO + single-use elixir drop"]
+    U --> B{"own_actions_blocked?"}
+    B -->|"yes"| B1["Preserve pending plays<br/>Update last_hand, last_elixir,<br/>recent hand and slot history<br/>Return None"]
+    B -->|"no"| D["_detect_slot_drops(hand, elixir, now,<br/>optional visual-overlay timestamp)"]
 
-    K --> N{"confirmed?"}
-    L --> N
-    M --> N
-    N -->|"yes"| O["_append_action(card, slot_idx, cell, time_left_s)"]
-    N -->|"no but keep"| P["pending survives"]
-    N -->|"no and stale/cancelled"| Q["pending removed"]
-    O --> R["actions list"]
+    D --> D1{"How did a hand slot change?"}
+    D1 -->|"previous card -> None"| P1["Append PendingOwnPlay"]
+    D1 -->|"Log or Barbarian Barrel -> another label"| P1
+    D1 -->|"other replacement"| D2["Ignore as OCR churn"]
+    D1 -->|"no relevant change"| C1["Continue"]
+    P1 --> P2["PendingOwnPlay carries<br/>card, slot_idx, started_at_s, elixir_before,<br/>visual and numeric elixir timestamps,<br/>spell state, rolling-spell state"]
+    P2 --> C1
+    D2 --> C1
+
+    C1 --> V{"elixir_change.covered?"}
+    V -->|"yes"| V1["_attach_elixir_change_to_pending(now, video_time_s)<br/>Return None<br/>Attach calibrated visual-overlay timestamp<br/>to closest eligible pending play"]
+    V -->|"no"| C2["Continue"]
+    V1 --> C2
+
+    C2 --> CP["_confirm_pending(...)"]
+    CP --> T1["Remember tracked own units<br/>Input: game_state.own_units<br/>Update recent_ally_tracks<br/>Output: new_tracks"]
+    T1 -.-> F1["_record_new_track_actions(new_tracks, hand, arena_px, now, clock_boxes)<br/>Only when no pending play existed<br/>DIRECT_UNIT_TO_CARD maps track class to card<br/>Allow only explicit track-fallback cards"]
+    F1 --> F2["_infer_cell_from_clock([match], arena_px, clock_boxes, card)<br/>Return deploy-clock cell or allowed troop-center fallback"]
+    F2 --> A
+    T1 --> E1["_pending_for_current_elixir_drop(elixir, now, preferred_pending)<br/>Input: last_elixir, current elixir, pending plays, card costs<br/>Output: one PendingOwnPlay or None"]
+    E1 --> E2{"Numeric elixir drop selected<br/>a pending play?"}
+    E2 -->|"yes"| E3["Latch numeric_elixir_drop_time_s<br/>and numeric_elixir_drop_video_time_s<br/>on PendingOwnPlay"]
+    E2 -->|"no"| K{"Pending card type?"}
+    E3 --> K
+
+    K -->|"normal troop or building"| N1["_recent_tracks_for_pending(pending, now)<br/>Return recent list[Match]"]
+    N1 --> N2["_infer_cell_from_clock(tracks, arena_px, clock_boxes, card)<br/>Match card track to nearby ally deploy clock<br/>Return cell: tuple[int, int] or None"]
+    N2 --> N3{"Cell and visual or latched<br/>numeric elixir evidence?"}
+
+    K -->|"other spell"| S1["_confirm_pending_spell(pending, arena_px, frame, elixir_confirms)<br/>SpellDeployLocator uses radius metadata to find<br/>white aim ellipse and purple release marker<br/>Return (cell or None, keep_pending)"]
+    S1 --> S2{"Release cell and latched<br/>spell elixir evidence?"}
+
+    K -->|"Log or Barbarian Barrel"| R1["_confirm_pending_rolling_spell(...)<br/>Use first visible ally rolling-object center<br/>and latch spell elixir evidence<br/>Return (cell or None, keep_pending)"]
+    R1 --> R2{"First rolling cell and latched<br/>spell elixir evidence?"}
+
+    N3 -->|"yes"| A
+    S2 -->|"yes"| A
+    R2 -->|"yes"| A
+    N3 -->|"not yet, within timeout"| W["Keep PendingOwnPlay for a later frame"]
+    S2 -->|"not yet, keep_pending"| W
+    R2 -->|"not yet, keep_pending"| W
+    N3 -->|"stale"| X["Remove pending play without emitting action"]
+    S2 -->|"cancelled"| X
+    R2 -->|"stale or mismatched"| X
+
+    A["_append_action(now, card, slot_idx, cell, video_time_s)<br/>Reject pre-start and recent duplicate actions"] --> A1["Append action dict<br/>{time_left_s, video_time_s,<br/>card, slot_idx, cell}"]
+    A1 --> OUT["OwnActionTracker.actions<br/>list[dict] consumed by enemy-card<br/>reconciliation, debug output and state pipelines"]
+    W --> OUT2["Update tracker memory and return None"]
+    X --> OUT2
 ```
 
-## Log-Specific Own Action Detection
+### Own Action Data Contracts
+
+| Value | Producer | Shape | Purpose |
+| --- | --- | --- | --- |
+| `game_state.hud.hand_cards` | `build_game_state()` | Four-element `list[str \| None]` | Detect the card that disappeared from a hand slot. |
+| `game_state.hud.elixir_self` | `build_game_state()` from `extract_elixir()` | `float` | Compare adjacent frames and latch numeric elixir-drop evidence. |
+| `elixir_change` | `detect_elixir_change()` | `{covered: bool, white: float, pink: float, edges: float}` | Detect the visual digit overlay and preserve its timestamp. |
+| `game_state.own_units` | YOLO conversion and `build_game_state()` | `list[Match]`, each with `match.troop.class_name`, `track_id`, center and team | Associate a pending play with a visible own unit or rolling spell. |
+| `clock_boxes` | `extract_clock_boxes()` | `list[dict]` with track ID, team, confidence, box and center coordinates | Estimate the placement cell for normal troops and buildings. |
+| `PendingOwnPlay` | `_detect_slot_drops()` | Stateful dataclass retained across frames | Join asynchronous hand, elixir, clock and spell evidence. |
+| `OwnActionTracker.actions` | `_append_action()` | `list[{time_left_s, video_time_s, card, slot_idx, cell}]` | Final confirmed own-action stream. |
+
+### Rolling-Spell Own Action Detection
 
 ```mermaid
 flowchart TD
-    A["hand slot has Log"] --> B{"slot disappears or changes"}
-    B -->|"yes"| C["create pending log with slot_idx and started_at_s"]
+    A["hand slot has Log or Barbarian Barrel"] --> B{"slot disappears or changes"}
+    B -->|"yes"| C["create PendingOwnPlay<br/>{card, slot_idx, started_at_s, elixir_before}"]
     C --> D["watch next frames"]
-    D --> E{"first ally YOLO class the-log visible?"}
+    D --> E{"first matching ally YOLO rolling-object track visible?"}
     E -->|"no"| F["keep pending until timeout"]
-    E -->|"yes"| G["choose one pending log within 1.0s window"]
-    G --> H["cancel older Log OCR-jitter pendings"]
-    H --> I{"current elixir drop >= 1.5 or selected pending already latched?"}
-    I -->|"yes"| J["cell = first visible Log box center mapped through ACTION_GRID"]
-    J --> K["append own action"]
+    E -->|"yes"| G["choose one matching pending rolling spell<br/>within 1.0s window"]
+    G --> H["store first rolling-object track id and cell"]
+    H --> I{"current elixir drop >= 1.5<br/>or spell elixir evidence already latched?"}
+    I -->|"yes"| J["cell = first visible rolling-object box center<br/>mapped through ACTION_GRID"]
+    J --> K["append action dict<br/>{time_left_s, video_time_s, card, slot_idx, cell}"]
     K --> L["consume YOLO track id"]
-    I -->|"no"| M["keep selected pending, retain first Log cell"]
+    I -->|"no"| M["keep selected pending, retain first rolling-spell cell"]
 ```
 
 ## Enemy Card Tracking
@@ -199,7 +263,7 @@ flowchart TD
     C --> D["for each enemy YOLO match with track_id"]
     D --> E["TrackMemory.add_observation()"]
     E --> F{"near enemy deploy clock?"}
-    F -->|"yes"| G["clock_confirmed=True"]
+    F -->|"yes"| G["claim deploy-clock track for this troop track<br/>clock_confirmed=True"]
     F -->|"no"| H{"frame-confirm class and enough frames/confidence?"}
     H -->|"yes"| I["frame_confirmed=True"]
     H -->|"no"| J["wait for more observations"]
