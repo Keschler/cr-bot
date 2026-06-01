@@ -179,7 +179,9 @@ def in_game(frame) -> bool:
 def game_end_from_result(result) -> bool:
     timer_seconds = _parse_timer(result["time"])
     if timer_seconds is None:
-      return True
+      filtered_time_left_s = result.get("time_left_s")
+      if filtered_time_left_s is None or float(filtered_time_left_s) <= 0.0:
+        return True
 
     elixir = result["elixir"]
     digit = elixir["displayed_digit"]
@@ -209,6 +211,9 @@ def game_end_from_result(result) -> bool:
       score += 1
 
     if visible_tower_bars:
+      score += 1
+
+    if timer_seconds is not None:
       score += 1
 
     return score < IN_GAME_SCORE_THRESHOLD
