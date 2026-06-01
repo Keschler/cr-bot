@@ -220,6 +220,7 @@ def extract_clock_boxes(boxes):
 
           clocks.append({
               "team": "enemy" if int(team) == 1 else "ally",
+              "track_id": None if track_id is None else int(track_id),
               "confidence": conf,
               "x1": x1,
               "y1": y1,

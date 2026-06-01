@@ -96,6 +96,8 @@ class RecentEnemyClock:
     seen_at_s: float | None
     center_x: float
     center_y: float
+    track_id: int | None = None
+    consumed_by_track_id: int | None = None
 
 class EnemyCardTracker:
     """
@@ -162,7 +164,10 @@ class EnemyCardTracker:
             memory.center_x = troop.center_x
             memory.center_y = troop.center_y
 
-            if self._has_nearby_clock(memory, troop, clock_boxes, now_s=now_s):
+            if (
+                not memory.clock_confirmed
+                and self._has_nearby_clock(memory, troop, clock_boxes, now_s=now_s)
+            ):
                 memory.clock_confirmed = True
 
             if self._should_frame_confirm(memory):
@@ -185,21 +190,6 @@ class EnemyCardTracker:
             self.recent_enemy_clocks = []
             return
 
-        fresh_clocks = []
-        for clock in clock_boxes:
-            if clock["confidence"] < 0.5:
-                continue
-            if clock["team"] != "enemy":
-                continue
-            fresh_clocks.append(
-                RecentEnemyClock(
-                    seen_at_s=now_s,
-                    center_x=clock["center_x"],
-                    center_y=clock["center_y"],
-                )
-            )
-
-        self.recent_enemy_clocks.extend(fresh_clocks)
         self.recent_enemy_clocks = [
             clock
             for clock in self.recent_enemy_clocks
@@ -207,17 +197,74 @@ class EnemyCardTracker:
             and now_s - clock.seen_at_s <= ENEMY_RECENT_CLOCK_CONFIRM_SECONDS
         ]
 
+        for clock in clock_boxes:
+            if clock["confidence"] < 0.5:
+                continue
+            if clock["team"] != "enemy":
+                continue
+            remembered = self._find_remembered_clock(clock)
+            if remembered is None:
+                self.recent_enemy_clocks.append(
+                    RecentEnemyClock(
+                        seen_at_s=now_s,
+                        center_x=clock["center_x"],
+                        center_y=clock["center_y"],
+                        track_id=clock.get("track_id"),
+                    )
+                )
+                continue
+            remembered.seen_at_s = now_s
+            remembered.center_x = clock["center_x"]
+            remembered.center_y = clock["center_y"]
+            if remembered.track_id is None:
+                remembered.track_id = clock.get("track_id")
+
+    def _find_remembered_clock(self, clock):
+        track_id = clock.get("track_id")
+        for remembered in self.recent_enemy_clocks:
+            if track_id is not None and remembered.track_id == track_id:
+                return remembered
+            if (
+                abs(remembered.center_x - clock["center_x"]) <= 12
+                and abs(remembered.center_y - clock["center_y"]) <= 12
+            ):
+                return remembered
+        return None
+
+    def _claim_clock(self, memory, clock):
+        if (
+            clock.consumed_by_track_id is not None
+            and clock.consumed_by_track_id != memory.track_id
+        ):
+            return False
+        clock.consumed_by_track_id = memory.track_id
+        return True
+
+    def _claim_current_clock(self, memory, troop, clock):
+        if not self._clock_matches_troop(
+            clock["center_x"],
+            clock["center_y"],
+            troop,
+        ):
+            return False
+        remembered = self._find_remembered_clock(clock)
+        if remembered is None:
+            remembered = RecentEnemyClock(
+                seen_at_s=None,
+                center_x=clock["center_x"],
+                center_y=clock["center_y"],
+                track_id=clock.get("track_id"),
+            )
+            self.recent_enemy_clocks.append(remembered)
+        return self._claim_clock(memory, remembered)
+
     def _has_nearby_clock(self, memory, troop, clock_boxes, now_s=None):
         for clock in clock_boxes:
             if clock["confidence"] < 0.5:
                 continue
             if clock["team"] != "enemy":
                 continue
-            if self._clock_matches_troop(
-                clock["center_x"],
-                clock["center_y"],
-                troop,
-            ):
+            if self._claim_current_clock(memory, troop, clock):
                 return True
 
         card_name = DIRECT_UNIT_TO_CARD.get(troop.class_name)
@@ -236,7 +283,10 @@ class EnemyCardTracker:
                 continue
             if now_s - clock.seen_at_s > ENEMY_RECENT_CLOCK_CONFIRM_SECONDS:
                 continue
-            if self._clock_matches_troop(clock.center_x, clock.center_y, troop):
+            if (
+                self._clock_matches_troop(clock.center_x, clock.center_y, troop)
+                and self._claim_clock(memory, clock)
+            ):
                 return True
         return False
 
