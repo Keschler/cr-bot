@@ -53,6 +53,23 @@ The report includes:
 The txt output repeats cumulative action lists every frame. The evaluator deduplicates actions and keeps the first frame where each action appears as the script's added video time.
 Predicted txt actions with impossible `time_left` values above `300` are ignored; this keeps pasted frame-index notes from being counted as script detections.
 
+## Import Human Labels
+
+Use `import_ground_truth_labels.py` to import compact hand-labeled files where
+each line is `<card> <frame_index>`. Name the file with an `own.txt` or
+`enemy.txt` suffix so the side can be inferred:
+
+```bash
+python3 scripts/import_ground_truth_labels.py \
+  'data/eval/ground_truth/human_labels/HOG 2.6 LADDER 🏆+3400 [tvA-OvUUHmw] enemy.txt'
+```
+
+The script creates the sibling ground-truth JSON when it does not exist. When
+the JSON already exists, it replaces events for the imported side and retains
+the other side. Matching imported events preserve existing fields such as
+manually labeled cells. Use `--fps`, `--video`, `--side`, or `--output` to
+override the inferred defaults.
+
 ## Cell Visualization
 
 Use `visualize_cells.py` to render the action grid on the labeled frames. It

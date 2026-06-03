@@ -1,0 +1,832 @@
+{
+  "video": "HOG 2.6 LADDER 🏆+3400 [tvA-OvUUHmw].mp4",
+  "fps": 10.0,
+  "notes": "Enemy-action labels converted from HOG 2.6 LADDER 🏆+3400 [tvA-OvUUHmw] enemy.txt. frame_index refers to the 10 FPS extracted frames. Corrected ice-spiirit to ice-spirit.",
+  "events": [
+    {
+      "side": "enemy",
+      "card": "skeletons",
+      "frame_index": 48
+    },
+    {
+      "side": "enemy",
+      "card": "musketeer",
+      "frame_index": 53
+    },
+    {
+      "side": "enemy",
+      "card": "fireball",
+      "frame_index": 74
+    },
+    {
+      "side": "enemy",
+      "card": "ice-spirit",
+      "frame_index": 279
+    },
+    {
+      "side": "enemy",
+      "card": "ice-golem",
+      "frame_index": 347
+    },
+    {
+      "side": "enemy",
+      "card": "log",
+      "frame_index": 399
+    },
+    {
+      "side": "enemy",
+      "card": "skeletons",
+      "frame_index": 409
+    },
+    {
+      "side": "enemy",
+      "card": "musketeer",
+      "frame_index": 421
+    },
+    {
+      "side": "enemy",
+      "card": "cannon",
+      "frame_index": 521
+    },
+    {
+      "side": "enemy",
+      "card": "ice-spirit",
+      "frame_index": 544
+    },
+    {
+      "side": "enemy",
+      "card": "log",
+      "frame_index": 651
+    },
+    {
+      "side": "enemy",
+      "card": "evo-skeletons",
+      "frame_index": 679
+    },
+    {
+      "side": "enemy",
+      "card": "ice-golem",
+      "frame_index": 699
+    },
+    {
+      "side": "enemy",
+      "card": "cannon",
+      "frame_index": 719
+    },
+    {
+      "side": "enemy",
+      "card": "ice-spirit",
+      "frame_index": 757
+    },
+    {
+      "side": "enemy",
+      "card": "log",
+      "frame_index": 814
+    },
+    {
+      "side": "enemy",
+      "card": "skeletons",
+      "frame_index": 856
+    },
+    {
+      "side": "enemy",
+      "card": "ice-golem",
+      "frame_index": 890
+    },
+    {
+      "side": "enemy",
+      "card": "evo-cannon",
+      "frame_index": 926
+    },
+    {
+      "side": "enemy",
+      "card": "log",
+      "frame_index": 1165
+    },
+    {
+      "side": "enemy",
+      "card": "skeletons",
+      "frame_index": 1186
+    },
+    {
+      "side": "enemy",
+      "card": "musketeer",
+      "frame_index": 1196
+    },
+    {
+      "side": "enemy",
+      "card": "cannon",
+      "frame_index": 1221
+    },
+    {
+      "side": "enemy",
+      "card": "ice-golem",
+      "frame_index": 1254
+    },
+    {
+      "side": "enemy",
+      "card": "log",
+      "frame_index": 1327
+    },
+    {
+      "side": "enemy",
+      "card": "evo-skeletons",
+      "frame_index": 1343
+    },
+    {
+      "side": "enemy",
+      "card": "ice-spirit",
+      "frame_index": 1344
+    },
+    {
+      "side": "enemy",
+      "card": "hog-rider",
+      "frame_index": 1397
+    },
+    {
+      "side": "enemy",
+      "card": "cannon",
+      "frame_index": 1406
+    },
+    {
+      "side": "enemy",
+      "card": "musketeer",
+      "frame_index": 1428
+    },
+    {
+      "side": "enemy",
+      "card": "skeletons",
+      "frame_index": 1443
+    },
+    {
+      "side": "enemy",
+      "card": "log",
+      "frame_index": 1471
+    },
+    {
+      "side": "enemy",
+      "card": "ice-golem",
+      "frame_index": 1531
+    },
+    {
+      "side": "enemy",
+      "card": "ice-spirit",
+      "frame_index": 1582
+    },
+    {
+      "side": "enemy",
+      "card": "hog-rider",
+      "frame_index": 1662
+    },
+    {
+      "side": "enemy",
+      "card": "skeletons",
+      "frame_index": 1678
+    },
+    {
+      "side": "enemy",
+      "card": "log",
+      "frame_index": 1693
+    },
+    {
+      "side": "enemy",
+      "card": "ice-golem",
+      "frame_index": 1765
+    },
+    {
+      "side": "enemy",
+      "card": "evo-cannon",
+      "frame_index": 1771
+    },
+    {
+      "side": "enemy",
+      "card": "hog-rider",
+      "frame_index": 1824
+    },
+    {
+      "side": "enemy",
+      "card": "fireball",
+      "frame_index": 1837
+    },
+    {
+      "side": "enemy",
+      "card": "ice-spirit",
+      "frame_index": 1842
+    },
+    {
+      "side": "enemy",
+      "card": "musketeer",
+      "frame_index": 1961
+    },
+    {
+      "side": "enemy",
+      "card": "ice-golem",
+      "frame_index": 1968
+    },
+    {
+      "side": "enemy",
+      "card": "log",
+      "frame_index": 2008
+    },
+    {
+      "side": "enemy",
+      "card": "evo-skeletons",
+      "frame_index": 2023
+    },
+    {
+      "side": "enemy",
+      "card": "ice-spirit",
+      "frame_index": 2046
+    },
+    {
+      "side": "enemy",
+      "card": "hog-rider",
+      "frame_index": 2078
+    },
+    {
+      "side": "enemy",
+      "card": "ice-golem",
+      "frame_index": 2092
+    },
+    {
+      "side": "enemy",
+      "card": "fireball",
+      "frame_index": 2122
+    },
+    {
+      "side": "enemy",
+      "card": "log",
+      "frame_index": 2141
+    },
+    {
+      "side": "enemy",
+      "card": "ice-spirit",
+      "frame_index": 2197
+    },
+    {
+      "side": "enemy",
+      "card": "skeletons",
+      "frame_index": 2211
+    },
+    {
+      "side": "enemy",
+      "card": "hog-rider",
+      "frame_index": 2271
+    },
+    {
+      "side": "enemy",
+      "card": "fireball",
+      "frame_index": 2288
+    },
+    {
+      "side": "enemy",
+      "card": "musketeer",
+      "frame_index": 2377
+    },
+    {
+      "side": "enemy",
+      "card": "log",
+      "frame_index": 2408
+    },
+    {
+      "side": "enemy",
+      "card": "ice-spirit",
+      "frame_index": 2417
+    },
+    {
+      "side": "enemy",
+      "card": "skeletons",
+      "frame_index": 2444
+    },
+    {
+      "side": "enemy",
+      "card": "hog-rider",
+      "frame_index": 2461
+    },
+    {
+      "side": "enemy",
+      "card": "ice-golem",
+      "frame_index": 2491
+    },
+    {
+      "side": "enemy",
+      "card": "musketeer",
+      "frame_index": 2494
+    },
+    {
+      "side": "enemy",
+      "card": "log",
+      "frame_index": 2513
+    },
+    {
+      "side": "enemy",
+      "card": "ice-spirit",
+      "frame_index": 2525
+    },
+    {
+      "side": "enemy",
+      "card": "hog-rider",
+      "frame_index": 2566
+    },
+    {
+      "side": "enemy",
+      "card": "fireball",
+      "frame_index": 2577
+    },
+    {
+      "side": "enemy",
+      "card": "evo-skeletons",
+      "frame_index": 2594
+    },
+    {
+      "side": "enemy",
+      "card": "ice-spirit",
+      "frame_index": 2642
+    },
+    {
+      "side": "enemy",
+      "card": "hog-rider",
+      "frame_index": 2662
+    },
+    {
+      "side": "enemy",
+      "card": "fireball",
+      "frame_index": 2688
+    },
+    {
+      "side": "enemy",
+      "card": "skeletons",
+      "frame_index": 2744
+    },
+    {
+      "side": "enemy",
+      "card": "cannon",
+      "frame_index": 2756
+    },
+    {
+      "side": "enemy",
+      "card": "ice-spirit",
+      "frame_index": 2782
+    },
+    {
+      "side": "enemy",
+      "card": "musketeer",
+      "frame_index": 2802
+    },
+    {
+      "side": "enemy",
+      "card": "skeletons",
+      "frame_index": 2822
+    },
+    {
+      "side": "enemy",
+      "card": "hog-rider",
+      "frame_index": 2854
+    },
+    {
+      "side": "enemy",
+      "card": "fireball",
+      "frame_index": 2873
+    },
+    {
+      "side": "enemy",
+      "card": "log",
+      "frame_index": 2892
+    },
+    {
+      "side": "enemy",
+      "card": "ice-spirit",
+      "frame_index": 2901
+    },
+    {
+      "side": "enemy",
+      "card": "evo-skeletons",
+      "frame_index": 2917
+    },
+    {
+      "side": "own",
+      "card": "hog-rider",
+      "frame_index": 19
+    },
+    {
+      "side": "own",
+      "card": "log",
+      "frame_index": 35
+    },
+    {
+      "side": "own",
+      "card": "ice-spirit",
+      "frame_index": 129
+    },
+    {
+      "side": "own",
+      "card": "ice-golem",
+      "frame_index": 219
+    },
+    {
+      "side": "own",
+      "card": "skeletons",
+      "frame_index": 289
+    },
+    {
+      "side": "own",
+      "card": "musketeer",
+      "frame_index": 343
+    },
+    {
+      "side": "own",
+      "card": "hog-rider",
+      "frame_index": 447
+    },
+    {
+      "side": "own",
+      "card": "ice-spirit",
+      "frame_index": 455
+    },
+    {
+      "side": "own",
+      "card": "log",
+      "frame_index": 527
+    },
+    {
+      "side": "own",
+      "card": "skeletons",
+      "frame_index": 610
+    },
+    {
+      "side": "own",
+      "card": "ice-golem",
+      "frame_index": 650
+    },
+    {
+      "side": "own",
+      "card": "hog-rider",
+      "frame_index": 670
+    },
+    {
+      "side": "own",
+      "card": "ice-spirit",
+      "frame_index": 763
+    },
+    {
+      "side": "own",
+      "card": "log",
+      "frame_index": 779
+    },
+    {
+      "side": "own",
+      "card": "evo-skeletons",
+      "frame_index": 822
+    },
+    {
+      "side": "own",
+      "card": "ice-golem",
+      "frame_index": 838
+    },
+    {
+      "side": "own",
+      "card": "hog-rider",
+      "frame_index": 860
+    },
+    {
+      "side": "own",
+      "card": "ice-spirit",
+      "frame_index": 1101
+    },
+    {
+      "side": "own",
+      "card": "log",
+      "frame_index": 1120
+    },
+    {
+      "side": "own",
+      "card": "skeletons",
+      "frame_index": 1152
+    },
+    {
+      "side": "own",
+      "card": "ice-golem",
+      "frame_index": 1168
+    },
+    {
+      "side": "own",
+      "card": "hog-rider",
+      "frame_index": 1183
+    },
+    {
+      "side": "own",
+      "card": "musketeer",
+      "frame_index": 1209
+    },
+    {
+      "side": "own",
+      "card": "ice-spirit",
+      "frame_index": 1247
+    },
+    {
+      "side": "own",
+      "card": "skeletons",
+      "frame_index": 1267
+    },
+    {
+      "side": "own",
+      "card": "ice-golem",
+      "frame_index": 1286
+    },
+    {
+      "side": "own",
+      "card": "log",
+      "frame_index": 1346
+    },
+    {
+      "side": "own",
+      "card": "hog-rider",
+      "frame_index": 1368
+    },
+    {
+      "side": "own",
+      "card": "ice-spirit",
+      "frame_index": 1383
+    },
+    {
+      "side": "own",
+      "card": "evo-skeletons",
+      "frame_index": 1419
+    },
+    {
+      "side": "own",
+      "card": "ice-golem",
+      "frame_index": 1431
+    },
+    {
+      "side": "own",
+      "card": "log",
+      "frame_index": 1447
+    },
+    {
+      "side": "own",
+      "card": "musketeer",
+      "frame_index": 1511
+    },
+    {
+      "side": "own",
+      "card": "ice-spirit",
+      "frame_index": 1534
+    },
+    {
+      "side": "own",
+      "card": "skeletons",
+      "frame_index": 1550
+    },
+    {
+      "side": "own",
+      "card": "ice-golem",
+      "frame_index": 1572
+    },
+    {
+      "side": "own",
+      "card": "log",
+      "frame_index": 1592
+    },
+    {
+      "side": "own",
+      "card": "musketeer",
+      "frame_index": 1669
+    },
+    {
+      "side": "own",
+      "card": "ice-spirit",
+      "frame_index": 1685
+    },
+    {
+      "side": "own",
+      "card": "hog-rider",
+      "frame_index": 1736
+    },
+    {
+      "side": "own",
+      "card": "fireball",
+      "frame_index": 1794
+    },
+    {
+      "side": "own",
+      "card": "log",
+      "frame_index": 1830
+    },
+    {
+      "side": "own",
+      "card": "cannon",
+      "frame_index": 1836
+    },
+    {
+      "side": "own",
+      "card": "skeletons",
+      "frame_index": 1842
+    },
+    {
+      "side": "own",
+      "card": "musketeer",
+      "frame_index": 1918
+    },
+    {
+      "side": "own",
+      "card": "ice-golem",
+      "frame_index": 1955
+    },
+    {
+      "side": "own",
+      "card": "ice-spirit",
+      "frame_index": 2003
+    },
+    {
+      "side": "own",
+      "card": "log",
+      "frame_index": 2016
+    },
+    {
+      "side": "own",
+      "card": "evo-skeletons",
+      "frame_index": 2033
+    },
+    {
+      "side": "own",
+      "card": "cannon",
+      "frame_index": 2065
+    },
+    {
+      "side": "own",
+      "card": "ice-golem",
+      "frame_index": 2093
+    },
+    {
+      "side": "own",
+      "card": "musketeer",
+      "frame_index": 2096
+    },
+    {
+      "side": "own",
+      "card": "ice-spirit",
+      "frame_index": 2113
+    },
+    {
+      "side": "own",
+      "card": "log",
+      "frame_index": 2155
+    },
+    {
+      "side": "own",
+      "card": "cannon",
+      "frame_index": 2176
+    },
+    {
+      "side": "own",
+      "card": "skeletons",
+      "frame_index": 2236
+    },
+    {
+      "side": "own",
+      "card": "ice-golem",
+      "frame_index": 2273
+    },
+    {
+      "side": "own",
+      "card": "musketeer",
+      "frame_index": 2282
+    },
+    {
+      "side": "own",
+      "card": "ice-spirit",
+      "frame_index": 2294
+    },
+    {
+      "side": "own",
+      "card": "log",
+      "frame_index": 2322
+    },
+    {
+      "side": "own",
+      "card": "fireball",
+      "frame_index": 2372
+    },
+    {
+      "side": "own",
+      "card": "skeletons",
+      "frame_index": 2423
+    },
+    {
+      "side": "own",
+      "card": "musketeer",
+      "frame_index": 2449
+    },
+    {
+      "side": "own",
+      "card": "ice-golem",
+      "frame_index": 2477
+    },
+    {
+      "side": "own",
+      "card": "log",
+      "frame_index": 2495
+    },
+    {
+      "side": "own",
+      "card": "cannon",
+      "frame_index": 2528
+    },
+    {
+      "side": "own",
+      "card": "evo-skeletons",
+      "frame_index": 2548
+    },
+    {
+      "side": "own",
+      "card": "ice-spirit",
+      "frame_index": 2553
+    },
+    {
+      "side": "own",
+      "card": "ice-golem",
+      "frame_index": 2574
+    },
+    {
+      "side": "own",
+      "card": "musketeer",
+      "frame_index": 2585
+    },
+    {
+      "side": "own",
+      "card": "cannon",
+      "frame_index": 2606
+    },
+    {
+      "side": "own",
+      "card": "fireball",
+      "frame_index": 2616
+    },
+    {
+      "side": "own",
+      "card": "ice-spirit",
+      "frame_index": 2645
+    },
+    {
+      "side": "own",
+      "card": "log",
+      "frame_index": 2650
+    },
+    {
+      "side": "own",
+      "card": "skeletons",
+      "frame_index": 2669
+    },
+    {
+      "side": "own",
+      "card": "ice-golem",
+      "frame_index": 2704
+    },
+    {
+      "side": "own",
+      "card": "hog-rider",
+      "frame_index": 2721
+    },
+    {
+      "side": "own",
+      "card": "cannon",
+      "frame_index": 2760
+    },
+    {
+      "side": "own",
+      "card": "fireball",
+      "frame_index": 2780
+    },
+    {
+      "side": "own",
+      "card": "log",
+      "frame_index": 2813
+    },
+    {
+      "side": "own",
+      "card": "skeletons",
+      "frame_index": 2850
+    },
+    {
+      "side": "own",
+      "card": "musketeer",
+      "frame_index": 2854
+    },
+    {
+      "side": "own",
+      "card": "ice-spirit",
+      "frame_index": 2867
+    },
+    {
+      "side": "own",
+      "card": "cannon",
+      "frame_index": 2894
+    },
+    {
+      "side": "own",
+      "card": "fireball",
+      "frame_index": 2912
+    }
+  ]
+}
