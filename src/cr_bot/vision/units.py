@@ -65,9 +65,7 @@ def match_from_dict(d: dict) -> Match:
     if bar is not None:
         troop_hp = get_unit_hp_level16(troop.class_name)
         if troop_hp:
-            print(f"Troop hp{troop_hp}, BAR_ESTIMATED_HP {bar.estimated_hp}")
             troop.estimated_hp = bar.estimated_hp * troop_hp
-            print("CALCULATED", troop.estimated_hp)
     else:
         troop.estimated_hp = get_unit_hp_level16(troop.class_name)
 

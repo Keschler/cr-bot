@@ -1,97 +1,50 @@
-import cv2
+from dataclasses import dataclass
+
 from cr_bot.domain.constants import FULL_TOWER_HP, KING_TOWER_HP
-from cr_bot.vision.image_utils import crop, read_number_from_roi, preprocess_digit, detect_if_king_tower_activated, detect_if_support_tower_alive
-from cr_bot.paths import TEMPLATES_DIR
+from cr_bot.vision.image_utils import crop, detect_if_king_tower_activated, detect_if_support_tower_alive
+from cr_bot.vision.tower_hp_ocr import get_tower_hp_ocr
 from cr_bot.vision.yolo_runtime import parse_box_row, load_yolo_runtime
 
 from cr_bot.domain.rois import ROIS
 
-TEMPLATE_DIR = TEMPLATES_DIR / "numbers"
-EXPERT_TEMPLATE_DIR = TEMPLATES_DIR / "expert_numbers"
-
-
-def read_template(name: str, expert: bool):
-    if expert:
-        path = EXPERT_TEMPLATE_DIR / name
-    else:
-        path = TEMPLATE_DIR / name
-    template = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
-    if template is None:
-        raise FileNotFoundError(f"Failed to read tower HP template: {path}")
-    return template
-
-def load_templates(expert: bool):
-    raw_templates = {
-        0: read_template("0.png", expert),
-        1: read_template("1.png", expert),
-        2: read_template("2.png", expert),
-        3: read_template("3.png", expert),
-        4: read_template("4.png", expert),
-        5: read_template("5.png", expert),
-        6: read_template("6.png", expert),
-        7: read_template("7.png", expert),
-        8: read_template("8.png", expert),
-        9: read_template("9.png", expert),
-        }
-
-    return {
-        digit: preprocess_digit(template)
-        for digit, template in raw_templates.items()
-    }
-
-
-TEMPLATES = load_templates(False)
-EXPERT_TEMPLATES = load_templates(True)
 OWN_TOWER_NAMES = {"own_king", "own_support_left", "own_support_right"}
+
+
+@dataclass
+class TowerHPCrop:
+    tower_name: str
+    image: object
+    mode: str
+
 
 def extract_tower_hp(frame, yolo_boxes=None, debug_steps_by_tower=None, support_tower_yolo_boxes=None):
     if yolo_boxes is None: # Live gameplay
         pause_own_tower_hp = has_blocking_emotes(support_tower_yolo_boxes)
-        towers_hp = {
-            "enemy_king": {
-                "image": crop(frame, ROIS["opponent_king_health_text"]),
-                "value": None,
-            },
-            "own_king": {
-                "image": crop(frame, ROIS["player_king_health_text"]),
-                "value": None,
-            },
-            "enemy_support_left": {
-                "image": crop(frame, ROIS["opponent_left_support_health_text"]),
-                "value": None,
-            },
-            "enemy_support_right": {
-                "image": crop(frame, ROIS["opponent_right_support_health_text"]),
-                "value": None,
-            },
-            "own_support_left": {
-                "image": crop(frame, ROIS["player_left_support_health_text"]),
-                "value": None,
-            },
-            "own_support_right": {
-                "image": crop(frame, ROIS["player_right_support_health_text"]),
-                "value": None,
-            },
-        }
+        tower_crops = extract_tower_hp_crops(frame)
+        towers_hp = {tower_crop.tower_name: None for tower_crop in tower_crops}
+        pending_crops = {}
 
-        for tower_name, tower_data in towers_hp.items():
-            tower_debug = {} if debug_steps_by_tower is not None else None
-            if pause_own_tower_hp and tower_name in OWN_TOWER_NAMES:
-                tower_data["value"] = None
+        for tower_crop in tower_crops:
+            tower_debug = _tower_debug(debug_steps_by_tower, tower_crop.tower_name)
+            if pause_own_tower_hp and tower_crop.tower_name in OWN_TOWER_NAMES:
                 if tower_debug is not None:
                     tower_debug["ocr_missing_reason"] = "blocked_by_emote"
             else:
-                tower_data["value"] = read_number_from_roi(tower_data["image"], TEMPLATES, debug_steps=tower_debug, digit_mode="tower")
-            if debug_steps_by_tower is not None:
-                debug_steps_by_tower[tower_name] = tower_debug
+                pending_crops[tower_crop.tower_name] = tower_crop.image
 
+        predictions = get_tower_hp_ocr().predict_batch(
+            pending_crops,
+            debug_steps_by_tower=debug_steps_by_tower,
+        )
+        for tower_name, prediction in predictions.items():
+            towers_hp[tower_name] = prediction.value
 
         king_tower_activated = detect_if_king_tower_activated(frame)
 
         if not pause_own_tower_hp and not king_tower_activated["own_king_activated"]:
-            towers_hp["own_king"]["value"] = KING_TOWER_HP
+            towers_hp["own_king"] = KING_TOWER_HP
         if not king_tower_activated["enemy_king_activated"]:
-            towers_hp["enemy_king"]["value"] = KING_TOWER_HP
+            towers_hp["enemy_king"] = KING_TOWER_HP
 
         if support_tower_yolo_boxes is not None:
             support_tower_alive = detect_if_support_tower_alive_from_yolo(support_tower_yolo_boxes)
@@ -99,131 +52,162 @@ def extract_tower_hp(frame, yolo_boxes=None, debug_steps_by_tower=None, support_
             support_tower_alive = detect_if_support_tower_alive(frame)
 
         if not pause_own_tower_hp and not support_tower_alive["support_left_activated"]:
-            towers_hp["own_support_left"]["value"] = 0
+            towers_hp["own_support_left"] = 0
         if not pause_own_tower_hp and not support_tower_alive["support_right_activated"]:
-            towers_hp["own_support_right"]["value"] = 0
+            towers_hp["own_support_right"] = 0
         if not support_tower_alive["enemy_support_left_activated"]:
-            towers_hp["enemy_support_left"]["value"] = 0
+            towers_hp["enemy_support_left"] = 0
         if not support_tower_alive["enemy_support_right_activated"]:
-            towers_hp["enemy_support_right"]["value"] = 0
+            towers_hp["enemy_support_right"] = 0
 
-        return {
-            tower_name: tower_data["value"]
-            for tower_name, tower_data in towers_hp.items()
-        }
-    else: # expert gameplay
-        _, _, idx2unit = load_yolo_runtime()
-        pause_own_tower_hp = has_blocking_emotes(yolo_boxes, idx2unit=idx2unit)
+        return towers_hp
 
-        king_towers = []
-        queen_towers = []
-        tower_bars = []
-        king_tower_bars = []
-        
-        for row in yolo_boxes:
-            x1, y1, x2, y2, track_id, conf, cls, team = parse_box_row(row)
-            class_name = idx2unit[int(cls)]
-
-            det = {
-              "class_name": class_name,
-              "team": "enemy" if int(team) == 1 else "ally",
-              "track_id": None if track_id is None else int(track_id),
-              "confidence": float(conf),
-              "x1": float(x1),
-              "y1": float(y1),
-              "x2": float(x2),
-              "y2": float(y2),
-              "cx": float((x1 + x2) / 2.0),
-              "cy": float((y1 + y2) / 2.0),
-          }
+    crops, result, paused_towers = extract_tower_hp_crops_from_yolo(
+        frame,
+        yolo_boxes,
+        debug_steps_by_tower=debug_steps_by_tower,
+    )
+    pending_crops = {
+        tower_crop.tower_name: tower_crop.image
+        for tower_crop in crops
+        if tower_crop.tower_name not in paused_towers
+    }
+    predictions = get_tower_hp_ocr().predict_batch(
+        pending_crops,
+        debug_steps_by_tower=debug_steps_by_tower,
+    )
+    for tower_name, prediction in predictions.items():
+        value = prediction.value
+        if value in (None, 0):
+            value = None if "support" in tower_name else FULL_TOWER_HP[tower_name]
+        result[tower_name] = value
+    return result
 
 
-            if class_name == "king-tower":
-               king_towers.append(det) 
-            elif class_name == "queen-tower":
-                queen_towers.append(det)
-            elif class_name in ("tower-bar", "dagger-duchess-tower-bar"):
-                tower_bars.append(det)
-            elif class_name == "king-tower-bar":
-                king_tower_bars.append(det)
+def _tower_debug(debug_steps_by_tower, tower_name):
+    if debug_steps_by_tower is None:
+        return None
+    return debug_steps_by_tower.setdefault(tower_name, {})
 
-        ally_king = [d for d in king_towers if d["team"] == "ally"]
-        enemy_king = [d for d in king_towers if d["team"] == "enemy"]
 
-        ally_queens = [d for d in queen_towers if d["team"] == "ally"]
-        enemy_queens = [d for d in queen_towers if d["team"] == "enemy"]
+def extract_tower_hp_crops(frame):
+    return [
+        TowerHPCrop("enemy_king", crop(frame, ROIS["opponent_king_health_text"]), "fixed_roi"),
+        TowerHPCrop("own_king", crop(frame, ROIS["player_king_health_text"]), "fixed_roi"),
+        TowerHPCrop("enemy_support_left", crop(frame, ROIS["opponent_left_support_health_text"]), "fixed_roi"),
+        TowerHPCrop("enemy_support_right", crop(frame, ROIS["opponent_right_support_health_text"]), "fixed_roi"),
+        TowerHPCrop("own_support_left", crop(frame, ROIS["player_left_support_health_text"]), "fixed_roi"),
+        TowerHPCrop("own_support_right", crop(frame, ROIS["player_right_support_health_text"]), "fixed_roi"),
+    ]
 
-        own_support_left, own_support_right = assign_support_towers_by_position(
-            ally_queens,
-            ROIS["player_left_support_tower"],
-            ROIS["player_right_support_tower"],
-        )
-        enemy_support_left, enemy_support_right = assign_support_towers_by_position(
-            enemy_queens,
-            ROIS["opponent_left_support_tower"],
-            ROIS["opponent_right_support_tower"],
-        )
 
-        towers = {
-                "own_king": ally_king[0] if ally_king else None,
-                "enemy_king": enemy_king[0] if enemy_king else None,
-                "own_support_left": own_support_left,
-                "own_support_right": own_support_right,
-                "enemy_support_left": enemy_support_left,
-                "enemy_support_right": enemy_support_right,
-                }
-        king_matches = match_bars_to_towers([t for name, t in towers.items() if t is not None and "king" in name], king_tower_bars)
-        queen_matches = match_bars_to_towers([t for name, t in towers.items() if t is not None and "support" in name], tower_bars)
+def extract_tower_hp_crops_from_yolo(frame, yolo_boxes, debug_steps_by_tower=None):
+    _, _, idx2unit = load_yolo_runtime()
+    pause_own_tower_hp = has_blocking_emotes(yolo_boxes, idx2unit=idx2unit)
 
-        result = {}
+    king_towers = []
+    queen_towers = []
+    tower_bars = []
+    king_tower_bars = []
 
-        for tower_name, tower in towers.items():
-            tower_debug = {} if debug_steps_by_tower is not None else None
-            if pause_own_tower_hp and tower_name in OWN_TOWER_NAMES:
-                result[tower_name] = None
-                if debug_steps_by_tower is not None:
-                    tower_debug["ocr_missing_reason"] = "blocked_by_emote"
-                    debug_steps_by_tower[tower_name] = tower_debug
-                continue
+    for row in yolo_boxes:
+        x1, y1, x2, y2, track_id, conf, cls, team = parse_box_row(row)
+        class_name = idx2unit[int(cls)]
 
-            if tower is None:
-                if "support" in tower_name:
-                    result[tower_name] = 0
-                else:
-                    result[tower_name] = FULL_TOWER_HP[tower_name]
-                if debug_steps_by_tower is not None:
-                    tower_debug["ocr_missing_reason"] = "no_tower_detection"
-                    debug_steps_by_tower[tower_name] = tower_debug
-                continue
+        det = {
+          "class_name": class_name,
+          "team": "enemy" if int(team) == 1 else "ally",
+          "track_id": None if track_id is None else int(track_id),
+          "confidence": float(conf),
+          "x1": float(x1),
+          "y1": float(y1),
+          "x2": float(x2),
+          "y2": float(y2),
+          "cx": float((x1 + x2) / 2.0),
+          "cy": float((y1 + y2) / 2.0),
+      }
 
-            if "king" in tower_name:
-                bar = king_matches.get(id(tower))
+        if class_name == "king-tower":
+           king_towers.append(det)
+        elif class_name == "queen-tower":
+            queen_towers.append(det)
+        elif class_name in ("tower-bar", "dagger-duchess-tower-bar"):
+            tower_bars.append(det)
+        elif class_name == "king-tower-bar":
+            king_tower_bars.append(det)
+
+    ally_king = [d for d in king_towers if d["team"] == "ally"]
+    enemy_king = [d for d in king_towers if d["team"] == "enemy"]
+
+    ally_queens = [d for d in queen_towers if d["team"] == "ally"]
+    enemy_queens = [d for d in queen_towers if d["team"] == "enemy"]
+
+    own_support_left, own_support_right = assign_support_towers_by_position(
+        ally_queens,
+        ROIS["player_left_support_tower"],
+        ROIS["player_right_support_tower"],
+    )
+    enemy_support_left, enemy_support_right = assign_support_towers_by_position(
+        enemy_queens,
+        ROIS["opponent_left_support_tower"],
+        ROIS["opponent_right_support_tower"],
+    )
+
+    towers = {
+            "own_king": ally_king[0] if ally_king else None,
+            "enemy_king": enemy_king[0] if enemy_king else None,
+            "own_support_left": own_support_left,
+            "own_support_right": own_support_right,
+            "enemy_support_left": enemy_support_left,
+            "enemy_support_right": enemy_support_right,
+            }
+    king_matches = match_bars_to_towers([t for name, t in towers.items() if t is not None and "king" in name], king_tower_bars)
+    queen_matches = match_bars_to_towers([t for name, t in towers.items() if t is not None and "support" in name], tower_bars)
+
+    result = {}
+    crops = []
+    paused_towers = set()
+
+    for tower_name, tower in towers.items():
+        tower_debug = _tower_debug(debug_steps_by_tower, tower_name)
+        if pause_own_tower_hp and tower_name in OWN_TOWER_NAMES:
+            result[tower_name] = None
+            paused_towers.add(tower_name)
+            if tower_debug is not None:
+                tower_debug["ocr_missing_reason"] = "blocked_by_emote"
+            continue
+
+        if tower is None:
+            if "support" in tower_name:
+                result[tower_name] = 0
             else:
-                bar = queen_matches.get(id(tower))
-
-            if bar is None:
                 result[tower_name] = FULL_TOWER_HP[tower_name]
-                if debug_steps_by_tower is not None:
-                    tower_debug["ocr_missing_reason"] = "no_bar_detection"
-                    debug_steps_by_tower[tower_name] = tower_debug
-                continue
+            if tower_debug is not None:
+                tower_debug["ocr_missing_reason"] = "no_tower_detection"
+            continue
 
-            bar_roi = (
-                int(bar["x1"]),
-                int(bar["y1"]),
-                max(1, int(bar["x2"] - bar["x1"])),
-                max(1, int(bar["y2"] - bar["y1"])),
-            )
-            bar_img = crop(frame, bar_roi)
-            text_img = crop_tower_hp_text_area(bar_img, tower_name)
-            value = read_number_from_roi(text_img, EXPERT_TEMPLATES, debug_steps=tower_debug, digit_mode="tower")
-            if value in (None, 0):
-                value = None if "support" in tower_name else FULL_TOWER_HP[tower_name]
+        if "king" in tower_name:
+            bar = king_matches.get(id(tower))
+        else:
+            bar = queen_matches.get(id(tower))
 
-            result[tower_name] = value
-            if debug_steps_by_tower is not None:
-                debug_steps_by_tower[tower_name] = tower_debug
-        return result
+        if bar is None:
+            result[tower_name] = FULL_TOWER_HP[tower_name]
+            if tower_debug is not None:
+                tower_debug["ocr_missing_reason"] = "no_bar_detection"
+            continue
+
+        bar_roi = (
+            int(bar["x1"]),
+            int(bar["y1"]),
+            max(1, int(bar["x2"] - bar["x1"])),
+            max(1, int(bar["y2"] - bar["y1"])),
+        )
+        bar_img = crop(frame, bar_roi)
+        text_img = crop_tower_hp_text_area(bar_img, tower_name)
+        crops.append(TowerHPCrop(tower_name, text_img, "yolo_bar"))
+
+    return crops, result, paused_towers
 
 
 def has_blocking_emotes(yolo_boxes, idx2unit=None):

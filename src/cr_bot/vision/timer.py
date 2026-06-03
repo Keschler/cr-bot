@@ -10,7 +10,6 @@ from cr_bot.domain.constants import (
     OVERTIME_SECONDS,
     OVERTIME_RED_RATIO_THRESHOLD,
 )
-from cr_bot.vision.tower_hp import EXPERT_TEMPLATES
 from cr_bot.domain.rois import ROIS
 from cr_bot.vision.image_utils import (
     build_digit_debug_views,
@@ -28,27 +27,27 @@ EXPERT_TEMPLATE_DIR = TEMPLATES_DIR / "expert_numbers"
 
 
 
-def read_template(name: str):
-    path = TEMPLATE_DIR / name
+def read_template(name: str, expert: bool = False):
+    path = (EXPERT_TEMPLATE_DIR if expert else TEMPLATE_DIR) / name
     template = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
     if template is None:
         raise FileNotFoundError(f"Failed to read timer template: {path}")
     return template
 
 
-def load_templates():
+def load_templates(expert: bool = False):
     raw_templates = {
-        0: read_template("0.png"),
-        1: read_template("1.png"),
-        2: read_template("2.png"),
-        3: read_template("3.png"),
-        4: read_template("4.png"),
-        5: read_template("5.png"),
-        6: read_template("6.png"),
-        7: read_template("7.png"),
-        8: read_template("8.png"),
-        9: read_template("9.png"),
-        ":": read_template("semi_colon.png"),
+        0: read_template("0.png", expert),
+        1: read_template("1.png", expert),
+        2: read_template("2.png", expert),
+        3: read_template("3.png", expert),
+        4: read_template("4.png", expert),
+        5: read_template("5.png", expert),
+        6: read_template("6.png", expert),
+        7: read_template("7.png", expert),
+        8: read_template("8.png", expert),
+        9: read_template("9.png", expert),
+        ":": read_template("semi_colon.png", expert),
     }
 
     return {
@@ -57,7 +56,8 @@ def load_templates():
     }
 
 
-TEMPLATES = load_templates()
+TEMPLATES = load_templates(False)
+EXPERT_TEMPLATES = load_templates(True)
 
 # Search broadly in the top-right HUD first, then localize the timer within it.
 TOP_RIGHT_TIMER_SEARCH_ROI = (0.62, 0.00, 0.38, 0.24)

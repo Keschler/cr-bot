@@ -34,7 +34,7 @@ def render_tower_hp_debug(steps_by_tower: dict[str, dict[str, np.ndarray]]) -> n
         "own_support_left",
         "own_support_right",
     ]
-    step_order = ["raw", "binary", "boxes", "digits"]
+    step_order = ["raw", "normalized", "binary", "boxes", "digits"]
     cell_w = 180
     cell_h = 90
     rows = []
@@ -102,7 +102,11 @@ def format_tower_ocr_debug(steps):
     missing_reason = steps.get("ocr_missing_reason")
     scores = steps.get("digit_scores") or []
     if value is None and not scores:
-        reason_text = f" reason={missing_reason}" if missing_reason else ""
+        reason_text = ""
+        if rejected_reason:
+            reason_text += f" rejected={rejected_reason}"
+        if missing_reason:
+            reason_text += f" reason={missing_reason}"
         return f"ocr=missing{reason_text}"
 
     score_parts = []
