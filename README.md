@@ -143,6 +143,19 @@ outputs/venv/bin/python scripts/debug/debug_spell_purple_detector.py \
 
 Debug outputs are written under `outputs/debug/` and are intentionally not part of the runtime pipeline.
 
+### Profile Video Analysis
+
+Use the profiling script to analyze the first 10 seconds of the 3400-ladder
+video and the 10 FPS hog-cycle video. It reports detector startup, warmup,
+overall throughput, and per-stage timings:
+
+```bash
+PYTHONPATH=src outputs/venv/bin/python scripts/profile_video_analysis.py
+```
+
+Pass `--duration` or explicit video paths to run a shorter smoke test or
+profile different clips.
+
 ## Action Evaluation
 
 The evaluation tools compare detected own and enemy actions against hand-labeled
