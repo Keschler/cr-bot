@@ -263,7 +263,7 @@ flowchart TD
     C --> D["for each enemy YOLO match with track_id"]
     D --> E["TrackMemory.add_observation()"]
     E --> F{"near enemy deploy clock?"}
-    F -->|"yes"| G["claim deploy-clock track for this troop track<br/>clock_confirmed=True"]
+    F -->|"yes"| G["claim deploy-clock track for this troop track<br/>retain deploy-clock center<br/>clock_confirmed=True"]
     F -->|"no"| H{"frame-confirm class and enough frames/confidence?"}
     H -->|"yes"| I["frame_confirmed=True"]
     H -->|"no"| J["wait for more observations"]
@@ -276,8 +276,19 @@ flowchart TD
     N -->|"yes"| O["mark track counted, do not record enemy play"]
     N -->|"no"| P{"recent duplicate enemy play?"}
     P -->|"yes"| O
-    P -->|"no"| Q["append detected_card_plays, add seen card, subtract cost"]
+    P -->|"no"| Q{"claimed deploy-clock center?"}
+    Q -->|"yes"| R["convert deploy-clock center to play cell"]
+    Q -->|"no"| S["convert detected object center to play cell<br/>fallback for frame-confirmed spells<br/>and frame-confirmed troop exceptions"]
+    R --> T["append detected_card_plays with cell,<br/>add seen card, subtract cost"]
+    S --> T
 ```
+
+Enemy troops and buildings normally use the claimed deploy-clock center for
+their play cell. Enemy spells are generally frame-confirmed without a deploy
+clock, so their fallback cell comes from the detected spell object or effect.
+For moving spells such as Fireball, Rocket and Giant Snowball, this is an
+observed projectile cell rather than a guaranteed target cell. Log and
+Barbarian Barrel similarly use the detected rolling-object position.
 
 ## Enemy Log Detection
 

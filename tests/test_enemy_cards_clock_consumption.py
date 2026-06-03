@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+from cr_bot.features.action_space import ACTION_GRID
 from cr_bot.trackers.enemy_cards import EnemyCardTracker
 
 
@@ -60,3 +61,39 @@ def test_enemy_clock_is_single_use_within_update_without_monotonic_time():
 
     assert [play["track_id"] for play in tracker.detected_card_plays] == [1]
     assert tracker.tracks[2].clock_confirmed is False
+
+
+def test_enemy_play_cell_uses_claimed_clock_center_instead_of_troop_center():
+    tracker = _tracker()
+    arena_px = (0.0, 0.0, 1000.0, 1000.0)
+    clock = _clock(center_x=500.0, center_y=780.0)
+
+    tracker.update(
+        289,
+        [_match(1, center_x=500.0, center_y=700.0)],
+        clock_boxes=[clock],
+        now_s=1.0,
+        arena_px=arena_px,
+    )
+
+    play = tracker.detected_card_plays[0]
+    assert play["cell"] == ACTION_GRID.pixel_to_cell(500.0, 780.0, arena_px)
+    assert play["cell"] != ACTION_GRID.pixel_to_cell(500.0, 700.0, arena_px)
+
+
+def test_enemy_play_cell_uses_remembered_clock_center():
+    tracker = _tracker()
+    arena_px = (0.0, 0.0, 1000.0, 1000.0)
+    clock = _clock(center_x=500.0, center_y=780.0)
+
+    tracker.update(290, [], clock_boxes=[clock], now_s=1.0, arena_px=arena_px)
+    tracker.update(
+        289,
+        [_match(1, center_x=500.0, center_y=700.0)],
+        clock_boxes=[],
+        now_s=1.1,
+        arena_px=arena_px,
+    )
+
+    play = tracker.detected_card_plays[0]
+    assert play["cell"] == ACTION_GRID.pixel_to_cell(500.0, 780.0, arena_px)

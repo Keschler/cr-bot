@@ -52,6 +52,8 @@ class TrackMemory:
     counted_as_card: bool = False
     center_x: float | None = None
     center_y: float | None = None
+    deploy_clock_center_x: float | None = None
+    deploy_clock_center_y: float | None = None
 
     def add_observation(self, class_name, team, confidence, total_remaining_s):
         self.class_votes[class_name] = self.class_votes.get(class_name, 0) + 1
@@ -238,6 +240,8 @@ class EnemyCardTracker:
         ):
             return False
         clock.consumed_by_track_id = memory.track_id
+        memory.deploy_clock_center_x = clock.center_x
+        memory.deploy_clock_center_y = clock.center_y
         return True
 
     def _claim_current_clock(self, memory, troop, clock):
@@ -497,7 +501,18 @@ class EnemyCardTracker:
     def _memory_cell(self, memory, arena_px):
         if memory is None:
             return None
-        if arena_px is None or memory.center_x is None or memory.center_y is None:
+        if arena_px is None:
+            return None
+        if (
+            memory.deploy_clock_center_x is not None
+            and memory.deploy_clock_center_y is not None
+        ):
+            return ACTION_GRID.pixel_to_cell(
+                memory.deploy_clock_center_x,
+                memory.deploy_clock_center_y,
+                arena_px,
+            )
+        if memory.center_x is None or memory.center_y is None:
             return None
         return ACTION_GRID.pixel_to_cell(memory.center_x, memory.center_y, arena_px)
 
