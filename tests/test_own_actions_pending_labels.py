@@ -179,6 +179,52 @@ def test_pending_troop_reuses_latched_numeric_elixir_drop_when_cell_arrives_late
     assert tracker.actions[0]["video_time_s"] == 12.83
 
 
+def test_pending_troop_can_confirm_from_own_elixir_before_when_log_consumes_global_drop():
+    tracker = OwnActionTracker()
+    tracker.last_elixir = 8.15
+    tracker.pending.extend(
+        [
+            PendingOwnPlay(
+                card="ice-spirit",
+                slot_idx=0,
+                started_at_s=185.0,
+                elixir_before=8.30,
+            ),
+            PendingOwnPlay(
+                card="log",
+                slot_idx=0,
+                started_at_s=184.0,
+                elixir_before=8.15,
+            ),
+        ]
+    )
+    tracker._infer_pending_cell = lambda pending, *args, **kwargs: (
+        (17, 30) if pending.card == "ice-spirit" else None
+    )
+    tracker._recent_tracks_for_pending = lambda *args, **kwargs: []
+
+    game_state = SimpleNamespace(
+        own_units=[_match("the-log", track_id=13, center_x=797.2, center_y=1152.1)],
+        hud=SimpleNamespace(hand_cards=[None, "fireball", "cannon", "musketeer"]),
+    )
+
+    tracker._confirm_pending(
+        game_state,
+        arena_px=(0, 0, 1080, 2400),
+        elixir=5.83,
+        now=183.0,
+        frame=None,
+        clock_boxes=[],
+        video_time_s=111.9,
+    )
+
+    assert [action["card"] for action in tracker.actions] == ["ice-spirit", "log"]
+    assert tracker.actions[0]["cell"] == (17, 30)
+    assert tracker.actions[0]["time_left_s"] == 183.0
+    assert tracker.actions[0]["video_time_s"] == 111.9
+    assert tracker.actions[1]["cell"] is not None
+
+
 def test_old_musketeer_drop_is_normalized_to_musketeer():
     tracker = OwnActionTracker()
     tracker.last_hand = ["old-musketeer", None, None, None]

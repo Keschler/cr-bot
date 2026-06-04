@@ -48,6 +48,7 @@ class PendingOwnPlay:
     elixir_change_video_time_s: float | None = None
     numeric_elixir_drop_time_s: float | None = None
     numeric_elixir_drop_video_time_s: float | None = None
+    numeric_elixir_drop_source: str | None = None
     rolling_spell_first_cell: tuple[int, int] | None = None
     rolling_spell_first_seen_s: float | None = None
     rolling_spell_first_track_id: int | None = None
@@ -307,14 +308,25 @@ class OwnActionTracker:
             is_spell = self._is_spell_card(pending.card)
             cost = CARD_METADATA.get(pending.card, {}).get("elixir_cost")
             elixir_drop = None if self.last_elixir is None else self.last_elixir - elixir
-            required_drop = None if cost is None else max(1.0, cost - 1.0)
-            elixir_confirms = pending is elixir_pending_to_confirm
+            required_drop = self._required_numeric_elixir_drop(pending)
+            pending_elixir_drop = pending.elixir_before - elixir
+            selected_global_elixir_drop = pending is elixir_pending_to_confirm
+            own_elixir_confirms = (
+                required_drop is not None
+                and pending_elixir_drop >= required_drop
+                and 0 <= pending.started_at_s - now <= OWN_ACTION_TRACK_AFTER_DROP_WINDOW_S
+            )
+            elixir_confirms = selected_global_elixir_drop or own_elixir_confirms
             if elixir_confirms and pending.numeric_elixir_drop_time_s is None:
                 pending.numeric_elixir_drop_time_s = now
                 pending.numeric_elixir_drop_video_time_s = video_time_s
+                pending.numeric_elixir_drop_source = (
+                    "global-drop" if selected_global_elixir_drop else "pending-elixir-before"
+                )
                 self._debug(
                     f"latched numeric elixir drop card={pending.card} "
-                    f"slot={pending.slot_idx} time_left={now} video_time={video_time_s}"
+                    f"slot={pending.slot_idx} time_left={now} video_time={video_time_s} "
+                    f"source={pending.numeric_elixir_drop_source}"
                 )
             if is_spell:
                 if self._is_rolling_spell(pending.card):
@@ -347,6 +359,7 @@ class OwnActionTracker:
             self._debug(
                 f"pending check card={pending.card} slot={pending.slot_idx} "
                 f"cost={cost} elixir_drop={elixir_drop} "
+                f"pending_elixir_drop={pending_elixir_drop} "
                 f"required_drop={required_drop} elixir_confirms={elixir_confirms} "
                 f"placed_cell={placed_cell}"
             )
@@ -615,14 +628,9 @@ class OwnActionTracker:
         for pending in self.pending:
             if pending.spell_elixir_confirmed:
                 continue
-            cost = CARD_METADATA.get(pending.card, {}).get("elixir_cost")
-            if cost is None:
+            required_drop = self._required_numeric_elixir_drop(pending)
+            if required_drop is None:
                 continue
-            required_drop = (
-                1.5
-                if self._is_rolling_spell(pending.card)
-                else max(1.0, cost - 1.0)
-            )
             if elixir_drop < required_drop:
                 continue
             elapsed_s = pending.started_at_s - now
@@ -635,6 +643,14 @@ class OwnActionTracker:
 
         candidates.sort(key=lambda item: (not item[0], item[1]))
         return candidates[0][2]
+
+    def _required_numeric_elixir_drop(self, pending):
+        cost = CARD_METADATA.get(pending.card, {}).get("elixir_cost")
+        if cost is None:
+            return None
+        if self._is_rolling_spell(pending.card):
+            return 1.5
+        return max(0.5, cost - 1.5)
 
     def _rolling_spell_placement_cell(self, troop, arena_px):
         # The detector exposes an axis-aligned box at runtime; its center is the
