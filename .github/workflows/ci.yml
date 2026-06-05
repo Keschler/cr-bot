@@ -15,6 +15,9 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Check out KataCR submodule
+        run: git submodule update --init vendor/external/KataCR
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
