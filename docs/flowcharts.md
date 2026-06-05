@@ -260,35 +260,54 @@ flowchart TD
 flowchart TD
     A["EnemyCardTracker.update(time_left, enemy_matches, clock_boxes, own_actions)"] --> B["regen enemy elixir estimate"]
     B --> C["remember recent enemy deploy clocks"]
-    C --> D["for each enemy YOLO match with track_id"]
-    D --> E["TrackMemory.add_observation()"]
-    E --> F{"near enemy deploy clock?"}
-    F -->|"yes"| G["claim deploy-clock track for this troop track<br/>retain deploy-clock center<br/>clock_confirmed=True"]
-    F -->|"no"| H{"frame-confirm class and enough frames/confidence?"}
+    C --> D["for each enemy YOLO match"]
+    D --> E{"match has track_id?"}
+    E -->|"no"| Z["skip match"]
+    E -->|"yes"| F["TrackMemory.add_observation()<br/>update class/team votes, confidence, center"]
+    F --> G{"specific enemy deploy clock claimable<br/>by this troop track?"}
+    G -->|"yes"| K["claim deploy-clock track<br/>retain deploy-clock center<br/>clock_confirmed=True"]
+    G -->|"no"| H{"frame-confirm class<br/>and enough frames/confidence?"}
     H -->|"yes"| I["frame_confirmed=True"]
     H -->|"no"| J["wait for more observations"]
-    G --> K["_maybe_record_play()"]
-    I --> K
-    K --> L{"reliable enemy play?"}
-    L -->|"no"| J
-    L -->|"yes"| M["DIRECT_UNIT_TO_CARD maps YOLO class to card"]
-    M --> N{"recent own spell duplicate?"}
-    N -->|"yes"| O["mark track counted, do not record enemy play"]
-    N -->|"no"| P{"recent duplicate enemy play?"}
+    K --> L["_maybe_record_play()"]
+    I --> L
+    L --> M{"reliable enemy play?"}
+    M -->|"no"| J
+    M -->|"yes"| N{"DIRECT_UNIT_TO_CARD maps<br/>YOLO class to a card?"}
+    N -->|"no"| O["mark track counted,<br/>do not record enemy play"]
+    N -->|"yes"| P{"recent own spell duplicate?"}
     P -->|"yes"| O
-    P -->|"no"| Q{"claimed deploy-clock center?"}
-    Q -->|"yes"| R["convert deploy-clock center to play cell"]
-    Q -->|"no"| S["convert detected object center to play cell<br/>fallback for frame-confirmed spells<br/>and frame-confirmed troop exceptions"]
-    R --> T["append detected_card_plays with cell,<br/>add seen card, subtract cost"]
-    S --> T
+    P -->|"no"| Q{"recent duplicate enemy play?"}
+    Q -->|"yes"| O
+    Q -->|"no"| R{"claimed deploy-clock center?"}
+    R -->|"yes"| S["convert deploy-clock center to play cell"]
+    R -->|"no"| T["convert detected object center to play cell<br/>fallback for frame-confirmed spells<br/>and frame-confirmed troop exceptions"]
+    S --> U["append detected_card_plays with cell,<br/>add seen card, subtract cost"]
+    T --> U
+    U --> V["mark track counted"]
+    O --> X["drop stale tracks"]
+    V --> W["future observations of this counted track<br/>may revise the recorded play"]
+    W --> X
+    J --> X
+    Z --> X
 ```
 
-Enemy troops and buildings normally use the claimed deploy-clock center for
-their play cell. Enemy spells are generally frame-confirmed without a deploy
-clock, so their fallback cell comes from the detected spell object or effect.
-For moving spells such as Fireball, Rocket and Giant Snowball, this is an
-observed projectile cell rather than a guaranteed target cell. Log and
-Barbarian Barrel similarly use the detected rolling-object position.
+Enemy troops and buildings normally need a deploy-clock box that can be claimed
+by their specific YOLO track. A nearby `clock:enemy` summary alone is not enough:
+the clock must pass confidence/team filters, be geometrically near the troop, and
+not already be consumed by another track. Frame-only confirmation is limited to
+spell-like detector classes and configured exceptions such as Electro Wizard.
+
+Some detector classes intentionally do not map directly to playable cards. For
+example, spawned units such as Skeletons can pass vision checks but still stop at
+`DIRECT_UNIT_TO_CARD == None`; in that case the tracker marks the track counted
+and does not append an enemy play.
+
+Enemy spells are generally frame-confirmed without a deploy clock, so their
+fallback cell comes from the detected spell object or effect. For moving spells
+such as Fireball, Rocket and Giant Snowball, this is an observed projectile cell
+rather than a guaranteed target cell. Log and Barbarian Barrel similarly use the
+detected rolling-object position.
 
 ## Enemy Log Detection
 
