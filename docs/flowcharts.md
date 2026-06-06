@@ -18,15 +18,19 @@ Generated CVAT serverless functions, vendored code, and virtualenv files are int
 | `scripts/fetch_royaleapi_data.py` | Utility Scripts |
 | `scripts/generate_cvat_labels.py` | Utility Scripts |
 | `scripts/import_card_classifier_frames.py` | Card Classifier Dataset Scripts |
+| `scripts/mine_enemy_audio_audit.py` | Enemy Audio Mining Scripts |
+| `scripts/mine_enemy_audio_dataset.py` | Enemy Audio Mining Scripts |
 | `scripts/prepare_card_classifier_dataset.py` | Card Classifier Dataset Scripts |
 | `scripts/prepare_seed_dataset.py` | Seed Detector Dataset And Training Scripts |
 | `scripts/propose_card_classifier_split.py` | Card Classifier Dataset Scripts |
 | `scripts/run_seed_inference.py` | Seed Detector Dataset And Training Scripts |
 | `scripts/setup_seed_detectors.py` | Seed Detector Dataset And Training Scripts |
+| `scripts/train_audio_classifier.py` | Audio Classifier Training And Evaluation |
 | `scripts/train_card_classifier.py` | Card Classifier Dataset Scripts |
 | `scripts/train_seed_baseline.py` | Seed Detector Dataset And Training Scripts |
 | `scripts/debug/debug_actions_output_selected_actions.py` | Debug Scripts |
 | `scripts/debug/debug_own_action_clock_cells.py` | Debug Scripts |
+| `scripts/debug/render_predicted_cells.py` | Debug Scripts |
 | `scripts/debug/debug_skeleton_clock_cell.py` | Debug Scripts |
 | `scripts/debug/debug_spell_purple_detector.py` | Debug Scripts |
 | `dataset_generation/scripts/detect_in_game.py` | Data Generation Scripts |
@@ -247,7 +251,7 @@ flowchart TD
     E -->|"no"| F["keep pending until timeout"]
     E -->|"yes"| G["choose one matching pending rolling spell<br/>within 1.0s window"]
     G --> H["store first rolling-object track id and cell"]
-    H --> I{"current elixir drop >= 1.5<br/>or spell elixir evidence already latched?"}
+    H --> I{"current elixir drop >= 0.8<br/>or spell elixir evidence already latched?"}
     I -->|"yes"| J["cell = first visible rolling-object box center<br/>mapped through ACTION_GRID"]
     J --> K["append action dict<br/>{time_left_s, video_time_s, card, slot_idx, cell}"]
     K --> L["consume YOLO track id"]
@@ -258,7 +262,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A["EnemyCardTracker.update(time_left, enemy_matches, clock_boxes, own_actions)"] --> B["regen enemy elixir estimate"]
+    A["EnemyCardTracker.update(time_left, matches, clock_boxes, own_actions)"] --> B["regen enemy elixir estimate"]
     B --> C["remember recent enemy deploy clocks"]
     C --> D["for each enemy YOLO match"]
     D --> E{"match has track_id?"}
@@ -280,13 +284,13 @@ flowchart TD
     P -->|"no"| Q{"recent duplicate enemy play?"}
     Q -->|"yes"| O
     Q -->|"no"| R{"claimed deploy-clock center?"}
-    R -->|"yes"| S["convert deploy-clock center to play cell"]
-    R -->|"no"| T["convert detected object center to play cell<br/>fallback for frame-confirmed spells<br/>and frame-confirmed troop exceptions"]
+    R -->|"yes"| S["convert deploy-clock center to play cell<br/>then raise row by 2"]
+    R -->|"no"| T["convert detected object center to play cell<br/>then raise row by 2<br/>fallback for frame-confirmed spells<br/>and frame-confirmed troop exceptions"]
     S --> U["append detected_card_plays with cell,<br/>add seen card, subtract cost"]
     T --> U
     U --> V["mark track counted"]
     O --> X["drop stale tracks"]
-    V --> W["future observations of this counted track<br/>may revise the recorded play"]
+    V --> W["future observations of this counted track<br/>do not revise the recorded play"]
     W --> X
     J --> X
     Z --> X
@@ -298,16 +302,21 @@ the clock must pass confidence/team filters, be geometrically near the troop, an
 not already be consumed by another track. Frame-only confirmation is limited to
 spell-like detector classes and configured exceptions such as Electro Wizard.
 
-Some detector classes intentionally do not map directly to playable cards. For
-example, spawned units such as Skeletons can pass vision checks but still stop at
-`DIRECT_UNIT_TO_CARD == None`; in that case the tracker marks the track counted
-and does not append an enemy play.
+Some detector classes intentionally do not map directly to playable cards. If a
+confirmed detector class still maps to `DIRECT_UNIT_TO_CARD == None`, the tracker
+marks the track counted and does not append an enemy play. Skeleton and Skeleton
+Evolution detections are exceptions: once confirmed, they map to the `skeletons`
+card.
 
 Enemy spells are generally frame-confirmed without a deploy clock, so their
 fallback cell comes from the detected spell object or effect. For moving spells
 such as Fireball, Rocket and Giant Snowball, this is an observed projectile cell
 rather than a guaranteed target cell. Log and Barbarian Barrel similarly use the
 detected rolling-object position.
+
+The current enemy cell calibration raises every emitted enemy play cell by two
+rows after grid conversion. In practical terms, `(7, 7)` becomes `(7, 5)`,
+clamped at row `0`.
 
 ## Enemy Log Detection
 
@@ -417,6 +426,46 @@ flowchart TD
     L --> M["rendered inference video/images and optional Labelme preannotations"]
 ```
 
+## Enemy Audio Mining Scripts
+
+```mermaid
+flowchart TD
+    A["scripts/mine_enemy_audio_dataset.py"] --> B["resolve_video_manifest()<br/>default source: @yersoncz6334/videos<br/>filter upload date before cutoff"]
+    B --> C["download_video()<br/>yt-dlp with browser-cookie and format fallbacks"]
+    C --> D["ensure_opencv_compatible_video()<br/>transcode analysis copy when needed"]
+    D --> E["extract_mono_wav_from_video()<br/>16 kHz mono gameplay WAV"]
+    E --> F["analyze_video_for_mining()<br/>default target_analysis_fps=10"]
+    F --> G["write states/<video>.jsonl"]
+    F --> H["write spans/<video>.json"]
+    F --> I["export_enemy_candidate_rows()<br/>phase metadata + quality tier"]
+    I --> J["write candidates/<video>.jsonl"]
+    J --> K["split_manifest_rows()<br/>train/val/test by video/span"]
+    K --> L["extract_candidate_windows()<br/>1.0s windows, start_offset_s=-0.3"]
+    L --> M["write manifests/<split>.jsonl"]
+    M --> N["compute_coverage()<br/>coverage.json + spell_coverage.json"]
+    N --> O["prune_raw_video_if_derived_complete()"]
+
+    P["scripts/mine_enemy_audio_audit.py"] --> Q["sample mined train manifest"]
+    Q --> R["group spell/gold/silver/bronze rows<br/>into audit/sample.json"]
+```
+
+## Audio Classifier Training And Evaluation
+
+```mermaid
+flowchart TD
+    A["scripts/train_audio_classifier.py"] --> B{"mode"}
+    B -->|"synthetic"| C["build_synthetic_loaders()<br/>MixedSFXCardDataset + optional background mix"]
+    B -->|"real"| D["build_real_loaders()<br/>ManifestAudioDataset from mined manifests"]
+    B -->|"hybrid"| E["synthetic pretrain<br/>then real fine-tune"]
+    C --> F["train_model()"]
+    D --> F
+    E --> F
+    F --> G["save audio_card_classifier checkpoint"]
+    G --> H["evaluate_manifest()<br/>real mined test manifest"]
+    G --> I["evaluate_real_ground_truth()<br/>existing GT json + aligned wav/video"]
+    I --> J["summarize_predictions()<br/>accuracy, confusion, phase breakdowns"]
+```
+
 ## Data Generation Scripts
 
 ```mermaid
@@ -468,6 +517,11 @@ flowchart TD
 
     J["debug_actions_output_selected_actions.py"] --> K["seek selected action frames"]
     K --> L["draw grid and selected action cells"]
+
+    M["render_predicted_cells.py"] --> N["parse txt predictions with parse_predictions_txt()"]
+    N --> O["seek source video frames"]
+    O --> P["draw ACTION_GRID and predicted cells"]
+    P --> Q["write overlay JPGs, index.html, TSV and json summary"]
 ```
 
 ## Cross-Cutting Data Objects
