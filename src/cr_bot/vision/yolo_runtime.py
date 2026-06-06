@@ -1,5 +1,6 @@
 import os
 import sys
+import contextlib
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +49,16 @@ def _patch_ultralytics_track_compat() -> None:
 
 
 _patch_ultralytics_track_compat()
+
+
+def _patch_ultralytics_plotting_compat() -> None:
+    import ultralytics.utils.plotting as plotting
+
+    if not hasattr(plotting, "contextlib"):
+        plotting.contextlib = contextlib
+
+
+_patch_ultralytics_plotting_compat()
 
 from katacr.constants.label_list import idx2unit, unit2idx
 from katacr.yolov8.custom_result import CRResults
