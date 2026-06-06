@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 
 from cr_bot.domain.card_metadata import CARD_METADATA
 from cr_bot.domain.constants import (
+    ENEMY_CLOCK_FIRST_SEEN_MIN_CONF,
     ELIXIR_PER_SECOND_DOUBLE,
     ELIXIR_PER_SECOND_NORMAL,
     ELIXIR_PER_SECOND_TRIPLE,
@@ -54,6 +55,7 @@ class TrackMemory:
     center_y: float | None = None
     deploy_clock_center_x: float | None = None
     deploy_clock_center_y: float | None = None
+    last_clock_reject_reason: str | None = None
 
     def add_observation(self, class_name, team, confidence, total_remaining_s):
         self.class_votes[class_name] = self.class_votes.get(class_name, 0) + 1
@@ -130,7 +132,7 @@ class EnemyCardTracker:
     def update(
         self,
         time_left_s,
-        enemy_matches,
+        matches,
         clock_boxes=None,
         now_s=None,
         own_actions=None,
@@ -140,11 +142,22 @@ class EnemyCardTracker:
         self._regen_elixir(time_left_s, now_s=now_s)
         self._remember_recent_enemy_clocks(clock_boxes, now_s)
 
-        for match in enemy_matches:
+        for match in matches:
             troop = match.troop
+            if troop.team != "enemy":
+                self._debug(
+                    f"skip class={troop.class_name} team={troop.team} "
+                    f"conf={troop.confidence:.3f}: not enemy"
+                )
+                continue
+
             track_id = getattr(troop, "track_id", None)
 
             if track_id is None:
+                self._debug(
+                    f"skip class={troop.class_name} team={troop.team} "
+                    f"conf={troop.confidence:.3f}: no track_id"
+                )
                 continue
             
             memory = self.tracks.get(track_id)
@@ -171,12 +184,22 @@ class EnemyCardTracker:
                 and self._has_nearby_clock(memory, troop, clock_boxes, now_s=now_s)
             ):
                 memory.clock_confirmed = True
+                self._debug(
+                    f"clock confirmed track={memory.track_id} class={memory.best_class} "
+                    f"clock_center=({memory.deploy_clock_center_x:.1f}, "
+                    f"{memory.deploy_clock_center_y:.1f})"
+                )
 
             if self._should_frame_confirm(memory):
                 memory.frame_confirmed = True
+                self._debug(
+                    f"frame confirmed track={memory.track_id} class={memory.best_class} "
+                    f"seen={memory.seen_frames} avg_conf={memory.avg_confidence:.3f} "
+                    f"team_ratio={memory.best_team_ratio:.2f}"
+                )
 
             if memory.counted_as_card:
-                self._maybe_revise_recorded_play(memory)
+                continue
             elif memory.clock_confirmed or memory.frame_confirmed:
                 self._maybe_record_play(
                     memory,
@@ -184,6 +207,8 @@ class EnemyCardTracker:
                     own_actions=own_actions,
                     arena_px=arena_px,
                 )
+            else:
+                self._debug_waiting(memory)
 
         self._drop_stale_tracks(time_left_s)
 
@@ -245,11 +270,41 @@ class EnemyCardTracker:
         return True
 
     def _claim_current_clock(self, memory, troop, clock):
-        if not self._clock_matches_troop(
+        reject_reason = self._clock_troop_reject_reason(
             clock["center_x"],
             clock["center_y"],
             troop,
-        ):
+        )
+        if reject_reason is not None:
+            memory.last_clock_reject_reason = reject_reason
+            self._debug_clock_candidate(
+                memory,
+                troop,
+                source="current",
+                clock_center_x=clock["center_x"],
+                clock_center_y=clock["center_y"],
+                clock_team=clock.get("team"),
+                clock_track_id=clock.get("track_id"),
+                clock_confidence=clock.get("confidence"),
+                status="rejected",
+                reject_reason=reject_reason,
+            )
+            return False
+        reject_reason = self._clock_claim_reject_reason(memory, troop)
+        if reject_reason is not None:
+            memory.last_clock_reject_reason = reject_reason
+            self._debug_clock_candidate(
+                memory,
+                troop,
+                source="current",
+                clock_center_x=clock["center_x"],
+                clock_center_y=clock["center_y"],
+                clock_team=clock.get("team"),
+                clock_track_id=clock.get("track_id"),
+                clock_confidence=clock.get("confidence"),
+                status="rejected",
+                reject_reason=reject_reason,
+            )
             return False
         remembered = self._find_remembered_clock(clock)
         if remembered is None:
@@ -260,14 +315,73 @@ class EnemyCardTracker:
                 track_id=clock.get("track_id"),
             )
             self.recent_enemy_clocks.append(remembered)
-        return self._claim_clock(memory, remembered)
+        consumed_by = remembered.consumed_by_track_id
+        if consumed_by is not None and consumed_by != memory.track_id:
+            reject_reason = f"enemy clock already consumed by track {consumed_by}"
+            memory.last_clock_reject_reason = reject_reason
+            self._debug_clock_candidate(
+                memory,
+                troop,
+                source="current",
+                clock_center_x=clock["center_x"],
+                clock_center_y=clock["center_y"],
+                clock_team=clock.get("team"),
+                clock_track_id=clock.get("track_id"),
+                clock_confidence=clock.get("confidence"),
+                status="consumed",
+                reject_reason=reject_reason,
+                consumed_by_track_id=consumed_by,
+            )
+            return False
+
+        claimed = self._claim_clock(memory, remembered)
+        self._debug_clock_candidate(
+            memory,
+            troop,
+            source="current",
+            clock_center_x=clock["center_x"],
+            clock_center_y=clock["center_y"],
+            clock_team=clock.get("team"),
+            clock_track_id=clock.get("track_id"),
+            clock_confidence=clock.get("confidence"),
+            status="accepted" if claimed else "rejected",
+            reject_reason=None if claimed else "enemy clock claim failed",
+            consumed_by_track_id=remembered.consumed_by_track_id,
+        )
+        return claimed
 
     def _has_nearby_clock(self, memory, troop, clock_boxes, now_s=None):
+        saw_enemy_clock = False
         for clock in clock_boxes:
             if clock["confidence"] < 0.5:
+                self._debug_clock_candidate(
+                    memory,
+                    troop,
+                    source="current",
+                    clock_center_x=clock["center_x"],
+                    clock_center_y=clock["center_y"],
+                    clock_team=clock.get("team"),
+                    clock_track_id=clock.get("track_id"),
+                    clock_confidence=clock.get("confidence"),
+                    status="skipped",
+                    reject_reason=f"clock confidence {clock['confidence']:.3f} < 0.500",
+                )
                 continue
             if clock["team"] != "enemy":
+                self._debug_clock_candidate(
+                    memory,
+                    troop,
+                    source="current",
+                    clock_center_x=clock["center_x"],
+                    clock_center_y=clock["center_y"],
+                    clock_team=clock.get("team"),
+                    clock_track_id=clock.get("track_id"),
+                    clock_confidence=clock.get("confidence"),
+                    status="skipped",
+                    reject_reason=f"clock team {clock['team']} != enemy",
+                )
                 continue
+            saw_enemy_clock = True
             if self._claim_current_clock(memory, troop, clock):
                 return True
 
@@ -280,29 +394,168 @@ class EnemyCardTracker:
             or troop.class_name in FRAME_CONFIRM_TROOPS
             or now_s > memory.first_seen_now_s + ENEMY_RECENT_CLOCK_CONFIRM_SECONDS
         ):
+            if not saw_enemy_clock and memory.last_clock_reject_reason is None:
+                memory.last_clock_reject_reason = "no current enemy clock box"
+            elif now_s is None:
+                memory.last_clock_reject_reason = "no monotonic time for remembered-clock lookup"
+            elif memory.first_seen_now_s is None:
+                memory.last_clock_reject_reason = "track has no first-seen monotonic time"
+            elif card_name is None:
+                memory.last_clock_reject_reason = f"class {troop.class_name} does not map to a card"
+            elif troop.class_name in FRAME_CONFIRM_SPELL_CLASSES:
+                memory.last_clock_reject_reason = f"class {troop.class_name} uses frame confirmation"
+            elif troop.class_name in FRAME_CONFIRM_TROOPS:
+                memory.last_clock_reject_reason = f"class {troop.class_name} uses frame confirmation"
+            elif now_s > memory.first_seen_now_s + ENEMY_RECENT_CLOCK_CONFIRM_SECONDS:
+                memory.last_clock_reject_reason = "remembered-clock window expired"
             return False
 
+        saw_recent_clock = False
         for clock in self.recent_enemy_clocks:
             if clock.seen_at_s is None:
                 continue
             if now_s - clock.seen_at_s > ENEMY_RECENT_CLOCK_CONFIRM_SECONDS:
                 continue
-            if (
-                self._clock_matches_troop(clock.center_x, clock.center_y, troop)
-                and self._claim_clock(memory, clock)
-            ):
+            saw_recent_clock = True
+            reject_reason = self._clock_troop_reject_reason(
+                clock.center_x,
+                clock.center_y,
+                troop,
+            )
+            if reject_reason is not None:
+                memory.last_clock_reject_reason = reject_reason
+                self._debug_clock_candidate(
+                    memory,
+                    troop,
+                    source="recent",
+                    clock_center_x=clock.center_x,
+                    clock_center_y=clock.center_y,
+                    clock_track_id=clock.track_id,
+                    status="rejected",
+                    reject_reason=reject_reason,
+                    consumed_by_track_id=clock.consumed_by_track_id,
+                )
+                continue
+            reject_reason = self._clock_claim_reject_reason(memory, troop)
+            if reject_reason is not None:
+                memory.last_clock_reject_reason = reject_reason
+                self._debug_clock_candidate(
+                    memory,
+                    troop,
+                    source="recent",
+                    clock_center_x=clock.center_x,
+                    clock_center_y=clock.center_y,
+                    clock_track_id=clock.track_id,
+                    status="rejected",
+                    reject_reason=reject_reason,
+                    consumed_by_track_id=clock.consumed_by_track_id,
+                )
+                continue
+
+            consumed_by = clock.consumed_by_track_id
+            if consumed_by is not None and consumed_by != memory.track_id:
+                reject_reason = f"enemy clock already consumed by track {consumed_by}"
+                memory.last_clock_reject_reason = reject_reason
+                self._debug_clock_candidate(
+                    memory,
+                    troop,
+                    source="recent",
+                    clock_center_x=clock.center_x,
+                    clock_center_y=clock.center_y,
+                    clock_track_id=clock.track_id,
+                    status="consumed",
+                    reject_reason=reject_reason,
+                    consumed_by_track_id=consumed_by,
+                )
+                continue
+
+            if self._claim_clock(memory, clock):
+                self._debug_clock_candidate(
+                    memory,
+                    troop,
+                    source="recent",
+                    clock_center_x=clock.center_x,
+                    clock_center_y=clock.center_y,
+                    clock_track_id=clock.track_id,
+                    status="accepted",
+                    consumed_by_track_id=clock.consumed_by_track_id,
+                )
                 return True
+        if memory.last_clock_reject_reason is None:
+            memory.last_clock_reject_reason = (
+                "no recent enemy clock box"
+                if not saw_recent_clock
+                else "enemy clock already consumed"
+            )
         return False
 
     def _clock_matches_troop(self, clock_center_x, clock_center_y, troop):
+        return self._clock_troop_reject_reason(clock_center_x, clock_center_y, troop) is None
+
+    def _clock_claim_reject_reason(self, memory, troop):
+        if (
+            memory.seen_frames <= 1
+            and troop.confidence < ENEMY_CLOCK_FIRST_SEEN_MIN_CONF
+        ):
+            return (
+                f"first-seen confidence {troop.confidence:.3f} < "
+                f"{ENEMY_CLOCK_FIRST_SEEN_MIN_CONF:.3f}"
+            )
+        return None
+
+    def _clock_troop_reject_reason(self, clock_center_x, clock_center_y, troop):
         horizontal_gap = abs(clock_center_x - troop.center_x)
         vertical_gap = clock_center_y - troop.center_y
-        return horizontal_gap <= 90 and 10 <= vertical_gap <= 140 
+        if horizontal_gap > 90:
+            return f"clock horizontal gap {horizontal_gap:.1f} > 90"
+        if vertical_gap < 10:
+            return f"clock vertical gap {vertical_gap:.1f} < 10"
+        if vertical_gap > 140:
+            return f"clock vertical gap {vertical_gap:.1f} > 140"
+        return None 
+
+    def _debug_clock_candidate(
+        self,
+        memory,
+        troop,
+        *,
+        source,
+        clock_center_x,
+        clock_center_y,
+        status,
+        clock_team=None,
+        clock_track_id=None,
+        clock_confidence=None,
+        reject_reason=None,
+        consumed_by_track_id=None,
+    ):
+        troop_center_x = troop.center_x
+        troop_center_y = troop.center_y
+        dx = abs(clock_center_x - troop_center_x)
+        dy = clock_center_y - troop_center_y
+        clock_conf = (
+            f"{clock_confidence:.3f}"
+            if clock_confidence is not None
+            else "-"
+        )
+        self._debug(
+            f"clock candidate track={memory.track_id} "
+            f"class={memory.best_class or troop.class_name} "
+            f"source={source} status={status} "
+            f"troop_center=({troop_center_x:.1f},{troop_center_y:.1f}) "
+            f"clock_center=({clock_center_x:.1f},{clock_center_y:.1f}) "
+            f"clock_team={clock_team or '-'} "
+            f"clock_track={clock_track_id if clock_track_id is not None else '-'} "
+            f"clock_conf={clock_conf} "
+            f"dx={dx:.1f} dy={dy:.1f} "
+            f"reject={reject_reason or '-'} "
+            f"consumed_by={consumed_by_track_id if consumed_by_track_id is not None else '-'}"
+        )
 
     def _should_frame_confirm(self, memory):
-        """Allow frame-only confirmation for spell-like classes, not normal troops."""
+        """Allow frame-only confirmation for spell-like classes, special troops."""
         best_class = memory.best_class
-        if best_class not in FRAME_CONFIRM_SPELL_CLASSES:
+        if best_class not in FRAME_CONFIRM_SPELL_CLASSES | FRAME_CONFIRM_TROOPS:
             return False
         if memory.seen_frames < ENEMY_CARD_CONFIRM_FRAMES:
             return False
@@ -328,12 +581,22 @@ class EnemyCardTracker:
 
     def _maybe_record_play(self, memory, time_left_s, own_actions=None, arena_px=None):
         if not self._is_reliable_enemy_play(memory):
+            self._debug(
+                f"not reliable track={memory.track_id} class={memory.best_class} "
+                f"clock={memory.clock_confirmed} frame={memory.frame_confirmed} "
+                f"team={memory.best_team} team_ratio={memory.best_team_ratio:.2f} "
+                f"avg_conf={memory.avg_confidence:.3f}"
+            )
             return
         
         unit_name = memory.best_class
         card_name = DIRECT_UNIT_TO_CARD.get(unit_name)
 
         if card_name is None:
+            self._debug(
+                f"suppress track={memory.track_id} class={unit_name}: "
+                "DIRECT_UNIT_TO_CARD maps to None"
+            )
             memory.counted_as_card = True
             return
 
@@ -344,6 +607,10 @@ class EnemyCardTracker:
             own_actions or [],
             arena_px,
         ):
+            self._debug(
+                f"suppress enemy {card_name} track={memory.track_id}: "
+                "matches recent own spell"
+            )
             memory.counted_as_card = True
             return
 
@@ -353,6 +620,10 @@ class EnemyCardTracker:
             memory,
             arena_px,
         ):
+            self._debug(
+                f"suppress enemy {card_name} track={memory.track_id}: "
+                "recent duplicate enemy play"
+            )
             memory.counted_as_card = True
             return
         
@@ -361,12 +632,29 @@ class EnemyCardTracker:
         cell = self._memory_cell(memory, arena_px)
 
         self.detected_card_plays.append({
+            "event_id": f"{card_name}_{memory.track_id}_{len(self.detected_card_plays) + 1:06d}",
             "time_left_s": time_left_s,
+            "total_remaining_s": time_left_s,
+            "video_time_s": memory.first_seen_now_s,
             "card": card_name,
             "cost": cost,
             "track_id": memory.track_id,
             "cell": cell,
+            "clock_confirmed": memory.clock_confirmed,
+            "frame_confirmed": memory.frame_confirmed,
+            "avg_confidence": memory.avg_confidence,
+            "team_ratio": memory.best_team_ratio,
+            "best_class": memory.best_class,
+            "class_votes": dict(memory.class_votes),
+            "is_spell": card_name in SPELL_CARD_NAMES,
+            "overtime": time_left_s <= 120.0,
+            "discard_reason": None,
         })
+        self._debug(
+            f"recorded enemy play card={card_name} track={memory.track_id} "
+            f"time_left={time_left_s} cell={cell} "
+            f"clock={memory.clock_confirmed} frame={memory.frame_confirmed}"
+        )
         
         if card_id is not None:
             self.confirmed_seen_cards.add(card_id)
@@ -406,45 +694,6 @@ class EnemyCardTracker:
             if (card_id := card_to_id(play["card"])) is not None
         }
         self.elixir_enemy_est = min(MAX_ELIXIR, self.elixir_enemy_est + removed_cost)
-
-    def _maybe_revise_recorded_play(self, memory):
-        assert memory.track_id is not None, "recorded track must have a track_id"
-
-        if not self._is_reliable_enemy_play(memory):
-            return
-
-        play_idx = self._find_detected_play_index(memory.track_id)
-        if play_idx is None:
-            return
-
-        updated_card = DIRECT_UNIT_TO_CARD.get(memory.best_class)
-        if updated_card is None:
-            return
-
-        play = self.detected_card_plays[play_idx]
-        old_card = play["card"]
-        if updated_card == old_card:
-            return
-
-        old_cost = play["cost"]
-        new_cost = CARD_METADATA[updated_card]["elixir_cost"]
-        play["card"] = updated_card
-        play["cost"] = new_cost
-        self.confirmed_seen_cards = {
-            card_id
-            for tracked_play in self.detected_card_plays
-            if (card_id := card_to_id(tracked_play["card"])) is not None
-        }
-        self.elixir_enemy_est = min(
-            MAX_ELIXIR,
-            max(0.0, self.elixir_enemy_est + old_cost - new_cost),
-        )
-
-    def _find_detected_play_index(self, track_id):
-        for idx, play in enumerate(self.detected_card_plays):
-            if play["track_id"] == track_id:
-                return idx
-        return None
 
     def _is_recent_duplicate_play(
         self,
@@ -507,14 +756,30 @@ class EnemyCardTracker:
             memory.deploy_clock_center_x is not None
             and memory.deploy_clock_center_y is not None
         ):
-            return ACTION_GRID.pixel_to_cell(
-                memory.deploy_clock_center_x,
-                memory.deploy_clock_center_y,
-                arena_px,
+            return self._raise_cell_rows(
+                ACTION_GRID.pixel_to_cell(
+                    memory.deploy_clock_center_x,
+                    memory.deploy_clock_center_y,
+                    arena_px,
+                ),
+                rows=2,
             )
         if memory.center_x is None or memory.center_y is None:
             return None
-        return ACTION_GRID.pixel_to_cell(memory.center_x, memory.center_y, arena_px)
+        return self._raise_cell_rows(
+            ACTION_GRID.pixel_to_cell(
+                memory.center_x,
+                memory.center_y,
+                arena_px,
+            ),
+            rows=2,
+        )
+
+    def _raise_cell_rows(self, cell, *, rows):
+        if cell is None:
+            return None
+        col, row = cell
+        return col, max(0, row - rows)
 
     def _has_distinct_spell_cell(self, own_cell, enemy_cell):
         if own_cell is None or enemy_cell is None:
@@ -523,6 +788,21 @@ class EnemyCardTracker:
         dx = abs(own_cell[0] - enemy_cell[0])
         dy = abs(own_cell[1] - enemy_cell[1])
         return max(dx, dy) > ENEMY_SPELL_DISTINCT_CELL_DISTANCE
+
+    def _debug_waiting(self, memory):
+        if memory.seen_frames > ENEMY_CARD_CONFIRM_FRAMES:
+            return
+        frame_class = memory.best_class in FRAME_CONFIRM_SPELL_CLASSES | FRAME_CONFIRM_TROOPS
+        self._debug(
+            f"waiting track={memory.track_id} class={memory.best_class} "
+            f"seen={memory.seen_frames} avg_conf={memory.avg_confidence:.3f} "
+            f"team={memory.best_team} team_ratio={memory.best_team_ratio:.2f} "
+            f"frame_class={frame_class} "
+            f"clock_reject={memory.last_clock_reject_reason or 'not checked'}"
+        )
+
+    def _debug(self, message):
+        print(f"[enemy_cards] {message}")
         
     def _regen_elixir(self, time_left_s, now_s=None):
         if self.last_time_left_s is None:
