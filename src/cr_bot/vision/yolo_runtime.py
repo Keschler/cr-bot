@@ -32,6 +32,23 @@ os.environ.setdefault("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "1")
 if not hasattr(np, "trapz") and hasattr(np, "trapezoid"):
     np.trapz = np.trapezoid
 
+
+def _patch_ultralytics_track_compat() -> None:
+    import ultralytics.trackers.track as track
+
+    if hasattr(track, "yaml_load"):
+        return
+    if hasattr(track, "YAML"):
+        track.yaml_load = track.YAML.load
+        return
+    from ultralytics.utils import YAML
+
+    track.YAML = YAML
+    track.yaml_load = YAML.load
+
+
+_patch_ultralytics_track_compat()
+
 from katacr.constants.label_list import idx2unit, unit2idx
 from katacr.yolov8.custom_result import CRResults
 from katacr.yolov8.custom_trackers import cr_on_predict_postprocess_end, cr_on_predict_start
