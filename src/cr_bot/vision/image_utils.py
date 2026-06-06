@@ -3,8 +3,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import torch
-from torch import nn
-from torchvision import models, transforms
+from torchvision import transforms
 from PIL import Image
 
 from cr_bot.domain.constants import (
@@ -18,6 +17,7 @@ from cr_bot.domain.constants import (
 )
 from cr_bot.paths import MODELS_DIR
 from cr_bot.domain.rois import ROIS
+from cr_bot.vision.model_loader import load_card_classifier
 
 HAND_CARD_ART_ROI = (18, 38, 184, 212)
 CARD_TEMPLATE_SIZE = (150, 180)
@@ -33,7 +33,6 @@ CLASSIFIER_TRANSFORM = transforms.Compose([
       std=[0.229, 0.224, 0.225],
   ),
 ])
-_CLASSIFIER_CACHE = {}
 
 
 def crop(frame, roi):
@@ -427,68 +426,43 @@ def _feature_match_card_template(slot_img, templates, crop_roi=None):
     return best_name, best_score
 
 
-def _load_card_classifier(checkpoint_path):
-    checkpoint_path = Path(checkpoint_path)
-    cache_key = str(checkpoint_path.resolve())
-    cached = _CLASSIFIER_CACHE.get(cache_key)
-    if cached is not None:
-        return cached
-
-    checkpoint = torch.load(checkpoint_path, map_location="cpu")
-    classes = checkpoint["classes"]
-    model = models.mobilenet_v3_small(weights=None)
-    model.classifier[-1] = nn.Linear(model.classifier[-1].in_features, len(classes))
-    model.load_state_dict(checkpoint["model_state"])
-    model.eval()
-
-    payload = {
-        "model": model,
-        "classes": classes,
-    }
-    _CLASSIFIER_CACHE[cache_key] = payload
-    return payload
-
-
 def _classify_card_with_model(slot_img, checkpoint_path, crop_roi=None):
-    if not Path(checkpoint_path).exists():
+    classifier = load_card_classifier(checkpoint_path)
+    if classifier is None:
         return None, None
 
     x, y, w, h = crop_roi or (0, 0, slot_img.shape[1], slot_img.shape[0])
     match_img = slot_img[y:y + h, x:x + w]
     rgb_img = cv2.cvtColor(match_img, cv2.COLOR_BGR2RGB)
     pil_img = Image.fromarray(rgb_img)
-    image_tensor = CLASSIFIER_TRANSFORM(pil_img).unsqueeze(0)
+    image_tensor = CLASSIFIER_TRANSFORM(pil_img).unsqueeze(0).to(classifier.device)
 
-    payload = _load_card_classifier(checkpoint_path)
-    model = payload["model"]
-    classes = payload["classes"]
-
-    with torch.no_grad():
-        logits = model(image_tensor)
+    with torch.inference_mode():
+        logits = classifier.model(image_tensor)
         probs = torch.softmax(logits, dim=1)
         confidence, pred_idx = probs.max(dim=1)
 
-    return classes[pred_idx.item()], float(confidence.item() * 100.0)
+    return classifier.classes[pred_idx.item()], float(confidence.item() * 100.0)
+
+def normalize_card_result(best_name, best_score, *, evolved=False):
+    if best_name is None:
+        return None, best_score
+    return _normalize_card_name(best_name, evolved=evolved), best_score
 
 
 def classify_card_for_slot(slot_img, base_templates, evo_templates, slot_name):
     has_purple_header, has_filled_evo_pips = _is_evolved_slot(slot_img)
     evolved = has_purple_header and has_filled_evo_pips
 
-    def normalize_result(best_name, best_score, evolved_flag=False):
-        if best_name is None:
-            return None, best_score
-        return _normalize_card_name(best_name, evolved=evolved_flag), best_score
-
     if slot_name == "next_card":
         best_name, best_score = _classify_card_with_model(slot_img, NEXT_CLASSIFIER_PATH)
         if best_name is None:
             if evolved:
                 best_name, best_score = _feature_match_card_template(slot_img, evo_templates)
-                return normalize_result(best_name, best_score, evolved_flag=True)
+                return normalize_card_result(best_name, best_score, evolved=True)
             best_name, best_score = _feature_match_card_template(slot_img, base_templates)
-            return normalize_result(best_name, best_score)
-        return normalize_result(best_name, best_score, evolved_flag=evolved)
+            return normalize_card_result(best_name, best_score)
+        return normalize_card_result(best_name, best_score, evolved=evolved)
 
     best_name, best_score = _classify_card_with_model(
         slot_img,
@@ -501,7 +475,7 @@ def classify_card_for_slot(slot_img, base_templates, evo_templates, slot_name):
             HAND_CLASSIFIER_PATH,
             crop_roi=HAND_CARD_ART_ROI,
         )
-    return normalize_result(best_name, best_score, evolved_flag=evolved)
+    return normalize_card_result(best_name, best_score, evolved=evolved)
 
 
 def build_digit_debug_views(binary_img, boxes, digit_views):

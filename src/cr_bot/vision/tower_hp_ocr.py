@@ -11,6 +11,7 @@ from torch import nn
 
 from cr_bot.domain.constants import FULL_TOWER_HP
 from cr_bot.paths import MODELS_DIR
+from cr_bot.vision.model_loader import load_torch_checkpoint, torch_inference_device
 
 DIGITS = "0123456789"
 BLANK_IDX = 0
@@ -161,7 +162,7 @@ class TowerHPOCR:
                 "Train it with scripts/train_tower_hp_ocr.py or set TOWER_HP_OCR_PATH."
             )
 
-        checkpoint = torch.load(self.checkpoint_path, map_location=self.device)
+        checkpoint = load_torch_checkpoint(self.checkpoint_path, self.device)
         state_dict = checkpoint.get("model_state_dict", checkpoint)
         self.model.load_state_dict(state_dict)
         self.model.to(self.device)
@@ -229,10 +230,7 @@ _OCR_CACHE: dict[tuple[str, str], TowerHPOCR] = {}
 
 
 def _default_device() -> str:
-    env_device = os.environ.get("TOWER_HP_OCR_DEVICE")
-    if env_device:
-        return env_device
-    return "cuda" if torch.cuda.is_available() else "cpu"
+    return str(torch_inference_device("TOWER_HP_OCR_DEVICE"))
 
 
 def get_tower_hp_ocr(checkpoint_path: Path | None = None) -> TowerHPOCR:

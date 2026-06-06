@@ -9,6 +9,7 @@ import torchvision
 
 from cr_bot.domain.constants import YOLO_CONF_THRESHOLD, YOLO_IOU_THRESHOLD
 from cr_bot.paths import CACHE_DIR, KATACR_DATASET_ROOT, KATACR_ROOT, MODELS_DIR, REPO_ROOT
+from cr_bot.vision.model_loader import yolo_device
 
 MPLCONFIGDIR = CACHE_DIR / "matplotlib"
 ULTRALYTICS_CONFIG_DIR = CACHE_DIR / "ultralytics"
@@ -58,7 +59,7 @@ class AppDetector:
         self.show_conf = show_conf
         self.conf = conf
         self.iou_thre = iou_thre
-        self.device = os.environ.get("YOLO_DEVICE") or ("0" if torch.cuda.is_available() else "cpu")
+        self.device = yolo_device()
         self.tracker = None
         if tracker == "bytetrack":
             self.conf = 0.1
