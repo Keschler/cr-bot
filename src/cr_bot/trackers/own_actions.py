@@ -649,7 +649,7 @@ class OwnActionTracker:
         if cost is None:
             return None
         if self._is_rolling_spell(pending.card):
-            return 1.5
+            return 0.8
         return max(0.5, cost - 1.5)
 
     def _rolling_spell_placement_cell(self, troop, arena_px):
