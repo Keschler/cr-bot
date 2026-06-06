@@ -1,6 +1,6 @@
 import cv2
 
-from cr_bot.vision.image_utils import crop, classify_card_for_slot
+from cr_bot.vision.image_utils import crop, classify_card_for_slot, classify_hand_card_slots
 from cr_bot.paths import TEMPLATES_DIR
 from cr_bot.domain.rois import ROIS
 
@@ -62,13 +62,17 @@ def extract_hand_state(frame):
         "next_card": {"image": crop(frame, ROIS["next_card_slot"]), "detected_card": None},
     }
 
-    for card, card_data in cards.items():
-        card_data["detected_card"] = classify_card_for_slot(
-            card_data["image"],
-            BASE_TEMPLATES,
-            EVO_TEMPLATES,
-            card,
-        )
+    hand_slots = ["card_1", "card_2", "card_3", "card_4"]
+    hand_images = [cards[slot]["image"] for slot in hand_slots]
+    for slot, detected_card in zip(hand_slots, classify_hand_card_slots(hand_images)):
+        cards[slot]["detected_card"] = detected_card
+
+    cards["next_card"]["detected_card"] = classify_card_for_slot(
+        cards["next_card"]["image"],
+        BASE_TEMPLATES,
+        EVO_TEMPLATES,
+        "next_card",
+    )
     
     return {
             card: card_data["detected_card"]

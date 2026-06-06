@@ -431,11 +431,7 @@ def _classify_card_with_model(slot_img, checkpoint_path, crop_roi=None):
     if classifier is None:
         return None, None
 
-    x, y, w, h = crop_roi or (0, 0, slot_img.shape[1], slot_img.shape[0])
-    match_img = slot_img[y:y + h, x:x + w]
-    rgb_img = cv2.cvtColor(match_img, cv2.COLOR_BGR2RGB)
-    pil_img = Image.fromarray(rgb_img)
-    image_tensor = CLASSIFIER_TRANSFORM(pil_img).unsqueeze(0).to(classifier.device)
+    image_tensor = _slot_image_tensor(slot_img, crop_roi=crop_roi).unsqueeze(0).to(classifier.device)
 
     with torch.inference_mode():
         logits = classifier.model(image_tensor)
@@ -444,10 +440,61 @@ def _classify_card_with_model(slot_img, checkpoint_path, crop_roi=None):
 
     return classifier.classes[pred_idx.item()], float(confidence.item() * 100.0)
 
+
+def _slot_image_tensor(slot_img, crop_roi=None):
+    x, y, w, h = crop_roi or (0, 0, slot_img.shape[1], slot_img.shape[0])
+    match_img = slot_img[y:y + h, x:x + w]
+    rgb_img = cv2.cvtColor(match_img, cv2.COLOR_BGR2RGB)
+    pil_img = Image.fromarray(rgb_img)
+    return CLASSIFIER_TRANSFORM(pil_img)
+
+
+def _classify_cards_with_model(slot_imgs, checkpoint_path, crop_roi=None):
+    classifier = load_card_classifier(checkpoint_path)
+    if classifier is None:
+        return [(None, None) for _ in slot_imgs]
+
+    image_tensors = [
+        _slot_image_tensor(slot_img, crop_roi=crop_roi)
+        for slot_img in slot_imgs
+    ]
+    if not image_tensors:
+        return []
+    batch = torch.stack(image_tensors, dim=0).to(classifier.device)
+
+    with torch.inference_mode():
+        logits = classifier.model(batch)
+        probs = torch.softmax(logits, dim=1)
+        confidences, pred_indices = probs.max(dim=1)
+
+    return [
+        (
+            classifier.classes[int(pred_idx.item())],
+            float(confidence.item() * 100.0),
+        )
+        for confidence, pred_idx in zip(confidences, pred_indices)
+    ]
+
 def normalize_card_result(best_name, best_score, *, evolved=False):
     if best_name is None:
         return None, best_score
     return _normalize_card_name(best_name, evolved=evolved), best_score
+
+
+def classify_hand_card_slots(slot_imgs):
+    evolved_flags = []
+    for slot_img in slot_imgs:
+        has_purple_header, has_filled_evo_pips = _is_evolved_slot(slot_img)
+        evolved_flags.append(has_purple_header and has_filled_evo_pips)
+    predictions = _classify_cards_with_model(
+        slot_imgs,
+        HAND_CLASSIFIER_PATH,
+        crop_roi=HAND_CARD_ART_ROI,
+    )
+    return [
+        normalize_card_result(best_name, best_score, evolved=evolved)
+        for (best_name, best_score), evolved in zip(predictions, evolved_flags)
+    ]
 
 
 def classify_card_for_slot(slot_img, base_templates, evo_templates, slot_name):
