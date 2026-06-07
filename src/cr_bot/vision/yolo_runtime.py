@@ -61,15 +61,23 @@ def _patch_ultralytics_plotting_compat() -> None:
 _patch_ultralytics_plotting_compat()
 
 from katacr.constants.label_list import idx2unit, unit2idx
-from katacr.yolov8.custom_result import CRResults
-from katacr.yolov8.custom_trackers import cr_on_predict_postprocess_end, cr_on_predict_start
-from katacr.yolov8.train import YOLO_CR
 
 
 DEFAULT_DETECTOR_WEIGHTS = [
     MODELS_DIR / "detector1_v0.7.13.pt",
     MODELS_DIR / "detector2_v0.7.13.pt",
 ]
+
+
+def _load_katacr_runtime():
+    from katacr.yolov8.custom_result import CRResults
+    from katacr.yolov8.custom_trackers import (
+        cr_on_predict_postprocess_end,
+        cr_on_predict_start,
+    )
+    from katacr.yolov8.train import YOLO_CR
+
+    return YOLO_CR, CRResults, cr_on_predict_start, cr_on_predict_postprocess_end
 
 
 class AppDetector:
@@ -83,6 +91,9 @@ class AppDetector:
         iou_thre=0.6,
         tracker="bytetrack",
     ):
+        YOLO_CR, _CRResults, cr_on_predict_start, _cr_on_predict_postprocess_end = _load_katacr_runtime()
+        self._cr_results_cls = _CRResults
+        self._cr_on_predict_postprocess_end = _cr_on_predict_postprocess_end
         self.models = [YOLO_CR(str(path)) for path in path_detectors]
         self.show_conf = show_conf
         self.conf = conf
@@ -123,9 +134,9 @@ class AppDetector:
             keep = torchvision.ops.nms(preds[:, :4], preds[:, 4], iou_threshold=self.iou_thre)
             preds = preds[keep]
 
-        self.result = CRResults(frame, path="", names=idx2unit, boxes=preds)
+        self.result = self._cr_results_cls(frame, path="", names=idx2unit, boxes=preds)
         if self.tracker is not None:
-            cr_on_predict_postprocess_end(self, persist=True)
+            self._cr_on_predict_postprocess_end(self, persist=True)
 
         data = self.result.get_data()
         self.result.boxes.data = data[
