@@ -42,6 +42,46 @@ PYTHONPATH=src python3 -m cr_bot.eval.action_eval \
   --predictions outputs/video/capture/2hog_cycle_champion.txt
 ```
 
+## Built-In Eval Scenarios
+
+Use `run_action_eval_scenarios.py` when you want to rerun the two checked-in
+hog-cycle evaluation scenarios and get one combined summary.
+
+By default it only evaluates the existing capture outputs, prints each
+scenario's `action_eval` report, and then prints aggregate precision/recall/F1
+across all selected runs:
+
+```bash
+PYTHONPATH=src python3 -m cr_bot.eval.run_action_eval_scenarios
+```
+
+Useful variants:
+
+```bash
+PYTHONPATH=src python3 -m cr_bot.eval.run_action_eval_scenarios --mode summary
+PYTHONPATH=src python3 -m cr_bot.eval.run_action_eval_scenarios --scenario 2hog-cycle
+PYTHONPATH=src python3 -m cr_bot.eval.run_action_eval_scenarios --scenario 3400ladder
+PYTHONPATH=src python3 -m cr_bot.eval.run_action_eval_scenarios --run-detection
+PYTHONPATH=src python3 -m cr_bot.eval.run_action_eval_scenarios --explain-misses
+```
+
+Built-in scenarios:
+
+- `2hog-cycle`: `dataset_generation/data/video_clips/10_fps_2.6HogCycle.mp4`
+- `3400ladder`: `dataset_generation/data/video_clips/downloaded_videos/HOG 2.6 LADDER 🏆+3400 [tvA-OvUUHmw].mp4`
+
+Behavior:
+
+- `--scenario all|2hog-cycle|3400ladder` selects one run or both.
+- `--mode full|summary` chooses detailed per-run output or only the final summary.
+- `--run-detection` regenerates the capture txt before evaluation. Without it,
+  the script only evaluates the existing prediction files.
+- `--explain-misses` runs `explain_action_misses.py` for each selected scenario
+  after evaluation.
+- `--side`, `--time-left-tolerance`, `--video-time-tolerance`,
+  `--cell-tolerance`, and `--strict-evolution` are forwarded to the matching
+  logic used by `action_eval.py`.
+
 The report includes:
 
 - precision, recall, and F1 for own and enemy actions
