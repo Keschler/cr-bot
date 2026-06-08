@@ -5,7 +5,7 @@ import cv2
 import time
 
 
-from cr_bot.app.pipeline import normalize_frame, process_frame
+from cr_bot.app.pipeline import normalize_frame, process_frame, process_frames_batch
 from cr_bot.app.state_builder import build_game_state
 from cr_bot.debug.output import (
     print_debug_frame_result,
@@ -50,6 +50,7 @@ def main(
     video: str | None = None,
     frame_stride: int = 1,
     video_duration_s: float | None = None,
+    yolo_batch_size: int = 1,
     normalize: bool = True,
     debug_frame_path: str | None = None,
     yolo_detections: bool = False,
@@ -58,6 +59,8 @@ def main(
         raise ValueError("frame_stride must be at least 1")
     if video_duration_s is not None and video_duration_s <= 0:
         raise ValueError("video_duration_s must be greater than 0")
+    if yolo_batch_size < 1:
+        raise ValueError("yolo_batch_size must be at least 1")
 
     detector = build_detector()
     print("detector sucessfully built!")
@@ -147,28 +150,10 @@ def main(
             cv2.namedWindow("feed", cv2.WINDOW_NORMAL)
 
         frame_idx = 0
-        while True:
-            ok, frame = cap.read()
-            if not ok:
-                break
+        pending_video_frames: list[tuple[int, float, object]] = []
 
-            frame_idx += 1
-            video_time_s = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
-            if video_duration_s is not None and video_time_s > video_duration_s:
-                break
-
-            if (frame_idx - 1) % frame_stride != 0:
-                continue
-
-            if normalize:
-                frame = normalize_frame(frame)
-
-            result = process_frame(
-                frame,
-                detector,
-                show_rois=False,
-                yolo_tower_hp_detections=yolo_detections,
-            )
+        def handle_result(frame, frame_idx, video_time_s, result):
+            nonlocal game_started, not_in_game_streak
             result["state"] = hand_state_filter.update(result["state"])
 
             if not game_started and (game_start(frame) or has_visible_match_timer(result)):
@@ -241,17 +226,13 @@ def main(
                     if not_in_game_streak >= 20:
                         game_started = False
                         not_in_game_streak = 0
-                        enemy_card_tracker = EnemyCardTracker()
-                        own_action_tracker = OwnActionTracker()
-                        match_clock_filter = MatchClockFilter()
-                        tower_hp_filter = TowerHPFilter()
-                        hand_state_filter = HandStateFilter()
-                        continue
+                        reset_trackers()
+                        return
                 else:
                     not_in_game_streak = 0
             else:
                 print(f"frame {frame_idx}: not in game")
-                continue
+                return
 
             print(f"frame {frame_idx} video_time={video_time_s:.2f}s")
             print_frame_result(result, enemy_card_tracker, own_action_tracker)
@@ -259,7 +240,64 @@ def main(
             if has_display:
                 cv2.imshow("feed", result["rendered"])
                 if cv2.waitKey(1) == 27:
+                    raise KeyboardInterrupt
+
+        def reset_trackers():
+            nonlocal enemy_card_tracker, own_action_tracker, match_clock_filter, tower_hp_filter, hand_state_filter
+            enemy_card_tracker = EnemyCardTracker()
+            own_action_tracker = OwnActionTracker()
+            match_clock_filter = MatchClockFilter()
+            tower_hp_filter = TowerHPFilter()
+            hand_state_filter = HandStateFilter()
+
+        def flush_pending():
+            if not pending_video_frames:
+                return
+            batch = pending_video_frames[:]
+            pending_video_frames.clear()
+            if len(batch) == 1:
+                idx, video_time_s, frame = batch[0]
+                result = process_frame(
+                    frame,
+                    detector,
+                    show_rois=False,
+                    yolo_tower_hp_detections=yolo_detections,
+                )
+                handle_result(frame, idx, video_time_s, result)
+                return
+
+            frames = [frame for _, _, frame in batch]
+            results = process_frames_batch(
+                frames,
+                detector,
+                show_rois=False,
+                yolo_tower_hp_detections=yolo_detections,
+            )
+            for (idx, video_time_s, frame), result in zip(batch, results):
+                handle_result(frame, idx, video_time_s, result)
+
+        try:
+            while True:
+                ok, frame = cap.read()
+                if not ok:
                     break
+
+                frame_idx += 1
+                video_time_s = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
+                if video_duration_s is not None and video_time_s > video_duration_s:
+                    break
+
+                if (frame_idx - 1) % frame_stride != 0:
+                    continue
+
+                if normalize:
+                    frame = normalize_frame(frame)
+                pending_video_frames.append((frame_idx, video_time_s, frame))
+                if len(pending_video_frames) >= yolo_batch_size:
+                    flush_pending()
+            flush_pending()
+        except KeyboardInterrupt:
+            pass
 
         cap.release()
         if has_display:

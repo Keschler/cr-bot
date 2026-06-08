@@ -105,28 +105,30 @@ class AppDetector:
             self.tracker_cfg_path = str(KATACR_ROOT / "katacr/yolov8/bytetrack.yaml")
             cr_on_predict_start(self, persist=True)
 
-    def infer(self, frame, pil=False):
+    def _normalize_input_frame(self, frame, pil=False):
         if pil:
-            frame = frame[..., ::-1]
+            return frame[..., ::-1]
+        return frame
 
-        results = [
-            model.predict(
-                frame,
-                verbose=False,
-                conf=self.conf,
-                device=self.device,
-                imgsz=896,
-            )[0]
-            for model in self.models
-        ]
+    def _predict_model_batch(self, model, frames):
+        return model.predict(
+            frames,
+            verbose=False,
+            conf=self.conf,
+            device=self.device,
+            imgsz=896,
+        )
 
+    def _collect_raw_predictions(self, results):
         preds = []
         for result in results:
             boxes = result.orig_boxes.clone()
             for index in range(len(boxes)):
                 boxes[index, 5] = unit2idx[result.names[int(boxes[index, 5])]]
                 preds.append(boxes[index])
+        return preds
 
+    def _finalize_result(self, frame, preds):
         if not preds:
             preds = torch.zeros((0, 7))
         else:
@@ -134,15 +136,35 @@ class AppDetector:
             keep = torchvision.ops.nms(preds[:, :4], preds[:, 4], iou_threshold=self.iou_thre)
             preds = preds[keep]
 
+        untracked = preds.clone() if hasattr(preds, "clone") else preds.copy()
         self.result = self._cr_results_cls(frame, path="", names=idx2unit, boxes=preds)
+        self.result.untracked_data = untracked
         if self.tracker is not None:
             self._cr_on_predict_postprocess_end(self, persist=True)
 
         data = self.result.get_data()
-        self.result.boxes.data = data[
+        filtered = data[
             ~(((data[:, 0] > 390) & (data[:, 3] < 120)) | ((data[:, 2] < 280) & (data[:, 3] < 80)))
         ]
+        self.result.boxes.data = filtered
         return self.result
+
+    def infer_batch(self, frames, pil=False):
+        normalized_frames = [self._normalize_input_frame(frame, pil=pil) for frame in frames]
+        model_outputs = [
+            self._predict_model_batch(model, normalized_frames)
+            for model in self.models
+        ]
+
+        results = []
+        for frame_idx, frame in enumerate(normalized_frames):
+            per_model_results = [output[frame_idx] for output in model_outputs]
+            preds = self._collect_raw_predictions(per_model_results)
+            results.append(self._finalize_result(frame, preds))
+        return results
+
+    def infer(self, frame, pil=False):
+        return self.infer_batch([frame], pil=pil)[0]
 
 
 

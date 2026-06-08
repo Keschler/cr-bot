@@ -28,6 +28,12 @@ def main():
         help="Stop analyzing --video after this many seconds from the start.",
     )
     parser.add_argument(
+        "--yolo-batch-size",
+        type=int,
+        default=1,
+        help="Batch size for offline YOLO video detection. Only used with --video.",
+    )
+    parser.add_argument(
         "--no-normalize",
         action="store_true",
         help="Process frames at their captured size instead of normalizing to 1080x2400.",
@@ -47,6 +53,8 @@ def main():
         parser.error("--frame-stride must be at least 1")
     if args.video_duration is not None and args.video_duration <= 0:
         parser.error("--video-duration must be greater than 0")
+    if args.yolo_batch_size < 1:
+        parser.error("--yolo-batch-size must be at least 1")
 
     debug = args.debug or args.debug_frame is not None
     if args.alternative_rois:
@@ -61,6 +69,7 @@ def main():
         video=args.video,
         frame_stride=args.frame_stride,
         video_duration_s=args.video_duration,
+        yolo_batch_size=args.yolo_batch_size,
         normalize=not args.no_normalize,
         debug_frame_path=args.debug_frame,
         yolo_detections=args.yolo_detections,
