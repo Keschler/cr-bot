@@ -191,7 +191,7 @@ def test_enemy_play_video_time_uses_first_seen_video_time_not_match_clock():
     assert play["video_time_s"] == 123.0
 
 
-def test_recorded_enemy_play_is_not_relabelled_when_track_class_later_flips():
+def test_recorded_enemy_play_is_relabelled_when_track_class_later_flips():
     tracker = _tracker()
 
     tracker.update(
@@ -209,7 +209,9 @@ def test_recorded_enemy_play_is_not_relabelled_when_track_class_later_flips():
         )
 
     play = tracker.detected_card_plays[0]
-    assert play["card"] == "royal-giant"
-    assert play["best_class"] == "royal-giant"
-    assert play["event_id"].startswith("royal-giant_")
+    assert play["card"] == "golem"
+    assert play["best_class"] == "golem"
+    assert play["event_id"].startswith("golem_")
+    assert play["cost"] == 8
+    assert play["class_votes"]["golem"] >= 3
     assert play["video_time_s"] == 123.0

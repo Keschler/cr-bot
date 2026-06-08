@@ -199,6 +199,7 @@ class EnemyCardTracker:
                 )
 
             if memory.counted_as_card:
+                self._maybe_revise_recorded_play(memory, arena_px=arena_px)
                 continue
             elif memory.clock_confirmed or memory.frame_confirmed:
                 self._maybe_record_play(
@@ -694,6 +695,67 @@ class EnemyCardTracker:
             if (card_id := card_to_id(play["card"])) is not None
         }
         self.elixir_enemy_est = min(MAX_ELIXIR, self.elixir_enemy_est + removed_cost)
+
+    def _maybe_revise_recorded_play(self, memory, *, arena_px=None):
+        assert memory.track_id is not None, "recorded track must have a track_id"
+
+        if not self._is_reliable_enemy_play(memory):
+            return
+
+        play_idx = self._find_detected_play_index(memory.track_id)
+        if play_idx is None:
+            return
+
+        play = self.detected_card_plays[play_idx]
+        old_card = play["card"]
+        old_cost = play["cost"]
+        if not self._sync_detected_play_from_memory(
+            play,
+            memory,
+            play_idx=play_idx,
+            arena_px=arena_px,
+        ):
+            return
+        new_cost = play["cost"]
+        self.confirmed_seen_cards = {
+            card_id
+            for tracked_play in self.detected_card_plays
+            if (card_id := card_to_id(tracked_play["card"])) is not None
+        }
+        self.elixir_enemy_est = min(
+            MAX_ELIXIR,
+            max(0.0, self.elixir_enemy_est + old_cost - new_cost),
+        )
+
+        if play["card"] != old_card:
+            self._debug(
+                f"revised enemy play track={memory.track_id} "
+                f"card={old_card} -> {play['card']}"
+            )
+
+    def _sync_detected_play_from_memory(self, play, memory, *, play_idx, arena_px=None):
+        updated_card = DIRECT_UNIT_TO_CARD.get(memory.best_class)
+        if updated_card is None:
+            return False
+
+        play["event_id"] = f"{updated_card}_{memory.track_id}_{play_idx + 1:06d}"
+        play["card"] = updated_card
+        play["cost"] = CARD_METADATA[updated_card]["elixir_cost"]
+        play["cell"] = self._memory_cell(memory, arena_px)
+        play["clock_confirmed"] = memory.clock_confirmed
+        play["frame_confirmed"] = memory.frame_confirmed
+        play["avg_confidence"] = memory.avg_confidence
+        play["team_ratio"] = memory.best_team_ratio
+        play["best_class"] = memory.best_class
+        play["class_votes"] = dict(memory.class_votes)
+        play["is_spell"] = updated_card in SPELL_CARD_NAMES
+        return True
+
+    def _find_detected_play_index(self, track_id):
+        for idx, play in enumerate(self.detected_card_plays):
+            if play["track_id"] == track_id:
+                return idx
+        return None
 
     def _is_recent_duplicate_play(
         self,
