@@ -178,10 +178,11 @@ def in_game(frame) -> bool:
 
 def game_end_from_result(result) -> bool:
     timer_seconds = _parse_timer(result["time"])
+    filtered_time_left_s = result.get("time_left_s")
+    if filtered_time_left_s is None or float(filtered_time_left_s) <= 0.0:
+      return True
     if timer_seconds is None:
-      filtered_time_left_s = result.get("time_left_s")
-      if filtered_time_left_s is None or float(filtered_time_left_s) <= 0.0:
-        return True
+      return True
 
     elixir = result["elixir"]
     digit = elixir["displayed_digit"]
