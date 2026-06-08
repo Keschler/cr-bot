@@ -66,7 +66,7 @@ SCENARIOS: dict[str, Scenario] = {
         capture_args=(
             "--yolo-detections",
             "--video-duration",
-            "296",
+            "195",
         ),
     ),
     "3400ladder": Scenario(

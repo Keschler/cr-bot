@@ -134,7 +134,8 @@ def main() -> None:
         )
         for condition in conditions:
             print(f"  {condition.status:<4} {condition.name}: {condition.detail}")
-            for item in condition.evidence[:3]:
+            evidence_limit = 8 if condition.name == "enemy tracker gate/debug reason" else 3
+            for item in condition.evidence[:evidence_limit]:
                 print(f"       {item}")
         print()
 
@@ -332,7 +333,7 @@ def explain_enemy_miss(
         if cards_match(event.card, miss.card)
     ]
 
-    return [
+    conditions = [
         Condition(
             "matching enemy unit/spell",
             "PASS" if enemy_units else "FAIL",
@@ -364,6 +365,19 @@ def explain_enemy_miss(
             tuple(format_event_evidence(event, miss) for event in same_card_prediction),
         ),
     ]
+
+    tracker_debug = enemy_tracker_debug_lines(lines, miss.card, expected_classes)
+    if tracker_debug:
+        conditions.append(
+            Condition(
+                "enemy tracker gate/debug reason",
+                "INFO",
+                "nearby enemy-card tracker lines mention this card/class",
+                tuple(tracker_debug),
+            )
+        )
+
+    return conditions
 
 
 def own_deploy_clock_condition(
@@ -549,6 +563,42 @@ def own_blocker_lines(
     return blockers
 
 
+def enemy_tracker_debug_lines(
+    lines: list[tuple[int, str]],
+    card: str,
+    expected_classes: set[str],
+) -> list[str]:
+    clock_candidates: list[str] = []
+    primary: list[str] = []
+    skipped: list[str] = []
+    candidates = card_candidates(card) | expected_classes
+    for line_no, line in lines:
+        if "[enemy_cards]" not in line:
+            continue
+        if not enemy_debug_mentions_any(line, candidates):
+            continue
+        evidence = format_evidence(line_no, line)
+        if "clock candidate" in line:
+            clock_candidates.append(evidence)
+        elif "skip class=" in line:
+            skipped.append(evidence)
+        else:
+            primary.append(evidence)
+    return unique_preserve_order(clock_candidates + primary + skipped)
+
+
+def enemy_debug_mentions_any(line: str, candidates: set[str]) -> bool:
+    for candidate in candidates:
+        if not candidate:
+            continue
+        escaped = re.escape(candidate)
+        if re.search(rf"\b(?:card|class)={escaped}(?=\s|:|$)", line):
+            return True
+        if re.search(rf"\benemy {escaped}(?=\s|:|$)", line):
+            return True
+    return False
+
+
 def has_any(
     name: str,
     lines: list[tuple[int, str]],
@@ -591,7 +641,7 @@ def matching_unit_lines(
 
 def clock_yolo_lines(lines: list[tuple[int, str]], *, team: str) -> list[str]:
     evidence: list[str] = []
-    needle = f"clock:{team}("
+    needle = f"clock:{team} x"
     for line_no, line in lines:
         if line.startswith("yolo:") and needle in line:
             evidence.append(format_evidence(line_no, line))

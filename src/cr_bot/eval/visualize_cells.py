@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -15,6 +16,10 @@ if str(SRC_ROOT) not in sys.path:
 KATACR_ROOT = ROOT / "vendor/external/KataCR"
 if str(KATACR_ROOT) not in sys.path:
     sys.path.insert(0, str(KATACR_ROOT))
+os.environ.setdefault(
+    "KATACR_DATASET_PATH",
+    str(ROOT / "vendor/external/Clash-Royale-Detection-Dataset"),
+)
 
 from cr_bot.eval.action_eval import ActionEvent, evaluate, load_ground_truth, parse_predictions_txt
 from cr_bot.features.action_space import ACTION_GRID
