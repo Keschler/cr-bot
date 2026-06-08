@@ -14,7 +14,7 @@ Clash Royale Vision Bot is a computer vision project that reads Clash Royale gam
 - Extracts own card plays from hand-slot changes and confirms deploy locations from elixir-change flashes, troop clocks, spell elixir-cost overlays, and rolling spell tracks.
 - Supports live capture through a video device such as `v4l2loopback`.
 - Supports offline dataset generation from recorded gameplay clips.
-- Includes an action-evaluation harness with ground-truth JSON, timing error reports, and cell visualization overlays.
+- Includes an action-evaluation harness with built-in scenario runs, ground-truth JSON, timing error reports, and cell visualization overlays.
 - Includes scripts for detector training, inference, annotation preparation, and dataset processing.
 
 ## Demo
@@ -162,9 +162,25 @@ The evaluation tools compare detected own and enemy actions against hand-labeled
 ground truth. They report precision, recall, F1, missed actions, false
 positives, timing error, and placement-cell distance.
 
+For the two built-in hog-cycle evaluation runs, use:
+
+```bash
+PYTHONPATH=src python3 -m cr_bot.eval.run_action_eval_scenarios
+```
+
+Use `--mode summary` for only the aggregate totals, `--scenario 2hog-cycle` or
+`--scenario 3400ladder` to run one clip, `--run-detection` to regenerate the
+capture txt first, and `--explain-misses` to run the missing-action explainer.
+
 The cell visualizer renders the action grid over labeled frames so ground-truth
 cells can be checked or filled in from video frames. See `docs/eval/README.md`
 for the ground-truth format and script options.
+
+## Audio Classifier Dataset
+
+The mined real-gameplay audio dataset lives under
+`data/audio_classifier/mined/`. Dataset layout, manifests, and pipeline notes
+are documented in `docs/audio_classifier_mined_dataset.md`.
 
 ## Devlogs
 
