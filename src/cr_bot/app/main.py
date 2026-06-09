@@ -5,8 +5,8 @@ import cv2
 import time
 
 
+from cr_bot.app.match_session import MatchSession
 from cr_bot.app.pipeline import normalize_frame, process_frame
-from cr_bot.app.state_builder import build_game_state
 from cr_bot.debug.output import (
     print_debug_frame_result,
     print_frame_result,
@@ -15,14 +15,7 @@ from cr_bot.debug.output import (
     render_tower_hp_debug,
 )
 from cr_bot.paths import APP_ROOT
-from cr_bot.vision.timer import total_remaining_seconds
-from cr_bot.vision.match_state import game_start, game_end_from_result
 from cr_bot.vision.yolo_runtime import build_detector
-from cr_bot.trackers.enemy_cards import EnemyCardTracker 
-from cr_bot.trackers.match_clock import MatchClockFilter
-from cr_bot.trackers.own_actions import OwnActionTracker
-from cr_bot.trackers.tower_hp_filter import TowerHPFilter
-from cr_bot.trackers.hand_state_filter import HandStateFilter
 
 
 def get_default_video_device() -> str:
@@ -38,12 +31,6 @@ def get_default_video_device() -> str:
             continue
 
     return "/dev/video37"
-
-
-def has_visible_match_timer(result) -> bool:
-    time_left_s = result.get("time_left_s")
-    return time_left_s is not None and float(time_left_s) > 0.0
-
 
 def main(
     debug: bool,
@@ -61,11 +48,7 @@ def main(
 
     detector = build_detector()
     print("detector sucessfully built!")
-    enemy_card_tracker = EnemyCardTracker()
-    own_action_tracker = OwnActionTracker()
-    match_clock_filter = MatchClockFilter()
-    tower_hp_filter = TowerHPFilter()
-    hand_state_filter = HandStateFilter()
+    session = MatchSession()
 
     if debug:
         if not debug_frame_path:
@@ -77,54 +60,32 @@ def main(
         if normalize:
             frame = normalize_frame(frame)
 
-        result = process_frame(frame, detector, show_rois=False, yolo_tower_hp_detections=yolo_detections)
-        result["state"] = hand_state_filter.update(result["state"])
+        analysis = process_frame(frame, detector, show_rois=False, yolo_tower_hp_detections=yolo_detections)
         debug_output_dir = APP_ROOT / "outputs" / "video" / "capture"
         debug_output_dir.mkdir(parents=True, exist_ok=True)
         tower_debug_path = debug_output_dir / "tower_hp_debug.png"
-        cv2.imwrite(str(tower_debug_path), render_tower_hp_debug(result["tower_hp_debug_steps"]))
+        cv2.imwrite(str(tower_debug_path), render_tower_hp_debug(analysis.tower_hp_debug_steps))
         print(f"tower hp debug image: {tower_debug_path}")
 
-        enemy_card_tracker.start_match(
-          result["time_left_s"],
-          result["total_remaining_s"],
-          now_s=time.monotonic(),
-      )
-
-        game_state = build_game_state(result)
-        own_action_tracker.update(
-            game_state,
-            result["arena_px"],
-            frame=frame,
-            clock_boxes=result["clock_boxes"],
-            own_actions_blocked=len(result["emote_boxes"]) >= 2,
-            elixir_change=result["elixir_change"],
-        )
-        enemy_card_tracker.reconcile_own_actions(
-            own_action_tracker.actions,
-            arena_px=result["arena_px"],
-        )
-        enemy_card_tracker.update(
-            result["total_remaining_s"],
-            result["matches"],
-            clock_boxes=result["clock_boxes"],
-            now_s=time.monotonic(),
-            own_actions=own_action_tracker.actions,
-            arena_px=result["arena_px"],
-        )
+        step = session.process(analysis, frame=frame, now_s=time.monotonic())
+        analysis = step.analysis
         has_display = os.environ.get("SHOW_DEBUG_WINDOW") == "1"
         if has_display:
             cv2.namedWindow("debug", cv2.WINDOW_NORMAL)
             cv2.setWindowProperty("debug", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-            cv2.imshow("debug", result["rendered"])
+            cv2.imshow("debug", analysis.rendered)
             cv2.namedWindow("tower_hp_debug", cv2.WINDOW_NORMAL)
-            cv2.imshow("tower_hp_debug", render_tower_hp_debug(result["tower_hp_debug_steps"]))
+            cv2.imshow("tower_hp_debug", render_tower_hp_debug(analysis.tower_hp_debug_steps))
             cv2.namedWindow("timer_debug", cv2.WINDOW_NORMAL)
-            cv2.imshow("timer_debug", render_timer_debug(result["timer_debug_steps"]))
+            cv2.imshow("timer_debug", render_timer_debug(analysis.timer_debug_steps))
             cv2.namedWindow("match_debug", cv2.WINDOW_NORMAL)
-            cv2.imshow("match_debug", render_match_debug(frame, result["matches"]))
+            cv2.imshow("match_debug", render_match_debug(frame, analysis.matches))
 
-        print_debug_frame_result(result, enemy_card_tracker, own_action_tracker)
+        print_debug_frame_result(
+            analysis,
+            session.enemy_card_tracker,
+            session.own_action_tracker,
+        )
 
         if has_display:
             cv2.waitKey(0)
@@ -140,19 +101,9 @@ def main(
         if not cap.isOpened():
             raise RuntimeError(f"Could not open video file: {video_path}")
 
-        game_started = False
-        not_in_game_streak = 0
         has_display = os.environ.get("SHOW_DEBUG_WINDOW") == "1"
         if has_display:
             cv2.namedWindow("feed", cv2.WINDOW_NORMAL)
-
-        def reset_trackers():
-            nonlocal enemy_card_tracker, own_action_tracker, match_clock_filter, tower_hp_filter, hand_state_filter
-            enemy_card_tracker = EnemyCardTracker()
-            own_action_tracker = OwnActionTracker()
-            match_clock_filter = MatchClockFilter()
-            tower_hp_filter = TowerHPFilter()
-            hand_state_filter = HandStateFilter()
 
         frame_idx = 0
         while True:
@@ -171,97 +122,27 @@ def main(
             if normalize:
                 frame = normalize_frame(frame)
 
-            result = process_frame(
+            analysis = process_frame(
                 frame,
                 detector,
                 show_rois=False,
                 yolo_tower_hp_detections=yolo_detections,
             )
-            result["state"] = hand_state_filter.update(result["state"])
-
-            if not game_started and (game_start(frame) or has_visible_match_timer(result)):
-                game_started = True
-                result["towers_hp"] = tower_hp_filter.update(result["towers_hp"])
-                match_clock_filter.initialise(result["time_left_s"], video_time_s)
-                enemy_card_tracker.start_match(
-                    result["time_left_s"],
-                    result["total_remaining_s"],
-                    now_s=video_time_s,
-                )
-                game_state = build_game_state(
-                    result,
-                    seen_enemy_cards=list(enemy_card_tracker.confirmed_seen_cards),
-                    elixir_enemy_est=enemy_card_tracker.elixir_enemy_est,
-                    game_started=game_started,
-                )
-                own_action_tracker.update(
-                    game_state,
-                    result["arena_px"],
-                    frame=frame,
-                    clock_boxes=result["clock_boxes"],
-                    own_actions_blocked=len(result["emote_boxes"]) >= 2,
-                    elixir_change=result["elixir_change"],
-                    video_time_s=video_time_s,
-                )
-                enemy_card_tracker.reconcile_own_actions(
-                    own_action_tracker.actions,
-                    arena_px=result["arena_px"],
-                )
-            elif game_started:
-                if match_clock_filter.initialised:
-                    filtered_time_left_s = match_clock_filter.update(result["time_left_s"], video_time_s, result["overtime"])
-                    result["time_left_s"] = filtered_time_left_s
-                    result["total_remaining_s"] = total_remaining_seconds(filtered_time_left_s, result["overtime"])
-                else:
-                    match_clock_filter.initialise(result["time_left_s"], video_time_s)
-
-                result["towers_hp"] = tower_hp_filter.update(result["towers_hp"])
-                game_state = build_game_state(
-                    result,
-                    seen_enemy_cards=list(enemy_card_tracker.confirmed_seen_cards),
-                    elixir_enemy_est=enemy_card_tracker.elixir_enemy_est,
-                    game_started=game_started,
-                )
-                own_action_tracker.update(
-                    game_state,
-                    result["arena_px"],
-                    frame=frame,
-                    clock_boxes=result["clock_boxes"],
-                    own_actions_blocked=len(result["emote_boxes"]) >= 2,
-                    elixir_change=result["elixir_change"],
-                    video_time_s=video_time_s,
-                )
-                enemy_card_tracker.reconcile_own_actions(
-                    own_action_tracker.actions,
-                    arena_px=result["arena_px"],
-                )
-                enemy_card_tracker.update(
-                    result["total_remaining_s"],
-                    result["matches"],
-                    now_s=video_time_s,
-                    clock_boxes=result["clock_boxes"],
-                    own_actions=own_action_tracker.actions,
-                    arena_px=result["arena_px"],
-                )
-
-                if game_end_from_result(result):
-                    not_in_game_streak += 1
-                    if not_in_game_streak >= 20:
-                        game_started = False
-                        not_in_game_streak = 0
-                        reset_trackers()
-                        continue
-                else:
-                    not_in_game_streak = 0
-            else:
+            step = session.process(analysis, frame=frame, now_s=video_time_s)
+            if not step.should_emit:
                 print(f"frame {frame_idx}: not in game")
                 continue
 
+            analysis = step.analysis
             print(f"frame {frame_idx} video_time={video_time_s:.2f}s")
-            print_frame_result(result, enemy_card_tracker, own_action_tracker)
+            print_frame_result(
+                analysis,
+                session.enemy_card_tracker,
+                session.own_action_tracker,
+            )
 
             if has_display:
-                cv2.imshow("feed", result["rendered"])
+                cv2.imshow("feed", analysis.rendered)
                 if cv2.waitKey(1) == 27:
                     break
 
@@ -295,9 +176,6 @@ def main(
 
     cv2.namedWindow("feed", cv2.WINDOW_NORMAL)
     cv2.setWindowProperty("feed", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-    game_started = False
-    not_in_game_streak = 0
-    
 
     while True:
         ok, frame = cap.read()
@@ -308,97 +186,21 @@ def main(
         if normalize:
             frame = normalize_frame(frame)
         
-        if not game_started and game_start(frame): # First frame of game_start
-            game_started = True
-
-            result = process_frame(frame, detector, show_rois=False)
-            result["state"] = hand_state_filter.update(result["state"])
-            result["towers_hp"] = tower_hp_filter.update(result["towers_hp"])
-
-            now = time.monotonic()
-            match_clock_filter.initialise(result["time_left_s"], now)
-
-
-            enemy_card_tracker.start_match(
-                result["time_left_s"],
-                result["total_remaining_s"],
-                now_s=time.monotonic(),
-            )
-            game_state = build_game_state(
-                result,
-                seen_enemy_cards=list(enemy_card_tracker.confirmed_seen_cards),
-                elixir_enemy_est=enemy_card_tracker.elixir_enemy_est,
-                game_started=game_started
-            )
-            own_action_tracker.update(
-                game_state,
-                result["arena_px"],
-                frame=frame,
-                clock_boxes=result["clock_boxes"],
-                own_actions_blocked=len(result["emote_boxes"]) >= 2,
-                elixir_change=result["elixir_change"],
-            )
-        elif game_started:
-            result = process_frame(frame, detector, show_rois=False)
-            result["state"] = hand_state_filter.update(result["state"])
-            result["towers_hp"] = tower_hp_filter.update(result["towers_hp"])
-
-            now = time.monotonic()
-            if match_clock_filter.initialised:
-                filtered_time_left_s = match_clock_filter.update(result["time_left_s"], now, result["overtime"])
-                result["time_left_s"] = filtered_time_left_s
-                result["total_remaining_s"] = total_remaining_seconds(filtered_time_left_s, result["overtime"])
-            else:
-                match_clock_filter.initialise(result["time_left_s"], now)
-
-            game_state = build_game_state(
-                result,
-                seen_enemy_cards=list(enemy_card_tracker.confirmed_seen_cards),
-                elixir_enemy_est=enemy_card_tracker.elixir_enemy_est,
-                game_started=game_started
-            )
-            own_action_tracker.update(
-                game_state,
-                result["arena_px"],
-                frame=frame,
-                clock_boxes=result["clock_boxes"],
-                own_actions_blocked=len(result["emote_boxes"]) >= 2,
-                elixir_change=result["elixir_change"],
-            )
-            enemy_card_tracker.reconcile_own_actions(
-                own_action_tracker.actions,
-                arena_px=result["arena_px"],
-            )
-            enemy_card_tracker.update(
-                result["total_remaining_s"],
-                result["matches"],
-                now_s=now,
-                clock_boxes=result["clock_boxes"],
-                own_actions=own_action_tracker.actions,
-                arena_px=result["arena_px"],
-            )
-            if game_end_from_result(result):
-                not_in_game_streak += 1
-                if not_in_game_streak >= 20:
-                    game_started = False
-                    not_in_game_streak = 0
-                    enemy_card_tracker = EnemyCardTracker()
-                    own_action_tracker = OwnActionTracker()
-                    match_clock_filter = MatchClockFilter()
-                    tower_hp_filter = TowerHPFilter()
-                    hand_state_filter = HandStateFilter()
-                    continue
-            else:
-                not_in_game_streak = 0
-        else:
+        analysis = process_frame(frame, detector, show_rois=False)
+        step = session.process(analysis, frame=frame, now_s=time.monotonic())
+        if not step.should_emit:
             print("not in game")
             continue
-        
+        analysis = step.analysis
 
         print()
-        print_frame_result(result, enemy_card_tracker, own_action_tracker)
+        print_frame_result(
+            analysis,
+            session.enemy_card_tracker,
+            session.own_action_tracker,
+        )
 
-        cv2.imshow("feed", result["rendered"])
+        cv2.imshow("feed", analysis.rendered)
 
         if cv2.waitKey(1) == 27:
             break
