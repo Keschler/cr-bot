@@ -180,9 +180,7 @@ def game_end_from_result(result) -> bool:
     timer_seconds = _parse_timer(result["time"])
     filtered_time_left_s = result.get("time_left_s")
     if filtered_time_left_s is None or float(filtered_time_left_s) <= 0.0:
-      return True
-    if timer_seconds is None:
-      return True
+        return True
 
     elixir = result["elixir"]
     digit = elixir["displayed_digit"]
@@ -193,29 +191,29 @@ def game_end_from_result(result) -> bool:
     confident_hand_cards = _count_confident_hand_cards(hand_state)
     distinct_hand_cards = _count_distinct_hand_cards(hand_state)
     next_card_confident = _is_confident_card(
-      hand_state.get("next_card"),
-      CARD_CONFIDENCE_THRESHOLD,
+        hand_state.get("next_card"),
+        CARD_CONFIDENCE_THRESHOLD,
     )
 
     visible_tower_bars = any(hp is not None and hp > 0 for hp in result["towers_hp"].values())
 
     score = 0
     if confident_hand_cards >= 4:
-      score += 2
+        score += 2
     elif confident_hand_cards >= 3 and next_card_confident:
-      score += 1
+        score += 1
 
     if distinct_hand_cards >= 3:
-      score += 1
+        score += 1
 
     if plausible_elixir:
-      score += 1
+        score += 1
 
     if visible_tower_bars:
-      score += 1
+        score += 1
 
     if timer_seconds is not None:
-      score += 1
+        score += 1
 
     return score < IN_GAME_SCORE_THRESHOLD
 
