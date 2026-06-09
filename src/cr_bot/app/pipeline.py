@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
-import sys
 
+from cr_bot.domain.frame_analysis import FrameAnalysisResult
 from cr_bot.domain.rois import ROIS
-from cr_bot.paths import KATACR_ROOT
 from cr_bot.vision.cards import extract_hand_state
 from cr_bot.vision.elixir import extract_elixir
 from cr_bot.vision.health import estimate_health
 from cr_bot.vision.image_utils import detect_elixir_change, draw_rois
+from cr_bot.vision.katacr_runtime import load_split_part_tools
 from cr_bot.vision.timer import (
     extract_time,
     is_overtime,
@@ -26,10 +26,7 @@ from cr_bot.vision.yolo_runtime import (
     remap_boxes_to_frame,
 )
 
-if str(KATACR_ROOT) not in sys.path:
-    sys.path.insert(0, str(KATACR_ROOT))
-
-from katacr.build_dataset.utils.split_part import process_part, ratio2name
+process_part, ratio2name = load_split_part_tools()
 
 
 PROCESSING_RESOLUTION = (1080, 2400)  # width, height
@@ -47,7 +44,7 @@ def process_frame(
     detector,
     show_rois: bool = False,
     yolo_tower_hp_detections: bool = False,
-):
+) -> FrameAnalysisResult:
     _, draw_boxes, _ = load_yolo_runtime()
     frame_to_analyze = draw_rois(frame, ROIS) if show_rois else frame
     ratio_name = ratio2name(frame)
@@ -113,28 +110,27 @@ def process_frame(
     time_left_s = parse_time_left_s(current_time_text)
     total_remaining_s = total_remaining_seconds(time_left_s, overtime)
 
-    state = extract_hand_state(frame)
+    hand_state = extract_hand_state(frame)
 
     troops, bars = convert_yolo(yolo_boxes)
     estimate_health(frame, bars)
     matches = match_troops_to_bars(troops, bars)
     typed_matches = [match_from_dict(m) for m in matches]
-    return {
-        "rendered": rendered,
-        "elixir": elixir,
-        "elixir_change": elixir_change,
-        "towers_hp": towers_hp,
-        "time": current_time_text,
-        "time_left_s": time_left_s,
-        "total_remaining_s": total_remaining_s,
-        "overtime": overtime,
-        "state": state,
-        "yolo_boxes": yolo_boxes,
-        "clock_boxes": clock_boxes,
-        "emote_boxes": emote_boxes,
-        "matches": typed_matches,
-        "arena_px": arena_px,
-        "tower_hp_debug_steps": tower_hp_debug_steps,
-        "timer_debug_steps": timer_debug_steps,
-    }
-
+    return FrameAnalysisResult(
+        rendered=rendered,
+        elixir=elixir,
+        elixir_change=elixir_change,
+        towers_hp=towers_hp,
+        time=current_time_text,
+        time_left_s=time_left_s,
+        total_remaining_s=total_remaining_s,
+        overtime=overtime,
+        hand_state=hand_state,
+        yolo_boxes=yolo_boxes,
+        clock_boxes=clock_boxes,
+        emote_boxes=emote_boxes,
+        matches=typed_matches,
+        arena_px=arena_px,
+        tower_hp_debug_steps=tower_hp_debug_steps,
+        timer_debug_steps=timer_debug_steps,
+    )

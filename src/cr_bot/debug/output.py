@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 
+from cr_bot.features.action_space import ACTION_GRID
 from cr_bot.vision.yolo_runtime import summarize_detections
 
 
@@ -124,6 +125,16 @@ def format_tower_ocr_debug(steps):
     return f"ocr={value or 'none'}{reason_text} scores=[{', '.join(score_parts)}]"
 
 
+def match_cell(match, arena_px):
+    if arena_px is None:
+        return None
+    return ACTION_GRID.pixel_to_cell(
+        match.troop.center_x,
+        match.troop.center_y,
+        arena_px,
+    )
+
+
 def print_frame_result(result, enemy_card_tracker, own_action_tracker=None):
     if enemy_card_tracker.elixir_enemy_est is None:
         print("enemy elixir is undefined")
@@ -157,58 +168,62 @@ def print_frame_result(result, enemy_card_tracker, own_action_tracker=None):
             )
     print()
 
-    elixir = result["elixir"]
-    detection_summary = summarize_detections(result["yolo_boxes"])
-    print(f"time:   {result['time_left_s']}")
+    elixir = result.elixir
+    detection_summary = summarize_detections(result.yolo_boxes)
+    print(f"time:   {result.time_left_s}")
     print(f"elixir: {elixir['estimated_value'] + elixir['displayed_digit']}")
     print(f"yolo:   {detection_summary}")
 
     print("towers:")
-    tower_debug_steps = result.get("tower_hp_debug_steps") or {}
-    for name, hp in result["towers_hp"].items():
+    tower_debug_steps = result.tower_hp_debug_steps or {}
+    for name, hp in result.towers_hp.items():
         debug_text = format_tower_ocr_debug(tower_debug_steps.get(name) or {})
         print(f"{name}: {hp} ({debug_text})")
 
     print("state:")
-    for slot, value in result["state"].items():
+    for slot, value in result.hand_state.items():
         print(f"  {slot}: {value}")
     print("matches:")
-    for match in result["matches"]:
+    for match in result.matches:
+        cell = match_cell(match, result.arena_px)
         print(
             f"  troop={match.troop.class_name:<18} "
             f"team={match.troop.team:<5} "
             f"conf={match.troop.confidence:.3f} "
-            f"hp={match.troop.estimated_hp}"
+            f"hp={match.troop.estimated_hp} "
+            f"cell={cell}"
         )
     print()
 
 
 def print_debug_frame_result(result, enemy_card_tracker, own_action_tracker):
-    elixir = result["elixir"]
+    elixir = result.elixir
     print(f"Estimated elixir {elixir['estimated_value'] + elixir['displayed_digit']}")
-    print(f"Overtime {result['overtime']}")
+    print(f"Overtime {result.overtime}")
 
-    detection_summary = summarize_detections(result["yolo_boxes"])
-    print(f"time:   {result['time']} time_left {result['total_remaining_s']}")
+    detection_summary = summarize_detections(result.yolo_boxes)
+    print(f"time:   {result.time} time_left {result.total_remaining_s}")
     print(f"yolo:   {detection_summary}")
 
     print("towers:")
-    tower_debug_steps = result.get("tower_hp_debug_steps") or {}
-    for name, hp in result["towers_hp"].items():
+    tower_debug_steps = result.tower_hp_debug_steps or {}
+    for name, hp in result.towers_hp.items():
         debug_text = format_tower_ocr_debug(tower_debug_steps.get(name) or {})
         print(f"{name}: {hp} ({debug_text})")
 
     print("state:")
-    for slot, value in result["state"].items():
+    for slot, value in result.hand_state.items():
         print(f"  {slot}: {value}")
 
     print("matches:")
-    for match in result["matches"]:
+    for match in result.matches:
+        cell = match_cell(match, result.arena_px)
         print(
             f"  troop={match.troop.class_name:<18} "
             f"team={match.troop.team:<5} "
             f"conf={match.troop.confidence:.3f} "
-            f"hp={match.troop.estimated_hp}"
+            f"hp={match.troop.estimated_hp} "
+            f"cell={cell}"
         )
 
     print("enemy plays:")

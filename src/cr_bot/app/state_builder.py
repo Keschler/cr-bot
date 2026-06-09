@@ -1,4 +1,5 @@
 from cr_bot.domain.constants import KING_TOWER_HP
+from cr_bot.domain.frame_analysis import FrameAnalysisResult
 from cr_bot.domain.game_state import GameState, HudState, PrincessTowerState
 
 
@@ -9,9 +10,15 @@ def card_name(card):
         return None
     return card
 
-def build_game_state(result, *, seen_enemy_cards=None, elixir_enemy_est=None, game_started=None):
-    towers_hp = result["towers_hp"]
-    hand = result["state"]
+def build_game_state(
+    analysis: FrameAnalysisResult,
+    *,
+    seen_enemy_cards=None,
+    elixir_enemy_est=None,
+    game_started=None,
+):
+    towers_hp = analysis.towers_hp
+    hand = analysis.hand_state
 
     def tower_alive(hp):
         return hp is not None and hp > 0
@@ -27,9 +34,9 @@ def build_game_state(result, *, seen_enemy_cards=None, elixir_enemy_est=None, ga
     )
 
     hud = HudState(
-          time_left_s=result["time_left_s"],
-          overtime=result["overtime"],
-          elixir_self=result["elixir"]["estimated_value"] + result["elixir"]["displayed_digit"],
+          time_left_s=analysis.time_left_s,
+          overtime=analysis.overtime,
+          elixir_self=analysis.elixir["estimated_value"] + analysis.elixir["displayed_digit"],
           hand_cards=[
               card_name(hand["card_1"]),
               card_name(hand["card_2"]),
@@ -50,12 +57,12 @@ def build_game_state(result, *, seen_enemy_cards=None, elixir_enemy_est=None, ga
           princess_towers=princess_towers,
     )
     
-    own_units = [m for m in result["matches"] if m.troop.team == "ally"]
-    enemy_units = [m for m in result["matches"] if m.troop.team == "enemy"]
+    own_units = [m for m in analysis.matches if m.troop.team == "ally"]
+    enemy_units = [m for m in analysis.matches if m.troop.team == "enemy"]
 
     return GameState(
         hud=hud,
-        total_remaining_s=result["total_remaining_s"],
+        total_remaining_s=analysis.total_remaining_s,
         own_units=own_units,
         enemy_units=enemy_units,
         seen_enemy_cards=seen_enemy_cards or [],

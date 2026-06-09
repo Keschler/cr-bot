@@ -1,7 +1,4 @@
 import os
-import sys
-import contextlib
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -9,58 +6,16 @@ import torch
 import torchvision
 
 from cr_bot.domain.constants import YOLO_CONF_THRESHOLD, YOLO_IOU_THRESHOLD
-from cr_bot.paths import CACHE_DIR, KATACR_DATASET_ROOT, KATACR_ROOT, MODELS_DIR, REPO_ROOT
+from cr_bot.paths import KATACR_ROOT, MODELS_DIR
+from cr_bot.vision.katacr_runtime import bootstrap_katacr_runtime, load_label_maps
 from cr_bot.vision.model_loader import yolo_device
 
-MPLCONFIGDIR = CACHE_DIR / "matplotlib"
-ULTRALYTICS_CONFIG_DIR = CACHE_DIR / "ultralytics"
-
-if str(KATACR_ROOT) not in sys.path:
-    sys.path.insert(0, str(KATACR_ROOT))
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
-MPLCONFIGDIR.mkdir(parents=True, exist_ok=True)
-ULTRALYTICS_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-
-katacr_dataset_env = os.environ.get("KATACR_DATASET_PATH")
-if not katacr_dataset_env or not Path(katacr_dataset_env).exists():
-    os.environ["KATACR_DATASET_PATH"] = str(KATACR_DATASET_ROOT)
-os.environ.setdefault("MPLCONFIGDIR", str(MPLCONFIGDIR))
-os.environ.setdefault("YOLO_CONFIG_DIR", str(ULTRALYTICS_CONFIG_DIR))
-os.environ.setdefault("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "1")
+bootstrap_katacr_runtime()
 
 if not hasattr(np, "trapz") and hasattr(np, "trapezoid"):
     np.trapz = np.trapezoid
 
-
-def _patch_ultralytics_track_compat() -> None:
-    import ultralytics.trackers.track as track
-
-    if hasattr(track, "yaml_load"):
-        return
-    if hasattr(track, "YAML"):
-        track.yaml_load = track.YAML.load
-        return
-    from ultralytics.utils import YAML
-
-    track.YAML = YAML
-    track.yaml_load = YAML.load
-
-
-_patch_ultralytics_track_compat()
-
-
-def _patch_ultralytics_plotting_compat() -> None:
-    import ultralytics.utils.plotting as plotting
-
-    if not hasattr(plotting, "contextlib"):
-        plotting.contextlib = contextlib
-
-
-_patch_ultralytics_plotting_compat()
-
-from katacr.constants.label_list import idx2unit, unit2idx
+idx2unit, unit2idx = load_label_maps()
 
 
 DEFAULT_DETECTOR_WEIGHTS = [
