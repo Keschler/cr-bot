@@ -176,12 +176,6 @@ The cell visualizer renders the action grid over labeled frames so ground-truth
 cells can be checked or filled in from video frames. See `docs/eval/README.md`
 for the ground-truth format and script options.
 
-## Audio Classifier Dataset
-
-The mined real-gameplay audio dataset lives under
-`data/audio_classifier/mined/`. Dataset layout, manifests, and pipeline notes
-are documented in `docs/audio_classifier_mined_dataset.md`.
-
 ## Devlogs
 
 Development logs are available online:
