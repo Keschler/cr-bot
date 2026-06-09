@@ -110,7 +110,7 @@ class EnemyCardTracker:
       Answers: which enemy cards have we inferred, and how does that affect
       enemy elixir/card history?
     """
-    def __init__(self):
+    def __init__(self, *, debug: bool = True):
         self.tracks: dict[int, TrackMemory] = {}
         self.confirmed_seen_cards: set[int] = set()
         self.detected_card_plays: list[dict] = []
@@ -118,6 +118,7 @@ class EnemyCardTracker:
         self.last_time_left_s: float | None = None
         self.last_update_monotonic_s: float | None = None
         self.recent_enemy_clocks: list[RecentEnemyClock] = []
+        self.debug = bool(debug)
 
     def start_match(self, time_left_s, total_remaining_s, now_s=None):
         opening_elapsed = max(0.0, 180.0 - time_left_s)
@@ -864,7 +865,8 @@ class EnemyCardTracker:
         )
 
     def _debug(self, message):
-        print(f"[enemy_cards] {message}")
+        if self.debug:
+            print(f"[enemy_cards] {message}")
         
     def _regen_elixir(self, time_left_s, now_s=None):
         if self.last_time_left_s is None:
