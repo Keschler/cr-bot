@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 from pathlib import Path
 import re
@@ -96,7 +96,7 @@ def load_ground_truth(path: Path) -> list[ActionEvent]:
 
 def parse_predictions_txt(path: Path) -> list[ActionEvent]:
     events: list[ActionEvent] = []
-    seen: set[tuple[Any, ...]] = set()
+    event_indexes: dict[tuple[Any, ...], int] = {}
     current_video_time: float | None = None
     section: str | None = None
 
@@ -176,9 +176,15 @@ def parse_predictions_txt(path: Path) -> list[ActionEvent]:
         else:
             continue
 
-        if key in seen:
+        existing_idx = event_indexes.get(key)
+        if existing_idx is not None:
+            existing = events[existing_idx]
+            events[existing_idx] = replace(
+                event,
+                video_time_s=existing.video_time_s,
+            )
             continue
-        seen.add(key)
+        event_indexes[key] = len(events)
         events.append(event)
 
     return events

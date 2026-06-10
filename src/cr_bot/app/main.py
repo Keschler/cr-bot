@@ -37,6 +37,8 @@ def main(
     video: str | None = None,
     frame_stride: int = 1,
     video_duration_s: float | None = None,
+    video_start_time_s: float | None = None,
+    video_end_time_s: float | None = None,
     normalize: bool = True,
     debug_frame_path: str | None = None,
     yolo_detections: bool = False,
@@ -45,6 +47,16 @@ def main(
         raise ValueError("frame_stride must be at least 1")
     if video_duration_s is not None and video_duration_s <= 0:
         raise ValueError("video_duration_s must be greater than 0")
+    if video_start_time_s is not None and video_start_time_s < 0:
+        raise ValueError("video_start_time_s must be non-negative")
+    if video_end_time_s is not None and video_end_time_s <= 0:
+        raise ValueError("video_end_time_s must be greater than 0")
+    if (
+        video_start_time_s is not None
+        and video_end_time_s is not None
+        and video_end_time_s <= video_start_time_s
+    ):
+        raise ValueError("video_end_time_s must be greater than video_start_time_s")
 
     detector = build_detector()
     print("detector sucessfully built!")
@@ -100,6 +112,8 @@ def main(
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
             raise RuntimeError(f"Could not open video file: {video_path}")
+        if video_start_time_s is not None:
+            cap.set(cv2.CAP_PROP_POS_MSEC, video_start_time_s * 1000.0)
 
         has_display = os.environ.get("SHOW_DEBUG_WINDOW") == "1"
         if has_display:
@@ -113,7 +127,11 @@ def main(
 
             frame_idx += 1
             video_time_s = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
+            if video_start_time_s is not None and video_time_s < video_start_time_s:
+                continue
             if video_duration_s is not None and video_time_s > video_duration_s:
+                break
+            if video_end_time_s is not None and video_time_s > video_end_time_s:
                 break
 
             if (frame_idx - 1) % frame_stride != 0:

@@ -28,6 +28,16 @@ def main():
         help="Stop analyzing --video after this many seconds from the start.",
     )
     parser.add_argument(
+        "--video-start-time",
+        type=float,
+        help="Start analyzing --video at this absolute video timestamp in seconds.",
+    )
+    parser.add_argument(
+        "--video-end-time",
+        type=float,
+        help="Stop analyzing --video at this absolute video timestamp in seconds.",
+    )
+    parser.add_argument(
         "--no-normalize",
         action="store_true",
         help="Process frames at their captured size instead of normalizing to 1080x2400.",
@@ -47,6 +57,16 @@ def main():
         parser.error("--frame-stride must be at least 1")
     if args.video_duration is not None and args.video_duration <= 0:
         parser.error("--video-duration must be greater than 0")
+    if args.video_start_time is not None and args.video_start_time < 0:
+        parser.error("--video-start-time must be non-negative")
+    if args.video_end_time is not None and args.video_end_time <= 0:
+        parser.error("--video-end-time must be greater than 0")
+    if (
+        args.video_start_time is not None
+        and args.video_end_time is not None
+        and args.video_end_time <= args.video_start_time
+    ):
+        parser.error("--video-end-time must be greater than --video-start-time")
     debug = args.debug or args.debug_frame is not None
     if args.alternative_rois:
         from cr_bot.domain.video_constants import activate_alternative_video_rois
@@ -60,6 +80,8 @@ def main():
         video=args.video,
         frame_stride=args.frame_stride,
         video_duration_s=args.video_duration,
+        video_start_time_s=args.video_start_time,
+        video_end_time_s=args.video_end_time,
         normalize=not args.no_normalize,
         debug_frame_path=args.debug_frame,
         yolo_detections=args.yolo_detections,

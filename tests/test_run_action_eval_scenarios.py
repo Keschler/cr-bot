@@ -2,10 +2,13 @@ import json
 from pathlib import Path
 
 from cr_bot.eval.run_action_eval_scenarios import (
+    FocusWindow,
     Scenario,
     aggregate_results,
+    build_focus_windows,
     build_parser,
     evaluate_scenario,
+    filter_events,
     render_report,
 )
 
@@ -118,3 +121,79 @@ def test_render_report_is_stable_for_single_side(tmp_path: Path):
 
     assert "own actions:" in report
     assert "enemy actions:" not in report
+
+
+def test_build_focus_windows_for_enemy_fireball():
+    events = [
+        type("Event", (), {"side": "enemy", "canonical_card": "fireball", "video_time_s": 183.7})(),
+        type("Event", (), {"side": "enemy", "canonical_card": "hog-rider", "video_time_s": 200.0})(),
+    ]
+
+    windows = build_focus_windows(
+        events,
+        card="fireball",
+        side="enemy",
+        before_s=5.0,
+        after_s=10.0,
+    )
+
+    assert windows == [FocusWindow(start_s=178.7, end_s=193.7)]
+
+
+def test_build_focus_windows_can_select_nearest_occurrence():
+    events = [
+        type("Event", (), {"side": "enemy", "canonical_card": "fireball", "video_time_s": 7.4})(),
+        type("Event", (), {"side": "enemy", "canonical_card": "fireball", "video_time_s": 183.7})(),
+        type("Event", (), {"side": "enemy", "canonical_card": "fireball", "video_time_s": 287.3})(),
+    ]
+
+    windows = build_focus_windows(
+        events,
+        card="fireball",
+        side="enemy",
+        before_s=5.0,
+        after_s=10.0,
+        focus_video_time_s=183.6,
+    )
+
+    assert windows == [FocusWindow(start_s=178.7, end_s=193.7)]
+
+
+def test_filter_events_keeps_only_focused_card_and_window():
+    matching = type("Event", (), {"side": "enemy", "canonical_card": "fireball", "video_time_s": 183.7})()
+    wrong_card = type("Event", (), {"side": "enemy", "canonical_card": "hog-rider", "video_time_s": 183.7})()
+    outside_window = type("Event", (), {"side": "enemy", "canonical_card": "fireball", "video_time_s": 210.0})()
+
+    filtered = filter_events(
+        [matching, wrong_card, outside_window],
+        card="fireball",
+        side="enemy",
+        windows=[FocusWindow(start_s=178.7, end_s=193.7)],
+    )
+
+    assert filtered == [matching]
+
+
+def test_build_parser_accepts_focus_window_args():
+    args = build_parser().parse_args(
+        [
+            "--scenario",
+            "all",
+            "--focus-card",
+            "fireball",
+            "--focus-side",
+            "enemy",
+            "--focus-window-before",
+            "5",
+            "--focus-window-after",
+            "10",
+            "--focus-video-time",
+            "183.7",
+        ]
+    )
+
+    assert args.focus_card == "fireball"
+    assert args.focus_side == "enemy"
+    assert args.focus_window_before == 5.0
+    assert args.focus_window_after == 10.0
+    assert args.focus_video_time == 183.7

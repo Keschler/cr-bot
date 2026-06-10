@@ -8,7 +8,7 @@ from cr_bot.eval.action_eval import (
 )
 
 
-def test_parse_predictions_txt_deduplicates_and_keeps_first_added_time(tmp_path: Path):
+def test_parse_predictions_txt_keeps_first_added_time_and_latest_cell(tmp_path: Path):
     output = tmp_path / "output.txt"
     output.write_text(
         "\n".join(
@@ -21,7 +21,7 @@ def test_parse_predictions_txt_deduplicates_and_keeps_first_added_time(tmp_path:
                 "",
                 "frame 2 video_time=10.10s",
                 "enemy plays:",
-                "  card=dart-goblin          cost=3 time_left=250 track_id=7 cell=(6, 6)",
+                "  card=dart-goblin          cost=3 time_left=250 track_id=7 cell=(8, 9)",
                 "own plays:",
                 "  card=ice-golem            slot=1 cell=(7, 19) time_left=160 ",
             ]
@@ -32,7 +32,7 @@ def test_parse_predictions_txt_deduplicates_and_keeps_first_added_time(tmp_path:
 
     assert len(events) == 2
     assert events[0].side == "enemy"
-    assert events[0].cell == (6, 6)
+    assert events[0].cell == (8, 9)
     assert events[0].video_time_s == 10.0
     assert events[1].side == "own"
     assert events[1].cell == (7, 19)

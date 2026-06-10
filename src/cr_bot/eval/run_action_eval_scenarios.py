@@ -56,6 +56,12 @@ class AggregateCounts:
         return 2 * self.precision * self.recall / denom if denom else 0.0
 
 
+@dataclass(frozen=True)
+class FocusWindow:
+    start_s: float
+    end_s: float
+
+
 SCENARIOS: dict[str, Scenario] = {
     "2hog-cycle": Scenario(
         key="2hog-cycle",
@@ -150,6 +156,25 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--window-before", type=float, default=2.5)
     parser.add_argument("--window-after", type=float, default=4.0)
     parser.add_argument("--nearby-prediction-window", type=float, default=8.0)
+    parser.add_argument(
+        "--focus-card",
+        default=None,
+        help="Filter detection and evaluation to a specific card, for example fireball.",
+    )
+    parser.add_argument(
+        "--focus-side",
+        choices=["own", "enemy", "both"],
+        default="both",
+        help="Side filter used together with --focus-card.",
+    )
+    parser.add_argument("--focus-window-before", type=float, default=0.0)
+    parser.add_argument("--focus-window-after", type=float, default=0.0)
+    parser.add_argument(
+        "--focus-video-time",
+        type=float,
+        default=None,
+        help="Restrict focus-card to the occurrence nearest this video timestamp in seconds.",
+    )
     return parser
 
 
@@ -167,16 +192,26 @@ def render_report(results: list[EvalResult]) -> str:
 
 
 def evaluate_scenario(args: argparse.Namespace, scenario: Scenario) -> tuple[list[EvalResult], str]:
+    expected = load_ground_truth(scenario.ground_truth)
+    focus_windows = build_focus_windows(
+        expected,
+        card=args.focus_card,
+        side=args.focus_side,
+        before_s=args.focus_window_before,
+        after_s=args.focus_window_after,
+        focus_video_time_s=args.focus_video_time,
+    )
     if args.run_detection:
-        run_detection(scenario)
+        run_detection(scenario, focus_windows=focus_windows)
     elif not scenario.predictions.exists():
         raise FileNotFoundError(
             f"prediction file not found for {scenario.key}: {scenario.predictions}. "
             "Run with --run-detection to regenerate it."
         )
 
-    expected = load_ground_truth(scenario.ground_truth)
     predicted = parse_predictions_txt(scenario.predictions)
+    expected = filter_events(expected, card=args.focus_card, side=args.focus_side, windows=focus_windows)
+    predicted = filter_events(predicted, card=args.focus_card, side=args.focus_side, windows=focus_windows)
     sides = ["own", "enemy"] if args.side == "both" else [args.side]
     results = [
         evaluate(
@@ -193,7 +228,70 @@ def evaluate_scenario(args: argparse.Namespace, scenario: Scenario) -> tuple[lis
     return results, render_report(results)
 
 
-def run_detection(scenario: Scenario) -> None:
+def build_focus_windows(
+    events,
+    *,
+    card: str | None,
+    side: str,
+    before_s: float,
+    after_s: float,
+    focus_video_time_s: float | None = None,
+) -> list[FocusWindow]:
+    if card is None:
+        return []
+    side_filter = {"own", "enemy"} if side == "both" else {side}
+    canonical = card.replace("_", "-")
+    matching_events = []
+    for event in events:
+        if event.side not in side_filter:
+            continue
+        if event.canonical_card != canonical:
+            continue
+        if event.video_time_s is None:
+            continue
+        matching_events.append(event)
+
+    if focus_video_time_s is not None and matching_events:
+        matching_events = [
+            min(
+                matching_events,
+                key=lambda event: abs(float(event.video_time_s) - focus_video_time_s),
+            )
+        ]
+
+    windows: list[FocusWindow] = []
+    for event in matching_events:
+        windows.append(
+            FocusWindow(
+                start_s=max(0.0, event.video_time_s - before_s),
+                end_s=event.video_time_s + after_s,
+            )
+        )
+    return windows
+
+
+def filter_events(events, *, card: str | None, side: str, windows: list[FocusWindow]):
+    side_filter = {"own", "enemy"} if side == "both" else {side}
+    canonical = card.replace("_", "-") if card is not None else None
+    filtered = []
+    for event in events:
+        if canonical is not None and event.canonical_card != canonical:
+            continue
+        if canonical is not None and event.side not in side_filter:
+            continue
+        if windows and not _event_in_windows(event, windows):
+            continue
+        filtered.append(event)
+    return filtered
+
+
+def _event_in_windows(event, windows: list[FocusWindow]) -> bool:
+    if event.video_time_s is None:
+        return False
+    return any(window.start_s <= event.video_time_s <= window.end_s for window in windows)
+
+
+def run_detection(scenario: Scenario, *, focus_windows: list[FocusWindow]) -> None:
     scenario.predictions.parent.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
     env["DEBUG_OWN_ACTIONS"] = "1"
@@ -204,6 +302,15 @@ def run_detection(scenario: Scenario) -> None:
         "--video",
         str(scenario.video),
     ]
+    if focus_windows:
+        cmd.extend(
+            [
+                "--video-start-time",
+                str(min(window.start_s for window in focus_windows)),
+                "--video-end-time",
+                str(max(window.end_s for window in focus_windows)),
+            ]
+        )
     with scenario.predictions.open("w", encoding="utf-8") as handle:
         subprocess.run(
             cmd,
