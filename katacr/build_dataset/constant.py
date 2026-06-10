@@ -9,6 +9,7 @@
 This file is used to define the clip rate for each part.
 Change path_dataset to Clash-Royale-Detection-Dataset directory!
 '''
+import os
 from pathlib import Path
 
 image_size = (592, 1280)  # ratio: 2.16
@@ -19,7 +20,9 @@ path_logs.mkdir(exist_ok=True)
 path_features = root / "katacr/features"
 # path_videos = Path("/home/yy/Coding/datasets/CR/fast_pig_2.6")
 # path_dataset = Path("/home/wty/Coding/datasets/CR")
-path_dataset = Path("/home/yy/Coding/datasets/Clash-Royale-Dataset")
+path_dataset = Path(
+  os.environ.get("KATACR_DATASET_PATH", "/home/yy/Coding/datasets/Clash-Royale-Dataset")
+)
 # path_dataset = Path("/data/user/wutianyang/dataset/Clash-Royale-Dataset")
 # path_dataset = Path("/data/user/zhihengwu/Coding/dataset/Clash-Royale-Dataset")
 assert path_dataset.exists(), "Dataset not exist!"

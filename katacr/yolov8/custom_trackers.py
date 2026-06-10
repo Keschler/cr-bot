@@ -1,4 +1,10 @@
-from ultralytics.trackers.track import check_yaml, IterableSimpleNamespace, yaml_load, partial, torch, Path
+from ultralytics.trackers.track import check_yaml, IterableSimpleNamespace, partial, torch, Path
+
+try:
+  from ultralytics.trackers.track import yaml_load
+except ImportError:
+  from ultralytics.trackers.track import YAML
+  yaml_load = YAML.load
 from ultralytics.trackers.byte_tracker import BYTETracker, STrack, matching, TrackState, np, xywh2ltwh
 from ultralytics.trackers.bot_sort import BOTSORT
 
@@ -182,6 +188,13 @@ class CRBOTSORT(BOTSORT, CRBYTETracker):
   
 TRACKER_MAP = {"bytetrack": CRBYTETracker, "botsort": CRBOTSORT}
 
+def _load_tracker_cfg(path):
+  cfg = IterableSimpleNamespace(**yaml_load(check_yaml(path)))
+  if not hasattr(cfg, "fuse_score"):
+    cfg.fuse_score = False
+  return cfg
+
+
 def on_predict_start(predictor: object, persist: bool = False) -> None:
   """
   Initialize trackers for object tracking during prediction.
@@ -196,8 +209,7 @@ def on_predict_start(predictor: object, persist: bool = False) -> None:
   if hasattr(predictor, "trackers") and persist:
     return
 
-  tracker = check_yaml(predictor.args.tracker)
-  cfg = IterableSimpleNamespace(**yaml_load(tracker))
+  cfg = _load_tracker_cfg(predictor.args.tracker)
 
   if cfg.tracker_type not in ["bytetrack", "botsort"]:
     raise AssertionError(f"Only 'bytetrack' and 'botsort' are supported for now, but got '{cfg.tracker_type}'")
@@ -252,8 +264,7 @@ def cr_on_predict_start(detector, persist: bool = True) -> None:
   if detector.tracker is not None and persist:
     return
 
-  tracker = check_yaml(detector.tracker_cfg_path)
-  cfg = IterableSimpleNamespace(**yaml_load(tracker))
+  cfg = _load_tracker_cfg(detector.tracker_cfg_path)
 
   if cfg.tracker_type not in ["bytetrack", "botsort"]:
     raise AssertionError(f"Only 'bytetrack' and 'botsort' are supported for now, but got '{cfg.tracker_type}'")

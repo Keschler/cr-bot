@@ -11,9 +11,24 @@ from ultralytics.cfg import get_cfg
 from ultralytics.engine.model import Model
 from pathlib import Path
 from katacr.yolov8.custom_model import CRDetectionModel
-from katacr.yolov8.custom_validator import CRDetectionValidator
-from katacr.yolov8.custom_trainer import CRTrainer
 from katacr.yolov8.custom_predict import CRDetectionPredictor
+
+class _DetectTaskMap(dict):
+  def __init__(self):
+    super().__init__(
+      model=CRDetectionModel,
+      predictor=CRDetectionPredictor,
+    )
+
+  def __getitem__(self, key):
+    if key == "trainer":
+      from katacr.yolov8.custom_trainer import CRTrainer
+      return CRTrainer
+    if key == "validator":
+      from katacr.yolov8.custom_validator import CRDetectionValidator
+      return CRDetectionValidator
+    return super().__getitem__(key)
+
 
 class YOLO_CR(Model):
   """YOLO (You Only Look Once) object detection model. (Clash Royale)"""
@@ -25,12 +40,7 @@ class YOLO_CR(Model):
   def task_map(self):
     """Map head to model, trainer, validator, and predictor classes."""
     return {
-      "detect": {
-        "model": CRDetectionModel,
-        "trainer": CRTrainer,
-        "validator": CRDetectionValidator,
-        "predictor": CRDetectionPredictor,
-      },
+      "detect": _DetectTaskMap(),
     }
 
   def track(self, source=None, stream=False, persist=False, **kwargs,) -> list:

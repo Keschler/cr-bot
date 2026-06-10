@@ -1,4 +1,6 @@
-from ultralytics.utils.plotting import threaded, np, torch, math, cv2, Annotator, Path, ops, colors, contextlib
+import contextlib
+
+from ultralytics.utils.plotting import threaded, np, torch, math, cv2, Annotator, Path, ops, colors
 @threaded
 def plot_images(
     images,
@@ -90,7 +92,18 @@ def plot_images(
     if on_plot:
         on_plot(fname)
 
-from ultralytics.utils.ops import xywh2xyxy, torch, xywh2xyxy, time, nms_rotated, torchvision, LOGGER
+import torchvision
+
+from ultralytics.utils import LOGGER
+from ultralytics.utils.metrics import batch_probiou
+from ultralytics.utils.nms import TorchNMS
+from ultralytics.utils.ops import torch, time, xywh2xyxy
+
+
+def nms_rotated(boxes, scores, iou_thres):
+  return TorchNMS.fast_nms(boxes, scores, iou_thres, iou_func=batch_probiou)
+
+
 def non_max_suppression(
   prediction,
   conf_thres=0.25,
