@@ -88,6 +88,10 @@ class MatchSession:
                 clock_boxes=analysis.clock_boxes,
                 own_actions=self.own_action_tracker.actions,
                 arena_px=analysis.arena_px,
+                frame=frame,
+                claimed_spell_observation_keys=set(
+                    self.own_action_tracker.claimed_spell_target_observations
+                ),
             )
 
             if game_end_from_result(analysis):

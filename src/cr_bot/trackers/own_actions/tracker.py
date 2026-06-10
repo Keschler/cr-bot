@@ -5,6 +5,7 @@ import os
 
 from cr_bot.domain.card_metadata import CARD_METADATA
 from cr_bot.domain.constants import (
+    ENEMY_SPELL_OWN_ACTION_VETO_WINDOW_S,
     OWN_ACTION_DUPLICATE_WINDOW_S,
     OWN_ACTION_RECENT_HAND_WINDOW_S,
     OWN_ACTION_RECENT_TRACK_WINDOW_S,
@@ -26,6 +27,7 @@ from .models import (
     PendingOwnPlay,
     RecentAllyTrack,
 )
+from .spell_targets import sense_spell_target_observations
 
 
 class OwnActionTracker:
@@ -40,6 +42,7 @@ class OwnActionTracker:
         self.actions: list[OwnActionEvent] = []
         self.recent_hand_seen: dict[str, float] = {}
         self.spell_deploy_locator = SpellDeployLocator()
+        self.claimed_spell_target_observations: dict[str, float] = {}
         self.debug = os.environ.get("DEBUG_OWN_ACTIONS") == "1"
 
     def _debug(self, message: str) -> None:
@@ -76,6 +79,7 @@ class OwnActionTracker:
             f"last_hand={self.last_hand} pending={len(self.pending)} "
             f"own_units={len(game_state.own_units)} clocks={len(clock_boxes)}"
         )
+        self._forget_stale_spell_target_claims(now)
 
         self._detect_slot_drops(
             hand,
@@ -254,7 +258,7 @@ class OwnActionTracker:
                     )
                 else:
                     placed_cell, keep_pending = self._confirm_pending_spell(
-                        pending, arena_px, frame, elixir_confirms
+                        pending, arena_px, frame, elixir_confirms, now
                     )
             else:
                 placed_cell = self._infer_pending_cell(
@@ -370,32 +374,53 @@ class OwnActionTracker:
             return None
         return self._infer_cell_from_clock(candidate_tracks, arena_px, clock_boxes, pending.card)
 
-    def _confirm_pending_spell(self, pending, arena_px, frame, elixir_confirms):
+    def _confirm_pending_spell(self, pending, arena_px, frame, elixir_confirms, now):
         if frame is None or arena_px is None:
             return None, True
-        cost = CARD_METADATA.get(pending.card, {}).get("elixir_cost")
-        deploy = self.spell_deploy_locator.locate(frame, arena_px, pending.card, cost)
-        release = self.spell_deploy_locator.locate_released(frame, arena_px, pending.card, cost)
+        observations = sense_spell_target_observations(
+            self.spell_deploy_locator,
+            frame=frame,
+            arena_px=arena_px,
+            card=pending.card,
+            time_left_s=now,
+        )
+        deploy = next((obs for obs in observations if obs.phase == "aim"), None)
+        release = next((obs for obs in observations if obs.phase == "release"), None)
         if elixir_confirms:
             pending.spell_elixir_confirmed = True
         if deploy is not None:
             pending.spell_aim_seen = True
-            pending.spell_target_cell = ACTION_GRID.pixel_to_cell(deploy.center_x, deploy.center_y, arena_px)
+            pending.spell_target_cell = deploy.cell
             self._debug(f"spell aim ellipse visible card={pending.card} cell={pending.spell_target_cell}")
         else:
             self._debug(f"spell aim ellipse missing card={pending.card}")
         if release is not None:
-            release_cell = ACTION_GRID.pixel_to_cell(release.center_x, release.center_y, arena_px)
+            release_cell = release.cell
             pending.spell_release_seen = True
             pending.spell_target_cell = release_cell
             self._debug(f"spell release marker visible card={pending.card} cell={release_cell}")
             if pending.spell_elixir_confirmed and release_cell is not None:
+                self._claim_spell_target_observations(observations)
                 return release_cell, False
         if pending.spell_release_seen and pending.spell_elixir_confirmed and pending.spell_target_cell is not None:
+            self._claim_spell_target_observations(observations)
             return pending.spell_target_cell, False
         if pending.spell_aim_seen and deploy is None and not pending.spell_release_seen:
             return None, False
         return None, True
+
+    def _claim_spell_target_observations(self, observations):
+        for observation in observations:
+            self.claimed_spell_target_observations[observation.key] = observation.time_left_s
+
+    def _forget_stale_spell_target_claims(self, now):
+        stale_keys = [
+            key
+            for key, seen_at in self.claimed_spell_target_observations.items()
+            if seen_at - now > ENEMY_SPELL_OWN_ACTION_VETO_WINDOW_S
+        ]
+        for key in stale_keys:
+            del self.claimed_spell_target_observations[key]
 
     def _confirm_pending_rolling_spell(self, pending, rolling_spell_match, selected_for_detection, rolling_spell_elixir_confirmed, arena_px, now):
         if arena_px is None:

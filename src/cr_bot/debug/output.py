@@ -191,6 +191,7 @@ def print_frame_result(result, enemy_card_tracker, own_action_tracker=None):
             f"team={match.troop.team:<5} "
             f"conf={match.troop.confidence:.3f} "
             f"hp={match.troop.estimated_hp} "
+            f"track_id={match.troop.track_id} "
             f"cell={cell}"
         )
     print()
@@ -223,6 +224,7 @@ def print_debug_frame_result(result, enemy_card_tracker, own_action_tracker):
             f"team={match.troop.team:<5} "
             f"conf={match.troop.confidence:.3f} "
             f"hp={match.troop.estimated_hp} "
+            f"track_id={match.troop.track_id} "
             f"cell={cell}"
         )
 

@@ -1,7 +1,21 @@
+from pathlib import Path
+import sys
 from types import SimpleNamespace
+from unittest.mock import MagicMock
+
+import numpy as np
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SRC_ROOT = ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.append(str(SRC_ROOT))
+
+sys.modules.setdefault("cv2", MagicMock())
 
 from cr_bot.features.action_space import ACTION_GRID
 from cr_bot.trackers.enemy_cards import EnemyCardTracker
+from cr_bot.trackers.enemy_cards.models import RecentSpellTargetObservation
 
 
 def _match(track_id, *, class_name="musketeer", center_x=500.0, center_y=700.0):
@@ -38,9 +52,40 @@ def _tracker():
     return tracker
 
 
+def _obs(card, time_left_s, cell, arena_px, *, phase="release", quality=1.0):
+    center_x, center_y = ACTION_GRID.cell_to_pixel_center(*cell, arena_px)
+    return RecentSpellTargetObservation(
+        card=card,
+        time_left_s=time_left_s,
+        cell=cell,
+        phase=phase,
+        quality=quality,
+        center_x=center_x,
+        center_y=center_y,
+        key=f"{card}:{phase}:{time_left_s}:{cell}",
+    )
+
+
 def _raised_cell(cell, rows=2):
     col, row = cell
     return col, max(0, row - rows)
+
+
+def _frame_with_burst(arena_px, cell=None, *, color=(40, 160, 255)):
+    frame = np.zeros((1000, 1000, 3), dtype=np.uint8)
+    if cell is None:
+        return frame
+    center_x, center_y = ACTION_GRID.cell_to_pixel_center(*cell, arena_px)
+    cell_w = arena_px[2] * ACTION_GRID.width / 18
+    cell_h = arena_px[3] * ACTION_GRID.height / 32
+    radius_x = max(8, int(round(cell_w * 0.8)))
+    radius_y = max(8, int(round(cell_h * 0.8)))
+    x0 = max(0, int(round(center_x - radius_x)))
+    y0 = max(0, int(round(center_y - radius_y)))
+    x1 = min(frame.shape[1], int(round(center_x + radius_x)))
+    y1 = min(frame.shape[0], int(round(center_y + radius_y)))
+    frame[y0:y1, x0:x1] = np.array(color, dtype=np.uint8)
+    return frame
 
 
 def test_enemy_clock_track_can_confirm_only_one_current_troop_track():
@@ -215,3 +260,322 @@ def test_recorded_enemy_play_is_relabelled_when_track_class_later_flips():
     assert play["cost"] == 8
     assert play["class_votes"]["golem"] >= 3
     assert play["video_time_s"] == 123.0
+
+
+def test_enemy_fireball_event_revises_from_late_observation_without_track_continuity():
+    tracker = _tracker()
+    arena_px = (0.0, 0.0, 1000.0, 1000.0)
+
+    target_x, target_y = ACTION_GRID.cell_to_pixel_center(12, 22, arena_px)
+    tracker.update(
+        200.0,
+        [_match(1, class_name="fireball", center_x=560.0, center_y=360.0)],
+        arena_px=arena_px,
+    )
+    tracker.update(
+        199.5,
+        [_match(1, class_name="fireball", center_x=610.0, center_y=470.0)],
+        arena_px=arena_px,
+    )
+    tracker.update(
+        199.0,
+        [_match(1, class_name="fireball", center_x=655.0, center_y=610.0)],
+        arena_px=arena_px,
+    )
+    tracker.update(
+        198.8,
+        [_ally_match(7, class_name="fireball", center_x=target_x, center_y=target_y)],
+        arena_px=arena_px,
+    )
+
+    assert tracker.detected_card_plays[0]["track_id"] == 1
+
+    play = tracker.detected_card_plays[0]
+    assert play["cell"] == (12, 22)
+    assert tracker.projectile_spell_events[0].finalized is True
+    assert tracker.projectile_spell_events[0].first_track_id == 1
+
+
+def test_enemy_fireball_fragment_is_merged_before_late_ally_endpoint():
+    tracker = _tracker()
+    arena_px = (0.0, 0.0, 1000.0, 1000.0)
+    target_x, target_y = ACTION_GRID.cell_to_pixel_center(12, 22, arena_px)
+
+    tracker.update(200.0, [_match(1, class_name="fireball", center_x=850.0, center_y=220.0)], arena_px=arena_px)
+    tracker.update(199.5, [_match(1, class_name="fireball", center_x=860.0, center_y=240.0)], arena_px=arena_px)
+    tracker.update(199.0, [_match(1, class_name="fireball", center_x=870.0, center_y=260.0)], arena_px=arena_px)
+
+    tracker.update(198.5, [_match(7, class_name="fireball", center_x=580.0, center_y=300.0)], arena_px=arena_px)
+    tracker.update(198.0, [_match(7, class_name="fireball", center_x=620.0, center_y=440.0)], arena_px=arena_px)
+    tracker.update(197.5, [_match(7, class_name="fireball", center_x=660.0, center_y=590.0)], arena_px=arena_px)
+    tracker.update(197.2, [_ally_match(9, class_name="fireball", center_x=target_x, center_y=target_y)], arena_px=arena_px)
+
+    assert len(tracker.detected_card_plays) == 1
+    assert tracker.detected_card_plays[0]["track_id"] == 1
+    assert tracker.detected_card_plays[0]["cell"] == (12, 22)
+
+
+def test_enemy_fireball_event_can_revise_from_observation_seen_just_before_frame_confirm():
+    tracker = _tracker()
+    arena_px = (0.0, 0.0, 1000.0, 1000.0)
+
+    target_x, target_y = ACTION_GRID.cell_to_pixel_center(12, 22, arena_px)
+    tracker.update(
+        200.0,
+        [_match(1, class_name="fireball", center_x=570.0, center_y=390.0)],
+        arena_px=arena_px,
+    )
+    tracker.update(
+        199.5,
+        [_match(1, class_name="fireball", center_x=620.0, center_y=500.0)],
+        arena_px=arena_px,
+    )
+    tracker.update(
+        199.0,
+        [
+            _match(1, class_name="fireball", center_x=660.0, center_y=640.0),
+            _ally_match(7, class_name="fireball", center_x=target_x, center_y=target_y),
+        ],
+        arena_px=arena_px,
+    )
+
+    assert tracker.detected_card_plays[0]["cell"] == (12, 22)
+    assert tracker.projectile_spell_events[0].finalized is True
+
+
+def test_enemy_fireball_trajectory_filter_rejects_late_impossible_candidate():
+    tracker = _tracker()
+    arena_px = (0.0, 0.0, 1000.0, 1000.0)
+
+    tracker.update(200.0, [_match(1, class_name="fireball", center_x=500.0, center_y=200.0)], arena_px=arena_px)
+    tracker.update(199.5, [_match(1, class_name="fireball", center_x=520.0, center_y=260.0)], arena_px=arena_px)
+    tracker.update(199.0, [_match(1, class_name="fireball", center_x=540.0, center_y=320.0)], arena_px=arena_px)
+
+    original_cell = tracker.detected_card_plays[0]["cell"]
+    tracker.update(198.6, [_ally_match(7, class_name="fireball", center_x=120.0, center_y=720.0)], arena_px=arena_px)
+
+    assert tracker.detected_card_plays[0]["cell"] == original_cell
+
+
+def test_own_fireball_action_blocks_enemy_projectile_reuse_without_changing_own_cell():
+    tracker = _tracker()
+    arena_px = (0.0, 0.0, 1000.0, 1000.0)
+
+    target_x, target_y = ACTION_GRID.cell_to_pixel_center(12, 22, arena_px)
+    own_action = {"card": "fireball", "time_left_s": 199.1, "cell": (12, 22)}
+    tracker.update(200.0, [_match(1, class_name="fireball", center_x=560.0, center_y=360.0)], arena_px=arena_px)
+    tracker.update(199.5, [_match(1, class_name="fireball", center_x=610.0, center_y=470.0)], arena_px=arena_px)
+    tracker.update(
+        199.0,
+        [
+            _match(1, class_name="fireball", center_x=655.0, center_y=610.0),
+            _ally_match(7, class_name="fireball", center_x=target_x, center_y=target_y),
+        ],
+        arena_px=arena_px,
+        own_actions=[own_action],
+    )
+
+    assert tracker.detected_card_plays[0]["cell"] != (12, 22)
+    assert own_action["cell"] == (12, 22)
+
+
+def test_ally_labelled_fireball_without_recent_own_action_records_enemy_spell():
+    tracker = _tracker()
+    arena_px = (0.0, 0.0, 1000.0, 1000.0)
+    target_x, target_y = ACTION_GRID.cell_to_pixel_center(12, 22, arena_px)
+
+    for idx in range(3):
+        tracker.update(
+            200.0 - idx * 0.1,
+            [_ally_match(19, class_name="fireball", center_x=target_x, center_y=target_y)],
+            now_s=7.9 + idx * 0.1,
+            arena_px=arena_px,
+        )
+
+    assert len(tracker.detected_card_plays) == 1
+    play = tracker.detected_card_plays[0]
+    assert play["card"] == "fireball"
+    assert play["track_id"] == 19
+    assert play["video_time_s"] == 7.9
+
+
+def test_recent_own_fireball_at_same_cell_suppresses_ally_labelled_enemy_fallback():
+    tracker = _tracker()
+    arena_px = (0.0, 0.0, 1000.0, 1000.0)
+    target_x, target_y = ACTION_GRID.cell_to_pixel_center(12, 22, arena_px)
+    own_action = {"card": "fireball", "time_left_s": 200.1, "cell": (12, 22)}
+
+    for idx in range(3):
+        tracker.update(
+            200.0 - idx * 0.1,
+            [_ally_match(19, class_name="fireball", center_x=target_x, center_y=target_y)],
+            own_actions=[own_action],
+            arena_px=arena_px,
+        )
+
+    assert tracker.detected_card_plays == []
+    assert own_action["cell"] == (12, 22)
+
+
+def test_recent_own_fireball_at_different_cell_keeps_ally_labelled_enemy_fallback():
+    tracker = _tracker()
+    arena_px = (0.0, 0.0, 1000.0, 1000.0)
+    target_x, target_y = ACTION_GRID.cell_to_pixel_center(12, 22, arena_px)
+    own_action = {"card": "fireball", "time_left_s": 200.1, "cell": (3, 8)}
+
+    for idx in range(3):
+        tracker.update(
+            200.0 - idx * 0.1,
+            [_ally_match(19, class_name="fireball", center_x=target_x, center_y=target_y)],
+            own_actions=[own_action],
+            arena_px=arena_px,
+        )
+
+    assert len(tracker.detected_card_plays) == 1
+    assert tracker.detected_card_plays[0]["card"] == "fireball"
+    assert own_action["cell"] == (3, 8)
+
+
+def test_log_moving_toward_increasing_rows_records_enemy_despite_team_labels():
+    tracker = _tracker()
+    arena_px = (0.0, 0.0, 1000.0, 1000.0)
+    teams = ("ally", "enemy", "ally", "ally")
+
+    for idx, row in enumerate((13, 13, 14, 15)):
+        center_x, center_y = ACTION_GRID.cell_to_pixel_center(13, row, arena_px)
+        match = _ally_match(24, class_name="the-log", center_x=center_x, center_y=center_y)
+        match.troop.team = teams[idx]
+        tracker.update(
+            200.0 - idx * 0.1,
+            [match],
+            now_s=40.3 + idx * 0.1,
+            arena_px=arena_px,
+        )
+
+    assert len(tracker.detected_card_plays) == 1
+    play = tracker.detected_card_plays[0]
+    assert play["card"] == "log"
+    assert play["track_id"] == 24
+    assert play["video_time_s"] == 40.3
+
+
+def test_log_moving_toward_decreasing_rows_is_not_recorded_as_enemy():
+    tracker = _tracker()
+    arena_px = (0.0, 0.0, 1000.0, 1000.0)
+
+    for idx, row in enumerate((22, 21, 20, 19)):
+        center_x, center_y = ACTION_GRID.cell_to_pixel_center(8, row, arena_px)
+        tracker.update(
+            200.0 - idx * 0.1,
+            [_match(24, class_name="the-log", center_x=center_x, center_y=center_y)],
+            arena_px=arena_px,
+        )
+
+    assert tracker.detected_card_plays == []
+
+
+def test_stationary_log_team_noise_is_not_recorded_as_enemy():
+    tracker = _tracker()
+    arena_px = (0.0, 0.0, 1000.0, 1000.0)
+
+    for idx, row in enumerate((13, 13, 13, 13)):
+        center_x, center_y = ACTION_GRID.cell_to_pixel_center(13, row, arena_px)
+        tracker.update(
+            200.0 - idx * 0.1,
+            [_match(24, class_name="the-log", center_x=center_x, center_y=center_y)],
+            arena_px=arena_px,
+        )
+
+    assert tracker.detected_card_plays == []
+
+
+def test_log_row_jitter_is_not_recorded_as_enemy():
+    tracker = _tracker()
+    arena_px = (0.0, 0.0, 1000.0, 1000.0)
+
+    for idx, row in enumerate((13, 14, 13, 14, 13)):
+        center_x, center_y = ACTION_GRID.cell_to_pixel_center(13, row, arena_px)
+        tracker.update(
+            200.0 - idx * 0.1,
+            [_match(24, class_name="the-log", center_x=center_x, center_y=center_y)],
+            arena_px=arena_px,
+        )
+
+    assert tracker.detected_card_plays == []
+
+
+def test_fragmented_enemy_log_is_suppressed_within_log_duplicate_window():
+    tracker = _tracker()
+    arena_px = (0.0, 0.0, 1000.0, 1000.0)
+
+    for idx, row in enumerate((13, 14, 15)):
+        center_x, center_y = ACTION_GRID.cell_to_pixel_center(13, row, arena_px)
+        tracker.update(
+            200.0 - idx * 0.1,
+            [_match(24, class_name="the-log", center_x=center_x, center_y=center_y)],
+            arena_px=arena_px,
+        )
+    for idx, row in enumerate((16, 17, 18)):
+        center_x, center_y = ACTION_GRID.cell_to_pixel_center(13, row, arena_px)
+        tracker.update(
+            198.8 - idx * 0.1,
+            [_match(25, class_name="the-log", center_x=center_x, center_y=center_y)],
+            arena_px=arena_px,
+        )
+
+    assert len(tracker.detected_card_plays) == 1
+    assert tracker.detected_card_plays[0]["track_id"] == 24
+
+
+def test_increasing_log_is_enemy_even_near_own_log_action():
+    tracker = _tracker()
+    arena_px = (0.0, 0.0, 1000.0, 1000.0)
+    own_action = {"card": "log", "time_left_s": 200.1, "cell": (13, 16)}
+
+    for idx, row in enumerate((13, 14, 15)):
+        center_x, center_y = ACTION_GRID.cell_to_pixel_center(13, row, arena_px)
+        tracker.update(
+            200.0 - idx * 0.1,
+            [_ally_match(24, class_name="the-log", center_x=center_x, center_y=center_y)],
+            own_actions=[own_action],
+            arena_px=arena_px,
+        )
+
+    assert len(tracker.detected_card_plays) == 1
+    assert tracker.detected_card_plays[0]["card"] == "log"
+    assert own_action["cell"] == (13, 16)
+
+
+def test_two_nearby_enemy_fireballs_resolve_in_time_order():
+    tracker = _tracker()
+    arena_px = (0.0, 0.0, 1000.0, 1000.0)
+
+    x1, y1 = ACTION_GRID.cell_to_pixel_center(7, 22, arena_px)
+    x2, y2 = ACTION_GRID.cell_to_pixel_center(11, 22, arena_px)
+    tracker.update(200.0, [_match(1, class_name="fireball", center_x=340.0, center_y=260.0)], arena_px=arena_px)
+    tracker.update(199.5, [_match(1, class_name="fireball", center_x=380.0, center_y=430.0)], arena_px=arena_px)
+    tracker.update(199.0, [_match(1, class_name="fireball", center_x=420.0, center_y=600.0)], arena_px=arena_px)
+
+    tracker.update(198.7, [_ally_match(9, class_name="fireball", center_x=x1, center_y=y1)], arena_px=arena_px)
+
+    tracker.update(195.0, [_match(2, class_name="fireball", center_x=610.0, center_y=260.0)], arena_px=arena_px)
+    tracker.update(194.5, [_match(2, class_name="fireball", center_x=630.0, center_y=430.0)], arena_px=arena_px)
+    tracker.update(194.0, [_match(2, class_name="fireball", center_x=650.0, center_y=600.0)], arena_px=arena_px)
+    tracker.update(193.7, [_ally_match(10, class_name="fireball", center_x=x2, center_y=y2)], arena_px=arena_px)
+
+    assert [play["cell"] for play in tracker.detected_card_plays[:2]] == [(7, 22), (11, 22)]
+
+
+def test_finalized_enemy_projectile_cell_does_not_regress_during_track_sync():
+    tracker = _tracker()
+    arena_px = (0.0, 0.0, 1000.0, 1000.0)
+
+    target_x, target_y = ACTION_GRID.cell_to_pixel_center(12, 22, arena_px)
+    tracker.update(200.0, [_match(1, class_name="fireball", center_x=560.0, center_y=360.0)], arena_px=arena_px)
+    tracker.update(199.5, [_match(1, class_name="fireball", center_x=610.0, center_y=470.0)], arena_px=arena_px)
+    tracker.update(199.0, [_match(1, class_name="fireball", center_x=655.0, center_y=610.0)], arena_px=arena_px)
+    tracker.update(198.8, [_ally_match(7, class_name="fireball", center_x=target_x, center_y=target_y)], arena_px=arena_px)
+
+    tracker.update(198.0, [_match(1, class_name="fireball", center_x=550.0, center_y=350.0)], arena_px=arena_px)
+
+    assert tracker.detected_card_plays[0]["cell"] == (12, 22)

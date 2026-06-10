@@ -223,6 +223,10 @@ def run(video_path: Path, output_dir: Path):
             clock_boxes=result["clock_boxes"],
             own_actions=own_action_tracker.actions,
             arena_px=result["arena_px"],
+            frame=frame,
+            claimed_spell_observation_keys=set(
+                own_action_tracker.claimed_spell_target_observations
+            ),
         )
 
         for action in new_actions:

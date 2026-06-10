@@ -320,3 +320,37 @@ def test_log_uses_rolling_spell_detection():
     assert len(tracker.actions) == 1
     assert tracker.actions[0]["card"] == "log"
     assert 13 in tracker.consumed_log_track_ids
+
+
+def test_confirm_pending_spell_behavior_is_unchanged_after_shared_helper_extraction():
+    tracker = OwnActionTracker()
+    pending = PendingOwnPlay(
+        card="fireball",
+        slot_idx=1,
+        started_at_s=200.0,
+        elixir_before=5.0,
+    )
+
+    tracker.spell_deploy_locator.locate = lambda *args, **kwargs: SimpleNamespace(
+        center_x=540.0,
+        center_y=1200.0,
+    )
+    tracker.spell_deploy_locator.locate_released = lambda *args, **kwargs: SimpleNamespace(
+        center_x=560.0,
+        center_y=1240.0,
+    )
+
+    cell, keep_pending = tracker._confirm_pending_spell(
+        pending,
+        arena_px=(0, 0, 1080, 2400),
+        frame=object(),
+        elixir_confirms=True,
+        now=199.8,
+    )
+
+    assert keep_pending is False
+    assert cell == pending.spell_target_cell
+    assert pending.spell_aim_seen is True
+    assert pending.spell_release_seen is True
+    assert pending.spell_elixir_confirmed is True
+    assert tracker.claimed_spell_target_observations
