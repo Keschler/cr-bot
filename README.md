@@ -1,6 +1,7 @@
 # Clash Royale Vision Bot
 
-Clash Royale Vision Bot is a computer vision project that reads Clash Royale gameplay from video or live capture and turns it into structured game state. Planned is to extract state and action from expert 2.6 hog cycle gameplay and use that to do behavior cloning and reinforcement learning.
+Clash Royale Vision Bot reads Clash Royale gameplay from recorded video, screenshots, or live capture and turns it into structured game state and card-play events. The project is currently focused on extracting state and actions from expert gameplay for evaluation and future imitation-learning datasets.
+
 <img width="1600" height="900" alt="cr-bot-banner-v1-dashboard" src="https://github.com/user-attachments/assets/1d225b86-79a3-4477-b524-2274faa92692" />
 
 ## Features
@@ -12,9 +13,10 @@ Clash Royale Vision Bot is a computer vision project that reads Clash Royale gam
 - Estimates enemy card plays and enemy unit HP from detected troops, buildings, health bars, and spell effects.
 - Estimates enemy elixir over time from match clock and confirmed enemy plays.
 - Extracts own card plays from hand-slot changes and confirms deploy locations from elixir-change flashes, troop clocks, spell elixir-cost overlays, and rolling spell tracks.
+- Tracks projectile and rolling-spell direction to distinguish own and enemy Fireballs and Logs more reliably.
 - Supports live capture through a video device such as `v4l2loopback`.
-- Supports offline dataset generation from recorded gameplay clips.
-- Includes an action-evaluation harness with built-in scenario runs, ground-truth JSON, timing error reports, and cell visualization overlays.
+- Supports frame-analysis replay caches for fast tracker-only iteration without rerunning YOLO and OCR.
+- Includes an action-evaluation harness with built-in scenarios, focused time windows, ground-truth JSON, timing reports, and cell visualization overlays.
 - Includes scripts for detector training, inference, annotation preparation, and dataset processing.
 
 ## Demo
@@ -35,6 +37,8 @@ The project processes each frame in a few steps:
 4. It builds a structured `GameState`.
 5. It updates trackers for own actions, enemy cards, enemy elixir, and match state.
 
+The hand HUD detector can distinguish an active evolution from its base card and emits names such as `evo-cannon`. Battlefield YOLO support is more limited: only evolution classes present in the KataCR training set can be detected, and enemy evolution units are currently normalized to their base card by the card-play tracker.
+
 Own action extraction is based on the card hand changing first, then confirming the deploy location from the best available in-game cue:
 
 - Normal troops and buildings use deploy-clock detections when available.
@@ -43,6 +47,26 @@ Own action extraction is based on the card hand changing first, then confirming 
 - Circle/radius spells use the white spell radius ellipse only as an aiming candidate.
 - The purple elixir-cost overlay is required to confirm that a spell was actually released. It is scored from the middle of the top half of the detected spell ellipse, so the crop is tied to the actual spell-radius candidate rather than a loose rectangle around the approximate center.
 - Rolling spells such as The Log and Barbarian Barrel use their first visible rolling unit track plus elixir confirmation.
+
+## Install From Source
+
+Python 3.12 or newer is required.
+
+```bash
+git clone https://github.com/Keschler/cr-bot.git
+cd cr-bot
+git submodule update --init vendor/external/KataCR
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -e .
+```
+
+Run the test suite with:
+
+```bash
+pytest
+```
 
 ## Use The Executable
 
@@ -76,6 +100,32 @@ Limit recorded-video analysis to the first N seconds:
 ./capture --video /path/to/gameplay.mp4 --video-duration 198
 ```
 
+Analyze every fifth frame within an absolute video-time window:
+
+```bash
+./capture --video /path/to/gameplay.mp4 \
+  --frame-stride 5 \
+  --video-start-time 120 \
+  --video-end-time 180
+```
+
+The same arguments are available from a source installation through `cr-bot`.
+
+### Replay Cache
+
+Vision processing is the expensive part of repeated tracker debugging. Write a replay cache during a normal video run:
+
+```bash
+cr-bot --video /path/to/gameplay.mp4 \
+  --write-replay-cache data/eval/replay_cache/gameplay.pkl.gz
+```
+
+Replay the stored frame analyses without rerunning YOLO, OCR, or the hand-card classifiers:
+
+```bash
+cr-bot --replay-cache data/eval/replay_cache/gameplay.pkl.gz
+```
+
 For Android live capture on Linux, create a loopback device first:
 
 ```bash
@@ -88,7 +138,7 @@ Then stream the phone screen into that device with `scrcpy`:
 scrcpy --video-source=display --v4l2-sink=/dev/video37
 ```
 
-**Use** `--yolo-detections` if screenshot or phone screen isn't `1080x2400` -> uses yolo dections for the extraction of tower-hp
+Use `--yolo-detections` to derive tower-HP crops from detected health bars instead of fixed tower ROIs. Use `--alternative-rois` for gameplay layouts where the bottom HUD is vertically shifted.
 
 Frames are normalized to `1080x2400` internally by default so the existing ROIs keep matching the game UI. Use `--no-normalize` only when intentionally processing the raw capture size. Currently, only `1080x2400` or resolutions with the same aspect ratio are expected to work.
 
@@ -99,9 +149,9 @@ src/cr_bot/
   app/                        CLI, live capture, video replay, frame pipeline
   domain/                     game state, constants, ROIs, card metadata
   vision/                     YOLO runtime and frame extractors
-  trackers/                   enemy cards, match clock, and stateful tracking
+  trackers/                   own actions, enemy cards/elixir, and match clock
   features/                   board and global feature builders
-  audio/                      audio classifier support
+  replay/                     serialized frame-analysis cache support
   eval/                       action evaluation and cell visualizer
   debug/                      debug rendering and reporting helpers
 
@@ -110,9 +160,8 @@ configs/                      detector training configs
 data/                         local datasets, labels, and evaluation ground truth
 scripts/                      training, inference, and dataset helper scripts
 scripts/debug/                local debug renderers for action and spell detection
-vendor/                       external KataCR dependency
+vendor/external/KataCR/       patched KataCR detector dependency
 outputs/                      generated runs, caches, debug images, and videos
-capture/                      temporary compatibility wrappers for old entrypoints
 
 dataset_generation/
   scripts/process_frame.py    offline frame-state dataset generation
@@ -172,6 +221,21 @@ Use `--mode summary` for only the aggregate totals, `--scenario 2hog-cycle` or
 `--scenario 3400ladder` to run one clip, `--run-detection` to regenerate the
 capture txt first, and `--explain-misses` to run the missing-action explainer.
 
+To isolate one card occurrence and avoid processing the whole video:
+
+```bash
+PYTHONPATH=src python3 -m cr_bot.eval.run_action_eval_scenarios \
+  --scenario 2hog-cycle \
+  --run-detection \
+  --focus-card fireball \
+  --focus-side enemy \
+  --focus-video-time 183.7 \
+  --focus-window-before 5 \
+  --focus-window-after 10
+```
+
+Use `--build-replay-cache` once and `--replay-cache` on later scenario runs when changing tracker logic but not frame analysis. The scenario runner stores one cache per built-in scenario under `data/eval/replay_cache/`.
+
 The cell visualizer renders the action grid over labeled frames so ground-truth
 cells can be checked or filled in from video frames. See `docs/eval/README.md`
 for the ground-truth format and script options.
@@ -187,7 +251,7 @@ Devlogs: https://flavortown.hackclub.com/projects/16627
 
 ## Planned Work
 
-- Extract player actions from gameplay videos, including card choice and deployment location.
+- Improve player-action extraction accuracy across more decks, cards, and layouts.
 - Build behavior cloning datasets from expert gameplay.
 - Train models that imitate expert decisions from extracted game state.
 - Explore reinforcement learning on top of the extracted state and action pipeline.
@@ -197,6 +261,9 @@ Devlogs: https://flavortown.hackclub.com/projects/16627
 - The hand-card and next-card UI classifiers reached 100% accuracy on the tested 2.6 Hog Cycle workflow, but have not been fully validated across every other deck and troop/card combination.
 - Heroes/champions are not currently included in detection, either in the YOLO battlefield detector setup or in the self-trained hand-card and next-card UI classifiers.
 - Goblinstein and Three Musketeers are not added to the hand-card and next-card detection model.
+- Active evolutions can appear as `evo-*` in hand state, but evolution names are not yet represented by `CARD_METADATA` IDs and therefore are not encoded in the card one-hot feature vector.
+- The battlefield detector only recognizes evolution classes included in the older KataCR model. Newer evolutions such as Cannon Evolution do not have dedicated YOLO classes.
+- Mirror cannot be identified from its spawned battlefield unit; it requires hand/cycle inference.
 - Timer, elixir, and tower HP extraction can still be noisy in some frames.
 - Enemy elixir is an estimate, not a value shown by the game.
 - Spell detection can be ambiguous when multiple radius effects overlap or when the purple elixir-cost overlay is outside the selected spell ellipse crop.
