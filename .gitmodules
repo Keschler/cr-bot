@@ -8,5 +8,4 @@
 
 [submodule "vendor/external/KataCR"]
 	path = vendor/external/KataCR
-	url = https://github.com/wty-yy/KataCR.git
-
+	url = https://github.com/Keschler/cr-bot.git
