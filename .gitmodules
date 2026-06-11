@@ -10,6 +10,3 @@
 	path = vendor/external/KataCR
 	url = https://github.com/wty-yy/KataCR.git
 
-[submodule "data/seed_labels/cvat"]
-	path = data/seed_labels/cvat
-	url = https://github.com/cvat-ai/cvat.git
