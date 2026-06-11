@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 import cv2
 
-
 from cr_bot.domain.constants import (
     CARD_CONFIDENCE_THRESHOLD,
     GAME_START_MIN_SECONDS,
@@ -11,10 +10,6 @@ from cr_bot.domain.constants import (
     MAX_ELIXIR,
     HAND_CARD_CONFIDENCE_THRESHOLD,
 )
-from cr_bot.vision.cards import extract_hand_state
-from cr_bot.vision.elixir import extract_elixir
-from cr_bot.vision.timer import extract_time
-from cr_bot.vision.image_utils import detect_if_king_tower_activated, detect_if_support_tower_alive
 
 
 _TIMER_RE = re.compile(r"^\d{1,2}:\d{2}$")
@@ -56,6 +51,8 @@ def _count_distinct_hand_cards(hand_state: dict) -> int:
 
 
 def _has_plausible_elixir(frame) -> bool:
+    from cr_bot.vision.elixir import extract_elixir
+
     elixir = extract_elixir(frame)
     digit = elixir["displayed_digit"]
     estimated_value = float(elixir["estimated_value"]) + float(digit)
@@ -63,6 +60,11 @@ def _has_plausible_elixir(frame) -> bool:
 
 
 def _has_visible_tower_bars(frame) -> bool:
+    from cr_bot.vision.image_utils import (
+        detect_if_king_tower_activated,
+        detect_if_support_tower_alive,
+    )
+
     king_state = detect_if_king_tower_activated(frame)
     support_state = detect_if_support_tower_alive(frame)
 
@@ -73,6 +75,13 @@ def _has_visible_tower_bars(frame) -> bool:
 
 
 def _extract_non_card_signals(frame) -> dict:
+    from cr_bot.vision.elixir import extract_elixir
+    from cr_bot.vision.image_utils import (
+        detect_if_king_tower_activated,
+        detect_if_support_tower_alive,
+    )
+    from cr_bot.vision.timer import extract_time
+
     timer_text = extract_time(frame)
     timer_seconds = _parse_timer(timer_text)
 
@@ -102,6 +111,8 @@ def _extract_non_card_signals(frame) -> dict:
 
 
 def in_game_debug(frame) -> dict:
+    from cr_bot.vision.cards import extract_hand_state
+
     non_card = _extract_non_card_signals(frame)
     hand_state = extract_hand_state(frame)
     confident_hand_cards = _count_confident_hand_cards(hand_state)
@@ -143,6 +154,8 @@ def in_game_debug(frame) -> dict:
 
 
 def game_start(frame) -> bool:
+    from cr_bot.vision.timer import extract_time
+
     timer_seconds = _parse_timer(extract_time(frame))
     if timer_seconds is None:
         return False
@@ -153,6 +166,8 @@ def game_end(frame):
 
 
 def in_game(frame) -> bool:
+    from cr_bot.vision.cards import extract_hand_state
+
     non_card = _extract_non_card_signals(frame)
     if non_card["timer_seconds"] is None:
         return False
