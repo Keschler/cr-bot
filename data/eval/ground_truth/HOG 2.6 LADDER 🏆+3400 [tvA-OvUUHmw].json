@@ -339,6 +339,11 @@
       "frame_index": 2594
     },
     {
+        "side": "enemy",
+        "card": "log",
+        "frame_index": 2614
+    },
+    {
       "side": "enemy",
       "card": "ice-spirit",
       "frame_index": 2642

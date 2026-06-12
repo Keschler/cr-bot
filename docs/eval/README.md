@@ -96,8 +96,10 @@ Predicted txt actions with impossible `time_left` values above `300` are ignored
 ## Import Human Labels
 
 Use `import_ground_truth_labels.py` to import compact hand-labeled files where
-each line is `<card> <frame_index>`. Name the file with an `own.txt` or
-`enemy.txt` suffix so the side can be inferred:
+each line is `<card> <frame_index> [<cell_row>,<cell_column>] [mirror]`. The
+cell and `mirror` marker are optional. A mirrored play uses the repeated card's
+normal ID and imports `"played_via": "mirror"`. Name the file with an `own.txt`
+or `enemy.txt` suffix so the side can be inferred:
 
 ```bash
 python3 scripts/import_ground_truth_labels.py \

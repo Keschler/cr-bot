@@ -148,7 +148,8 @@ def print_frame_result(result, enemy_card_tracker, own_action_tracker=None):
             f"cost={play['cost']} "
             f"time_left={play['time_left_s']} "
             f"track_id={play['track_id']} "
-            f"cell={play.get('cell')}"
+            f"cell={play.get('cell')} "
+            f"played_via={play.get('played_via')}"
         )
     if own_action_tracker is not None:
         print("own plays:")
@@ -165,6 +166,7 @@ def print_frame_result(result, enemy_card_tracker, own_action_tracker=None):
                 f"cell={action['cell']} "
                 f"{video_time_text}"
                 f"time_left={action['time_left_s']} "
+                f"played_via={action.get('played_via')}"
             )
     print()
 
@@ -235,7 +237,8 @@ def print_debug_frame_result(result, enemy_card_tracker, own_action_tracker):
             f"cost={play['cost']} "
             f"time_left={play['time_left_s']} "
             f"track_id={play['track_id']} "
-            f"cell={play.get('cell')}"
+            f"cell={play.get('cell')} "
+            f"played_via={play.get('played_via')}"
         )
     print("own plays:")
     for action in own_action_tracker.actions:
@@ -243,6 +246,7 @@ def print_debug_frame_result(result, enemy_card_tracker, own_action_tracker):
             f"  card={action['card']:<20} "
             f"slot={action['slot_idx']} "
             f"cell={action['cell']} "
-            f"time_left={action['time_left_s']}"
+            f"time_left={action['time_left_s']} "
+            f"played_via={action.get('played_via')}"
         )
     print()

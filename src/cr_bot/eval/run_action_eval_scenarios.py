@@ -103,6 +103,48 @@ SCENARIOS: dict[str, Scenario] = {
             "296",
         ),
     ),
+    "spell": Scenario(
+        key="spell",
+        label="spell",
+        video=REPO_ROOT / "dataset_generation" / "data" / "video_clips" / "spell" / "spell.mp4",
+        ground_truth=REPO_ROOT / "data" / "eval" / "ground_truth" / "spell.json",
+        predictions=REPO_ROOT / "outputs" / "video" / "capture" / "spell.txt",
+        capture_args=(
+            "--yolo-detections",
+            "--video-sample-interval",
+            "0.1",
+            "--video-duration",
+            "128",
+        ),
+    ),
+    "spell2": Scenario(
+        key="spell2",
+        label="spell2",
+        video=REPO_ROOT / "dataset_generation" / "data" / "video_clips" / "spell" / "spell2.mp4",
+        ground_truth=REPO_ROOT / "data" / "eval" / "ground_truth" / "spell2.json",
+        predictions=REPO_ROOT / "outputs" / "video" / "capture" / "spell2.txt",
+        capture_args=(
+            "--yolo-detections",
+            "--video-sample-interval",
+            "0.1",
+            "--video-duration",
+            "117",
+        ),
+    ),
+    "spell3": Scenario(
+        key="spell3",
+        label="spell3",
+        video=REPO_ROOT / "dataset_generation" / "data" / "video_clips" / "spell" / "spell3.mp4",
+        ground_truth=REPO_ROOT / "data" / "eval" / "ground_truth" / "spell3.json",
+        predictions=REPO_ROOT / "outputs" / "video" / "capture" / "spell3.txt",
+        capture_args=(
+            "--yolo-detections",
+            "--video-sample-interval",
+            "0.1",
+            "--video-duration",
+            "121",
+        ),
+    ),
 }
 
 
@@ -129,6 +171,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--run-detection",
         action="store_true",
         help="Regenerate the capture txt for each selected scenario before evaluation.",
+    )
+    parser.add_argument(
+        "--build-replay-cache",
+        action="store_true",
+        help="Run vision once, write a replay cache, and regenerate predictions.",
+    )
+    parser.add_argument(
+        "--replay-cache",
+        action="store_true",
+        help="Regenerate predictions by rerunning trackers from the replay cache.",
     )
     parser.add_argument(
         "--side",
@@ -201,7 +253,27 @@ def evaluate_scenario(args: argparse.Namespace, scenario: Scenario) -> tuple[lis
         after_s=args.focus_window_after,
         focus_video_time_s=args.focus_video_time,
     )
-    if args.run_detection:
+    selected_run_modes = sum(
+        bool(value)
+        for value in (
+            args.run_detection,
+            args.build_replay_cache,
+            args.replay_cache,
+        )
+    )
+    if selected_run_modes > 1:
+        raise ValueError(
+            "Choose only one of --run-detection, --build-replay-cache, or --replay-cache"
+        )
+    if args.build_replay_cache:
+        run_detection(
+            scenario,
+            focus_windows=focus_windows,
+            write_replay_cache=replay_cache_path(scenario),
+        )
+    elif args.replay_cache:
+        run_replay(scenario)
+    elif args.run_detection:
         run_detection(scenario, focus_windows=focus_windows)
     elif not scenario.predictions.exists():
         raise FileNotFoundError(
@@ -291,7 +363,16 @@ def _event_in_windows(event, windows: list[FocusWindow]) -> bool:
     return any(window.start_s <= event.video_time_s <= window.end_s for window in windows)
 
 
-def run_detection(scenario: Scenario, *, focus_windows: list[FocusWindow]) -> None:
+def replay_cache_path(scenario: Scenario) -> Path:
+    return REPO_ROOT / "data" / "eval" / "replay_cache" / f"{scenario.key}.pkl.gz"
+
+
+def run_detection(
+    scenario: Scenario,
+    *,
+    focus_windows: list[FocusWindow],
+    write_replay_cache: Path | None = None,
+) -> None:
     scenario.predictions.parent.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
     env["DEBUG_OWN_ACTIONS"] = "1"
@@ -311,6 +392,35 @@ def run_detection(scenario: Scenario, *, focus_windows: list[FocusWindow]) -> No
                 str(max(window.end_s for window in focus_windows)),
             ]
         )
+    if write_replay_cache is not None:
+        write_replay_cache.parent.mkdir(parents=True, exist_ok=True)
+        cmd.extend(["--write-replay-cache", str(write_replay_cache)])
+    with scenario.predictions.open("w", encoding="utf-8") as handle:
+        subprocess.run(
+            cmd,
+            cwd=REPO_ROOT,
+            env=env,
+            stdout=handle,
+            check=True,
+        )
+
+
+def run_replay(scenario: Scenario) -> None:
+    cache_path = replay_cache_path(scenario)
+    if not cache_path.exists():
+        raise FileNotFoundError(
+            f"replay cache not found for {scenario.key}: {cache_path}. "
+            "Run with --build-replay-cache first."
+        )
+    scenario.predictions.parent.mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ)
+    env["DEBUG_OWN_ACTIONS"] = "1"
+    cmd = [
+        sys.executable,
+        str(CAPTURE_SCRIPT),
+        "--replay-cache",
+        str(cache_path),
+    ]
     with scenario.predictions.open("w", encoding="utf-8") as handle:
         subprocess.run(
             cmd,

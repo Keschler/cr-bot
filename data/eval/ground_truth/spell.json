@@ -1,0 +1,120 @@
+{
+  "video": "spell.mp4",
+  "fps": 10.0,
+  "notes": "Action labels imported from spell enemy.txt.",
+  "events": [
+    {
+      "side": "enemy",
+      "card": "lightning",
+      "frame_index": 162,
+      "cell": [
+        14,
+        24
+      ]
+    },
+    {
+      "side": "enemy",
+      "card": "vines",
+      "frame_index": 221,
+      "cell": [
+        14,
+        20
+      ]
+    },
+    {
+      "side": "enemy",
+      "card": "log",
+      "frame_index": 280,
+      "cell": [
+        4,
+        11
+      ]
+    },
+    {
+      "side": "enemy",
+      "card": "graveyard",
+      "frame_index": 439,
+      "cell": [
+        14,
+        27
+      ]
+    },
+    {
+      "side": "enemy",
+      "card": "goblin-curse",
+      "frame_index": 462,
+      "cell": [
+        14,
+        26
+      ]
+    },
+    {
+      "side": "enemy",
+      "card": "fireball",
+      "frame_index": 551,
+      "cell": [
+        12,
+        28
+      ]
+    },
+    {
+      "side": "enemy",
+      "card": "rage",
+      "frame_index": 680,
+      "cell": [
+        13,
+        21
+      ]
+    },
+    {
+      "side": "enemy",
+      "card": "lightning",
+      "frame_index": 750,
+      "cell": [
+        3,
+        18
+      ]
+    },
+    {
+      "side": "enemy",
+      "card": "graveyard",
+      "frame_index": 1011,
+      "cell": [
+        14,
+        25
+      ]
+    },
+    {
+      "side": "enemy",
+      "card": "clone",
+      "frame_index": 1043,
+      "cell": [
+        14,
+        24
+      ]
+    },
+    {
+      "side": "enemy",
+      "card": "vines",
+      "frame_index": 1061
+    },
+    {
+      "side": "enemy",
+      "card": "rage",
+      "frame_index": 1218,
+      "cell": [
+        4,
+        21
+      ]
+    },
+    {
+      "side": "enemy",
+      "card": "fireball",
+      "frame_index": 1241,
+      "cell": [
+        15,
+        22
+      ]
+    }
+  ]
+}

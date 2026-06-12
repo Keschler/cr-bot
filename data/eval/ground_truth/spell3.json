@@ -1,0 +1,107 @@
+{
+  "video": "spell3.mp4",
+  "fps": 10.0,
+  "notes": "Action labels imported from spell3 enemy.txt.",
+  "events": [
+    {
+      "side": "enemy",
+      "card": "babarian-barrel",
+      "frame_index": 87,
+      "cell": [
+        14,
+        14
+      ]
+    },
+    {
+      "side": "enemy",
+      "card": "void",
+      "frame_index": 179,
+      "cell": [
+        3,
+        13
+      ]
+    },
+    {
+      "side": "enemy",
+      "card": "earthquake",
+      "frame_index": 288
+    },
+    {
+      "side": "enemy",
+      "card": "arrows",
+      "frame_index": 391,
+      "cell": [
+        13,
+        13
+      ]
+    },
+    {
+      "side": "enemy",
+      "card": "goblin-barrel",
+      "frame_index": 527,
+      "cell": [
+        14,
+        24
+      ]
+    },
+    {
+      "side": "enemy",
+      "card": "goblin-barrel",
+      "frame_index": 547,
+      "cell": [
+        14,
+        24
+      ],
+      "played_via": "mirror"
+    },
+    {
+      "side": "enemy",
+      "card": "clone",
+      "frame_index": 570
+    },
+    {
+      "side": "enemy",
+      "card": "void",
+      "frame_index": 708
+    },
+    {
+      "side": "enemy",
+      "card": "earthquake",
+      "frame_index": 791
+    },
+    {
+      "side": "enemy",
+      "card": "babarian-barrel",
+      "frame_index": 921,
+      "cell": [
+        3,
+        14
+      ]
+    },
+    {
+      "side": "enemy",
+      "card": "babarian-barrel",
+      "frame_index": 943,
+      "cell": [
+        10,
+        19
+      ],
+      "played_via": "mirror"
+    },
+    {
+      "side": "enemy",
+      "card": "void",
+      "frame_index": 1007
+    },
+    {
+      "side": "enemy",
+      "card": "clone",
+      "frame_index": 1117
+    },
+    {
+      "side": "enemy",
+      "card": "earthquake",
+      "frame_index": 1169
+    }
+  ]
+}

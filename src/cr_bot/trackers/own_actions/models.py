@@ -39,6 +39,7 @@ class PendingOwnPlay:
     rolling_spell_first_cell: tuple[int, int] | None = None
     rolling_spell_first_seen_s: float | None = None
     rolling_spell_first_track_id: int | None = None
+    played_via: str | None = None
 
 
 @dataclass

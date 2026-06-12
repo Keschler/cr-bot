@@ -14,6 +14,36 @@ sys.modules.setdefault("cv2", MagicMock())
 from cr_bot.trackers.own_actions import OwnActionTracker, PendingOwnPlay
 
 
+def test_mirror_drop_reuses_last_confirmed_card_and_costs_one_more():
+    tracker = OwnActionTracker()
+    tracker._append_action(
+        now=200.0,
+        card="fireball",
+        slot_idx=1,
+        cell=(12, 22),
+    )
+    tracker.last_hand = ["mirror", None, None, None]
+
+    tracker._detect_slot_drops(
+        [None, None, None, None],
+        elixir=7.0,
+        now=198.0,
+    )
+
+    pending = tracker.pending[0]
+    assert pending.card == "fireball"
+    assert pending.played_via == "mirror"
+    assert tracker._required_numeric_elixir_drop(pending) == 3.5
+    assert tracker._append_action(
+        now=198.0,
+        card=pending.card,
+        slot_idx=pending.slot_idx,
+        cell=(12, 22),
+        played_via=pending.played_via,
+    )
+    assert tracker.actions[-1]["played_via"] == "mirror"
+
+
 def _match(class_name, *, track_id=1, center_x=500.0, center_y=1000.0):
     troop = SimpleNamespace(
         class_name=class_name,

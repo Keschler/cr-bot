@@ -37,6 +37,25 @@ def test_creates_ground_truth_next_to_human_labels_parent(tmp_path: Path):
     ]
 
 
+def test_imports_optional_cell_and_mirror_marker(tmp_path: Path):
+    labels = tmp_path / "match enemy.txt"
+    labels.write_text("fireball 53 12,28 mirror\npoison 60\n", encoding="utf-8")
+
+    _run(str(labels))
+
+    ground_truth = json.loads((tmp_path / "match.json").read_text(encoding="utf-8"))
+    assert ground_truth["events"] == [
+        {
+            "side": "enemy",
+            "card": "fireball",
+            "frame_index": 53,
+            "cell": [12, 28],
+            "played_via": "mirror",
+        },
+        {"side": "enemy", "card": "poison", "frame_index": 60},
+    ]
+
+
 def test_updates_imported_side_and_preserves_matching_fields(tmp_path: Path):
     labels = tmp_path / "match enemy.txt"
     labels.write_text("musketeer 53\nice-spirit 60\n", encoding="utf-8")
@@ -49,7 +68,13 @@ def test_updates_imported_side_and_preserves_matching_fields(tmp_path: Path):
                 "notes": "keep me",
                 "events": [
                     {"side": "own", "card": "hog-rider", "frame_index": 40, "cell": [1, 17]},
-                    {"side": "enemy", "card": "musketeer", "frame_index": 53, "cell": [9, 6]},
+                    {
+                        "side": "enemy",
+                        "card": "musketeer",
+                        "frame_index": 53,
+                        "cell": [9, 6],
+                        "played_via": "mirror",
+                    },
                     {"side": "enemy", "card": "fireball", "frame_index": 55},
                 ],
             }

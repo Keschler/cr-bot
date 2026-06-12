@@ -49,6 +49,18 @@ class OwnActionTracker:
         if self.debug:
             print(f"[own_actions] {message}")
 
+    @property
+    def pending_spell_targets(self):
+        return [
+            {
+                "card": pending.card,
+                "time_left_s": pending.started_at_s,
+                "cell": pending.spell_target_cell,
+            }
+            for pending in self.pending
+            if pending.spell_target_cell is not None
+        ]
+
     def update(
         self,
         game_state,
@@ -111,19 +123,27 @@ class OwnActionTracker:
             self._debug(f"slot {idx}: prev={prev} cur={cur}")
             if prev is not None and cur is None:
                 dropped_card = self._normalize_card(self._resolve_drop_card(idx, prev))
+                dropped_card, played_via = self._resolve_mirror_play(dropped_card)
                 self._debug(
                     f"slot {idx} drop detected: card={dropped_card} "
+                    f"played_via={played_via} "
                     f"started_at={now} elixir_before={elixir:.2f}"
                 )
+                if dropped_card is None:
+                    continue
                 self.pending.append(
                     PendingOwnPlay(
                         card=dropped_card, slot_idx=idx, started_at_s=now, elixir_before=elixir,
                         elixir_change_time_s=elixir_change_time_s,
                         elixir_change_video_time_s=elixir_change_video_time_s,
+                        played_via=played_via,
                     )
                 )
             elif prev is not None and cur != prev:
                 dropped_card = self._normalize_card(self._resolve_drop_card(idx, prev))
+                dropped_card, played_via = self._resolve_mirror_play(dropped_card)
+                if dropped_card is None:
+                    continue
                 if self._is_rolling_spell(dropped_card):
                     self._debug(
                         f"slot {idx} rolling spell change detected: prev={prev} cur={cur} "
@@ -134,6 +154,7 @@ class OwnActionTracker:
                             card=dropped_card, slot_idx=idx, started_at_s=now, elixir_before=elixir,
                             elixir_change_time_s=elixir_change_time_s,
                             elixir_change_video_time_s=elixir_change_video_time_s,
+                            played_via=played_via,
                         )
                     )
                     continue
@@ -180,6 +201,14 @@ class OwnActionTracker:
 
     def _normalize_card(self, card):
         return CARD_ALIASES.get(card, card)
+
+    def _resolve_mirror_play(self, card):
+        if card != "mirror":
+            return card, None
+        if not self.actions:
+            self._debug("mirror drop ignored: no previous confirmed own action")
+            return None, None
+        return self.actions[-1].card, "mirror"
 
     def _remember_slot_history(self, hand):
         for idx, card in enumerate(hand):
@@ -319,6 +348,8 @@ class OwnActionTracker:
                         if pending.elixir_change_video_time_s is not None
                         else pending.numeric_elixir_drop_video_time_s
                     ),
+                    rolling_spell_track_id=pending.rolling_spell_first_track_id,
+                    played_via=pending.played_via,
                 )
                 if self._is_rolling_spell(pending.card) and pending.rolling_spell_first_track_id is not None:
                     self.consumed_log_track_ids.add(pending.rolling_spell_first_track_id)
@@ -497,6 +528,8 @@ class OwnActionTracker:
         cost = CARD_METADATA.get(pending.card, {}).get("elixir_cost")
         if cost is None:
             return None
+        if pending.played_via == "mirror":
+            cost += 1
         if self._is_rolling_spell(pending.card):
             return 0.8
         return max(0.5, cost - 1.5)
@@ -545,11 +578,21 @@ class OwnActionTracker:
                 return idx
         return None
 
-    def _append_action(self, *, now, card, slot_idx, cell, video_time_s=None):
+    def _append_action(
+        self,
+        *,
+        now,
+        card,
+        slot_idx,
+        cell,
+        video_time_s=None,
+        rolling_spell_track_id=None,
+        played_via=None,
+    ):
         if now > OWN_ACTION_START_TIME_LEFT_S:
             self._debug(f"own action ignored before start threshold card={card} time_left={now}")
             return False
-        if self._is_duplicate_action(now, card, slot_idx):
+        if played_via != "mirror" and self._is_duplicate_action(now, card, slot_idx):
             self._debug(f"duplicate own action ignored card={card} slot={slot_idx} time_left={now}")
             return False
         self.actions.append(
@@ -559,6 +602,8 @@ class OwnActionTracker:
                 card=card,
                 slot_idx=slot_idx,
                 cell=cell,
+                rolling_spell_track_id=rolling_spell_track_id,
+                played_via=played_via,
             )
         )
         return True

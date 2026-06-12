@@ -1,0 +1,112 @@
+{
+  "video": "spell2.mp4",
+  "fps": 10.0,
+  "notes": "Action labels imported from spell2 enemy.txt.",
+  "events": [
+    {
+      "side": "enemy",
+      "card": "rocket",
+      "frame_index": 65,
+      "cell": [
+        12,
+        26
+      ]
+    },
+    {
+      "side": "enemy",
+      "card": "poison",
+      "frame_index": 131
+    },
+    {
+      "side": "enemy",
+      "card": "royal-delivery",
+      "frame_index": 209,
+      "cell": [
+        13,
+        8
+      ]
+    },
+    {
+      "side": "enemy",
+      "card": "freeze",
+      "frame_index": 342
+    },
+    {
+      "side": "enemy",
+      "card": "goblin-barrel",
+      "frame_index": 487,
+      "cell": [
+        14,
+        24
+      ]
+    },
+    {
+      "side": "enemy",
+      "card": "tornado",
+      "frame_index": 516,
+      "cell": [
+        6,
+        5
+      ]
+    },
+    {
+      "side": "enemy",
+      "card": "arrows",
+      "frame_index": 612,
+      "cell": [
+        11,
+        22
+      ]
+    },
+    {
+      "side": "enemy",
+      "card": "giant-snowball",
+      "frame_index": 688,
+      "cell": [
+        4,
+        23
+      ]
+    },
+    {
+      "side": "enemy",
+      "card": "royal-delivery",
+      "frame_index": 883,
+      "cell": [
+        4,
+        7
+      ]
+    },
+    {
+      "side": "enemy",
+      "card": "goblin-barrel",
+      "frame_index": 901,
+      "cell": [
+        14,
+        24
+      ]
+    },
+    {
+      "side": "enemy",
+      "card": "freeze",
+      "frame_index": 929,
+      "cell": [
+        14,
+        24
+      ]
+    },
+    {
+      "side": "enemy",
+      "card": "poison",
+      "frame_index": 1011
+    },
+    {
+      "side": "enemy",
+      "card": "tornado",
+      "frame_index": 1098,
+      "cell": [
+        4,
+        24
+      ]
+    }
+  ]
+}

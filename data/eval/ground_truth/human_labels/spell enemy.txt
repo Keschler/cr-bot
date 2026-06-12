@@ -1,0 +1,13 @@
+lightning 162 14,24
+vines 221 14,20
+log 280 4,11
+graveyard 439 14,27
+goblin-curse 462 14,26
+fireball 551 12,28
+rage 680 13,21
+lightning 750 3,18
+graveyard 1011 14,25
+clone 1043 14,24
+vines 1061
+rage 1218 4,21
+fireball 1241 15,22

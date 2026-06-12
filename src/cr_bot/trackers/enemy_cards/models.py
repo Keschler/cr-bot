@@ -40,6 +40,7 @@ class TrackMemory:
     deploy_clock_center_y: float | None = None
     last_clock_reject_reason: str | None = None
     observed_centers: list[tuple[float, float, float]] = field(default_factory=list)
+    motion_centers: list[tuple[float, float, float]] = field(default_factory=list)
 
     def add_observation(self, class_name, team, confidence, total_remaining_s, *, center_x=None, center_y=None):
         self.class_votes[class_name] = self.class_votes.get(class_name, 0) + 1
@@ -50,6 +51,31 @@ class TrackMemory:
         if center_x is not None and center_y is not None:
             self.observed_centers.append((total_remaining_s, center_x, center_y))
             del self.observed_centers[:-8]
+
+    def add_motion_center(self, sample_time_s, center_x, center_y):
+        if sample_time_s is None or center_x is None or center_y is None:
+            return
+        sample_time = round(float(sample_time_s), 3)
+        same_frame = [
+            item
+            for item in self.motion_centers
+            if round(item[0], 3) == sample_time
+        ]
+        if same_frame:
+            count = len(same_frame)
+            center_x = (
+                sum(item[1] for item in same_frame) + center_x
+            ) / (count + 1)
+            center_y = (
+                sum(item[2] for item in same_frame) + center_y
+            ) / (count + 1)
+            self.motion_centers = [
+                item
+                for item in self.motion_centers
+                if round(item[0], 3) != sample_time
+            ]
+        self.motion_centers.append((float(sample_time_s), center_x, center_y))
+        del self.motion_centers[:-8]
 
     @property
     def best_class(self) -> str | None:

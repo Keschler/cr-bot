@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from cr_bot.eval.run_action_eval_scenarios import (
+    SCENARIOS,
     FocusWindow,
     Scenario,
     aggregate_results,
@@ -9,8 +10,22 @@ from cr_bot.eval.run_action_eval_scenarios import (
     build_parser,
     evaluate_scenario,
     filter_events,
+    replay_cache_path,
     render_report,
 )
+
+
+def test_spell_scenarios_use_matching_videos_and_ground_truth():
+    for key in ("spell", "spell2", "spell3"):
+        scenario = SCENARIOS[key]
+        assert scenario.video.name == f"{key}.mp4"
+        assert scenario.ground_truth.name == f"{key}.json"
+        assert scenario.predictions.name == f"{key}.txt"
+        assert scenario.video.exists()
+        assert scenario.ground_truth.exists()
+        assert scenario.capture_args[
+            scenario.capture_args.index("--video-sample-interval") + 1
+        ] == "0.1"
 
 
 def _write_ground_truth(path: Path) -> None:
@@ -197,3 +212,24 @@ def test_build_parser_accepts_focus_window_args():
     assert args.focus_window_before == 5.0
     assert args.focus_window_after == 10.0
     assert args.focus_video_time == 183.7
+
+
+def test_build_parser_accepts_replay_modes():
+    build_args = build_parser().parse_args(["--build-replay-cache"])
+    replay_args = build_parser().parse_args(["--replay-cache"])
+
+    assert build_args.build_replay_cache is True
+    assert replay_args.replay_cache is True
+
+
+def test_replay_cache_path_is_scenario_specific(tmp_path: Path):
+    scenario = Scenario(
+        key="sample",
+        label="sample",
+        video=tmp_path / "video.mp4",
+        ground_truth=tmp_path / "ground-truth.json",
+        predictions=tmp_path / "predictions.txt",
+        capture_args=(),
+    )
+
+    assert replay_cache_path(scenario).name == "sample.pkl.gz"

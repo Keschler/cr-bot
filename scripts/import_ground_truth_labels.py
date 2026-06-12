@@ -8,7 +8,11 @@ import re
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_LABELS_DIR = ROOT / "data/eval/ground_truth/human_labels"
-LABEL_LINE_RE = re.compile(r"^(?P<card>\S+)\s+(?P<frame_index>\d+)$")
+LABEL_LINE_RE = re.compile(
+    r"^(?P<card>\S+)\s+(?P<frame_index>\d+)"
+    r"(?:\s+(?P<cell_row>\d+),(?P<cell_column>\d+))?"
+    r"(?:\s+(?P<played_via>mirror))?$"
+)
 LABEL_FILE_RE = re.compile(r"^(?P<video_stem>.+) (?P<side>own|enemy)$")
 CARD_CORRECTIONS = {
     "ice-spiirit": "ice-spirit",
@@ -31,13 +35,19 @@ def parse_labels(path: Path, *, side: str) -> tuple[list[dict], list[tuple[str, 
         corrected_card = CARD_CORRECTIONS.get(card, card)
         if corrected_card != card:
             corrections.append((card, corrected_card))
-        events.append(
-            {
-                "side": side,
-                "card": corrected_card,
-                "frame_index": int(match.group("frame_index")),
-            }
-        )
+        event = {
+            "side": side,
+            "card": corrected_card,
+            "frame_index": int(match.group("frame_index")),
+        }
+        if match.group("cell_row") is not None:
+            event["cell"] = [
+                int(match.group("cell_row")),
+                int(match.group("cell_column")),
+            ]
+        if match.group("played_via") is not None:
+            event["played_via"] = match.group("played_via")
+        events.append(event)
     return events, corrections
 
 
@@ -92,7 +102,13 @@ def update_ground_truth(
     merged_imported_events = []
     for event in imported_events:
         previous = existing_by_key.get((event["side"], event["card"], event["frame_index"]))
-        merged_imported_events.append({**previous, **event} if previous is not None else event)
+        if previous is None:
+            merged_imported_events.append(event)
+            continue
+        merged_event = {**previous, **event}
+        if "played_via" not in event:
+            merged_event.pop("played_via", None)
+        merged_imported_events.append(merged_event)
 
     ground_truth["video"] = video_name
     ground_truth["fps"] = fps
@@ -114,7 +130,10 @@ def write_ground_truth(path: Path, ground_truth: dict) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Import '<card> <frame_index>' human labels into an eval ground-truth JSON file."
+        description=(
+            "Import '<card> <frame_index> [<cell_row>,<cell_column>] [mirror]' human labels "
+            "into an eval ground-truth JSON file."
+        )
     )
     parser.add_argument("labels", type=Path, help="Input text file, normally ending in ' own.txt' or ' enemy.txt'.")
     parser.add_argument("--output", type=Path, help="Ground-truth JSON to create or update.")

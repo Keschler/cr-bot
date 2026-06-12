@@ -1,0 +1,13 @@
+rocket 65 12,26
+poison 131
+royal-delivery 209 13,8
+freeze 342
+goblin-barrel 487 14,24
+tornado 516 6,5
+arrows 612 11,22
+giant-snowball 688 4,23
+royal-delivery 883 4,7
+goblin-barrel 901 14,24
+freeze 929 14,24
+poison 1011
+tornado 1098 4,24

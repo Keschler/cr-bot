@@ -87,6 +87,7 @@ class MatchSession:
                 now_s=now_s,
                 clock_boxes=analysis.clock_boxes,
                 own_actions=self.own_action_tracker.actions,
+                pending_own_spell_targets=self.own_action_tracker.pending_spell_targets,
                 arena_px=analysis.arena_px,
                 frame=frame,
                 claimed_spell_observation_keys=set(

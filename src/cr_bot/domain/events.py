@@ -31,6 +31,8 @@ class OwnActionEvent(DataclassMapping):
     card: str
     slot_idx: int | None
     cell: tuple[int, int] | None
+    rolling_spell_track_id: int | None = None
+    played_via: str | None = None
 
 
 @dataclass(slots=True)
@@ -52,3 +54,4 @@ class EnemyCardPlay(DataclassMapping):
     is_spell: bool
     overtime: bool
     discard_reason: str | None = None
+    played_via: str | None = None
