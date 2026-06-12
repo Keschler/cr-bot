@@ -44,7 +44,7 @@ flowchart TD
     A["python capture/capture.py or PYTHONPATH=src python -m cr_bot.app.cli"] --> B["parse CLI args"]
     B --> C{"mode"}
     C -->|"--debug or --debug-frame"| D["main(debug=True, debug_frame_path=...)"]
-    C -->|"--video"| E["main(debug=False, video=..., frame_stride=...)"]
+    C -->|"--video"| E["main(debug=False, video=...,<br/>frame_stride or video_sample_interval_s)"]
     C -->|"default"| F["main(debug=False): live video device"]
     B --> G["pass normalize and yolo_detections flags"]
     G --> D
@@ -72,7 +72,7 @@ flowchart TD
     M --> N["print/debug windows"]
 
     D -->|"video file"| O["open cv2.VideoCapture(video)"]
-    O --> P["loop frames with frame_stride"]
+    O --> P["decode frames sequentially<br/>sample by frame_stride or exact timestamp interval"]
     P --> Q["normalize_frame() if enabled"]
     Q --> R["process_frame()"]
     R --> S{"game_started?"}
@@ -151,7 +151,8 @@ flowchart TD
 `OwnActionTracker` detects the player's actions incrementally. A hand-slot change
 creates a `PendingOwnPlay`; later frames attach timing evidence and a placement
 cell. The action is emitted only when the evidence required by that card type is
-available.
+available. Mirror is represented as the repeated card with
+`played_via="mirror"`; it is not emitted as a separate `mirror` action.
 
 ```mermaid
 flowchart TD
@@ -178,12 +179,18 @@ flowchart TD
     B -->|"no"| D["_detect_slot_drops(hand, elixir, now,<br/>optional visual-overlay timestamp)"]
 
     D --> D1{"How did a hand slot change?"}
-    D1 -->|"previous card -> None"| P1["Append PendingOwnPlay"]
-    D1 -->|"Log or Barbarian Barrel -> another label"| P1
+    D1 -->|"previous card -> None"| P0["_resolve_drop_card()<br/>stabilize label from slot history"]
+    D1 -->|"Log or Barbarian Barrel -> another label"| P0
     D1 -->|"other replacement"| D2["Ignore as OCR churn"]
     D1 -->|"no relevant change"| C1["Continue"]
-    P1 --> P2["PendingOwnPlay carries<br/>card, slot_idx, started_at_s, elixir_before,<br/>visual and numeric elixir timestamps,<br/>spell state, rolling-spell state"]
-    P2 --> C1
+    P0 --> PM{"Dropped card is Mirror?"}
+    PM -->|"yes, prior confirmed action exists"| PM1["Use previous action.card<br/>played_via = mirror"]
+    PM -->|"yes, no prior action"| PM2["Ignore unresolved Mirror drop"]
+    PM -->|"no"| P1["Use dropped card<br/>played_via = None"]
+    PM1 --> P2
+    P1 --> P2
+    P2["Append PendingOwnPlay carrying<br/>card, slot_idx, started_at_s, elixir_before,<br/>played_via, visual/numeric elixir timestamps,<br/>spell state and rolling-spell state"] --> C1
+    PM2 --> C1
     D2 --> C1
 
     C1 --> V{"elixir_change.covered?"}
@@ -196,7 +203,7 @@ flowchart TD
     T1 -.-> F1["_record_new_track_actions(new_tracks, hand, arena_px, now, clock_boxes)<br/>Only when no pending play existed<br/>DIRECT_UNIT_TO_CARD maps track class to card<br/>Allow only explicit track-fallback cards"]
     F1 --> F2["_infer_cell_from_clock([match], arena_px, clock_boxes, card)<br/>Return deploy-clock cell or allowed troop-center fallback"]
     F2 --> A
-    T1 --> E1["_pending_for_current_elixir_drop(elixir, now, preferred_pending)<br/>Input: last_elixir, current elixir, pending plays, card costs<br/>Output: one PendingOwnPlay or None"]
+    T1 --> E1["_pending_for_current_elixir_drop(elixir, now, preferred_pending)<br/>Compare current drop with required card cost<br/>Mirror uses repeated-card cost + 1<br/>Output: one PendingOwnPlay or None"]
     E1 --> E2{"Numeric elixir drop selected<br/>a pending play?"}
     E2 -->|"yes"| E3["Latch numeric_elixir_drop_time_s<br/>and numeric_elixir_drop_video_time_s<br/>on PendingOwnPlay"]
     E2 -->|"no"| K{"Pending card type?"}
@@ -222,8 +229,8 @@ flowchart TD
     S2 -->|"cancelled"| X
     R2 -->|"stale or mismatched"| X
 
-    A["_append_action(now, card, slot_idx, cell, video_time_s)<br/>Reject pre-start and recent duplicate actions"] --> A1["Append action dict<br/>{time_left_s, video_time_s,<br/>card, slot_idx, cell}"]
-    A1 --> OUT["OwnActionTracker.actions<br/>list[dict] consumed by enemy-card<br/>reconciliation, debug output and state pipelines"]
+    A["_append_action(now, card, slot_idx, cell,<br/>video_time_s, rolling_spell_track_id, played_via)<br/>Reject pre-start actions<br/>Reject recent duplicates except confirmed Mirror"] --> A1["Append OwnActionEvent<br/>{time_left_s, video_time_s, card, slot_idx, cell,<br/>rolling_spell_track_id, played_via}"]
+    A1 --> OUT["OwnActionTracker.actions<br/>list[OwnActionEvent] consumed by enemy-card<br/>reconciliation, debug output and state pipelines"]
     W --> OUT2["Update tracker memory and return None"]
     X --> OUT2
 ```
@@ -237,8 +244,8 @@ flowchart TD
 | `elixir_change` | `detect_elixir_change()` | `{covered: bool, white: float, pink: float, edges: float}` | Detect the visual digit overlay and preserve its timestamp. |
 | `game_state.own_units` | YOLO conversion and `build_game_state()` | `list[Match]`, each with `match.troop.class_name`, `track_id`, center and team | Associate a pending play with a visible own unit or rolling spell. |
 | `clock_boxes` | `extract_clock_boxes()` | `list[dict]` with track ID, team, confidence, box and center coordinates | Estimate the placement cell for normal troops and buildings. |
-| `PendingOwnPlay` | `_detect_slot_drops()` | Stateful dataclass retained across frames | Join asynchronous hand, elixir, clock and spell evidence. |
-| `OwnActionTracker.actions` | `_append_action()` | `list[{time_left_s, video_time_s, card, slot_idx, cell}]` | Final confirmed own-action stream. |
+| `PendingOwnPlay` | `_detect_slot_drops()` | Stateful dataclass including card, slot, evidence timestamps, spell state, rolling-spell state and `played_via` | Join asynchronous hand, elixir, clock and spell evidence. |
+| `OwnActionTracker.actions` | `_append_action()` | `list[OwnActionEvent]` with `time_left_s`, `video_time_s`, `card`, `slot_idx`, `cell`, `rolling_spell_track_id`, `played_via` | Final confirmed own-action stream. Mirror retains the repeated card ID. |
 
 ### Rolling-Spell Own Action Detection
 
@@ -253,47 +260,71 @@ flowchart TD
     G --> H["store first rolling-object track id and cell"]
     H --> I{"current elixir drop >= 0.8<br/>or spell elixir evidence already latched?"}
     I -->|"yes"| J["cell = first visible rolling-object box center<br/>mapped through ACTION_GRID"]
-    J --> K["append action dict<br/>{time_left_s, video_time_s, card, slot_idx, cell}"]
+    J --> K["append OwnActionEvent<br/>including rolling_spell_track_id<br/>and optional played_via"]
     K --> L["consume YOLO track id"]
     I -->|"no"| M["keep selected pending, retain first rolling-spell cell"]
 ```
 
 ## Enemy Card Tracking
 
+`EnemyCardTracker` combines deploy-clock claims, multi-frame detector evidence,
+motion direction, own-action reconciliation and spell-specific continuation
+tracking. Recorded plays may be revised later when class votes or projectile
+evidence improve.
+
 ```mermaid
 flowchart TD
-    A["EnemyCardTracker.update(time_left, matches, clock_boxes, own_actions)"] --> B["regen enemy elixir estimate"]
-    B --> C["remember recent enemy deploy clocks"]
-    C --> D["for each enemy YOLO match"]
-    D --> E{"match has track_id?"}
-    E -->|"no"| Z["skip match"]
-    E -->|"yes"| F["TrackMemory.add_observation()<br/>update class/team votes, confidence, center"]
-    F --> G{"specific enemy deploy clock claimable<br/>by this troop track?"}
-    G -->|"yes"| K["claim deploy-clock track<br/>retain deploy-clock center<br/>clock_confirmed=True"]
-    G -->|"no"| H{"frame-confirm class<br/>and enough frames/confidence?"}
-    H -->|"yes"| I["frame_confirmed=True"]
-    H -->|"no"| J["wait for more observations"]
-    K --> L["_maybe_record_play()"]
-    I --> L
-    L --> M{"reliable enemy play?"}
-    M -->|"no"| J
-    M -->|"yes"| N{"DIRECT_UNIT_TO_CARD maps<br/>YOLO class to a card?"}
-    N -->|"no"| O["mark track counted,<br/>do not record enemy play"]
-    N -->|"yes"| P{"recent own spell duplicate?"}
-    P -->|"yes"| O
-    P -->|"no"| Q{"recent duplicate enemy play?"}
-    Q -->|"yes"| O
-    Q -->|"no"| R{"claimed deploy-clock center?"}
-    R -->|"yes"| S["convert deploy-clock center to play cell<br/>then raise row by 2"]
-    R -->|"no"| T["convert detected object center to play cell<br/>then raise row by 2<br/>fallback for frame-confirmed spells<br/>and frame-confirmed troop exceptions"]
-    S --> U["append detected_card_plays with cell,<br/>add seen card, subtract cost"]
-    T --> U
-    U --> V["mark track counted"]
-    O --> X["drop stale tracks"]
-    V --> W["future observations of this counted track<br/>do not revise the recorded play"]
-    W --> X
-    J --> X
-    Z --> X
+    A["EnemyCardTracker.update(...)"] --> B["Update enemy elixir estimate<br/>remember enemy clock boxes<br/>remember own Log claims<br/>expire stale projectile observations"]
+    B --> C["For each YOLO match"]
+    C --> R{"Rolling Log object?"}
+    R -->|"yes"| R1["RollingSpellTracker.observe()<br/>accumulate trajectory and assign own claims"]
+    R1 --> R2{"Direction confirms enemy<br/>and not own claimed?"}
+    R2 -->|"yes"| R3["Record enemy Log<br/>suppress later same-lane fragments"]
+    R2 -->|"no"| NEXT["Continue"]
+    R3 --> NEXT
+
+    R -->|"no"| T{"team != enemy?"}
+    T -->|"yes, ally-labelled Fireball"| F1["ProjectileSpellTracker.observe_ally_fireball()<br/>compare own actions, active enemy trajectories<br/>and vertical motion direction"]
+    F1 --> F2{"ownership/result"}
+    F2 -->|"own or continuation"| NEXT
+    F2 -->|"enemy"| REC
+    F2 -->|"unresolved/explosion"| NEXT
+    T -->|"yes, other class"| NEXT
+
+    T -->|"no"| M{"track_id exists?"}
+    M -->|"no"| NEXT
+    M -->|"yes"| TM["Create/update TrackMemory<br/>class/team votes, confidence, centers,<br/>motion centers and first video timestamp"]
+    TM --> C1{"claim current/recent enemy deploy clock?"}
+    C1 -->|"yes"| C2["clock_confirmed=True<br/>store deploy-clock center<br/>consume clock for this track"]
+    C1 -->|"no"| FC{"configured frame-confirm class<br/>with enough frames, votes and confidence?"}
+    FC -->|"yes"| C3["frame_confirmed=True"]
+    FC -->|"no"| NEXT
+    C2 --> MP
+    C3 --> MP
+    MP{"Track already counted?"}
+    MP -->|"yes"| REV["_maybe_revise_recorded_play()<br/>late class-vote changes update card, cost,<br/>event ID, cell and projectile event"]
+    MP -->|"no"| REL{"Reliable enemy play?"}
+    REL -->|"no"| NEXT
+    REL -->|"yes"| MAP{"DIRECT_UNIT_TO_CARD mapping?"}
+    MAP -->|"none"| DROP["Mark track counted without a play"]
+    MAP -->|"card"| OWN{"Explained by recent own spell<br/>or active projectile continuation?"}
+    OWN -->|"yes"| DROP
+    OWN -->|"no"| DUP{"Recent same-card duplicate?"}
+    DUP -->|"yes, independently confirmed before 4-card cycle"| MIR["Treat as Mirror<br/>card remains repeated card<br/>played_via=mirror, cost=base+1"]
+    DUP -->|"yes, ordinary duplicate"| DROP
+    DUP -->|"no"| REC["Create EnemyCardPlay"]
+
+    MIR --> REC
+    REC --> CELL{"Cell source"}
+    CELL -->|"claimed clock"| CELL1["Deploy-clock center -> ACTION_GRID<br/>raise enemy row by 2"]
+    CELL -->|"object/effect"| CELL2["Detected center -> ACTION_GRID<br/>raise enemy row by 2"]
+    CELL1 --> SAVE
+    CELL2 --> SAVE
+    SAVE["Append detected_card_plays<br/>update seen card IDs, including Mirror<br/>subtract inferred cost<br/>register projectile event when supported<br/>mark track counted"] --> NEXT
+    DROP --> NEXT
+    REV --> NEXT
+
+    NEXT --> POST["After all matches:<br/>assign projectile continuations<br/>confirm delayed Fireball explosions<br/>store recent arena frames and impact observations<br/>reconcile projectile target cells<br/>drop stale tracks/candidates"]
 ```
 
 Enemy troops and buildings normally need a deploy-clock box that can be claimed
@@ -308,11 +339,26 @@ marks the track counted and does not append an enemy play. Skeleton and Skeleton
 Evolution detections are exceptions: once confirmed, they map to the `skeletons`
 card.
 
-Enemy spells are generally frame-confirmed without a deploy clock, so their
-fallback cell comes from the detected spell object or effect. For moving spells
-such as Fireball, Rocket and Giant Snowball, this is an observed projectile cell
-rather than a guaranteed target cell. Log and Barbarian Barrel similarly use the
-detected rolling-object position.
+Enemy spells are generally frame-confirmed without a deploy clock. Fireball
+ownership is resolved from vertical motion and recent own Fireball actions;
+later detections can be attached to an existing enemy projectile event and move
+its cell farther along the trajectory. The tracker also retains recent arena
+frames and spell-target observations for projectile reconciliation. Log uses
+trajectory direction plus explicit own-action claims to avoid counting the
+player's rolling spell as an enemy action.
+
+Before each enemy update, `MatchSession` calls
+`EnemyCardTracker.reconcile_own_actions()`. It removes previously recorded enemy
+Log, Fireball or other spell events that are later explained by confirmed own
+actions, releases their projectile records and refunds the enemy elixir
+estimate.
+
+Mirror cannot be seen directly in the enemy hand. The tracker infers it only
+when the same card appears again before four intervening enemy plays and the
+second play has independent evidence, such as a claimed deploy clock or a
+distinct spell target. The event keeps the repeated card ID, sets
+`played_via="mirror"`, charges one extra elixir and adds Mirror to the seen-card
+set. A repeat after four intervening plays is treated as a normal cycle.
 
 The current enemy cell calibration raises every emitted enemy play cell by two
 rows after grid conversion. In practical terms, `(7, 7)` becomes `(7, 5)`,
@@ -329,11 +375,12 @@ flowchart TD
     E -->|"no"| D
     E -->|"yes"| F["frame_confirmed=True"]
     F --> G["map the-log -> log"]
-    G --> H{"matches recent own Log within 3s and <= 3 cells?"}
+    G --> H{"matches claimed recent own Log<br/>by source track, time, lane or trajectory?"}
     H -->|"yes"| I["veto as own spell duplicate"]
     H -->|"no"| J{"recent enemy Log duplicate within 0.75s?"}
-    J -->|"yes"| K["suppress duplicate"]
-    J -->|"no"| L["record enemy log play and subtract 2 elixir"]
+    J -->|"yes, independently confirmed pre-cycle repeat"| M["record mirrored Log<br/>played_via=mirror, subtract 3 elixir"]
+    J -->|"yes, fragment or ordinary duplicate"| K["suppress duplicate"]
+    J -->|"no"| L["record enemy Log and subtract 2 elixir"]
 ```
 
 ## Vision And YOLO Runtime
