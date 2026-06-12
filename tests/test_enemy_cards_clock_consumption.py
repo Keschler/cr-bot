@@ -415,7 +415,7 @@ def test_downward_ally_labelled_fireball_without_recent_own_action_records_enemy
     tracker = _tracker()
     arena_px = (0.0, 0.0, 1000.0, 1000.0)
 
-    for idx, center_y in enumerate((300.0, 360.0, 430.0)):
+    for idx, center_y in enumerate((300.0, 360.0, 430.0, 500.0, 570.0, 640.0)):
         tracker.update(
             200.0 - idx * 0.1,
             [_ally_match(19, class_name="fireball", center_x=600.0, center_y=center_y)],
@@ -453,7 +453,7 @@ def test_recent_own_fireball_at_different_cell_keeps_ally_labelled_enemy_fallbac
     arena_px = (0.0, 0.0, 1000.0, 1000.0)
     own_action = {"card": "fireball", "time_left_s": 200.1, "cell": (3, 8)}
 
-    for idx, center_y in enumerate((300.0, 360.0, 430.0)):
+    for idx, center_y in enumerate((300.0, 360.0, 430.0, 500.0, 570.0, 640.0)):
         tracker.update(
             200.0 - idx * 0.1,
             [_ally_match(19, class_name="fireball", center_x=600.0, center_y=center_y)],
@@ -478,6 +478,207 @@ def test_upward_fireball_is_claimed_internally_even_when_yolo_labels_it_enemy():
         )
 
     assert tracker.detected_card_plays == []
+
+
+def test_upward_giant_snowball_is_suppressed_when_yolo_labels_it_enemy():
+    tracker = _tracker()
+    arena_px = (0.0, 0.0, 1000.0, 1000.0)
+
+    for idx, center_y in enumerate((700.0, 620.0, 530.0)):
+        tracker.update(
+            200.0 - idx * 0.1,
+            [_match(19, class_name="giant-snowball", center_x=600.0, center_y=center_y)],
+            arena_px=arena_px,
+        )
+
+    assert tracker.detected_card_plays == []
+
+
+def test_downward_enemy_giant_snowball_records_projectile_spell():
+    tracker = _tracker()
+    arena_px = (0.0, 0.0, 1000.0, 1000.0)
+
+    for idx, center_y in enumerate((300.0, 360.0, 430.0)):
+        tracker.update(
+            200.0 - idx * 0.1,
+            [_match(19, class_name="giant-snowball", center_x=600.0, center_y=center_y)],
+            arena_px=arena_px,
+        )
+
+    assert len(tracker.detected_card_plays) == 1
+    assert tracker.detected_card_plays[0]["card"] == "giant-snowball"
+
+
+def test_ally_labelled_giant_snowball_does_not_use_fireball_fallback():
+    tracker = _tracker()
+    arena_px = (0.0, 0.0, 1000.0, 1000.0)
+
+    for idx, center_y in enumerate((300.0, 360.0, 430.0, 500.0)):
+        tracker.update(
+            200.0 - idx * 0.1,
+            [_ally_match(19, class_name="giant-snowball", center_x=600.0, center_y=center_y)],
+            arena_px=arena_px,
+        )
+
+    assert tracker.detected_card_plays == []
+
+
+def test_direction_only_projectiles_suppress_upward_enemy_detections():
+    arena_px = (0.0, 0.0, 1000.0, 1000.0)
+
+    for card in ("goblin-barrel", "arrows", "rocket"):
+        tracker = _tracker()
+        for idx, center_y in enumerate((700.0, 620.0, 530.0)):
+            tracker.update(
+                200.0 - idx * 0.1,
+                [_match(19, class_name=card, center_x=600.0, center_y=center_y)],
+                arena_px=arena_px,
+            )
+
+        assert tracker.detected_card_plays == []
+
+
+def test_direction_only_projectiles_record_downward_enemy_detections():
+    arena_px = (0.0, 0.0, 1000.0, 1000.0)
+
+    for card in ("goblin-barrel", "arrows", "rocket"):
+        tracker = _tracker()
+        for idx, center_y in enumerate((300.0, 360.0, 430.0)):
+            tracker.update(
+                200.0 - idx * 0.1,
+                [_match(19, class_name=card, center_x=600.0, center_y=center_y)],
+                arena_px=arena_px,
+            )
+
+        assert len(tracker.detected_card_plays) == 1
+        assert tracker.detected_card_plays[0]["card"] == card
+
+
+def test_direction_only_projectiles_ignore_ally_labels():
+    arena_px = (0.0, 0.0, 1000.0, 1000.0)
+
+    for card in ("goblin-barrel", "arrows", "rocket"):
+        tracker = _tracker()
+        for idx, center_y in enumerate((300.0, 360.0, 430.0, 500.0)):
+            tracker.update(
+                200.0 - idx * 0.1,
+                [_ally_match(19, class_name=card, center_x=600.0, center_y=center_y)],
+                arena_px=arena_px,
+            )
+
+        assert tracker.detected_card_plays == []
+
+
+def test_reconcile_skips_legacy_direction_only_projectile_events():
+    tracker = _tracker()
+    arena_px = (0.0, 0.0, 1000.0, 1000.0)
+
+    for idx, center_y in enumerate((300.0, 360.0, 430.0, 500.0, 570.0, 640.0)):
+        tracker.update(
+            200.0 - idx * 0.1,
+            [_match(19, class_name="fireball", center_x=600.0, center_y=center_y)],
+            arena_px=arena_px,
+        )
+
+    event = tracker.projectile_spell_events[0]
+    event.card = "goblin-barrel"
+    tracker.projectiles.reconcile(
+        arena_px=arena_px,
+        claimed_spell_observation_keys=set(),
+    )
+
+    assert event.card == "goblin-barrel"
+
+
+def test_rocket_cell_advances_with_projectile_trajectory():
+    tracker = _tracker()
+    arena_px = (0.0, 0.0, 1000.0, 1000.0)
+
+    for idx, center_y in enumerate((120.0, 220.0, 340.0)):
+        tracker.update(
+            200.0 - idx * 0.1,
+            [_match(19, class_name="rocket", center_x=600.0, center_y=center_y)],
+            arena_px=arena_px,
+        )
+    initial_cell = tracker.detected_card_plays[0]["cell"]
+
+    tracker.update(
+        199.6,
+        [_match(20, class_name="rocket", center_x=610.0, center_y=760.0)],
+        arena_px=arena_px,
+    )
+
+    assert len(tracker.detected_card_plays) == 1
+    assert tracker.detected_card_plays[0]["cell"][1] > initial_cell[1]
+
+
+def test_projectile_event_keeps_early_and_late_trajectory_samples():
+    tracker = _tracker()
+    arena_px = (0.0, 0.0, 1000.0, 1000.0)
+
+    for idx in range(12):
+        tracker.update(
+            200.0 - idx * 0.1,
+            [
+                _match(
+                    19,
+                    class_name="rocket",
+                    center_x=500.0 + idx * 5.0,
+                    center_y=100.0 + idx * 60.0,
+                )
+            ],
+            arena_px=arena_px,
+        )
+
+    samples = tracker.projectile_spell_events[0].observed_centers
+    assert len(samples) == 8
+    assert max(center_y for _, _, center_y in samples) >= 700.0
+
+
+def test_goblin_barrel_cell_refines_to_spawned_enemy_goblin():
+    tracker = _tracker()
+    arena_px = (0.0, 0.0, 1000.0, 1000.0)
+
+    for idx, center_y in enumerate((100.0, 180.0, 260.0)):
+        tracker.update(
+            200.0 - idx * 0.1,
+            [_match(19, class_name="goblin-barrel", center_x=700.0, center_y=center_y)],
+            arena_px=arena_px,
+        )
+    goblin_cell = (14, 24)
+    goblin_x, goblin_y = ACTION_GRID.cell_to_pixel_center(*goblin_cell, arena_px)
+
+    tracker.update(
+        199.4,
+        [_match(20, class_name="goblin", center_x=goblin_x, center_y=goblin_y)],
+        arena_px=arena_px,
+    )
+
+    assert len(tracker.detected_card_plays) == 1
+    assert tracker.detected_card_plays[0]["cell"] == goblin_cell
+
+
+def test_royal_delivery_cell_refines_to_spawned_enemy_recruit():
+    tracker = _tracker()
+    arena_px = (0.0, 0.0, 1000.0, 1000.0)
+
+    for idx in range(3):
+        tracker.update(
+            200.0 - idx * 0.1,
+            [_match(19, class_name="royal-delivery", center_x=250.0, center_y=180.0)],
+            arena_px=arena_px,
+        )
+    recruit_cell = (4, 7)
+    recruit_x, recruit_y = ACTION_GRID.cell_to_pixel_center(*recruit_cell, arena_px)
+
+    tracker.update(
+        199.4,
+        [_match(20, class_name="royal-recruit", center_x=recruit_x, center_y=recruit_y)],
+        arena_px=arena_px,
+    )
+
+    assert len(tracker.detected_card_plays) == 1
+    assert tracker.detected_card_plays[0]["cell"] == recruit_cell
 
 
 def test_compact_upward_fireball_uses_direction_before_explosion_fallback():
@@ -521,7 +722,7 @@ def test_compact_downward_fireball_uses_direction_before_explosion_fallback():
     tracker = _tracker()
     arena_px = (0.0, 0.0, 1000.0, 1000.0)
 
-    for idx, center_y in enumerate((300.0, 320.0, 340.0)):
+    for idx, center_y in enumerate((300.0, 320.0, 340.0, 360.0, 380.0, 400.0)):
         tracker.update(
             200.0 - idx * 0.1,
             [_ally_match(19, class_name="fireball", center_x=600.0, center_y=center_y)],
@@ -536,7 +737,7 @@ def test_duplicate_same_frame_fireball_boxes_preserve_direction_history():
     tracker = _tracker()
     arena_px = (0.0, 0.0, 1000.0, 1000.0)
 
-    for idx, center_y in enumerate((300.0, 360.0, 430.0)):
+    for idx, center_y in enumerate((300.0, 360.0, 430.0, 500.0, 570.0, 640.0)):
         matches = [
             _ally_match(
                 19,
@@ -560,7 +761,7 @@ def test_fireball_direction_uses_video_time_when_match_clock_is_unchanged():
     tracker = _tracker()
     arena_px = (0.0, 0.0, 1000.0, 1000.0)
 
-    for idx, center_y in enumerate((300.0, 360.0, 430.0)):
+    for idx, center_y in enumerate((300.0, 360.0, 430.0, 500.0, 570.0, 640.0)):
         tracker.update(
             111.0,
             [_match(19, class_name="fireball", center_x=600.0, center_y=center_y)],
@@ -570,6 +771,46 @@ def test_fireball_direction_uses_video_time_when_match_clock_is_unchanged():
 
     assert len(tracker.detected_card_plays) == 1
     assert tracker.detected_card_plays[0]["card"] == "fireball"
+
+
+def test_pending_own_fireball_suppresses_different_cell_enemy_fallback():
+    tracker = _tracker()
+    arena_px = (0.0, 0.0, 1000.0, 1000.0)
+    pending_target = {
+        "card": "fireball",
+        "time_left_s": 200.1,
+        "cell": (3, 8),
+    }
+
+    for idx, center_y in enumerate((300.0, 360.0, 430.0, 500.0, 570.0, 640.0)):
+        tracker.update(
+            200.0 - idx * 0.1,
+            [_ally_match(19, class_name="fireball", center_x=600.0, center_y=center_y)],
+            pending_own_spell_targets=[pending_target],
+            arena_px=arena_px,
+        )
+
+    assert tracker.detected_card_plays == []
+
+
+def test_reused_non_fireball_track_id_does_not_create_fireball_play():
+    tracker = _tracker()
+    arena_px = (0.0, 0.0, 1000.0, 1000.0)
+
+    tracker.update(
+        200.0,
+        [_match(32, class_name="mega-knight")],
+        clock_boxes=[_clock(track_id=63)],
+        arena_px=arena_px,
+    )
+    for idx, center_y in enumerate((300.0, 360.0, 430.0, 500.0, 570.0, 640.0)):
+        tracker.update(
+            199.9 - idx * 0.1,
+            [_ally_match(32, class_name="fireball", center_x=600.0, center_y=center_y)],
+            arena_px=arena_px,
+        )
+
+    assert [play["card"] for play in tracker.detected_card_plays] == ["mega-knight"]
 
 
 def test_compact_fireball_explosion_without_matching_own_target_records_enemy_spell():
@@ -610,7 +851,7 @@ def test_compact_fireball_explosion_matching_pending_own_target_is_consumed():
     assert tracker.detected_card_plays == []
 
 
-def test_compact_fireball_explosion_at_different_pending_target_records_enemy_spell():
+def test_compact_fireball_explosion_at_different_pending_target_is_provisionally_owned():
     tracker = _tracker()
     arena_px = (0.0, 0.0, 1000.0, 1000.0)
     target_x, target_y = ACTION_GRID.cell_to_pixel_center(12, 22, arena_px)
@@ -634,8 +875,7 @@ def test_compact_fireball_explosion_at_different_pending_target_records_enemy_sp
         arena_px=arena_px,
     )
 
-    assert len(tracker.detected_card_plays) == 1
-    assert tracker.detected_card_plays[0]["card"] == "fireball"
+    assert tracker.detected_card_plays == []
 
 
 def test_log_moving_toward_increasing_rows_records_enemy_despite_team_labels():

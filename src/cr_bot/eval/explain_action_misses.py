@@ -35,7 +35,10 @@ PENDING_CHECK_RE = re.compile(
 YOLO_ITEM_RE = re.compile(r"(?P<class>[a-z0-9-]+):(?P<team>ally|enemy|neutral)\((?P<count>\d+)\)")
 OWN_DEBUG_PREFIX = "[own_actions]"
 CARD_ALIASES = {
+    "babarian-barrel": "barbarian-barrel",
+    "minion-hord": "minion-horde",
     "old-musketeer": "musketeer",
+    "the-log": "log",
 }
 DISPLAY_CARD_TO_UNIT_CLASSES = {
     "evo-skeletons": {"skeleton-evolution"},

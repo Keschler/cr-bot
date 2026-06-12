@@ -23,7 +23,10 @@ OWN_RE = re.compile(
 )
 MAX_PREDICTED_TIME_LEFT_S = 300.0
 CARD_ALIASES = {
+    "babarian-barrel": "barbarian-barrel",
+    "minion-hord": "minion-horde",
     "old-musketeer": "musketeer",
+    "the-log": "log",
 }
 
 

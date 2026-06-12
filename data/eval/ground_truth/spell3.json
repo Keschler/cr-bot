@@ -5,7 +5,7 @@
   "events": [
     {
       "side": "enemy",
-      "card": "babarian-barrel",
+      "card": "barbarian-barrel",
       "frame_index": 87,
       "cell": [
         14,
@@ -71,7 +71,7 @@
     },
     {
       "side": "enemy",
-      "card": "babarian-barrel",
+      "card": "barbarian-barrel",
       "frame_index": 921,
       "cell": [
         3,
@@ -80,7 +80,7 @@
     },
     {
       "side": "enemy",
-      "card": "babarian-barrel",
+      "card": "barbarian-barrel",
       "frame_index": 943,
       "cell": [
         10,

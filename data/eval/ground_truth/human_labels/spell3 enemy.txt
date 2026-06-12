@@ -1,4 +1,4 @@
-babarian-barrel 87 14,14
+barbarian-barrel 87 14,14
 void 179 3,13
 earthquake 288
 arrows 391 13,13
@@ -7,8 +7,8 @@ goblin-barrel 547 14,24 mirror
 clone 570
 void 708
 earthquake 791
-babarian-barrel 921 3,14
-babarian-barrel 943 10,19 mirror
+barbarian-barrel 921 3,14
+barbarian-barrel 943 10,19 mirror
 void 1007
 clone 1117
 earthquake 1169

@@ -87,8 +87,11 @@ def build_quadratic_trajectory_model(event, time_left_s: float, arena_px) -> Qua
 
 
 class EnemyProjectileImpactObserver:
-    _SUPPORTED_CARDS = frozenset({"fireball"})
-    _MIN_IMPACT_SCORE = {"fireball": 0.18}
+    _SUPPORTED_CARDS = frozenset({"fireball", "rocket"})
+    _MIN_IMPACT_SCORE = {
+        "fireball": 0.18,
+        "rocket": 0.18,
+    }
 
     def supports(self, card: str) -> bool:
         return card in self._SUPPORTED_CARDS
@@ -155,6 +158,26 @@ class EnemyProjectileImpactObserver:
             return None, ImpactObservationDebug(candidate_count, best[1], best[0], False, "below-score-threshold")
 
         score, cell = best
+        if card == "rocket":
+            _, row = cell
+            y_norm = ACTION_GRID.cell_to_norm_center(0, row)[1]
+            arena_x, arena_y, arena_w, arena_h = arena_px
+            points = [
+                ((x - arena_x) / arena_w, (y - arena_y) / arena_h)
+                for _, x, y in event.observed_centers
+            ]
+            if len(points) >= 2:
+                x_values = np.array([point[0] for point in points], dtype=np.float64)
+                y_values = np.array([point[1] for point in points], dtype=np.float64)
+                slope, intercept = np.polyfit(y_values, x_values, deg=1)
+                predicted_x = float(slope * y_norm + intercept)
+            else:
+                predicted_x = model.predict_x(y_norm)
+            predicted_col = max(
+                0,
+                min(GRID_SIZE[0] - 1, int(round(predicted_x * GRID_SIZE[0] - 0.5))),
+            )
+            cell = (predicted_col, row)
         center_x, center_y = ACTION_GRID.cell_to_pixel_center(*cell, arena_px)
         return (
             RecentSpellTargetObservation(

@@ -29,18 +29,39 @@ PROJECTILE_SPELL_CONFIGS = {
         min_early_samples=2,
         corridor_width_norm=0.08,
     ),
-    "goblin-barrel": ProjectileTrajectoryConfig(
-        update_window_s=1.8,
+    "giant-snowball": ProjectileTrajectoryConfig(
+        update_window_s=2.0,
         pre_observation_window_s=0.5,
         min_early_samples=2,
         corridor_width_norm=0.10,
     ),
+    "rocket": ProjectileTrajectoryConfig(
+        update_window_s=3.0,
+        pre_observation_window_s=0.5,
+        min_early_samples=2,
+        corridor_width_norm=0.08,
+    ),
 }
+
+DIRECTION_OWNED_PROJECTILE_CARDS = {
+    "arrows",
+    "fireball",
+    "giant-snowball",
+    "goblin-barrel",
+    "rocket",
+}
+
+SPAWN_REFINED_PROJECTILES = {
+    "goblin-barrel": frozenset({"goblin"}),
+    "royal-delivery": frozenset({"royal-recruit", "royal-recruit-evolution"}),
+}
+SPAWN_REFINEMENT_WINDOW_S = 3.0
 
 FIREBALL_DIRECTION_MIN_DELTA_NORM = 0.015
 FIREBALL_DIRECTION_MIN_STEPS = 2
 FIREBALL_EXPLOSION_MAX_SPAN_NORM = 0.08
 FIREBALL_EXPLOSION_CONFIRM_DELAY_S = 0.6
+FIREBALL_OWN_ACTION_GRACE_S = 0.5
 
 
 class ProjectileSpellTracker:
@@ -54,7 +75,10 @@ class ProjectileSpellTracker:
         self.impact_observer = EnemyProjectileImpactObserver()
 
     def register(self, play, memory):
-        if play.card not in PROJECTILE_SPELL_CONFIGS:
+        if (
+            play.card not in PROJECTILE_SPELL_CONFIGS
+            and play.card not in SPAWN_REFINED_PROJECTILES
+        ):
             return
         event = EnemyProjectileSpellEvent(
             play_event_id=play.event_id,
@@ -91,6 +115,7 @@ class ProjectileSpellTracker:
         time_left_s,
         now_s,
         own_actions,
+        pending_own_spell_targets,
         arena_px,
         should_frame_confirm,
     ):
@@ -125,6 +150,9 @@ class ProjectileSpellTracker:
         memory.center_y = troop.center_y
         if memory.counted_as_card or not should_frame_confirm(memory):
             return memory, None
+        if self._explained_by_pending_own_fireball(memory, pending_own_spell_targets):
+            memory.counted_as_card = True
+            return memory, "own-action"
         if self._explained_by_own_action(memory, own_actions, arena_px):
             memory.counted_as_card = True
             return memory, "own-action"
@@ -145,9 +173,26 @@ class ProjectileSpellTracker:
             return memory, "waiting-direction"
         if ownership != "enemy":
             return memory, "waiting-direction"
+        age_s = memory.first_seen_time - memory.last_seen_time
+        if now_s is not None and memory.first_seen_now_s is not None:
+            age_s = now_s - memory.first_seen_now_s
+        if age_s < FIREBALL_OWN_ACTION_GRACE_S:
+            return memory, "waiting-own-action"
         return memory, "record"
 
-    def fireball_ownership(self, memory, arena_px):
+    def _explained_by_pending_own_fireball(self, memory, pending_own_spell_targets):
+        for target in reversed(pending_own_spell_targets):
+            if target.get("card") != "fireball":
+                continue
+            target_time = target.get("time_left_s")
+            if target_time is None:
+                continue
+            elapsed_s = target_time - memory.last_seen_time
+            if 0 <= elapsed_s <= ENEMY_SPELL_OWN_ACTION_VETO_WINDOW_S:
+                return True
+        return False
+
+    def projectile_ownership(self, memory, arena_px):
         if arena_px is None or len(memory.motion_centers) < FIREBALL_DIRECTION_MIN_STEPS + 1:
             return None
         arena_h = arena_px[3]
@@ -181,6 +226,9 @@ class ProjectileSpellTracker:
         if max(span_x, span_y) <= FIREBALL_EXPLOSION_MAX_SPAN_NORM:
             return "explosion"
         return None
+
+    def fireball_ownership(self, memory, arena_px):
+        return self.projectile_ownership(memory, arena_px)
 
     def confirmed_explosion_candidates(
         self,
@@ -262,7 +310,7 @@ class ProjectileSpellTracker:
             for sample in self.arena_frames
         ]
         for event in self.events:
-            if event.finalized:
+            if event.finalized and event.card != "rocket":
                 continue
             config = PROJECTILE_SPELL_CONFIGS.get(event.card)
             if (
@@ -274,6 +322,8 @@ class ProjectileSpellTracker:
             for idx, sample in enumerate(samples):
                 delta_s = event.started_at_s - sample.time_left_s
                 if delta_s < -config.pre_observation_window_s or delta_s > config.update_window_s:
+                    continue
+                if event.card == "rocket" and delta_s < 0.6:
                     continue
                 previous_sample = samples[idx - 1] if idx > 0 else None
                 observation, debug_info = self.impact_observer.inspect_event_impact(
@@ -296,8 +346,7 @@ class ProjectileSpellTracker:
             return
         for event in sorted(self.events, key=lambda item: item.started_at_s, reverse=True):
             config = PROJECTILE_SPELL_CONFIGS.get(event.card)
-            assert config, "projectile config must not be empty"
-            if event.card == "fireball":
+            if config is None or event.card == "fireball":
                 continue
             candidates = []
             for observation in self.target_observations:
@@ -310,19 +359,35 @@ class ProjectileSpellTracker:
                 delta_s = event.started_at_s - observation.time_left_s
                 if delta_s < -config.pre_observation_window_s or delta_s > config.update_window_s:
                     continue
-                trajectory_metrics = self._trajectory_metrics(event, observation, arena_px, config)
+                trajectory_metrics = (
+                    (0.0,)
+                    if event.card == "rocket" and observation.phase == "impact"
+                    else self._trajectory_metrics(event, observation, arena_px, config)
+                )
                 if trajectory_metrics is None:
                     continue
-                candidates.append(
-                    (
-                        delta_s < 0,
-                        trajectory_metrics[0],
-                        self._observation_phase_rank(observation.phase),
-                        abs(delta_s),
-                        -observation.quality,
-                        observation,
+                if event.card == "rocket":
+                    candidates.append(
+                        (
+                            delta_s < 0,
+                            -delta_s,
+                            trajectory_metrics[0],
+                            -observation.quality,
+                            0,
+                            observation,
+                        )
                     )
-                )
+                else:
+                    candidates.append(
+                        (
+                            delta_s < 0,
+                            trajectory_metrics[0],
+                            self._observation_phase_rank(observation.phase),
+                            abs(delta_s),
+                            -observation.quality,
+                            observation,
+                        )
+                    )
             if not candidates:
                 continue
             chosen_score = min(candidates, key=lambda item: item[:5])
@@ -352,27 +417,29 @@ class ProjectileSpellTracker:
     def update_from_matches(self, matches, *, time_left_s, own_actions, arena_px):
         if arena_px is None:
             return
-        own_fireball_actions = self._recent_own_actions("fireball", own_actions)
         for match in matches:
             troop = match.troop
-            if DIRECT_UNIT_TO_CARD.get(troop.class_name) != "fireball":
+            card = DIRECT_UNIT_TO_CARD.get(troop.class_name)
+            if card not in PROJECTILE_SPELL_CONFIGS:
                 continue
+            own_projectile_actions = self._recent_own_actions(card, own_actions)
             event, score = self._best_enemy_event_for_detection(
-                card="fireball",
+                card=card,
                 time_left_s=time_left_s,
                 center_x=troop.center_x,
                 center_y=troop.center_y,
                 arena_px=arena_px,
-                own_actions=own_fireball_actions,
+                own_actions=own_projectile_actions,
                 include_finalized=True,
             )
-            if event is None:
-                event = self._recent_unclaimed_fireball_event(
+            if event is None and card in {"fireball", "rocket"}:
+                event = self._recent_unclaimed_projectile_event(
+                    card=card,
                     time_left_s=time_left_s,
                     center_x=troop.center_x,
                     center_y=troop.center_y,
                     arena_px=arena_px,
-                    own_actions=own_fireball_actions,
+                    own_actions=own_projectile_actions,
                 )
                 score = 0.0 if event is not None else None
             if event is None:
@@ -387,10 +454,57 @@ class ProjectileSpellTracker:
                 source_track_id=getattr(troop, "track_id", None),
                 score=score,
             )
+        self._refine_from_spawned_units(matches, time_left_s=time_left_s, arena_px=arena_px)
+
+    def _refine_from_spawned_units(self, matches, *, time_left_s, arena_px):
+        candidates = []
+        for match in matches:
+            troop = match.troop
+            if troop.team != "enemy":
+                continue
+            cell = ACTION_GRID.pixel_to_cell(troop.center_x, troop.center_y, arena_px)
+            if cell is None:
+                continue
+            candidates.append((troop.class_name, cell))
+
+        for event in sorted(self.events, key=lambda item: item.started_at_s):
+            spawn_classes = SPAWN_REFINED_PROJECTILES.get(event.card)
+            if spawn_classes is None or event.finalized:
+                continue
+            elapsed_s = event.started_at_s - time_left_s
+            if elapsed_s < 0 or elapsed_s > SPAWN_REFINEMENT_WINDOW_S:
+                continue
+            matching_cells = [
+                cell
+                for class_name, cell in candidates
+                if class_name in spawn_classes
+            ]
+            if not matching_cells:
+                continue
+            reference = event.best_cell
+            chosen = (
+                min(
+                    matching_cells,
+                    key=lambda cell: abs(cell[0] - reference[0]) + abs(cell[1] - reference[1]),
+                )
+                if reference is not None
+                else matching_cells[0]
+            )
+            event.finalized = True
+            event.finalized_cell = chosen
+            event.best_cell = chosen
+            play = self._find_play(event.play_event_id)
+            if play is not None:
+                play.cell = chosen
+            self._debug(
+                f"finalized enemy projectile card={event.card} "
+                f"track={event.first_track_id} cell={chosen} "
+                f"from_spawn=True dt={elapsed_s:.2f}"
+            )
 
     def should_absorb(self, card_name, memory, *, time_left_s, own_actions, arena_px):
         if (
-            card_name != "fireball"
+            card_name not in {"fireball", "giant-snowball"}
             or memory.center_x is None
             or memory.center_y is None
             or arena_px is None
@@ -407,7 +521,8 @@ class ProjectileSpellTracker:
             include_finalized=True,
         )
         if event is None:
-            event = self._recent_unclaimed_fireball_event(
+            event = self._recent_unclaimed_projectile_event(
+                card=card_name,
                 time_left_s=time_left_s,
                 center_x=memory.center_x,
                 center_y=memory.center_y,
@@ -462,18 +577,19 @@ class ProjectileSpellTracker:
             if action.get("card") == card_name and action.get("cell") is not None
         ]
 
-    def _recent_unclaimed_fireball_event(
+    def _recent_unclaimed_projectile_event(
         self,
         *,
+        card,
         time_left_s,
         center_x,
         center_y,
         arena_px,
         own_actions,
     ):
-        config = PROJECTILE_SPELL_CONFIGS["fireball"]
+        config = PROJECTILE_SPELL_CONFIGS[card]
         own_score = self._best_own_projectile_score(
-            card="fireball",
+            card=card,
             time_left_s=time_left_s,
             center_x=center_x,
             center_y=center_y,
@@ -485,7 +601,7 @@ class ProjectileSpellTracker:
         candidates = [
             event
             for event in self.events
-            if event.card == "fireball"
+            if event.card == card
             and -config.pre_observation_window_s
             <= event.started_at_s - time_left_s
             <= config.update_window_s
@@ -707,7 +823,7 @@ class ProjectileSpellTracker:
         return 2
 
     def _debug_impact_observation(self, event, sample, debug_info):
-        if event.card != "fireball":
+        if event.card not in {"fireball", "rocket"}:
             return
         best_cell = debug_info.best_cell if debug_info.best_cell is not None else "none"
         best_score = "-" if debug_info.best_score is None else f"{debug_info.best_score:.3f}"

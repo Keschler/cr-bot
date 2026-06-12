@@ -145,7 +145,11 @@ class EnemyProjectileSpellEvent:
                 self.observed_centers.append(item)
                 seen.add(item)
         self.observed_centers.sort(key=lambda item: item[0], reverse=True)
-        del self.observed_centers[8:]
+        if len(self.observed_centers) > 8:
+            self.observed_centers = [
+                *self.observed_centers[:4],
+                *self.observed_centers[-4:],
+            ]
 
 
 @dataclass

@@ -21,7 +21,10 @@ from .models import (
     SPELL_CARD_NAMES,
     TrackMemory,
 )
-from .projectile_spells import ProjectileSpellTracker
+from .projectile_spells import (
+    DIRECTION_OWNED_PROJECTILE_CARDS,
+    ProjectileSpellTracker,
+)
 from .rolling_spells import RollingSpellTracker
 
 
@@ -126,11 +129,24 @@ class EnemyCardTracker:
                         )
                 continue
             if troop.team != "enemy":
+                track_id = getattr(troop, "track_id", None)
+                existing_memory = self.tracks.get(track_id)
+                if (
+                    DIRECT_UNIT_TO_CARD.get(troop.class_name) == "fireball"
+                    and existing_memory is not None
+                    and DIRECT_UNIT_TO_CARD.get(existing_memory.best_class) != "fireball"
+                ):
+                    self._debug(
+                        f"skip ally-labelled fireball track={track_id}: "
+                        f"track already belongs to class={existing_memory.best_class}"
+                    )
+                    continue
                 memory, action = self.projectiles.observe_ally_fireball(
                     troop,
                     time_left_s=time_left_s,
                     now_s=now_s,
                     own_actions=own_projectile_targets,
+                    pending_own_spell_targets=pending_own_spell_targets,
                     arena_px=arena_px,
                     should_frame_confirm=self._should_frame_confirm,
                 )
@@ -153,6 +169,11 @@ class EnemyCardTracker:
                     self._debug(
                         f"waiting fireball track={memory.track_id}: "
                         "projectile direction is not resolved"
+                    )
+                elif action == "waiting-own-action":
+                    self._debug(
+                        f"waiting fireball track={memory.track_id}: "
+                        "allowing own-action evidence to settle"
                     )
                 elif action == "record":
                     self._record_ally_labelled_enemy_fireball(memory, time_left_s, arena_px)
@@ -188,7 +209,8 @@ class EnemyCardTracker:
                 center_x=troop.center_x,
                 center_y=troop.center_y,
             )
-            if DIRECT_UNIT_TO_CARD.get(troop.class_name) == "fireball":
+            card_name = DIRECT_UNIT_TO_CARD.get(troop.class_name)
+            if card_name in DIRECTION_OWNED_PROJECTILE_CARDS:
                 memory.add_motion_center(
                     now_s if now_s is not None else time_left_s,
                     troop.center_x,
@@ -315,18 +337,18 @@ class EnemyCardTracker:
             )
             memory.counted_as_card = True
             return
-        if card_name == "fireball":
-            ownership = self.projectiles.fireball_ownership(memory, arena_px)
+        if card_name in DIRECTION_OWNED_PROJECTILE_CARDS:
+            ownership = self.projectiles.projectile_ownership(memory, arena_px)
             if ownership == "own":
                 self._debug(
-                    f"suppress fireball track={memory.track_id}: "
+                    f"suppress {card_name} track={memory.track_id}: "
                     "projectile direction is toward enemy side"
                 )
                 memory.counted_as_card = True
                 return
             if ownership not in {"enemy", "explosion"}:
                 self._debug(
-                    f"waiting fireball track={memory.track_id}: "
+                    f"waiting {card_name} track={memory.track_id}: "
                     "projectile direction is not resolved"
                 )
                 return

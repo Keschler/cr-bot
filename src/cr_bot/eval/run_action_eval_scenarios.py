@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from contextlib import redirect_stdout
 from dataclasses import dataclass
 import io
@@ -16,7 +17,14 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from cr_bot.eval.action_eval import EvalResult, evaluate, load_ground_truth, parse_predictions_txt, print_report
+from cr_bot.eval.action_eval import (
+    ActionEvent,
+    EvalResult,
+    evaluate,
+    load_ground_truth,
+    parse_predictions_txt,
+    print_report,
+)
 
 
 CAPTURE_SCRIPT = REPO_ROOT / "capture" / "capture.py"
@@ -60,6 +68,14 @@ class AggregateCounts:
 class FocusWindow:
     start_s: float
     end_s: float
+
+
+@dataclass(frozen=True)
+class CellMismatch:
+    side: str
+    missed: ActionEvent
+    false_positive: ActionEvent
+    cell_distance: int
 
 
 SCENARIOS: dict[str, Scenario] = {
@@ -479,7 +495,14 @@ def aggregate_results(results: list[EvalResult]) -> list[AggregateCounts]:
     return summary
 
 
-def print_summary(summary: list[AggregateCounts], *, scenario_count: int) -> None:
+def print_summary(
+    summary: list[AggregateCounts],
+    *,
+    scenario_count: int,
+    results: list[EvalResult] | None = None,
+    time_left_tolerance_s: float = 2.0,
+    video_time_tolerance_s: float = 2.0,
+) -> None:
     print("=== summary ===")
     print(f"runs: {scenario_count}")
     for counts in summary:
@@ -492,6 +515,120 @@ def print_summary(summary: list[AggregateCounts], *, scenario_count: int) -> Non
             f"missed={counts.missed} "
             f"false_positive={counts.false_positive}"
         )
+    if results is None:
+        return
+
+    print_card_error_counts("false positives by card", results, attribute="false_positives")
+    print_card_error_counts("misses by card", results, attribute="misses")
+
+    cell_mismatches = find_cell_mismatches(
+        results,
+        time_left_tolerance_s=time_left_tolerance_s,
+        video_time_tolerance_s=video_time_tolerance_s,
+    )
+    if cell_mismatches:
+        print("different-cell counterparts:")
+        for mismatch in cell_mismatches:
+            missed = mismatch.missed
+            false_positive = mismatch.false_positive
+            print(
+                f"  {mismatch.side} {missed.canonical_card}: "
+                f"expected_cell={missed.cell} pred_cell={false_positive.cell} "
+                f"cell_dist={mismatch.cell_distance} "
+                f"expected_video={format_optional_time(missed.video_time_s)} "
+                f"added_video={format_optional_time(false_positive.video_time_s)}"
+            )
+
+
+def print_card_error_counts(
+    heading: str,
+    results: list[EvalResult],
+    *,
+    attribute: str,
+) -> None:
+    counts = Counter(
+        event.canonical_card
+        for result in results
+        for event in getattr(result, attribute)
+    )
+    print(f"{heading}:")
+    if not counts:
+        print("  none")
+        return
+    for card, count in sorted(counts.items(), key=lambda item: (-item[1], item[0])):
+        print(f"  {card}: {count}")
+
+
+def find_cell_mismatches(
+    results: list[EvalResult],
+    *,
+    time_left_tolerance_s: float,
+    video_time_tolerance_s: float,
+) -> list[CellMismatch]:
+    mismatches: list[CellMismatch] = []
+    for result in results:
+        unused_false_positives = set(range(len(result.false_positives)))
+        for missed in result.misses:
+            candidates = []
+            for idx in unused_false_positives:
+                false_positive = result.false_positives[idx]
+                score = cell_mismatch_score(
+                    missed,
+                    false_positive,
+                    time_left_tolerance_s=time_left_tolerance_s,
+                    video_time_tolerance_s=video_time_tolerance_s,
+                )
+                if score is not None:
+                    candidates.append((score, idx, false_positive))
+            if not candidates:
+                continue
+            _, idx, false_positive = min(candidates, key=lambda item: (item[0], item[1]))
+            unused_false_positives.remove(idx)
+            mismatches.append(
+                CellMismatch(
+                    side=result.side,
+                    missed=missed,
+                    false_positive=false_positive,
+                    cell_distance=cell_distance(missed.cell, false_positive.cell),
+                )
+            )
+    return mismatches
+
+
+def cell_mismatch_score(
+    missed: ActionEvent,
+    false_positive: ActionEvent,
+    *,
+    time_left_tolerance_s: float,
+    video_time_tolerance_s: float,
+) -> float | None:
+    if missed.canonical_card != false_positive.canonical_card:
+        return None
+    if missed.cell is None or false_positive.cell is None or missed.cell == false_positive.cell:
+        return None
+
+    score = 0.0
+    has_time_constraint = False
+    for expected, predicted, tolerance in (
+        (missed.time_left_s, false_positive.time_left_s, time_left_tolerance_s),
+        (missed.video_time_s, false_positive.video_time_s, video_time_tolerance_s),
+    ):
+        if expected is None or predicted is None:
+            continue
+        delta = abs(predicted - expected)
+        if delta > tolerance:
+            return None
+        score += delta
+        has_time_constraint = True
+    return score if has_time_constraint else None
+
+
+def cell_distance(left: tuple[int, int], right: tuple[int, int]) -> int:
+    return abs(left[0] - right[0]) + abs(left[1] - right[1])
+
+
+def format_optional_time(value: float | None) -> str:
+    return "-" if value is None else f"{value:.2f}"
 
 
 def run_explainer(args: argparse.Namespace, scenario: Scenario, report_text: str) -> None:
@@ -542,7 +679,13 @@ def main() -> None:
         if args.explain_misses:
             run_explainer(args, scenario, report_text)
 
-    print_summary(aggregate_results(all_results), scenario_count=len(scenarios))
+    print_summary(
+        aggregate_results(all_results),
+        scenario_count=len(scenarios),
+        results=all_results,
+        time_left_tolerance_s=args.time_left_tolerance,
+        video_time_tolerance_s=args.video_time_tolerance,
+    )
 
 
 if __name__ == "__main__":

@@ -146,3 +146,36 @@ def test_evaluate_treats_old_musketeer_as_musketeer():
     )
 
     assert len(result.matches) == 1
+
+
+def test_evaluate_matches_legacy_ground_truth_card_aliases():
+    aliases = [
+        ("the-log", "log"),
+        ("minion-hord", "minion-horde"),
+        ("babarian-barrel", "barbarian-barrel"),
+    ]
+
+    for legacy_card, canonical_card in aliases:
+        result = evaluate(
+            [
+                ActionEvent(
+                    side="enemy",
+                    card=legacy_card,
+                    video_time_s=10.0,
+                )
+            ],
+            [
+                ActionEvent(
+                    side="enemy",
+                    card=canonical_card,
+                    video_time_s=10.0,
+                )
+            ],
+            side="enemy",
+            time_left_tolerance_s=2.0,
+            video_time_tolerance_s=2.0,
+            cell_tolerance=1,
+            strict_evolution=False,
+        )
+
+        assert len(result.matches) == 1

@@ -1,6 +1,9 @@
 import json
+import io
 from pathlib import Path
+from contextlib import redirect_stdout
 
+from cr_bot.eval.action_eval import ActionEvent, EvalResult
 from cr_bot.eval.run_action_eval_scenarios import (
     SCENARIOS,
     FocusWindow,
@@ -10,6 +13,8 @@ from cr_bot.eval.run_action_eval_scenarios import (
     build_parser,
     evaluate_scenario,
     filter_events,
+    find_cell_mismatches,
+    print_summary,
     replay_cache_path,
     render_report,
 )
@@ -233,3 +238,77 @@ def test_replay_cache_path_is_scenario_specific(tmp_path: Path):
     )
 
     assert replay_cache_path(scenario).name == "sample.pkl.gz"
+
+
+def test_summary_ranks_false_positives_and_misses_by_card():
+    results = [
+        EvalResult(
+            side="enemy",
+            matches=[],
+            misses=[
+                ActionEvent(side="enemy", card="fireball"),
+                ActionEvent(side="enemy", card="evo-fireball"),
+                ActionEvent(side="enemy", card="arrows"),
+            ],
+            false_positives=[
+                ActionEvent(side="enemy", card="zap"),
+                ActionEvent(side="enemy", card="arrows"),
+                ActionEvent(side="enemy", card="zap"),
+            ],
+        )
+    ]
+    output = io.StringIO()
+
+    with redirect_stdout(output):
+        print_summary(
+            aggregate_results(results),
+            scenario_count=1,
+            results=results,
+        )
+
+    text = output.getvalue()
+    assert "false positives by card:\n  zap: 2\n  arrows: 1" in text
+    assert "misses by card:\n  fireball: 2\n  arrows: 1" in text
+
+
+def test_find_cell_mismatches_pairs_same_card_with_matching_time():
+    miss = ActionEvent(
+        side="enemy",
+        card="fireball",
+        time_left_s=120.0,
+        video_time_s=30.0,
+        cell=(5, 8),
+    )
+    different_cell = ActionEvent(
+        side="enemy",
+        card="fireball",
+        time_left_s=119.5,
+        video_time_s=30.4,
+        cell=(9, 8),
+    )
+    wrong_time = ActionEvent(
+        side="enemy",
+        card="fireball",
+        time_left_s=100.0,
+        video_time_s=50.0,
+        cell=(6, 8),
+    )
+    results = [
+        EvalResult(
+            side="enemy",
+            matches=[],
+            misses=[miss],
+            false_positives=[wrong_time, different_cell],
+        )
+    ]
+
+    mismatches = find_cell_mismatches(
+        results,
+        time_left_tolerance_s=2.0,
+        video_time_tolerance_s=2.0,
+    )
+
+    assert len(mismatches) == 1
+    assert mismatches[0].missed is miss
+    assert mismatches[0].false_positive is different_cell
+    assert mismatches[0].cell_distance == 4
