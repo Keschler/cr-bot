@@ -260,7 +260,6 @@ Devlogs: https://flavortown.hackclub.com/projects/16627
 
 - The hand-card and next-card UI classifiers reached 100% accuracy on the tested 2.6 Hog Cycle workflow, but have not been fully validated across every other deck and troop/card combination.
 - Heroes/champions are not currently included in detection, either in the YOLO battlefield detector setup or in the self-trained hand-card and next-card UI classifiers.
-- Goblinstein and Three Musketeers are not added to the hand-card and next-card detection model.
 - Active evolutions can appear as `evo-*` in hand state, but evolution names are not yet represented by `CARD_METADATA` IDs and therefore are not encoded in the card one-hot feature vector.
 - The battlefield detector only recognizes evolution classes included in the older KataCR model. Newer evolutions such as Cannon Evolution do not have dedicated YOLO classes.
 - Mirror cannot be identified from its spawned battlefield unit; it requires hand/cycle inference.
