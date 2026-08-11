@@ -98,11 +98,6 @@ def test_enemy_repeat_after_four_other_plays_is_normal_cycle():
     assert repeated["cost"] == 4
 
 
-def _raised_cell(cell, rows=2):
-    col, row = cell
-    return col, max(0, row - rows)
-
-
 def _frame_with_burst(arena_px, cell=None, *, color=(40, 160, 255)):
     frame = np.zeros((1000, 1000, 3), dtype=np.uint8)
     if cell is None:
@@ -183,8 +178,8 @@ def test_enemy_play_cell_uses_claimed_clock_center_instead_of_troop_center():
     )
 
     play = tracker.detected_card_plays[0]
-    assert play["cell"] == _raised_cell(ACTION_GRID.pixel_to_cell(500.0, 780.0, arena_px))
-    assert play["cell"] != _raised_cell(ACTION_GRID.pixel_to_cell(500.0, 700.0, arena_px))
+    assert play["cell"] == ACTION_GRID.pixel_to_cell(500.0, 780.0, arena_px)
+    assert play["cell"] != ACTION_GRID.pixel_to_cell(500.0, 700.0, arena_px)
 
 
 def test_enemy_play_cell_uses_remembered_clock_center():
@@ -202,15 +197,84 @@ def test_enemy_play_cell_uses_remembered_clock_center():
     )
 
     play = tracker.detected_card_plays[0]
-    assert play["cell"] == _raised_cell(ACTION_GRID.pixel_to_cell(500.0, 780.0, arena_px))
+    assert play["cell"] == ACTION_GRID.pixel_to_cell(500.0, 780.0, arena_px)
 
 
-def test_enemy_cell_calibration_raises_rows_by_two():
+def test_long_visible_area_spell_updates_to_majority_observed_cell():
     tracker = _tracker()
+    arena_px = (0.0, 0.0, 1000.0, 1000.0)
+    cells = [(13, 25), (13, 25), (14, 26), (14, 26), (14, 26)]
 
-    assert tracker._raise_cell_rows((7, 7), rows=2) == (7, 5)
-    assert tracker._raise_cell_rows((7, 1), rows=2) == (7, 0)
-    assert tracker._raise_cell_rows(None, rows=2) is None
+    for idx, cell in enumerate(cells):
+        center_x, center_y = ACTION_GRID.cell_to_pixel_center(*cell, arena_px)
+        tracker.update(
+            263.0 - idx * 0.1,
+            [_match(1, class_name="graveyard", center_x=center_x, center_y=center_y)],
+            now_s=44.1 + idx * 0.1,
+            arena_px=arena_px,
+        )
+
+    assert len(tracker.detected_card_plays) == 1
+    assert tracker.detected_card_plays[0]["cell"] == (14, 26)
+
+
+def test_long_visible_area_spell_majority_tie_prefers_latest_cell():
+    tracker = _tracker()
+    arena_px = (0.0, 0.0, 1000.0, 1000.0)
+    cells = [(13, 25), (13, 25), (14, 26), (14, 26)]
+
+    for idx, cell in enumerate(cells):
+        center_x, center_y = ACTION_GRID.cell_to_pixel_center(*cell, arena_px)
+        tracker.update(
+            263.0 - idx * 0.1,
+            [_match(1, class_name="rage", center_x=center_x, center_y=center_y)],
+            now_s=44.1 + idx * 0.1,
+            arena_px=arena_px,
+        )
+
+    assert len(tracker.detected_card_plays) == 1
+    assert tracker.detected_card_plays[0]["cell"] == (14, 26)
+
+
+def test_overlapping_long_visible_area_spell_tracks_merge_into_one_play():
+    tracker = _tracker()
+    arena_px = (0.0, 0.0, 1000.0, 1000.0)
+    first_center = ACTION_GRID.cell_to_pixel_center(13, 20, arena_px)
+    second_center = ACTION_GRID.cell_to_pixel_center(14, 20, arena_px)
+
+    for idx in range(3):
+        tracker.update(
+            239.0 - idx * 0.1,
+            [
+                _match(1, class_name="rage", center_x=first_center[0], center_y=first_center[1]),
+                _match(2, class_name="rage", center_x=second_center[0], center_y=second_center[1]),
+            ],
+            now_s=68.3 + idx * 0.1,
+            arena_px=arena_px,
+        )
+
+    assert len(tracker.detected_card_plays) == 1
+    assert tracker.detected_card_plays[0]["track_id"] == 1
+
+
+def test_separate_long_visible_area_spell_tracks_are_not_merged():
+    tracker = _tracker()
+    arena_px = (0.0, 0.0, 1000.0, 1000.0)
+    first_center = ACTION_GRID.cell_to_pixel_center(3, 8, arena_px)
+    second_center = ACTION_GRID.cell_to_pixel_center(14, 24, arena_px)
+
+    for idx in range(3):
+        tracker.update(
+            239.0 - idx * 0.1,
+            [
+                _match(1, class_name="rage", center_x=first_center[0], center_y=first_center[1]),
+                _match(2, class_name="rage", center_x=second_center[0], center_y=second_center[1]),
+            ],
+            now_s=68.3 + idx * 0.1,
+            arena_px=arena_px,
+        )
+
+    assert len(tracker.detected_card_plays) == 2
 
 
 def test_clock_confirmed_enemy_skeleton_records_skeletons_card():

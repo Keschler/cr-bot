@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections import Counter
+
 from cr_bot.domain.card_metadata import CARD_METADATA
 from cr_bot.domain.constants import (
     ENEMY_CARD_CONFIRM_FRAMES,
@@ -26,6 +28,19 @@ from .projectile_spells import (
     ProjectileSpellTracker,
 )
 from .rolling_spells import RollingSpellTracker
+
+
+LONG_VISIBLE_AREA_SPELLS = {
+    "earthquake",
+    "freeze",
+    "rage",
+    "void",
+    "graveyard",
+    "goblin-curse",
+    "poison",
+    "tornado",
+}
+LONG_VISIBLE_AREA_DUPLICATE_WINDOW_S = 1.0
 
 
 class EnemyCardTracker:
@@ -352,6 +367,23 @@ class EnemyCardTracker:
                     "projectile direction is not resolved"
                 )
                 return
+        overlapping_play = self._overlapping_long_visible_area_play(
+            card_name,
+            memory,
+            arena_px,
+        )
+        if overlapping_play is not None:
+            self._merge_long_visible_area_observations(
+                overlapping_play,
+                memory,
+                arena_px,
+            )
+            self._debug(
+                f"suppress enemy {card_name} track={memory.track_id}: "
+                f"overlaps track={overlapping_play.track_id}"
+            )
+            memory.counted_as_card = True
+            return
         if self._is_recent_duplicate_play(card_name, time_left_s, memory, arena_px):
             self._debug(
                 f"suppress enemy {card_name} track={memory.track_id}: "
@@ -609,6 +641,49 @@ class EnemyCardTracker:
             if play.event_id == play_event_id:
                 return play
         return None
+
+    def _overlapping_long_visible_area_play(self, card_name, memory, arena_px):
+        if card_name not in LONG_VISIBLE_AREA_SPELLS or arena_px is None:
+            return None
+        candidate_cells = self._observed_cells(memory, arena_px)
+        for play in reversed(self.detected_card_plays):
+            if play.card != card_name:
+                continue
+            previous_memory = self.tracks.get(play.track_id)
+            if previous_memory is None:
+                continue
+            gap_s = max(
+                0.0,
+                previous_memory.last_seen_time - memory.first_seen_time,
+                memory.last_seen_time - previous_memory.first_seen_time,
+            )
+            if gap_s > LONG_VISIBLE_AREA_DUPLICATE_WINDOW_S:
+                continue
+            previous_cells = self._observed_cells(previous_memory, arena_px)
+            if self._cell_sets_overlap(previous_cells, candidate_cells):
+                return play
+        return None
+
+    def _merge_long_visible_area_observations(self, play, memory, arena_px):
+        previous_memory = self.tracks.get(play.track_id)
+        if previous_memory is None:
+            return
+        seen = set(previous_memory.observed_centers)
+        for observation in memory.observed_centers:
+            if observation not in seen:
+                previous_memory.observed_centers.append(observation)
+                seen.add(observation)
+        previous_memory.observed_centers.sort(key=lambda item: item[0], reverse=True)
+        play.cell = self._majority_observed_cell(previous_memory, arena_px)
+
+    def _cell_sets_overlap(self, left_cells, right_cells):
+        return any(
+            max(abs(left[0] - right[0]), abs(left[1] - right[1]))
+            <= ENEMY_SPELL_DISTINCT_CELL_DISTANCE
+            for left in left_cells
+            for right in right_cells
+        )
+
     def _is_recent_duplicate_play(self, card_name, time_left_s, memory, arena_px):
         if self._mirror_source_play(card_name, memory, arena_px) is not None:
             return False
@@ -677,27 +752,37 @@ class EnemyCardTracker:
     def _memory_cell(self, memory, arena_px):
         if memory is None or arena_px is None:
             return None
+        card_name = DIRECT_UNIT_TO_CARD.get(memory.best_class)
+        if card_name in LONG_VISIBLE_AREA_SPELLS:
+            majority_cell = self._majority_observed_cell(memory, arena_px)
+            if majority_cell is not None:
+                return majority_cell
         if memory.deploy_clock_center_x is not None and memory.deploy_clock_center_y is not None:
-            return self._raise_cell_rows(
-                ACTION_GRID.pixel_to_cell(
-                    memory.deploy_clock_center_x,
-                    memory.deploy_clock_center_y,
-                    arena_px,
-                ),
-                rows=2,
+            return ACTION_GRID.pixel_to_cell(
+                memory.deploy_clock_center_x,
+                memory.deploy_clock_center_y,
+                arena_px,
             )
         if memory.center_x is None or memory.center_y is None:
             return None
-        return self._raise_cell_rows(
-            ACTION_GRID.pixel_to_cell(memory.center_x, memory.center_y, arena_px),
-            rows=2,
-        )
+        return ACTION_GRID.pixel_to_cell(memory.center_x, memory.center_y, arena_px)
 
-    def _raise_cell_rows(self, cell, *, rows):
-        if cell is None:
+    def _majority_observed_cell(self, memory, arena_px):
+        observed_cells = self._observed_cells(memory, arena_px)
+        if not observed_cells:
             return None
-        col, row = cell
-        return col, max(0, row - rows)
+        counts = Counter(observed_cells)
+        max_count = max(counts.values())
+        for cell in reversed(observed_cells):
+            if counts[cell] == max_count:
+                return cell
+        return None
+
+    def _observed_cells(self, memory, arena_px):
+        return [
+            ACTION_GRID.pixel_to_cell(center_x, center_y, arena_px)
+            for _, center_x, center_y in memory.observed_centers
+        ]
 
     def _has_distinct_spell_cell(self, own_cell, enemy_cell):
         if own_cell is None or enemy_cell is None:
