@@ -35,6 +35,15 @@ class OwnActionEvent(DataclassMapping):
     played_via: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class TemporalSpellDetection(DataclassMapping):
+    card: str
+    confidence: float
+    video_time_s: float
+    target_cell: tuple[int, int] | None
+    heatmap_score: float
+
+
 @dataclass(slots=True)
 class EnemyCardPlay(DataclassMapping):
     event_id: str

@@ -11,7 +11,7 @@ from cr_bot.domain.constants import (
     ENEMY_CARD_STALE_AFTER_SECONDS,
     FRAME_CONFIRM_TROOPS,
 )
-from cr_bot.domain.events import EnemyCardPlay
+from cr_bot.domain.events import EnemyCardPlay, TemporalSpellDetection
 from cr_bot.features.action_space import ACTION_GRID
 from cr_bot.features.global_features import card_to_id
 from cr_bot.trackers.direct_unit_to_card import DIRECT_UNIT_TO_CARD
@@ -103,6 +103,7 @@ class EnemyCardTracker:
         arena_px=None,
         frame=None,
         claimed_spell_observation_keys=None,
+        temporal_spell_detections=None,
     ):
         clock_boxes = clock_boxes or []
         pending_own_spell_targets = pending_own_spell_targets or []
@@ -285,9 +286,111 @@ class EnemyCardTracker:
             arena_px=arena_px,
             claimed_spell_observation_keys=claimed_spell_observation_keys,
         )
+        self._consume_temporal_spell_detections(
+            temporal_spell_detections or [],
+            time_left_s=time_left_s,
+            own_actions=own_actions or [],
+            pending_own_spell_targets=pending_own_spell_targets,
+        )
         self._drop_stale_tracks(time_left_s)
         self.projectiles.cleanup_ally_candidates(time_left_s)
         self.rolling_spells.cleanup(time_left_s)
+
+    def _consume_temporal_spell_detections(
+        self,
+        detections: list[TemporalSpellDetection],
+        *,
+        time_left_s: float,
+        own_actions,
+        pending_own_spell_targets,
+    ) -> None:
+        for detection in detections:
+            if self._temporal_matches_own_action(
+                detection,
+                [*own_actions, *pending_own_spell_targets],
+            ):
+                self._debug(
+                    f"suppress temporal {detection.card}: matches recent own spell"
+                )
+                continue
+            matching_play = self._matching_temporal_play(detection)
+            if matching_play is not None:
+                matching_play.avg_confidence = max(
+                    matching_play.avg_confidence,
+                    detection.confidence,
+                )
+                if matching_play.cell is None:
+                    matching_play.cell = detection.target_cell
+                continue
+            card_id = card_to_id(detection.card)
+            cost = CARD_METADATA[detection.card]["elixir_cost"]
+            play = EnemyCardPlay(
+                event_id=(
+                    f"{detection.card}_temporal_"
+                    f"{len(self.detected_card_plays) + 1:06d}"
+                ),
+                time_left_s=time_left_s,
+                total_remaining_s=time_left_s,
+                video_time_s=detection.video_time_s,
+                card=detection.card,
+                cost=cost,
+                track_id=None,
+                cell=detection.target_cell,
+                clock_confirmed=False,
+                frame_confirmed=True,
+                avg_confidence=detection.confidence,
+                team_ratio=1.0,
+                best_class=detection.card,
+                class_votes={detection.card: 1},
+                is_spell=True,
+                overtime=time_left_s <= 120.0,
+                discard_reason=None,
+                played_via="temporal-vision",
+            )
+            self.detected_card_plays.append(play)
+            if card_id is not None:
+                self.confirmed_seen_cards.add(card_id)
+            self.elixir.spend(cost)
+            self._debug(
+                f"recorded temporal enemy play card={detection.card} "
+                f"time_left={time_left_s} cell={detection.target_cell}"
+            )
+
+    def _matching_temporal_play(
+        self,
+        detection: TemporalSpellDetection,
+    ) -> EnemyCardPlay | None:
+        for play in reversed(self.detected_card_plays):
+            if play.card != detection.card or play.video_time_s is None:
+                continue
+            if abs(play.video_time_s - detection.video_time_s) > 1.2:
+                continue
+            if self._has_distinct_spell_cell(play.cell, detection.target_cell):
+                continue
+            return play
+        return None
+
+    def _temporal_matches_own_action(self, detection, own_evidence) -> bool:
+        for action in reversed(own_evidence):
+            card = action.get("card") if hasattr(action, "get") else getattr(action, "card", None)
+            if card != detection.card:
+                continue
+            action_time = (
+                action.get("video_time_s")
+                if hasattr(action, "get")
+                else getattr(action, "video_time_s", None)
+            )
+            if action_time is None:
+                action_time = getattr(action, "started_at_s", None)
+            if action_time is None or abs(detection.video_time_s - action_time) > 3.0:
+                continue
+            cell = action.get("cell") if hasattr(action, "get") else getattr(action, "cell", None)
+            if cell is None:
+                cell = getattr(action, "spell_target_cell", None)
+            if self._has_distinct_spell_cell(cell, detection.target_cell):
+                continue
+            return True
+        return False
 
     def _should_frame_confirm(self, memory):
         best_class = memory.best_class

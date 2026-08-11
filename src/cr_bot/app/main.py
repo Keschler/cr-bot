@@ -47,6 +47,7 @@ def main(
     yolo_detections: bool = False,
     write_replay_cache: str | None = None,
     replay_cache: str | None = None,
+    temporal_spell_checkpoint: str | None = None,
 ):
     if frame_stride < 1:
         raise ValueError("frame_stride must be at least 1")
@@ -67,7 +68,12 @@ def main(
     ):
         raise ValueError("video_end_time_s must be greater than video_start_time_s")
 
-    session = MatchSession()
+    temporal_spell_predictor = None
+    if temporal_spell_checkpoint:
+        from cr_bot.temporal_spells import TemporalSpellPredictor
+
+        temporal_spell_predictor = TemporalSpellPredictor(temporal_spell_checkpoint)
+    session = MatchSession(temporal_spell_predictor=temporal_spell_predictor)
 
     if replay_cache:
         for record in ReplayCacheReader(replay_cache):

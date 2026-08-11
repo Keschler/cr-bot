@@ -23,8 +23,9 @@ class MatchSessionStep:
 
 
 class MatchSession:
-    def __init__(self, *, tracker_debug: bool = True) -> None:
+    def __init__(self, *, tracker_debug: bool = True, temporal_spell_predictor=None) -> None:
         self.tracker_debug = tracker_debug
+        self.temporal_spell_predictor = temporal_spell_predictor
         self.reset()
 
     def reset(self) -> None:
@@ -37,6 +38,15 @@ class MatchSession:
         self.not_in_game_streak = 0
 
     def process(self, analysis: FrameAnalysisResult, *, frame, now_s: float) -> MatchSessionStep:
+        temporal_spell_detections = (
+            self.temporal_spell_predictor.update(
+                frame,
+                video_time_s=now_s,
+                arena_px=analysis.arena_px,
+            )
+            if self.temporal_spell_predictor is not None
+            else []
+        )
         analysis = analysis.with_hand_state(self.hand_state_filter.update(analysis.hand_state))
 
         if not self.game_started and (game_start(frame) or has_visible_match_timer(analysis)):
@@ -93,6 +103,7 @@ class MatchSession:
                 claimed_spell_observation_keys=set(
                     self.own_action_tracker.claimed_spell_target_observations
                 ),
+                temporal_spell_detections=temporal_spell_detections,
             )
 
             if game_end_from_result(analysis):

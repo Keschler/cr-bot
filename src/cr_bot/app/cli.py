@@ -66,6 +66,12 @@ def main():
         "--replay-cache",
         help="Skip vision processing and replay a previously written cache.",
     )
+    parser.add_argument(
+        "--temporal-spell-checkpoint",
+        nargs="?",
+        const="assets/models/temporal_spell_classifier_best.pt",
+        help="Enable temporal spell inference, optionally with a custom checkpoint.",
+    )
     args = parser.parse_args()
     if args.frame_stride < 1:
         parser.error("--frame-stride must be at least 1")
@@ -106,6 +112,7 @@ def main():
         yolo_detections=args.yolo_detections,
         write_replay_cache=args.write_replay_cache,
         replay_cache=args.replay_cache,
+        temporal_spell_checkpoint=args.temporal_spell_checkpoint,
     )
 
 
