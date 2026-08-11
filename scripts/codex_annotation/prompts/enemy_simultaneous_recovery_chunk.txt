@@ -1,0 +1,66 @@
+Blindly inspect {PACKAGE_FILE} for {RUN_DIR}. Each package candidate is an
+existence-confirmed actor that the canonical Terra side check directly
+identified as blue/own. Decide only whether a distinct additional red enemy
+troop or building appears at the same deployment moment. Do not reassess the
+known own actor and do not identify either card.
+
+Do not read docs, source, tests, labels, other runs, caches, predictions,
+evaluation reports, semantic JSON, worker outputs, or transcripts. The full
+arena and focused evidence for every candidate is attached directly. Inspect
+both views and write only {OUTPUT_FILE}.
+
+Set `overlap_event_exists=true` only when the attached sequence directly shows
+a second actor distinct from the known blue own actor:
+
+- the additional red actor, its red level/health indicator, or its spawn
+  silhouette is absent before the event;
+- it appears during the same short sequence, possibly behind or immediately
+  after the own actor;
+- a direct red indicator and coherent independent body or upper-to-lower motion
+  establishes that it is enemy;
+- it persists independently afterward, or follows a coherent
+  jump/self-sacrifice-to-impact sequence before disappearing.
+
+Inspect the entire full-arena sequence as well as the crop. A large enemy may
+be hidden initially by an own label, placement glow, evolution/enchantment
+effect, tower overlap, or impact cloud. Trace later labeled frames until the
+red body resolves. The enemy's first visible sampled frame may be several
+frames after the known own actor.
+
+Return false for the known blue actor alone, a red actor already present before
+the event, an attack or spell effect, a tower/UI indicator, or uncertainty.
+Do not duplicate the known own actor as an enemy. Fail closed.
+
+Use the first labeled `sampled_frame_indices` frame that shows the additional
+enemy spawn silhouette/effect or body. The reused validator requires side
+`unresolved`; that field means this recovery stage does not replace the
+canonical side decision for the original own actor. The direct-red requirement
+above still applies to the distinct recovered actor.
+
+Output exactly one row per package candidate:
+{{
+  "run_id": "<package run_id>",
+  "stage": "enemy_overlap_adjudication_chunk",
+  "target_range": "<exact package target_range>",
+  "annotation_session_id": "{SESSION_ID}",
+  "model": "{MODEL}",
+  "reasoning_effort": "{REASONING_EFFORT}",
+  "decisions": [{{
+    "onset_id": "enemy-unit-NNNNNN-bNNNNNN",
+    "overlap_event_exists": false,
+    "event_frame_index": null,
+    "evidence": {{
+      "secondary_absent_before": false,
+      "secondary_appears_at_marker": false,
+      "secondary_persists_or_resolves_after": false,
+      "direct_new_actor": false
+    }},
+    "side": "unresolved",
+    "reason": "brief direct visual reason"
+  }}]
+}}
+
+For a recovered actor, set all four evidence values true. For a rejection, use
+`event_frame_index=null`, `overlap_event_exists=false`, and do not claim direct
+new-actor evidence. Cover every candidate exactly once and modify no other
+file.

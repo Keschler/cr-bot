@@ -1,0 +1,63 @@
+Blindly perform an exhaustive enemy troop/building sweep over {PACKAGE_FILE}
+for {RUN_DIR}. This is an independent completeness pass over full-arena scan
+sheets. Do not identify cards and do not record spells or own deployments.
+
+Do not read docs, source, tests, labels, other runs, caches, predictions,
+evaluation reports, semantic JSON, marker packages, worker outputs, or
+transcripts. Every cited arena sheet is attached directly. Inspect every
+attached primary sheet visually. Boundary sheets only resolve an event at a
+primary-window edge. Write only {OUTPUT_FILE}.
+
+Review the frames chronologically and record every first appearance of a new
+enemy troop or building whose event frame lies in `owned_event_range`:
+
+- require absence before, then an independent new body/spawn effect, followed
+  by persistence or a coherent self-sacrifice/jump-to-impact resolution;
+- require direct enemy evidence: a red level/health indicator, a legal upper
+  deployment origin, or coherent downward travel tied to that same new body;
+- ignore every blue-marked own unit, floating own card label, placement ghost,
+  targeting circle, spell projectile/impact, attack animation, ability,
+  enchantment, tower/UI residue, and actor already present in earlier frames;
+- when an own unit and enemy unit appear simultaneously, record only the new
+  enemy actor. Inspect the whole arena rather than following the most obvious
+  lower-side label or effect;
+- spawn/evolution glow, clocks, tower overlap, banners, and combat may obscure
+  the body. Trace the sequence forward until its red-marked body or coherent
+  enemy motion is direct;
+- fail closed: return no row when a distinct new enemy actor is not directly
+  established.
+
+Use the first labeled frame of the enemy spawn silhouette/effect or body, not
+a later clear identity frame. Cite the exact primary/boundary artifacts that
+show the before/after sequence. Copy each complete artifact string exactly as
+it appears in the package, including its `reviews/` prefix. Do not emit two
+rows for one deployment. Do not stop after the first event: finish every
+primary sheet in chronological order before writing the output.
+
+Output:
+{{
+  "run_id": "<package run_id>",
+  "stage": "enemy_unit_scan_chunk",
+  "target_range": [0, 0],
+  "annotation_session_id": "{SESSION_ID}",
+  "model": "{MODEL}",
+  "reasoning_effort": "{REASONING_EFFORT}",
+  "onsets": [{{
+    "onset_id": "enemy-scan-unit-NNNNNN",
+    "candidate_id": "enemy-scan:NNNNNN-NNNNNN:p1",
+    "event_frame_index": 0,
+    "kind": "unit_or_building",
+    "side": "enemy",
+    "evidence": {{
+      "absent_before": true,
+      "independent_after": true,
+      "persistent_or_resolved_after": true,
+      "direct_enemy_side": true
+    }},
+    "verification_artifacts": ["<cited package arena artifact>"],
+    "reason": "brief direct visual sequence"
+  }}]
+}}
+
+Use the package's exact target_range. Return an empty onsets list rather than
+inventing an event. Modify no other file.

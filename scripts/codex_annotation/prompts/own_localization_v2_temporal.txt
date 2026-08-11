@@ -1,0 +1,43 @@
+Independently localize the single own event in {PACKAGE_FILE} for {RUN_DIR}.
+Write only {OUTPUT_FILE}. Use only the package and attached pixels. Do not read
+source, docs, tests, labels, ground truth, caches, predictions, detector output,
+reports, other decisions, or transcripts.
+
+Treat the card and approximate event frame as fixed. Establish the placement
+by temporal subtraction: inventory actors in the clean pre-onset macro frames,
+identify the matching white-name/purple-cost release, then find what first
+appears afterward. Do not choose an older body merely because it is clearer in
+a later frame. Do not convert the purple badge to a cell with any fixed offset.
+
+Use the exact onset and follow-through sheets to read `[column,row]` on the
+18x32 grid. `rows_14_31` sheets are a lower-arena zoom but use the original row
+numbers. For troops/buildings select the initial new blue spawn/deployment
+footprint center; for targeted spells select aim/impact center; for Log select
+the first rolling-object center before travel. A later moved position or
+projectile position is not the placement.
+
+Choose one allowed rule and one listed visibly supporting frame. Copy both
+artifact lists exactly. Use `direct` only for a visible initial center and
+`inferred` when occlusion forces inference, explaining the before/after facts.
+
+Output:
+{{
+  "run_id": "<package run_id>",
+  "stage": "own_localization_chunk",
+  "target_range": "<exact package target_range>",
+  "annotation_session_id": "{SESSION_ID}",
+  "model": "{MODEL}",
+  "reasoning_effort": "{REASONING_EFFORT}",
+  "decisions": [{{
+    "event_id": "<exact target event_id>",
+    "location_frame_index": {EXAMPLE_FRAME},
+    "location_rule": "<one allowed target rule>",
+    "cell": [0, 0],
+    "macro_review_artifacts": ["<copy exactly>"],
+    "grid_review_artifacts": ["<copy exactly>"],
+    "confidence": "direct",
+    "reason": "absence before release and first new center afterward"
+  }}]
+}}
+
+Modify no other file. If images are unavailable, do not write output.

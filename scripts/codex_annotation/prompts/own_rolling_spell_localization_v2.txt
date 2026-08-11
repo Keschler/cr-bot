@@ -1,0 +1,39 @@
+Blindly localize the single own rolling-spell event in {PACKAGE_FILE} for
+{RUN_DIR}. Write only {OUTPUT_FILE}. Inspect only the attached images and
+package. Do not read documentation, source, tests, ground truth, labels,
+caches, predictions, detector output, reports, other decisions, or transcripts.
+
+Use the fixed card/cost and white card-name plus purple-cost overlay to identify
+the correct own release. Then find the rolling object itself at its first
+visible frame, before it travels up the lane. The location is the center of
+that initial rolling object. Do not add a UI offset to the purple badge, do not
+use a later object position, and do not select an older troop or combat effect.
+
+Read `[column,row]` from the clean 18x32 grid rulers. A `rows_14_31` view is a
+lower-arena zoom but keeps the original row numbers. Use
+`initial_rolling_object_center`, copy both artifact lists exactly, and cite the
+first supporting frame and object center. The example frame below is a real
+listed event-adjacent frame; replace it when a different listed frame more
+clearly shows the first rolling object.
+
+Output:
+{{
+  "run_id": "<package run id>",
+  "stage": "own_localization_chunk",
+  "target_range": "<exact package target range>",
+  "annotation_session_id": "{SESSION_ID}",
+  "model": "{MODEL}",
+  "reasoning_effort": "{REASONING_EFFORT}",
+  "decisions": [{{
+    "event_id": "<exact event id>",
+    "location_frame_index": {EXAMPLE_FRAME},
+    "location_rule": "initial_rolling_object_center",
+    "cell": [0, 0],
+    "macro_review_artifacts": ["<copy exactly>"],
+    "grid_review_artifacts": ["<copy exactly>"],
+    "confidence": "direct",
+    "reason": "first visible rolling object and grid coordinate"
+  }}]
+}}
+
+Modify no other file. If images are unavailable, do not write output.

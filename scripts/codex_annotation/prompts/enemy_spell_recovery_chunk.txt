@@ -1,0 +1,65 @@
+Blindly inspect only the focused spell-recovery reviews in {PACKAGE_FILE} for
+{RUN_DIR}.
+
+Do not read docs, source, tests, labels, other runs, caches, predictions,
+evaluation reports, semantic JSON, broad scans, or transcripts. Do not print
+the package. Every cited lane-focused sheet is attached. Inspect all of them
+directly. Use filesystem tools only to read the named package and write the one
+required {OUTPUT_FILE}. Modify no other file.
+
+The broad trigger has already been attributed to each review's
+`known_own_spell`. Do not re-accept that own spell, its continuing projectile,
+impact, smoke, target overlay, or floating label. Each review isolates one
+lane named by its `lane` field. Decide that lane independently; do not use
+motion from another review as evidence.
+
+- The first sheet is a consecutive upper/red onset sequence. Compare each
+  frame with its immediate predecessor.
+- It must first appear after the known own spell as a physically distinct
+  rolling object, projectile, or area-impact sequence near the upper/red
+  origin.
+- troops, buildings, spawn effects, attacks, abilities, and debris are not
+  spells;
+- For a rolling object, use the first labeled frame where its separate wide
+  wooden body becomes visible, not a tower edge, unit body, label, clock, glow,
+  or smoke. It may subsequently be partially hidden by the tower or troops.
+- The second sheet must show coherent downward continuation or resolution
+  through the same lane. Do not move the timestamp earlier than the first
+  visible separate body.
+- Require direct upper/red origin and coherent movement toward the lower/blue
+  side. If either is not direct, return `unresolved`.
+
+Cover every review exactly once. Use the same
+`enemy_spell_confirmation_chunk` decision schema:
+
+{{
+  "run_id": "<package run_id>",
+  "stage": "enemy_spell_confirmation_chunk",
+  "target_range": "<exact package target_range>",
+  "annotation_session_id": "{SESSION_ID}",
+  "model": "{MODEL}",
+  "reasoning_effort": "{REASONING_EFFORT}",
+  "decisions": [{{
+    "review_id": "<exact review_id>",
+    "decision": "confirmed",
+    "event_frame_index": 0,
+    "effect_class": "rolling_object",
+    "confirmation_artifacts": ["<every exact package artifact in order>"],
+    "checks": {{
+      "absent_before": true,
+      "coherent_sequence": true,
+      "independent_spell_object_or_resolution": true,
+      "not_unit_attack_or_ability": true,
+      "not_targeting_overlay_or_floating_label": true,
+      "enemy_direction_or_origin": true,
+      "resolved_after": true,
+      "boundary_truncated": false
+    }},
+    "reason": "direct visual description without naming the card"
+  }}]
+}}
+
+For `rejected` or `unresolved`, use null `event_frame_index`,
+`effect_class: "unresolved"`, preserve all artifact paths, fill every check,
+and explain why no additional enemy spell was directly established. Do not
+identify a card.

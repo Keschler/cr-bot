@@ -1,0 +1,53 @@
+Blindly discover only spell onsets in {PACKAGE_FILE} for {RUN_DIR}.
+
+Do not read docs, source, tests, labels, other runs, caches, predictions,
+evaluation reports, own evidence, semantic JSON, marker-unit packages, or
+transcripts. Do not print the package. Every cited arena sheet is attached to
+this conversation; inspect every attached image directly. Use filesystem tools
+only to read the named package and to write the one required output JSON. Do
+not open files outside the package or render new images. Boundary sheets only
+resolve a primary-window edge. Write only {OUTPUT_FILE}.
+
+Ignore every troop, building, spawn clock, attack animation, enchantment,
+ability, static aura, and debris. Record a spell only from a new coherent
+rolling object, directional projectile, or impact sequence. Trace it backward
+to the first independent spell frame and forward across adjacent sheets.
+Inspect the context halo, but emit only frames in `owned_event_range`.
+
+Choose the first labeled frame of the coherent spell sequence. Cite the
+primary/boundary scan artifacts that directly show it. The harness renders
+canonical exact before/after evidence later. Do not decide side or card.
+
+Output:
+{{
+  "run_id": "<package run_id>",
+  "stage": "enemy_spell_onsets_chunk",
+  "target_range": [0, 0],
+  "annotation_session_id": "{SESSION_ID}",
+  "model": "{MODEL}",
+  "reasoning_effort": "{REASONING_EFFORT}",
+  "onsets": [{{
+    "onset_id": "enemy-NNNNNN",
+    "candidate_id": "enemy-scan:NNNNNN-NNNNNN:p1",
+    "event_frame_index": 0,
+    "kind": "spell",
+    "focus_cell": null,
+    "track_id": "spell-effect-NNNNNN",
+    "absence_confirmed": true,
+    "persistence_confirmed": true,
+    "evidence": {{
+      "elixir_drop": null,
+      "hand_transition": null,
+      "deployment_onset": null,
+      "first_visible_object": null,
+      "side_direction": null,
+      "impact_sequence": true
+    }},
+    "verification_artifacts": [
+      "<cited package arena artifact>"
+    ],
+    "identity_artifacts": []
+  }}]
+}}
+
+Return [] rather than inventing a spell. Modify no other file.

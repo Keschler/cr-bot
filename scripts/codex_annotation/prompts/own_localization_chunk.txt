@@ -1,0 +1,50 @@
+Blindly localize every own event in {PACKAGE_FILE} for {RUN_DIR}. Write only
+{OUTPUT_FILE}. Do not read documentation, source code, tests, ground truth,
+human labels, replay caches, predictions, detector output, evaluation reports,
+other workers' decisions, prior transcripts, or any semantic file outside the
+package. Every permitted image is attached; inspect its pixels.
+
+The event card and approximate verified event frame are fixed semantic inputs,
+not decisions to revisit. For each target, use the macro sequence to follow the
+specific new own deployment or spell through time, then use the dense labeled
+grid sequence to select its location. The grid is 18 columns by 32 rows,
+`[column,row]`, with `[0,0]` at the top-left. Copy a
+`location_frame_index` that is actually listed in the target's
+`review_frame_indices` and visibly supports the cell.
+
+Localize the deployment chosen by the player, not the actor's later movement,
+an older arena actor, a simultaneous enemy, a projectile's later travel, or a
+floating HUD element. Use the earliest visually supported center:
+
+- troop: center of the initial spawn/deployment footprint;
+- building: center of the placed building footprint;
+- Fireball or another targeted spell: target/impact center;
+- Log: center of the rolling object at its initial visible placement.
+
+Choose only one of each target's `location_rule_options`. Grid lines and labels
+are visual rulers, not detections. A legal-looking cell alone is not evidence.
+Return the visually closest cell even when the center lies near a boundary.
+Cover every target exactly once and copy both artifact lists exactly.
+
+Output:
+{{
+  "run_id": "<package run_id>",
+  "stage": "own_localization_chunk",
+  "target_range": "<exact package target_range>",
+  "annotation_session_id": "{SESSION_ID}",
+  "model": "{MODEL}",
+  "reasoning_effort": "{REASONING_EFFORT}",
+  "decisions": [{{
+    "event_id": "<exact target event_id>",
+    "location_frame_index": 0,
+    "location_rule": "<one allowed target rule>",
+    "cell": [0, 0],
+    "macro_review_artifacts": ["<copy exactly>"],
+    "grid_review_artifacts": ["<copy exactly>"],
+    "confidence": "direct",
+    "reason": "specific visible deployment/impact center and frame"
+  }}]
+}}
+
+Modify no other file. If attached images are unavailable, do not write output.
+

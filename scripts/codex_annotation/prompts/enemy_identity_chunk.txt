@@ -1,0 +1,74 @@
+Independently determine event existence and side for every recall-safe onset
+candidate in {PACKAGE_FILE} for {RUN_DIR}. Do not identify cards in this stage.
+
+Do not read docs, source, tests, labels, other runs, evaluation reports,
+semantic outputs outside the package, or transcripts. Do not print the whole
+package. Read its compact onset rows, own-release confound frames, rejected-drag
+ranges, and every exact onset artifact it cites. Write only {OUTPUT_FILE}.
+
+Every cited package image is attached directly to this conversation. Inspect
+every attached image visually. Do not substitute filenames, JSON metadata,
+`ls`, `find`, `identify`, ImageMagick/montages, or inferred timing for the
+pixels. Do not create another montage. If the attached images are unavailable,
+do not write an output file.
+
+First decide whether the candidate is an actual new deployment:
+
+- `event_exists=true` requires direct absence before the marker followed by a
+  new independent persistent troop/building body or a coherent spell sequence;
+- use `event_exists=false` for an old body's reacquired marker, ongoing combat,
+  tower/UI residue, a drag preview that is canceled, or an effect without a new
+  independent actor;
+- another actor elsewhere in the arena does not disqualify a new actor;
+- marker timing may lead or lag the visible body by a few frames, and tower,
+  spawn, evolution, enchantment, or impact effects may obscure it;
+- fail open when existence remains genuinely ambiguous: retain it with
+  `event_exists=true` and side `unresolved` so a later review can adjudicate it.
+
+For retained events, classify side from the first independent appearance, not
+from a later arena half after the body has moved:
+
+- red health/level indicators, legal upper-half deployment origin, or coherent
+  downward travel support `enemy`;
+- blue health/level indicators, legal lower-half deployment origin, a floating
+  own-card label/drag ghost, or a matching confirmed/rejected own-hand
+  transition support `own`;
+- screen half alone is insufficient after a unit has moved;
+- a simultaneous own release does not erase a distinct enemy onset elsewhere.
+
+Do not render new images or identify cards in this stage. If direct side
+evidence remains genuinely ambiguous, use side `unresolved`; never force
+`enemy`.
+
+Output one decision per onset:
+{{
+  "run_id": "<package run_id>",
+  "stage": "enemy_identities_chunk",
+  "target_range": "<exact package target_range>",
+  "annotation_session_id": "{SESSION_ID}",
+  "model": "{MODEL}",
+  "reasoning_effort": "{REASONING_EFFORT}",
+  "decisions": [{{
+    "onset_id": "enemy-NNNNNN",
+    "event_exists": true,
+    "existence_evidence": {{
+      "absent_before": true,
+      "independent_after": true,
+      "persistent_after": true
+    }},
+    "side": "enemy",
+    "card": null,
+    "side_evidence": {{
+      "origin": "upper",
+      "team_indicator": "red",
+      "direction": "downward",
+      "direct": true
+    }},
+    "identity_frame_index": null,
+    "identity_artifacts": [],
+    "reason": "direct red/origin/direction evidence"
+  }}]
+}}
+
+All rows use null identity_frame_index and identity_artifacts []. Cover every
+onset exactly once and modify no other file.

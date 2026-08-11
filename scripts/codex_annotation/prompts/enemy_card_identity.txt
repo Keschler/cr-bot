@@ -1,0 +1,40 @@
+Blindly identify only the retained enemy targets in {RUN_DIR}.
+
+Do not read documentation, source code, tests, Git state, ground truth, human
+labels, other runs, caches, predictions, evaluation reports, onset/identity
+worker outputs, or transcripts. Read only:
+
+- {RUN_DIR}/enemy_identity_targets.json
+- the exact verification_artifacts and identity_artifacts cited by each target
+
+No prior card guess is present. Identify a troop/building by tracking the same
+body across all cited views. Prefer the latest clear body/mount view. Discount
+spawn glow, evolution/enchantment glow, jump/impact effects, clocks, shadows,
+and overlapping units. For mounted troops, identify both rider and mount; do
+not name a ground champion when a mount is visible. For spells, use the full
+directional/projectile/impact sequence.
+
+Write only {RUN_DIR}/enemy_cards.json:
+
+{{
+  "run_id": "<same run_id>",
+  "stage": "enemy_cards",
+  "annotation_session_id": "{SESSION_ID}",
+  "model": "{MODEL}",
+  "reasoning_effort": "{REASONING_EFFORT}",
+  "cards": [
+    {{
+      "onset_id": "enemy-NNNNNN",
+      "card": "canonical-card-slug",
+      "identity_frame_index": 0,
+      "identity_artifacts": [
+        "reviews/identity-enemy-NNNNNN-a.jpg",
+        "reviews/identity-enemy-NNNNNN-b.jpg"
+      ],
+      "reason": "visible identifying features"
+    }}
+  ]
+}}
+
+For spells, use null and [] for the two identity fields. Cover every target
+exactly once. Do not modify any other file.

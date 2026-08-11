@@ -1,0 +1,63 @@
+Review every deterministic empty hand-slot interval in {PACKAGE_FILE} for
+{RUN_DIR}. Use only the package and its attached/cited review images. Write only
+{OUTPUT_FILE}. Do not inspect other annotation output, labels, evaluation
+reports, source code, caches, predictions, detector output, or transcripts. Do
+not invoke a renderer.
+
+Each artifact is a consecutive timeline. Every source frame contains the full
+own hand/HUD beside the synchronized arena; the relevant hand slot is outlined.
+The harness has already compared the card art before and after every empty
+interval. `return_evidence.outcome_constraint` is deterministic metadata:
+
+- `canceled` means the same card returned with a histogram score at or above
+  the printed threshold, or the clip ended without the required confirmation
+  horizon. Copy `canceled`; card and both frame fields must be null.
+- `released` means a different card replaced the original and a bounded
+  confirmation horizon exists. Copy `released`, identify the departing card,
+  and choose its onset and confirmation frames from the artifact.
+
+Never override this constraint from arena activity. An older unit or building
+may remain visible while a newer drag is canceled.
+
+For each constrained release, identify the departing card from its separate
+high-resolution `card_identity_artifact`. That sheet contains only the outlined
+hand slot immediately before it empties. Use the timeline artifact for timing
+and confirmation, not for card-art recognition. Temporary yellow/purple
+enchantment glow in the arena does not change the hand card's identity.
+
+Decide each interval independently:
+
+- For a constrained `released` interval, the card leaves the outlined slot and
+  the later frames prove the
+  release with a persistent hand cycle/elixir spend plus an arena unit,
+  building, projectile, rolling object, or impact. Identify the card from the
+  visible card before it leaves and use its exact canonical slug.
+
+For `released`, choose the earliest sampled frame that directly marks the
+deployment onset. Choose a sampled confirmation frame 5-15 frames later that
+proves persistence. The package's direct `elixir_drop_transitions` will be used
+by the deterministic merger to align the final onset to the departing card's
+elixir cost, so do not use unrelated later drops as identity evidence. For
+`canceled` and `unresolved`, card and both frame fields
+must be null. Copy interval_id and artifact exactly. Give a short, concrete
+visual reason for every decision. Cover every package interval exactly once.
+
+Write this exact structure:
+
+{{
+  "run_id": "<package run_id>",
+  "stage": "own_slot_intervals_chunk",
+  "target_range": [0, 0],
+  "annotation_session_id": "{SESSION_ID}",
+  "model": "{MODEL}",
+  "reasoning_effort": "{REASONING_EFFORT}",
+  "decisions": [{{
+    "interval_id": "own-slot:1:000010-000016",
+    "decision": "released|canceled|unresolved",
+    "card": "canonical-card-slug-or-null",
+    "event_frame_index": 0,
+    "confirmation_frame_index": 5,
+    "artifact": "reviews/own-slot-1-000010-000016.jpg",
+    "reason": "specific visible evidence"
+  }}]
+}}

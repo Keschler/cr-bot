@@ -1,0 +1,87 @@
+Perform a fresh, blind, high-recall own-release sweep for package
+{PACKAGE_FILE} in {RUN_DIR}. This is independent completeness, not review of a
+primary answer.
+
+Do not read source, docs, tests, labels, other runs, evaluation reports,
+verification/semantic JSON, worker outputs, or transcripts. Read only the
+package and every listed sparse discovery artifact. Write only {OUTPUT_FILE}.
+
+Work chronologically. Enumerate every true bottom-hand release whose event
+frame is inside owned_event_range. A floating label/empty slot with unchanged
+elixir is a held drag, but it becomes a true play if a later sampled frame
+shows:
+
+- the card did not return to hand and its replacement cooldown/next card
+  persists;
+- its unit/building persists or its spell resolves.
+
+Displayed elixir may regenerate during the held drag: allow at most one point
+of compensation when permanent hand cycling plus an independent arena effect
+prove release. Record the displayed delta and total simultaneous card cost.
+For spells, a targeting overlay or reserved elixir is not release; require the
+overlay to clear plus a projectile, rolling object, or impact. Fail closed at
+the segment end.
+
+Track pending drags into later candidate timelines. Multiple cards can release
+at one transition. For troops/buildings use the first labeled independent arena
+deployment effect/body as event_frame_index; for spells use the first
+projectile, rolling object, or impact. The HUD transition confirms release but
+does not set event timing. In the evidence object, elixir_drop=true means a
+confirmed spend, including an allowed compensated spend. Do not use hand refill.
+A candidate whose `total_released_cost - observed_elixir_delta` is outside
+`[0, 1]` is not a valid release and must not be emitted. Before writing, audit
+this arithmetic for every row and omit any row that fails it; never rely on
+the validator to repair an impossible spend.
+A floating card-name/level label, translucent placement ghost, targeting ring,
+or drag shadow is still a preview and never the required arena manifestation.
+Use filesystem tools only to read the named package/listed artifacts and to
+write the one required output JSON. Do not invoke renderers or inspect any
+other file. Choose event and confirmation frames only
+from the listed discovery_frame_indices and cite the candidate's discovery
+artifact for both. Associate each play with the closest candidate. Use
+canonical `log`, never `the-log`.
+
+Output:
+{{
+  "run_id": "<package run_id>",
+  "stage": "own_completeness_chunk",
+  "target_range": [0, 0],
+  "annotation_session_id": "{SESSION_ID}",
+  "model": "{MODEL}",
+  "reasoning_effort": "{REASONING_EFFORT}",
+  "events": [{{
+    "candidate_id": "own:NNNNNN",
+    "card": "canonical-card-slug",
+    "event_frame_index": 0,
+    "evidence": {{
+      "elixir_drop": true,
+      "hand_transition": true,
+      "deployment_onset": true,
+      "first_visible_object": true,
+      "side_direction": null,
+      "impact_sequence": null
+    }},
+    "transition_observation": {{
+      "elixir_before": 0, "elixir_after": 0,
+      "observed_elixir_delta": 0,
+      "total_released_cost": 0,
+      "regeneration_compensated": false,
+      "occupied_slots_before": [0], "cooldown_slots_after": [0]
+    }},
+    "spell_release": null,
+    "verification_artifacts": ["<candidate discovery_artifact>"],
+    "confirmation_frame_index": 0,
+    "confirmation_artifacts": ["<candidate discovery_artifact>"],
+    "own_confirmation": {{
+      "release_confirmed": true,
+      "elixir_spend_persisted": true,
+      "hand_cycle_completed": true,
+      "post_release_effect": true
+    }}
+  }}]
+}}
+
+For spell events include the same non-null spell_release object required by
+the primary pass. Do not assume there is at most one event per candidate. Do
+not write rejected candidates and do not modify any other JSON file.
+Confirmation must be a listed labeled frame 0.5–1.5 seconds after the event.

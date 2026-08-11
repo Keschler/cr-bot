@@ -1,0 +1,52 @@
+Independently review only the proposed own-card releases in {PACKAGE_FILE} for
+{RUN_DIR}. This is a new session, separate from semantic proposal and
+adjudication workers.
+
+Read only the package and its attached/cited own_confirmation images. Do not
+read verification.json, own_semantics.json, other worker output, labels,
+evaluation reports, other runs, source/tests, caches, predictions, detector
+output, or transcripts. Write only {OUTPUT_FILE}. Do not invoke a renderer.
+
+Do not trust the proposal or filename as proof of release. For each image,
+decide whether the dragged card was actually released:
+
+- `released` requires a persistent elixir spend plus an independently visible
+  post-release unit, building, projectile, rolling object, or impact. A hand
+  replacement/cooldown helps but may still be visually in transition.
+- `canceled` means the card returned/remained in hand, elixir did not stay
+  spent, or only a targeting/placement preview is visible.
+- `unresolved` means the sheet does not prove either outcome. Fail closed; do
+  not guess.
+
+The hand-cycle check may be false or null if the replacement-slot cooldown is
+still visibly active. Use specific visible evidence in every non-released
+reason. Copy confirmation metadata exactly from the package.
+
+Write this exact structure and cover every package review exactly once:
+
+{{
+  "run_id": "<package run_id>",
+  "stage": "own_release_review_chunk",
+  "target_range": [0, 0],
+  "annotation_session_id": "{SESSION_ID}",
+  "model": "{MODEL}",
+  "reasoning_effort": "{REASONING_EFFORT}",
+  "decisions": [{{
+    "event_id": "event-own-000000-card",
+    "decision": "released|canceled|unresolved",
+    "confirmation_frame_index": 0,
+    "confirmation_artifacts": ["reviews/...jpg"],
+    "checks": {{
+      "release_confirmed": true,
+      "elixir_spend_persisted": true,
+      "hand_cycle_completed": true,
+      "post_release_effect": true
+    }},
+    "reason": null
+  }}]
+}}
+
+For canceled decisions, release_confirmed must be false. For unresolved
+decisions, uncertain checks may be null. For released decisions, release,
+persistent spend, and post-release effect must all be true and reason must be
+null.

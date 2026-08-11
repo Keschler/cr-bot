@@ -1,0 +1,38 @@
+Blindly localize the single own deployment in {PACKAGE_FILE} for {RUN_DIR}.
+Write only {OUTPUT_FILE}. Inspect only the package and attached images. Do not
+read source, documentation, tests, ground truth, labels, caches, predictions,
+detector output, reports, other decisions, or transcripts.
+
+Use the fixed card and exact elixir cost to find its matching white card-name
+overlay and purple cost badge at release. For this review, the release anchor
+itself is the location evidence: choose the grid cell containing the center of
+that matching purple badge. Do not add a vertical UI correction and do not
+follow the later moving body. Reject different-cost simultaneous badges and
+red/yellow actor clocks.
+
+The grid is 18x32 `[column,row]`, with columns on the top ruler and rows on the
+left ruler. Copy a real listed supporting frame and both artifact lists exactly.
+Use an allowed troop/building rule and cite the badge center.
+
+Output:
+{{
+  "run_id": "<package run id>",
+  "stage": "own_localization_chunk",
+  "target_range": "<exact package target range>",
+  "annotation_session_id": "{SESSION_ID}",
+  "model": "{MODEL}",
+  "reasoning_effort": "{REASONING_EFFORT}",
+  "decisions": [{{
+    "event_id": "<exact event id>",
+    "location_frame_index": {EXAMPLE_FRAME},
+    "location_rule": "spawn_center",
+    "cell": [0, 0],
+    "macro_review_artifacts": ["<copy exactly>"],
+    "grid_review_artifacts": ["<copy exactly>"],
+    "confidence": "direct",
+    "reason": "matching release badge center and grid coordinate"
+  }}]
+}}
+
+Replace all placeholders; the frame must be listed in the package. Modify no
+other file. If images are unavailable, do not write output.

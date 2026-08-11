@@ -1,0 +1,118 @@
+Blindly review only the own-side work package {PACKAGE_FILE} for {RUN_DIR}.
+
+Do not read documentation, source, tests, Git state, labels, other runs,
+caches, predictions, evaluation reports, enemy evidence, verification.json, or
+worker transcripts. Read only the package and its listed sparse
+`discovery_artifact` timelines. Write only {OUTPUT_FILE}.
+
+Review candidates chronologically and maintain a pending-drag ledger. A card
+missing from the bottom hand while elixir is unchanged is held, not played.
+It is canceled if it returns to hand. It is released at the later transition
+where the source card permanently leaves, its slot becomes a persistent
+cooldown/replacement, and its arena unit/building persists or spell resolves.
+A later spend can release a previously held card together with a newly dragged
+card. First establish release from the later persistent elixir spend, hand
+cycle, and arena continuation. Then back-propagate event_frame_index to the
+first labeled deployment indicator belonging to that confirmed release. For a
+troop/building this may be its card-name/level placement label or spawn effect
+before the body becomes clear; for a spell it is the first physical projectile,
+rolling object, or impact frame. Do not wait for a fully resolved body or later
+hand refill. A floating label, translucent placement ghost, targeting ring, or
+drag shadow never proves release by itself: if the card returns, elixir does
+not persistently drop, or the hand does not cycle, reject the drag instead of
+timestamping the preview. Emit multiple cards at the same frame only when their
+first confirmed deployment indicators are actually the same frame.
+
+For every candidate, transcribe displayed elixir immediately before/after,
+the observed delta, total elixir cost of all cards released at that transition,
+occupied slots before, and cooldown slots after. Elixir regenerates while a
+drag is held: a true 1-cost release may show no net digit change, and a 2-cost
+release may show only a 1-point drop. Accept this compensated spend only when
+permanent hand cycling and an independent post-release arena effect both
+confirm it. Set regeneration_compensated=true exactly when total released cost
+exceeds the displayed delta; the difference must be at most one. Never infer
+spend from a floating preview alone. In the final evidence object,
+`elixir_drop=true` means a spend was confirmed, including a spend proven by
+the one-point regeneration-compensation rule when the displayed digit did not
+fall.
+
+For a spell, a targeting circle, card label, reserved/temporarily empty slot,
+or hidden elixir digit is still a held drag. Accept only after the targeting
+overlay clears and a direct projectile, rolling object, or impact appears. If
+the segment ends before that happens, reject it.
+
+Use canonical slugs; in particular, The Log is `log`, never `the-log`.
+
+Every discovery sheet is a dense labeled sequence with a high-resolution HUD
+and a smaller synchronized arena view. Use filesystem tools only to read the
+named package/listed artifacts and to write the one required output JSON. Do
+not invoke renderers or inspect any other file. Choose event_frame_index and confirmation_frame_index only
+from that candidate's listed discovery_frame_indices. Use the first deployment
+indicator tied to the permanently confirmed release, not a canceled
+drag/empty-slot frame, fully resolved later body, or hand refill. Decide every
+owned and context candidate. Emit a confirmed event even when its corrected
+frame is outside this package's owned range; the deterministic merger assigns
+boundary events to exactly one chunk.
+
+Output this schema:
+{{
+  "run_id": "<package run_id>",
+  "stage": "own_semantics_chunk",
+  "target_range": [0, 0],
+  "annotation_session_id": "{SESSION_ID}",
+  "model": "{MODEL}",
+  "reasoning_effort": "{REASONING_EFFORT}",
+  "events": [{{
+    "candidate_id": "own:NNNNNN",
+    "card": "canonical-card-slug",
+    "event_frame_index": 0,
+    "evidence": {{
+      "elixir_drop": true,
+      "hand_transition": true,
+      "deployment_onset": true,
+      "first_visible_object": true,
+      "side_direction": null,
+      "impact_sequence": null
+    }},
+    "transition_observation": {{
+      "elixir_before": 0, "elixir_after": 0,
+      "observed_elixir_delta": 0,
+      "total_released_cost": 0,
+      "regeneration_compensated": false,
+      "occupied_slots_before": [0], "cooldown_slots_after": [0]
+    }},
+    "spell_release": null,
+    "verification_artifacts": ["<candidate discovery_artifact>"],
+    "confirmation_frame_index": 0,
+    "confirmation_artifacts": ["<candidate discovery_artifact>"],
+    "own_confirmation": {{
+      "release_confirmed": true,
+      "elixir_spend_persisted": true,
+      "hand_cycle_completed": true,
+      "post_release_effect": true
+    }}
+  }}],
+  "rejected_candidates": [{{
+    "candidate_id": "own:NNNNNN",
+    "transition_observation": {{
+      "elixir_before": 0, "elixir_after": 0,
+      "observed_elixir_delta": 0,
+      "total_released_cost": 0,
+      "regeneration_compensated": false,
+      "occupied_slots_before": [0], "cooldown_slots_after": [0]
+    }},
+    "reason": "specific evidence"
+  }}],
+  "pending_at_end": [{{
+    "candidate_id": "own:NNNNNN", "card": "canonical-card-slug",
+    "reason": "held without spend"
+  }}]
+}}
+
+For spells replace spell_release=null with
+`{{"targeting_overlay_cleared":true,"projectile_or_impact_visible":true}}`.
+Confirmation must be a labeled frame 0.5–1.5 seconds after the event.
+Deduplicate overlapping candidates within this package: emit a release under
+the closest supporting candidate and reject other copies. Every package
+candidate, including context_peak, must occur in exactly one of events,
+rejected_candidates, or pending_at_end.

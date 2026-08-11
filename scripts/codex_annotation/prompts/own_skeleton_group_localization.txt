@@ -1,0 +1,41 @@
+Blindly localize the single own Skeletons deployment in {PACKAGE_FILE} for
+{RUN_DIR}. Write only {OUTPUT_FILE}. Inspect only the package and attached
+images. Do not read source, docs, tests, ground truth, labels, caches,
+predictions, detector output, reports, other decisions, or transcripts.
+
+This crowded sequence contains overlapping actions and existing actors. Use the
+fixed Skeletons card and its exact cost-1 white-name/purple-badge release to bind
+the correct play. Reject the overlapping cost-3 Cannon overlay, all red enemy
+clocks, and all bodies already present before the Skeletons release.
+
+Follow forward from the cost-1 release and find the first newly appearing own
+blue Skeleton group or its first blue level/deployment clocks. The location is
+the centroid of that group's initial spawn footprint before the Skeletons
+spread or move. Do not use the center of the large white text, the Cannon, the
+purple badge alone, or an older unit at the bridge.
+
+Read `[column,row]` from the clean 18x32 rulers. Copy a real listed supporting
+frame and both artifact lists exactly. Use `spawn_center` and explain which
+new blue Skeletons establish the initial group centroid.
+
+Output:
+{{
+  "run_id": "<package run id>",
+  "stage": "own_localization_chunk",
+  "target_range": "<exact package target range>",
+  "annotation_session_id": "{SESSION_ID}",
+  "model": "{MODEL}",
+  "reasoning_effort": "{REASONING_EFFORT}",
+  "decisions": [{{
+    "event_id": "<exact event id>",
+    "location_frame_index": {EXAMPLE_FRAME},
+    "location_rule": "spawn_center",
+    "cell": [0, 0],
+    "macro_review_artifacts": ["<copy exactly>"],
+    "grid_review_artifacts": ["<copy exactly>"],
+    "confidence": "direct",
+    "reason": "first new blue Skeleton group centroid"
+  }}]
+}}
+
+Modify no other file. If images are unavailable, do not write output.

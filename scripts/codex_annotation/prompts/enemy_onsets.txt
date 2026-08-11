@@ -1,0 +1,65 @@
+Blindly perform only enemy deployment-onset discovery for {RUN_DIR}.
+
+This is a deliberately narrow worker. Do not read the annotation guide, source
+code, tests, Git state, ground truth, human labels, other annotation runs,
+replay caches, predictions, detector/tracker/OCR output, evaluation reports,
+verification.json, localization.json, own candidate sheets, or any existing
+identity/semantic JSON. Everything needed is in this prompt, the target
+manifest's `run_id`, `fps`, `segment`, and `candidate_discovery` fields, and
+these pre-rendered images:
+
+- reviews/verify-enemy-scan-*.jpg
+- reviews/verify-enemy-boundary-*.jpg
+
+Review the scan sheets in time order. Discover every plausible new arena onset
+exactly once. Do not discard an onset merely because side is uncertain; a
+fresh independent worker will classify side.
+Use first appearance/deployment animation for a troop or building. For spells,
+look for a new rolling object, projectile, directional trail, impact, or
+resolved effect. Do not assign a card identity in this stage, even when it
+looks obvious. Existing units moving or attacking are not new deployments.
+
+For every onset, cite enough adjacent arena sheets to cover frames from four
+before through ten after onset. For each non-spell onset, render two separate,
+focused, grid-free identity sheets that track the same body after spawn effects
+clear:
+
+- first range begins at least 0.5 seconds after onset;
+- both ranges end no later than 2.0 seconds after onset;
+- purpose is `identity`;
+- event scope is exactly `identity-enemy-NNNNNN`, where NNNNNN is the zero
+  padded onset frame;
+- filenames are opaque `identity-enemy-NNNNNN-a.jpg` and
+  `identity-enemy-NNNNNN-b.jpg`;
+- neither event scope nor filename may contain a guessed card name.
+
+Use render_annotation_review.py from scripts/codex_annotation. Focus on the
+approximate unit position, but do not add a grid.
+
+Write only {RUN_DIR}/enemy_onsets.json with:
+
+{{
+  "run_id": "<exact manifest run_id>",
+  "stage": "enemy_onsets",
+  "annotation_session_id": "{SESSION_ID}",
+  "model": "{MODEL}",
+  "reasoning_effort": "{REASONING_EFFORT}",
+  "onsets": [
+    {{
+      "onset_id": "enemy-NNNNNN",
+      "candidate_id": "enemy-scan:NNNNNN-NNNNNN:p1",
+      "event_frame_index": 0,
+      "kind": "unit_or_building",
+      "verification_artifacts": [
+        "reviews/verify-enemy-scan-NNNNNN-NNNNNN-p1.jpg"
+      ],
+      "identity_artifacts": [
+        "reviews/identity-enemy-NNNNNN-a.jpg",
+        "reviews/identity-enemy-NNNNNN-b.jpg"
+      ]
+    }}
+  ]
+}}
+
+For `kind: "spell"`, leave identity_artifacts empty. Do not create or modify any
+other JSON file.

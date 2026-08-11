@@ -1,0 +1,66 @@
+Blindly identify only the already-discovered enemy onsets in {RUN_DIR}.
+
+This must be independent of onset discovery. Do not read the annotation guide,
+source code, tests, Git state, ground truth, human labels, other annotation
+runs, replay caches, predictions, detector/tracker/OCR output, evaluation
+reports, verification.json, localization.json, own sheets, or worker
+transcripts. Read only:
+
+- {RUN_DIR}/manifest.json (only `run_id`, `fps`, and `segment`)
+- {RUN_DIR}/enemy_onsets.json
+- the exact verification_artifacts and identity_artifacts cited by each onset
+
+The onset file deliberately contains no card guesses. First classify side.
+The bottom player is own/blue and the top player is enemy/red. A unit dragged
+from the bottom hand, a floating bottom-hand card-name/cost label, a blue
+health/level indicator, or a unit originating on the lower half and moving
+upward is own and must be excluded. An enemy unit originates from the upper
+side, has enemy/red indicators, or moves downward from an enemy deployment.
+Arena position alone is not enough—track the body over time.
+
+For retained enemy troops/buildings, identify the card only from the two
+delayed, grid-free identity views. Track the same body across both views and
+discount spawn glow, evolution/enchantment glow, jump/impact effects, shadows,
+and overlapping units. If the views remain ambiguous, render an additional
+opaque identity sheet while continuously tracking the same body, up to 6.0
+seconds after onset. Prefer a later clear side/body view over an early
+spawn/impact view. Do not put a guessed card name in its event scope or
+filename.
+
+For spells, identify the card from the cited onset/effect sequence, including
+direction, projectile or rolling-object shape, and impact progression.
+
+Write only {RUN_DIR}/enemy_identities.json with:
+
+{{
+  "run_id": "<same run_id>",
+  "stage": "enemy_identities",
+  "annotation_session_id": "{SESSION_ID}",
+  "model": "{MODEL}",
+  "reasoning_effort": "{REASONING_EFFORT}",
+  "decisions": [
+    {{
+      "onset_id": "enemy-NNNNNN",
+      "side": "enemy",
+      "card": "canonical-card-slug",
+      "identity_frame_index": 0,
+      "identity_artifacts": [
+        "reviews/identity-enemy-NNNNNN-a.jpg",
+        "reviews/identity-enemy-NNNNNN-b.jpg"
+      ],
+      "reason": "direct side and identity evidence"
+    }},
+    {{
+      "onset_id": "enemy-NNNNNN",
+      "side": "own",
+      "card": null,
+      "identity_frame_index": null,
+      "identity_artifacts": [],
+      "reason": "direct evidence that this is an own/blue appearance"
+    }}
+  ]
+}}
+
+For a retained enemy spell, set identity_frame_index to null and
+identity_artifacts to []. Cover every onset exactly once in `decisions`.
+Do not modify any other file.

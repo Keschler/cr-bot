@@ -1,0 +1,55 @@
+Blindly assign canonical enemy card identities for every target in
+{PACKAGE_FILE} for {RUN_DIR}. Write only {OUTPUT_FILE}.
+
+Copy each target's `identity_frame_index` and `identity_artifacts` verbatim;
+these provenance fields are not model decisions. Use canonical repository
+slugs exactly (`minion-horde`, not `minions`; `log`, not `the-log`).
+
+Do not read docs, source, tests, labels, other runs, evaluation reports,
+semantic outputs, previous card guesses, detector output, or transcripts.
+Read the package target rows and inspect every image attached to this
+conversation. Do not substitute filenames or metadata for the pixels.
+
+The target-labelled roster sheets contain unit/building deployments. Each
+labelled panel shows three delayed views of exactly one target. The cyan
+rectangle follows the deployment marker directly under or overlapping that
+new body. Name the newly deployed body above the marker, not a larger older
+actor nearby. Compare early/middle/late pixels within the same labelled panel.
+
+Infer one consistent enemy deck vocabulary across the interval. A Clash Royale
+deck has at most eight card slots: the same anatomy/projectile seen at repeated
+onsets must receive the same base card slug. Evolution and base versions occupy
+one deck slot; use `evo-` only when persistent evolution anatomy is direct.
+Purchased yellow/gold glow is not a different card. Do not introduce a ninth
+base identity to explain an unclear repeat.
+
+Spell targets use their separately attached full sequences. Fireball is a
+compact spherical flaming projectile and orange burst; Rocket is a long
+cylindrical rocket with a thick trail; Log is a wooden ground cylinder rolling
+down a lane. Identify the complete object/trajectory, not impact size.
+
+The package retains the original evidence paths required by the validator.
+Copy each target's identity_frame_index and identity_artifacts exactly into its
+output row. For spells use null and []. Cover every target exactly once.
+Use canonical `log`, never `the-log`.
+
+Output:
+{{
+  "run_id": "<package run_id>",
+  "stage": "enemy_cards_chunk",
+  "target_range": "<exact package target_range>",
+  "annotation_session_id": "{SESSION_ID}",
+  "model": "{MODEL}",
+  "reasoning_effort": "{REASONING_EFFORT}",
+  "cards": [{{
+    "onset_id": "<exact target onset_id>",
+    "card": "canonical-card-slug",
+    "confidence": "direct",
+    "visibility": "clear",
+    "identity_frame_index": "<exact target value>",
+    "identity_artifacts": "<exact target list>",
+    "reason": "visible target-specific identifying features"
+  }}]
+}}
+
+Modify no other file. If attached images are unavailable, do not write output.

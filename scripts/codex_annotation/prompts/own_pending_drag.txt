@@ -1,0 +1,61 @@
+Blindly perform only pending-drag adjudication for {RUN_DIR}.
+
+Do not read documentation, source code, tests, Git state, ground truth, human
+labels, other runs, caches, predictions, evaluation reports, enemy sheets, or
+worker transcripts. Read only:
+
+- {RUN_DIR}/manifest.json (`run_id`, `fps`, segment, own candidates)
+- {RUN_DIR}/own_semantics.json
+- reviews/verify-own-*.jpg and reviews/release-own-*.jpg for candidates rejected
+  because elixir did not yet decrease, plus the next chronological candidate
+
+Track held cards chronologically. A card can leave its hand slot and appear as
+a floating arena preview while elixir remains unchanged. That is not a play
+yet. It has one of two later outcomes:
+
+- cancellation: the same card returns to an occupied hand slot before any
+  matching spend;
+- release: it remains absent, the displayed elixir later decreases by its
+  cost, its arena object persists, and the slot becomes a replacement cooldown.
+
+If a later spend releases a previously held card together with another card,
+record the previously held card at that later transition too. Do not duplicate
+events already present in own_semantics.json. Do not delete an accepted event
+unless its own transcribed `elixir_after` is not lower than `elixir_before`.
+
+Write only {RUN_DIR}/own_pending_adjudication.json:
+
+{{
+  "run_id": "<exact manifest run_id>",
+  "stage": "own_pending_adjudication",
+  "annotation_session_id": "{SESSION_ID}",
+  "model": "{MODEL}",
+  "reasoning_effort": "{REASONING_EFFORT}",
+  "add_events": [
+    {{
+      "candidate_id": "own:NNNNNN",
+      "card": "canonical-card-slug",
+      "event_frame_index": 0,
+      "transition_observation": {{
+        "elixir_before": 0,
+        "elixir_after": 0,
+        "held_from_candidate_id": "own:NNNNNN"
+      }},
+      "verification_artifacts": ["reviews/verify-own-NNNNNN.jpg"],
+      "confirmation_frame_index": 0,
+      "confirmation_artifacts": ["reviews/release-own-NNNNNN.jpg"],
+      "own_confirmation": {{
+        "release_confirmed": true,
+        "elixir_spend_persisted": true,
+        "hand_cycle_completed": false,
+        "post_release_effect": true
+      }}
+    }}
+  ],
+  "remove_events": [],
+  "notes": "brief evidence ledger"
+}}
+
+`remove_events` contains exact event descriptors
+`{{"candidate_id": "...", "card": "...", "event_frame_index": 0}}`.
+Do not modify any other file.

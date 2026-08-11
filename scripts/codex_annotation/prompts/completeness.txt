@@ -1,0 +1,19 @@
+Perform only the independent completeness stage for {RUN_DIR} using the v7
+workflow in docs/eval/codex_video_annotation.md.
+
+Do not read verification.json, release_review.json, localization.json,
+checkpoints.json, accepted-event lists, prior worker transcripts, or reference
+labels. Use render_annotation_sweep.py for separate own and enemy sweeps over
+the full prepared segment. For enemy frames, explicitly scan for spells and
+transient effects—rolling objects, projectiles, impacts, and direction—not only
+troops/buildings.
+
+Fill completeness.json provenance exactly as:
+- annotation_session_id: {SESSION_ID}
+- model: {MODEL}
+- reasoning_effort: {REASONING_EFFORT}
+
+Copy the exact ranges and artifacts printed by the renderer. If a possible
+unrecorded event exists, place a deterministic completeness candidate ID in
+unresolved_candidate_ids and stop without checkpointing. Otherwise checkpoint
+completeness only. Do not finalize or evaluate.

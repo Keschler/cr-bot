@@ -1,0 +1,69 @@
+Blindly discover arena onsets in {PACKAGE_FILE} for {RUN_DIR}. This is the
+primary chronological pass.
+
+Do not read documentation, source, tests, Git state, labels, other runs,
+caches, predictions, evaluation reports, own evidence, semantic JSON, or
+worker transcripts. Do not print the package or manifest. Use a terse `jq`
+command only to list its target range and primary artifact paths, then inspect
+every listed primary image chronologically. Write only {OUTPUT_FILE}.
+
+This stage decides only whether and when a genuinely new arena object/effect
+begins. Do not decide side or card, and do not render identity sheets.
+
+Maintain an active-object ledger across adjacent sheets. A moving unit,
+attack, jump, projectile already in flight, bridge crossing, tower contact, or
+body entering a crop is not a new onset. For each suspected onset:
+
+1. Trace the same object backward through the preceding sheet(s).
+2. Reject it if it was already present.
+3. Find the earliest frame where the independent object/effect exists.
+4. Trace it forward for at least five frames to distinguish a deployed object
+   from a drag ghost, transient overlay, clock, glow, shadow, or impact debris.
+5. Render two exact grid-free `arena` sheets: `onset-enemy-NNNNNN-before.jpg`
+   covering at least n-6 through n-1, and
+   `onset-enemy-NNNNNN-after.jpg` covering n through at least n+9. Clamp only
+   at the prepared segment boundary.
+
+Record a spell only from a new rolling object, directional projectile, or
+coherent impact sequence. Record separate simultaneous objects separately.
+Inspect the context halo, but emit only onsets whose earliest frame lies in
+`owned_event_range`.
+`focus_cell` is only the approximate visible center `[column,row]` of a new
+unit/building at its first independent frame; use null for spells.
+
+Output:
+{{
+  "run_id": "<package run_id>",
+  "stage": "enemy_onsets_chunk",
+  "target_range": [0, 0],
+  "annotation_session_id": "{SESSION_ID}",
+  "model": "{MODEL}",
+  "reasoning_effort": "{REASONING_EFFORT}",
+  "onsets": [{{
+    "onset_id": "enemy-NNNNNN",
+    "candidate_id": "enemy-scan:NNNNNN-NNNNNN:p1",
+    "event_frame_index": 0,
+    "kind": "unit_or_building",
+    "focus_cell": [0, 0],
+    "absence_confirmed": true,
+    "persistence_confirmed": true,
+    "evidence": {{
+      "elixir_drop": null,
+      "hand_transition": null,
+      "deployment_onset": true,
+      "first_visible_object": true,
+      "side_direction": null,
+      "impact_sequence": null
+    }},
+    "verification_artifacts": [
+      "reviews/onset-enemy-NNNNNN-before.jpg",
+      "reviews/onset-enemy-NNNNNN-after.jpg"
+    ],
+    "identity_artifacts": []
+  }}]
+}}
+
+For spells use kind `spell`, null focus_cell, null deployment/first-visible
+flags, true impact_sequence, and [] identity_artifacts. Cover
+the complete target range, but return an empty onsets list rather than inventing
+an event. Modify no other file.

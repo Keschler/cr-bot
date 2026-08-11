@@ -1,0 +1,66 @@
+Blindly localize every own event in {PACKAGE_FILE} for {RUN_DIR}. Write only
+{OUTPUT_FILE}. Do not read documentation, source code, tests, ground truth,
+human labels, replay caches, predictions, detector output, evaluation reports,
+other workers' decisions, prior transcripts, or any semantic file outside the
+package. Every permitted image is attached; inspect its pixels.
+
+The fixed event card and approximate event frame identify which play to follow;
+do not revisit them. The broad macro sequence supplies temporal context. The
+dense grid sheet shows the event-adjacent frames at high resolution on an
+18-column by 32-row grid. Cells are `[column,row]`, origin `[0,0]` at top-left.
+Read the column from the large horizontal ruler above the arena and the row
+from the large vertical ruler at its left. The number inside the purple badge
+is elixir cost, never a column or row number.
+
+Use the initial placement chosen by the player. First locate the matching large
+white card-name overlay and its small purple circular elixir-cost badge at the
+event onset. This identifies which play to follow, including when another unit
+is already present. Then follow forward to the newly appearing own blue level
+or deployment clock and the new body/building. For a troop or building, select
+the center of that body's first spawn/deployment footprint before it starts
+moving.
+
+The own cost badge is purple/magenta, contains the played card's white elixir
+number (for example 1, 2, 3, or 4), and is spatially attached to the matching
+large white card-name overlay on the lower/player side. A red circular clock
+with a yellow/red level number such as 11 beneath an enemy body is not the own
+deployment. The purple cost badge is also not automatically the exact placement
+cell: the UI often draws it vertically above the selected point. Use it to bind
+the card identity, then prefer the first blue deployment clock/body center.
+Only if no later spawn footprint can be supported may the release marker be
+used as the location. In `reason`, state the onset card-name/badge evidence and
+the later frame and coordinate ruler values supporting the spawn center; do not
+return a generic reason.
+
+Do not use the troop's position after it starts moving, an older unit near the
+bridge, an existing unit in the arena center, or a simultaneous different card.
+In particular, a newly deployed troop can move several rows between the marker
+and a later visible body: the initial marker wins. For a targeted spell use its
+target/impact center. For Log use its initial visible rolling-object center.
+
+Choose one listed `location_rule_options` value and copy a listed
+`location_frame_index` that visibly supports the chosen cell. Cover every
+target exactly once and copy both artifact lists exactly. A legal-looking cell
+without the matching temporal marker is not evidence.
+
+Output:
+{{
+  "run_id": "<package run_id>",
+  "stage": "own_localization_chunk",
+  "target_range": "<exact package target_range>",
+  "annotation_session_id": "{SESSION_ID}",
+  "model": "{MODEL}",
+  "reasoning_effort": "{REASONING_EFFORT}",
+  "decisions": [{{
+    "event_id": "<exact target event_id>",
+    "location_frame_index": 0,
+    "location_rule": "<one allowed target rule>",
+    "cell": [0, 0],
+    "macro_review_artifacts": ["<copy exactly>"],
+    "grid_review_artifacts": ["<copy exactly>"],
+    "confidence": "direct",
+    "reason": "matching marker/body and exact supporting frame"
+  }}]
+}}
+
+Modify no other file. If attached images are unavailable, do not write output.

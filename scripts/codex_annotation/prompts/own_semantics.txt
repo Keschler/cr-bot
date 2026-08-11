@@ -1,0 +1,99 @@
+Blindly perform only own-side semantic review for {RUN_DIR}.
+
+This is a deliberately narrow worker. Do not read the annotation guide, source
+code, tests, Git state, ground truth, human labels, other annotation runs,
+replay caches, predictions, detector/tracker/OCR output, evaluation reports,
+verification.json, or localization.json. Everything needed is in this prompt,
+the target run's manifest candidate ranges, and these pre-rendered images:
+
+- reviews/verify-own-*.jpg
+- reviews/release-own-*.jpg
+
+Inspect every own candidate. A candidate can contain zero, one, or multiple
+actual plays. Record a play only when the evidence establishes all of:
+
+1. The dragged card was released, rather than returned to the hand.
+2. The elixir decrease persists.
+3. A unit/building persists on the arena or a spell resolves.
+4. The hand changes permanently, or a replacement-slot countdown is visibly
+   in progress. A still-running countdown is positive evidence and does not
+   need to finish inside the release sheet.
+
+For every candidate, first transcribe the bottom HUD state before deciding:
+
+- the white integer elixir value immediately before the proposed release;
+- the white integer elixir value immediately after it;
+- the occupied card slots before;
+- which slots are replacement-cooldown/empty after.
+
+Do not infer an elixir spend merely from a missing card slot or floating arena
+preview. If the displayed elixir does not decrease across the proposed release,
+reject it as a held/canceled drag. Use the transition frames in verify-own,
+not just the later release sheet, for this comparison.
+
+Use the card label/portrait in the hand transition to identify the played card,
+not a unit that was already on the arena. Use the first released/on-field frame
+as event_frame_index. It must lie in that candidate's manifest inspection
+range. Use a confirmation frame at least 0.5 seconds and at most 1.5 seconds
+after the event. If the pre-rendered release sheet does not cover a valid
+confirmation, render another sheet with purpose own_confirmation, opaque event
+scope `release-own-NNNNNN`, and an opaque filename beginning
+`release-own-NNNNNN`.
+
+Ownership is determined by the bottom hand/HUD: a card dragged from that hand
+and its floating card-name/cost label is an own action even when its model is
+near or across the bridge. Do not reclassify it as enemy from arena position
+alone. Count occupied hand slots before and after each transition. If two
+different occupied slots become two replacement-cooldown slots and the
+persistent elixir decrease is consistent with both costs, record two separate
+plays from that candidate. A replacement-cooldown slot is not the same as a
+card returning to hand.
+
+Write only {RUN_DIR}/own_semantics.json with:
+
+{{
+  "run_id": "<manifest run_id>",
+  "stage": "own_semantics",
+  "annotation_session_id": "{SESSION_ID}",
+  "model": "{MODEL}",
+  "reasoning_effort": "{REASONING_EFFORT}",
+  "events": [
+    {{
+      "candidate_id": "own:NNNNNN",
+      "card": "canonical-card-slug",
+      "event_frame_index": 0,
+      "transition_observation": {{
+        "elixir_before": 0,
+        "elixir_after": 0,
+        "occupied_slots_before": [0],
+        "cooldown_slots_after": [0]
+      }},
+      "verification_artifacts": ["reviews/verify-own-NNNNNN.jpg"],
+      "confirmation_frame_index": 0,
+      "confirmation_artifacts": ["reviews/release-own-NNNNNN.jpg"],
+      "own_confirmation": {{
+        "release_confirmed": true,
+        "elixir_spend_persisted": true,
+        "hand_cycle_completed": true,
+        "post_release_effect": true
+      }}
+    }}
+  ],
+  "rejected_candidates": [
+    {{
+      "candidate_id": "own:NNNNNN",
+      "transition_observation": {{
+        "elixir_before": 0,
+        "elixir_after": 0,
+        "occupied_slots_before": [0],
+        "cooldown_slots_after": [0]
+      }},
+      "reason": "specific visual reason"
+    }}
+  ]
+}}
+
+`hand_cycle_completed` may be false or null only when a visible replacement-slot
+countdown has not finished yet. Every manifest own candidate must appear in at
+least one accepted event or in rejected_candidates. Do not create or modify any
+other file.

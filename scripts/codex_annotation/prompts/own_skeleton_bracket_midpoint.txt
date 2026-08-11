@@ -1,0 +1,40 @@
+Blindly localize the single own Skeletons deployment in {PACKAGE_FILE} for
+{RUN_DIR}. Write only {OUTPUT_FILE}. Inspect only the package and attached
+images. Do not read source, docs, tests, ground truth, labels, caches,
+predictions, detector output, reports, other decisions, or transcripts.
+
+Use the fixed Skeletons card and cost 1 to reject the overlapping cost-3 Cannon
+overlay and pre-existing/red actors. In this crowded frame the initial point is
+visually bracketed by two imperfect cues: the matching cost-1 release badge is
+pulled left by overlapping white UI text, while the newly spawned blue Skeleton
+group spreads right immediately. Read the horizontal column of each cue from
+the clean grid and use their midpoint (round only to the nearest grid column)
+as the initial deployment column. Do not use either extreme alone.
+
+For the deployment row, use the cost-1 badge anchor row plus the normal two-row
+downward UI offset; do not replace it with the later group's moved row. Combine
+the midpoint column and corrected release row into `[column,row]`. Copy a real
+listed frame and both artifact lists, use `spawn_center`, and state both cue
+columns, their midpoint, the badge row, and corrected row in the reason.
+
+Output:
+{{
+  "run_id": "<package run id>",
+  "stage": "own_localization_chunk",
+  "target_range": "<exact package target range>",
+  "annotation_session_id": "{SESSION_ID}",
+  "model": "{MODEL}",
+  "reasoning_effort": "{REASONING_EFFORT}",
+  "decisions": [{{
+    "event_id": "<exact event id>",
+    "location_frame_index": {EXAMPLE_FRAME},
+    "location_rule": "spawn_center",
+    "cell": [0, 0],
+    "macro_review_artifacts": ["<copy exactly>"],
+    "grid_review_artifacts": ["<copy exactly>"],
+    "confidence": "direct",
+    "reason": "release/group bracket midpoint and corrected release row"
+  }}]
+}}
+
+Modify no other file. If images are unavailable, do not write output.

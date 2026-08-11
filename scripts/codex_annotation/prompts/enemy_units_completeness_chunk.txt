@@ -1,0 +1,48 @@
+Perform an independent blind completeness sweep over every pre-rendered marker
+burst in {PACKAGE_FILE} for {RUN_DIR}. This stage exists only to recover
+possible troop/building deployments that another annotator might miss. Do not
+read any other worker output and do not identify card, side, location, or an
+exact onset frame.
+
+Do not read docs, source, tests, labels, other runs, caches, predictions,
+evaluation reports, semantic JSON, or transcripts. Do not print the package.
+Use terse `jq` to list burst ID, package role, start frame, sampled frame
+indices, and review artifact. Review paths are relative to {RUN_DIR}.
+
+You MUST visually open every listed artifact. Use a fail-open completeness
+standard:
+
+- Accept any owned burst for which a new troop/building, team marker, spawn
+  clock, drag/deployment preview, or tower-occluded body could plausibly begin
+  at or shortly after the burst start.
+- Accept if uncertain. The later event-existence and side stage removes own
+  previews, continuations, and false candidates.
+- A pre-existing actor elsewhere does not disqualify a new actor near the
+  highlighted marker.
+- Reject only when the entire sampled timeline clearly contains no new actor
+  or marker associated with the burst.
+- Emit one candidate per burst, never one per swarm member.
+
+Do not render images or create onset records. `context_burst` rows use
+`context_only`; `owned_burst` rows use `accepted` or `rejected`.
+
+Output only:
+{{
+  "run_id": "<package run_id>",
+  "stage": "enemy_unit_completeness_chunk",
+  "target_range": [0, 0],
+  "annotation_session_id": "{SESSION_ID}",
+  "model": "{MODEL}",
+  "reasoning_effort": "{REASONING_EFFORT}",
+  "burst_decisions": [{{
+    "burst_id": "enemy-marker-burst:NNNNNN",
+    "decision": "accepted",
+    "accepted_onset_ids": [],
+    "reason": "possible new actor or deployment marker"
+  }}],
+  "onsets": []
+}}
+
+Use the exact package target_range and cover every burst once. Always leave
+accepted_onset_ids and onsets empty; the deterministic merger creates them.
+Modify no other file.

@@ -1,0 +1,53 @@
+Blindly localize every own event in {PACKAGE_FILE} for {RUN_DIR}. Write only
+{OUTPUT_FILE}. Do not read documentation, source code, tests, ground truth,
+human labels, replay caches, predictions, detector output, evaluation reports,
+other workers' decisions, prior transcripts, or any semantic file outside the
+package. Every permitted image is attached; inspect its pixels.
+
+These are visually crowded localization targets. The fixed card, canonical
+`elixir_cost`, and approximate event frame identify the play. The clean grid is
+18 columns by 32 rows, `[column,row]`, with large column numbers above and row
+numbers at left.
+
+At the event onset, locate the large white matching card name and the attached
+purple badge with exactly the target's `elixir_cost`. Reject a purple badge for
+a simultaneous different-cost card, every red/yellow level clock, and every
+actor already present before onset. The purple badge identifies the release
+anchor, but its vertical UI offset varies with screen crowding and clipping:
+do not apply a fixed row correction automatically. Compare the anchor with the
+next frames and select the visually supported initial spawn/deployment center.
+If the new body is hidden by a tower or combat, use the center of its first blue
+deployment clock/glow aligned with the matching release anchor, not a clearer
+older body.
+
+For Fireball or another targeted spell, ignore the lower release badge as the
+location and use the upper arena target/impact center. For Log, use the first
+visible rolling-object center and lane before it travels. For ordinary troops
+and buildings, use the initial spawn/deployment center before movement.
+
+In `reason`, state the matching card/cost, onset frame, release anchor cell,
+the later spawn/impact evidence, and why the final cell follows that evidence.
+Use one allowed rule, one listed supporting frame, and copy both artifact lists
+exactly. Cover every target once.
+
+Output:
+{{
+  "run_id": "<package run id>",
+  "stage": "own_localization_chunk",
+  "target_range": "<exact package target range>",
+  "annotation_session_id": "{SESSION_ID}",
+  "model": "{MODEL}",
+  "reasoning_effort": "{REASONING_EFFORT}",
+  "decisions": [{{
+    "event_id": "<exact target event_id>",
+    "location_frame_index": 0,
+    "location_rule": "<one allowed target rule>",
+    "cell": [0, 0],
+    "macro_review_artifacts": ["<copy exactly>"],
+    "grid_review_artifacts": ["<copy exactly>"],
+    "confidence": "direct",
+    "reason": "specific release anchor and spawn/impact evidence"
+  }}]
+}}
+
+Modify no other file. If attached images are unavailable, do not write output.

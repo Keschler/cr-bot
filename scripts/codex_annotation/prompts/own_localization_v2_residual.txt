@@ -1,0 +1,45 @@
+Blindly localize the single visually crowded own event in {PACKAGE_FILE} for
+{RUN_DIR}. Write only {OUTPUT_FILE}. Do not read documentation, source, tests,
+ground truth, human labels, replay caches, predictions, detector output,
+evaluation reports, other workers' decisions, or prior transcripts. Inspect
+only the package and its attached images.
+
+The fixed card, canonical elixir cost, and approximate event frame identify the
+play. At onset locate the matching white card name and attached purple badge
+with exactly that cost. Reject a badge for a simultaneous different-cost card,
+red/yellow level clocks, and every actor present before onset. The purple badge
+identifies the release anchor, but its vertical UI offset varies: never apply a
+fixed row correction. Compare subsequent frames and select the visually
+supported initial spawn/deployment center. If hidden by tower or combat, use
+the first blue deployment clock/glow aligned with the release, not an older
+body.
+
+For a targeted spell ignore the lower release badge and use the upper-arena
+target/impact center. For Log use the first rolling-object center before
+travel. Exact sheets use `[column,row]`; a `rows_14_31` sheet is zoomed but
+retains the original row numbers. State the matching card/cost, release anchor,
+later evidence, and exact ruler coordinate. Use one allowed rule, a listed
+supporting frame, and copy both artifact lists exactly. The example frame is a
+real listed event-adjacent frame and may be replaced by a clearer listed frame.
+
+Output:
+{{
+  "run_id": "<package run id>",
+  "stage": "own_localization_chunk",
+  "target_range": "<exact package target range>",
+  "annotation_session_id": "{SESSION_ID}",
+  "model": "{MODEL}",
+  "reasoning_effort": "{REASONING_EFFORT}",
+  "decisions": [{{
+    "event_id": "<exact target event_id>",
+    "location_frame_index": {EXAMPLE_FRAME},
+    "location_rule": "<one allowed target rule>",
+    "cell": [0, 0],
+    "macro_review_artifacts": ["<copy exactly>"],
+    "grid_review_artifacts": ["<copy exactly>"],
+    "confidence": "direct",
+    "reason": "specific release anchor and first spawn or impact evidence"
+  }}]
+}}
+
+Modify no other file. If images are unavailable, do not write output.

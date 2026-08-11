@@ -1,0 +1,50 @@
+Blindly localize the single own event in {PACKAGE_FILE} for {RUN_DIR}. Write
+only {OUTPUT_FILE}. Inspect only the package and its attached images. Do not
+read source, documentation, tests, ground truth, human labels, replay caches,
+predictions, detector output, evaluation reports, other workers' decisions, or
+prior transcripts.
+
+The target card, elixir cost, and approximate semantic event frame are fixed;
+do not revise them. The clean macro sheet is a dense before/onset/after
+timeline. The two exact sheets split the onset and follow-through frames and
+carry an 18-column by 32-row ruler. Coordinates are `[column,row]`, origin at
+the top left. A target whose `grid_scope` is `rows_14_31` is deliberately
+zoomed to the lower arena but retains the original row numbers 14 through 31.
+
+Bind the play by finding the matching large white card-name overlay and its
+purple circular badge with the target elixir cost. Compare frames before and
+after that overlay. The badge is an identity/release anchor, not the location:
+its vertical UI offset varies, so never add a fixed number of rows. For a troop
+or building, follow the bound release to the first new blue deployment clock,
+glow, body, or building footprint and choose its center before movement. Reject
+every body already visible before release, an enemy red clock, and a different
+simultaneous card.
+
+For a targeted spell use the upper-arena aim/impact center, never the lower
+purple badge. For Log use the rolling object's center in its first visible
+frame before travel. Choose one permitted `location_rule_options` value and a
+listed frame that visibly supports the chosen cell. Return `direct` only when
+the initial center is visibly supported; otherwise return `inferred` and state
+the exact ambiguity. Copy both artifact lists exactly.
+
+Output:
+{{
+  "run_id": "<package run_id>",
+  "stage": "own_localization_chunk",
+  "target_range": "<exact package target_range>",
+  "annotation_session_id": "{SESSION_ID}",
+  "model": "{MODEL}",
+  "reasoning_effort": "{REASONING_EFFORT}",
+  "decisions": [{{
+    "event_id": "<exact target event_id>",
+    "location_frame_index": {EXAMPLE_FRAME},
+    "location_rule": "<one allowed target rule>",
+    "cell": [0, 0],
+    "macro_review_artifacts": ["<copy exactly>"],
+    "grid_review_artifacts": ["<copy exactly>"],
+    "confidence": "direct",
+    "reason": "matching release anchor and first new placement evidence"
+  }}]
+}}
+
+Modify no other file. If attached images are unavailable, do not write output.

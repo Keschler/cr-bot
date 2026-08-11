@@ -1,0 +1,47 @@
+Blindly perform only semantic verification for {RUN_DIR} using the checkpointed
+v7 workflow in docs/eval/codex_video_annotation.md.
+
+The compact candidate sheets and opaque `release-own-*` sheets are already
+rendered. Inspect every own candidate together with its release sheet, and
+inspect every enemy scan and boundary sheet. Include enemy spells by looking for
+rolling objects, projectiles, impacts, and directional effects—not only newly
+visible troops and buildings.
+
+If roster.json exists, read it before assigning card identities. Treat its
+per-side roster as a blind vocabulary constraint. A card outside that roster
+requires two separate clear identity artifacts and must be marked unresolved
+if either artifact is ambiguous; never substitute a visually similar
+out-of-roster card from spawn effects.
+
+For every own candidate, decide accepted or rejected only after inspecting its
+pre-rendered opaque release sheet. Reuse that sheet when its range is valid;
+render another opaque `release-CANDIDATE-ID` sheet only if necessary. Reject
+drag previews unless bounded evidence proves release, persistent elixir spend,
+a persistent unit or resolved spell effect. Record hand_cycle_completed when
+visible, but do not reject solely because the replacement-slot cooldown is
+still active. Do not
+reuse a candidate whose manifest range does not contain the event frame.
+
+For every enemy troop/building, render two full-arena, grid-free identity sheets
+between 0.5 and 6.0 seconds after onset. Do not use a focus crop. Track the same
+body across the separated post-effect views before assigning identity.
+Crucially, use the opaque event
+scope `identity-enemy-NNNNNN` using the zero-padded onset frame, and opaque
+filenames that contain no
+guessed card name. Decide the card only after both sheets exist and have been
+inspected. Keep event_frame_index at deployment onset.
+
+For own plays, assign the card from the permanent hand-slot transition at that
+candidate, not from a unit that merely remains on the arena from an earlier
+play. Do not assign two different cards to adjacent frames from one HUD
+candidate unless two distinct permanent hand cycles are visible.
+
+Fill verification.json provenance exactly as:
+- annotation_session_id: {SESSION_ID}
+- model: {MODEL}
+- reasoning_effort: {REASONING_EFFORT}
+
+Do not fill release_review.json. Do not checkpoint verification, localize,
+perform completeness, finalize, or evaluate. Do not inspect ground truth,
+human labels, other annotation runs, replay caches, predictions, detector,
+tracker, OCR/classifier output, or evaluation reports.

@@ -1,0 +1,75 @@
+Blindly confirm only the exact enemy-spell reviews in {PACKAGE_FILE} for
+{RUN_DIR}.
+
+Do not read docs, source, tests, labels, other runs, caches, predictions,
+evaluation reports, semantic JSON, broad scan images, or transcripts. Do not
+print the package. Every exact before/after sheet cited by the package is
+attached to this conversation. The forward horizon may be split across two
+chronological after-sheets so every frame remains readable; inspect both.
+Inspect every attached image directly. Use filesystem tools only to read the
+named package and to write the one required output JSON. Write only
+{OUTPUT_FILE}.
+
+This is a precision gate, not card identification. Cover every review exactly
+once. A review may have been triggered by an own spell, a held targeting
+preview, a troop/building attack, an ability, spawn residue, enchantment, or
+debris. Reject those. In particular:
+
+- a floating card name, targeting circle, placement overlay, or glow is not a
+  released spell;
+- a projectile emitted by an already-present troop/building or tower is an
+  attack, not a new spell;
+- own spells moving from the lower/blue side toward the upper/red side are not
+  enemy spells;
+- an enemy spell needs direct upper/red origin or coherent motion toward the
+  lower/blue side, plus a new independent rolling object, projectile, or
+  resolving area-impact sequence.
+
+Inspect up to three seconds forward. The true enemy spell may begin later than
+the broad proposal after a distinct own preview/effect; if so, replace the
+proposal time with the first labeled frame of that later enemy sequence. Use
+only a frame listed in `sampled_frame_indices`. Do not retain the earlier own
+effect. If more than one plausible sequence exists or enemy ownership is not
+direct, return `unresolved`.
+
+Normally require the sequence to resolve or progress coherently in the after
+sheet. Only a `segment_end_sentinel` may confirm a spell on the final source
+frame without later video; then `boundary_truncated` must be true and the
+first projectile/impact itself must already be direct.
+
+Output:
+{{
+  "run_id": "<package run_id>",
+  "stage": "enemy_spell_confirmation_chunk",
+  "target_range": "<exact package target_range>",
+  "annotation_session_id": "{SESSION_ID}",
+  "model": "{MODEL}",
+  "reasoning_effort": "{REASONING_EFFORT}",
+  "decisions": [{{
+    "review_id": "<exact review_id>",
+    "decision": "confirmed",
+    "event_frame_index": 0,
+    "effect_class": "directional_projectile",
+    "confirmation_artifacts": [
+      "<exact before artifact>",
+      "<exact after artifact>"
+    ],
+    "checks": {{
+      "absent_before": true,
+      "coherent_sequence": true,
+      "independent_spell_object_or_resolution": true,
+      "not_unit_attack_or_ability": true,
+      "not_targeting_overlay_or_floating_label": true,
+      "enemy_direction_or_origin": true,
+      "resolved_after": true,
+      "boundary_truncated": false
+    }},
+    "reason": "direct visual description without naming the card"
+  }}]
+}}
+
+`effect_class` is one of `directional_projectile`, `rolling_object`,
+`area_impact`, or `unresolved`. For `rejected` or `unresolved`, use null
+event_frame_index, `unresolved` effect_class, preserve every exact artifact
+path in package order, fill every check with true/false/null, and explain the
+visual failure. Do not identify a card. Modify no other file.

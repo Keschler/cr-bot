@@ -1,0 +1,61 @@
+Blindly assign canonical enemy card identities to every target in
+{PACKAGE_FILE} for {RUN_DIR}. Write only {OUTPUT_FILE}.
+
+Do not read docs, source, tests, labels, other runs, evaluation reports,
+semantic outputs, prior card decisions, detector output, or transcripts. Read
+only the package target rows and inspect every attached image visually.
+
+Infer one consistent enemy deck across the complete interval, with at most
+eight base card slots. Repeated anatomy or projectiles must receive the same
+base slug. Evolution and base forms share one slot; use `evo-` only when the
+persistent evolution anatomy is direct. Do not invent a ninth identity for an
+unclear repeat. Use canonical slugs (`minion-horde`, not `minions`; `log`, never
+`the-log`).
+
+For each target, treat its full-arena temporal onset sequence as the authority:
+
+1. Find the new enemy deployment that was absent before onset and appears with
+   a red clock, red level/health indicator, upper origin, or downward motion.
+2. Reject own bodies with blue indicators, lower origin, upward motion, or the
+   local player's white card-name/elixir placement overlay.
+3. Reject every actor already present before onset, even if larger or clearer.
+4. Then use the delayed `neighbor_candidates` montage to resolve anatomy. Its
+   cyan boxes and `identity_track_id` are fallible proposals; inspect all panels
+   and follow the onset-supported enemy, never a simultaneous own or older body.
+
+Purchased yellow/purple glow does not change identity. Knight is compact and
+unmounted with helmet and sword; Mega Knight is a very large dark armored
+drop/jump unit with massive gauntlets; Hog Rider has rider plus hog; Ice Spirit
+is a tiny bright-blue self-sacrificing jumper. For spells, use the complete
+projectile/rolling/impact sequence. Fireball is a compact flaming sphere, Log a
+wooden ground roller, and Rocket a long cylindrical projectile with thick smoke.
+Dark Prince requires a mounted horse plus shield and mace; purple shield glow
+alone does not turn an unmounted sword-bearing Knight into Dark Prince. Evolved
+Knight remains recognizably unmounted Knight anatomy beneath its shield effect.
+
+Copy every `onset_id`, `identity_frame_index`, and complete
+`identity_artifacts` list exactly from the package. Cover every target once. For
+spells use null and []. If an identity cannot be supported after applying deck
+consistency, use null card with confidence `unresolved` and visibility
+`obscured` or `empty`; never substitute a different actor.
+
+Output:
+{{
+  "run_id": "<package run_id>",
+  "stage": "enemy_cards_chunk",
+  "target_range": "<exact package target_range>",
+  "annotation_session_id": "{SESSION_ID}",
+  "model": "{MODEL}",
+  "reasoning_effort": "{REASONING_EFFORT}",
+  "cards": [{{
+    "onset_id": "<exact target onset_id>",
+    "card": "canonical-card-slug",
+    "confidence": "direct",
+    "visibility": "clear",
+    "identity_frame_index": "<exact target value>",
+    "identity_artifacts": "<exact target list>",
+    "reason": "onset-side evidence, anatomy, and deck-consistency rationale"
+  }}]
+}}
+
+Modify no other file. If attached images are unavailable, do not write output.

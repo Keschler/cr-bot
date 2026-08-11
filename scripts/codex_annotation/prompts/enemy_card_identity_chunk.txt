@@ -1,0 +1,100 @@
+Blindly identify only retained enemy targets in {PACKAGE_FILE} for {RUN_DIR}.
+
+Before writing each row, copy `identity_frame_index` and the complete
+`identity_artifacts` list verbatim from that target row in the package. These
+are harness-owned provenance fields: never replace them with a frame you
+chose or with a shortened artifact list. The card field is the only semantic
+field you may decide. Use only canonical slugs from the repository vocabulary
+(for example `minion-horde`, never `minions`; `log`, never `the-log`).
+
+Do not read docs, source, tests, labels, other runs, evaluation reports,
+semantic outputs, previous card guesses, or transcripts. Do not print the
+whole package. Read only its target rows and every exact full-arena onset and
+delayed identity artifact cited by each target. Write only {OUTPUT_FILE}.
+
+Every cited package image is attached directly to this conversation. Inspect
+every attached image visually. Do not substitute filenames, metadata, shell
+image tools, or a newly created montage for the pixels. If attached images are
+unavailable, do not write output.
+
+Track the same body from onset through the delayed views. Prefer the latest
+clear body; discount spawn/enchantment glow, clocks, impacts, shadows,
+overlap, and tower decorations. A self-sacrificing unit may be clear in the
+first sheet and then move/jump to impact and disappear in the second; that
+coherent resolution is valid and does not require the body to remain. Identify
+mounted troops from rider plus mount. For spells, use the complete directional
+projectile/rolling/impact sequence.
+
+The full-arena onset sequence is the authority for which deployment this enemy
+target represents. First establish which *enemy* body is absent before the
+target frame and appears with a red deployment clock/level marker, red level or
+health indicator, upper-side origin, or coherent downward motion. A blue level
+or health indicator, lower-side origin, upward motion, or a visible own card-name
+placement overlay identifies an own body and must be rejected even when it is
+closer to the tracked marker. Never name an older unit that was already present
+before the target frame. Then follow only the onset-supported enemy body through
+the delayed evidence. If another older or own actor is clearer, ignore it. Do
+not transfer that actor's identity to the target. Each package is intentionally
+isolated to one target so images from different deployments cannot be bound
+together.
+
+The delayed identity sheets dynamically follow deployment-marker candidates.
+Legacy sheets contain one selected track. A `neighbor_candidates` sheet stacks
+separate panels whose cyan headings name their candidate track IDs; inspect all
+panels and use the candidate that remains consistent with the enemy deployment
+established in the full-arena onset sequence. `identity_track_id` is a
+deterministic nearest-track proposal, not semantic proof, and may accidentally
+follow a simultaneous own deployment or an older actor. The cyan rectangle
+outlines the candidate clock/level marker directly underneath or overlapping a
+body; it does not establish team side and does not identify the largest nearby
+actor. In particular, an own Ice Spirit beside an own card-name overlay, or an
+older Mega Knight, Hog Rider, building, or swarm, may be much clearer than the
+new enemy. Compare frames, team indicators, origin, and motion before naming the
+onset-supported enemy body.
+
+The arena can apply a purchased yellow/gold enchantment glow to ordinary
+troops. That glow does not turn a Knight into Golden Knight, a Knight into
+Prince, or another armored troop into Mini P.E.K.K.A. Identify the anatomy,
+equipment, mount, and movement only after the glow clears. Golden Knight
+requires his actual blond uncovered head and gold/white champion body; Prince
+requires an actual horse and lance. A regular Knight retains his helmet,
+mustache, sword, and compact unmounted body. Likewise, use an `evo-` slug only
+when the later clear body has the evolution's persistent identifying design,
+not merely a temporary purple/yellow spawn or enchantment effect.
+
+For spells, distinguish the physical object across the whole sequence. Fireball
+is a compact spherical flaming projectile followed by an orange fire burst.
+Rocket is a long cylindrical rocket with a thick smoke trail and a much larger
+rocket blast. Log is a wooden cylinder that stays on the ground and rolls down
+the lane. Do not call a Fireball a Rocket from impact size alone.
+
+Do not hallucinate a card from an empty or mismatched delayed view. If no clear
+body plus continuous track/resolution supports one canonical identity, return
+card null with confidence `unresolved`. Use canonical `log`, never `the-log`.
+
+Output:
+{{
+  "run_id": "<package run_id>",
+  "stage": "enemy_cards_chunk",
+  "target_range": "<exact package target_range>",
+  "annotation_session_id": "{SESSION_ID}",
+  "model": "{MODEL}",
+  "reasoning_effort": "{REASONING_EFFORT}",
+  "cards": [{{
+    "onset_id": "enemy-NNNNNN",
+    "card": "canonical-card-slug",
+    "confidence": "direct",
+    "visibility": "clear",
+    "identity_frame_index": 0,
+    "identity_artifacts": [
+      "reviews/identity-enemy-NNNNNN-a.jpg",
+      "reviews/identity-enemy-NNNNNN-b.jpg"
+    ],
+    "reason": "visible identifying features"
+  }}]
+}}
+
+For unresolved rows use null card, confidence `unresolved`, and visibility
+`obscured` or `empty`. For spells only, identity_frame_index is null and
+identity_artifacts is [].
+Cover every target once and modify no other file.

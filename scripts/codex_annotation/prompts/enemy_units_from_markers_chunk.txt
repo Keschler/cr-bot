@@ -1,0 +1,69 @@
+Blindly classify the pre-rendered persistent red team-marker bursts in
+{PACKAGE_FILE} for {RUN_DIR}. This is a high-recall candidate-decision stage.
+Do not determine card identity or location, and do not render any new images.
+The deterministic merger assigns the marker start frame and renders final
+before/after evidence later.
+
+Do not read docs, source, tests, labels, other runs, caches, predictions,
+evaluation reports, own evidence, semantic JSON, or transcripts. Do not print
+the package. Use terse `jq` to list each burst ID, package role, start frame,
+sampled frame indices, and review artifact.
+
+You MUST visually open every listed review artifact with the image-viewing
+tool. Review artifact paths are relative to {RUN_DIR}; never resolve them
+relative to the work_packages directory. Listing filenames is not inspection.
+Treat each sheet as a chronological timeline. Record one explicit decision for
+every burst before writing {OUTPUT_FILE}.
+
+The candidate generator has already required a persistent red level/team
+marker near a deployment clock. Yellow boxes identify that marker; multiple
+yellow tracks in one burst are usually pieces of one badge or one swarm and
+still produce exactly one candidate event. Your only question is whether the
+burst could mark the beginning of a new troop/building, rather than a
+continuation of a marker that was already present.
+
+Use these high-recall rules:
+
+- Accept when a new red marker or spawn clock first appears at or just after
+  the burst start, even if the troop body is hidden by a tower, spawn glow,
+  evolution/enchantment effect, overlap, or impact effect.
+- A marker beginning behind the enemy king/princess tower is valid deployment
+  evidence. Do not wait until its body walks clear of the tower.
+- Compare neighboring burst sheets. If a later burst shows the same body
+  clearly but an earlier nearby burst is its plausible first marker, accept
+  the earlier burst and reject the later one as a continuation.
+- Accept an uncertain but plausible first marker. False positives are removed
+  by later side/card verification; a missed burst cannot be recovered there.
+- Reject only when the sheet clearly shows no new red marker at the burst
+  boundary, or the same marker/body is visibly present throughout the
+  pre-burst frames and merely reappears after occlusion, or the signal is
+  clearly spell/UI/combat residue with no plausible new deployment.
+
+`context_burst` rows must be inspected and use `context_only`. Every
+`owned_burst` must use exactly `accepted` or `rejected`. Do not trace an exact
+body onset, split simultaneous bodies, identify a card, infer a cell, render
+evidence, or create onset records. The merger produces exactly one
+deterministically timed candidate for every accepted owned burst.
+
+Output only:
+{{
+  "run_id": "<package run_id>",
+  "stage": "enemy_unit_onsets_chunk",
+  "target_range": [0, 0],
+  "annotation_session_id": "{SESSION_ID}",
+  "model": "{MODEL}",
+  "reasoning_effort": "{REASONING_EFFORT}",
+  "burst_decisions": [{{
+    "burst_id": "enemy-marker-burst:NNNNNN",
+    "decision": "accepted",
+    "accepted_onset_ids": [],
+    "reason": "plausible first persistent red marker"
+  }}],
+  "onsets": []
+}}
+
+Replace target_range with the package's exact target_range. Cover every burst
+exactly once. Always use an empty accepted_onset_ids list because the merger
+creates deterministic IDs. Copy package roles mechanically: `context_only` if
+and only if package_role is `context_burst`; never use it for an `owned_burst`.
+Modify no other file.

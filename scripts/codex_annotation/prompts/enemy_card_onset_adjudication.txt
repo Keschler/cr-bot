@@ -1,0 +1,64 @@
+Blindly identify every retained enemy target in {PACKAGE_FILE} for {RUN_DIR}.
+Write only {OUTPUT_FILE}. Do not read docs, source, tests, labels, other runs,
+evaluation reports, semantic outputs, earlier card decisions, detector output,
+or transcripts. Every permitted package image is attached; inspect its pixels.
+
+Treat this as an onset-first side-and-identity adjudication. For each target:
+
+1. Inspect the full-arena onset sequence in temporal order. Find the new enemy
+   deployment: it was absent before onset and appears with a red clock, red
+   level/health indicator, upper-side origin, or coherent downward motion.
+2. Explicitly reject simultaneous own deployments. Blue level/health bars,
+   lower-side origin, upward motion, and the local player's white card-name or
+   elixir placement overlay are own evidence. Do not name that body.
+3. Explicitly reject every actor already present before onset, even if it is
+   larger, clearer, or closer to a later cyan rectangle.
+4. Only after the new enemy body is fixed, use the focused onset and delayed
+   candidate views to resolve its anatomy. Delayed tracking is supporting
+   evidence and must never override the onset's side or new-versus-old test.
+
+A `neighbor_candidates` montage contains several separately headed candidate
+tracks. `identity_track_id` and cyan boxes are deterministic visual proposals,
+not semantic truth; inspect all panels and follow whichever candidate is the
+new enemy established at onset. It is valid for the correct actor to disappear
+after a jump or impact. If no candidate preserves that actor, identify it from
+the clear onset evidence or return unresolved; never substitute a different
+body.
+
+Use canonical repository slugs (`minion-horde`, not `minions`; `log`, never
+`the-log`). Purchased gold/purple deployment glow does not change card identity.
+Use `evo-` only for persistent evolution anatomy. A regular Knight is compact,
+unmounted, helmeted, and carries a sword. Mega Knight is a very large dark
+armored body with massive gauntlets and a drop/jump arrival. Hog Rider has both
+a rider and hog. Ice Spirit is a tiny bright-blue self-sacrificing jumper.
+Dark Prince requires a mounted horse plus shield and mace; purple shield glow
+alone does not make an unmounted sword-bearing Knight into Dark Prince. An
+evolved Knight remains recognizably unmounted Knight anatomy beneath its
+persistent evolution shield effect.
+
+Copy each package row's `identity_frame_index` and complete
+`identity_artifacts` list exactly. Cover every target exactly once. For spells,
+use null and [] and identify the complete projectile/rolling/impact sequence.
+For unresolved rows use null card, confidence `unresolved`, and visibility
+`obscured` or `empty`.
+
+Output:
+{{
+  "run_id": "<package run_id>",
+  "stage": "enemy_cards_chunk",
+  "target_range": "<exact package target_range>",
+  "annotation_session_id": "{SESSION_ID}",
+  "model": "{MODEL}",
+  "reasoning_effort": "{REASONING_EFFORT}",
+  "cards": [{{
+    "onset_id": "<exact target onset_id>",
+    "card": "canonical-card-slug",
+    "confidence": "direct",
+    "visibility": "clear",
+    "identity_frame_index": "<exact target value>",
+    "identity_artifacts": "<exact target list>",
+    "reason": "onset-side evidence and visible identifying anatomy"
+  }}]
+}}
+
+Modify no other file. If attached images are unavailable, do not write output.

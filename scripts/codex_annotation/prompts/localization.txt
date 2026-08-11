@@ -1,0 +1,15 @@
+Continue {RUN_DIR} after its independent release_review checkpoint.
+
+Use docs/eval/codex_video_annotation.md. Verify that release_review is
+checkpointed, then checkpoint verification. Perform localization for every
+verified event: render an event-scoped macro sheet followed by a tight labeled
+grid sheet, fill localization.json, and checkpoint localization.
+
+Fill localization.json provenance exactly as:
+- annotation_session_id: {SESSION_ID}
+- model: {MODEL}
+- reasoning_effort: {REASONING_EFFORT}
+
+Do not change semantic events unless a validator exposes a structural error; in
+that case stop and report it. Do not perform completeness, finalize, evaluate,
+or inspect any forbidden reference data or other annotation runs.

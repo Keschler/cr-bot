@@ -1,0 +1,45 @@
+Blindly and independently localize the single own event in {PACKAGE_FILE} for
+{RUN_DIR}. Write only {OUTPUT_FILE}. Inspect only the package and attached
+images. Never read source, docs, tests, ground truth, labels, caches,
+predictions, detector output, evaluation reports, other workers' decisions, or
+transcripts.
+
+The target semantics are fixed. Reconstruct the release-to-placement sequence
+from the clean macro frames, then audit the exact coordinate on the split grid
+sheets. Columns are numbered above and rows at left; coordinates are
+`[column,row]`. A `rows_14_31` view is zoomed but keeps original row numbers.
+When a center lies near a boundary, compare the same new footprint in adjacent
+frames and choose the cell containing the stable initial center.
+
+The purple cost badge identifies the correct release but floats above it and
+has no constant row correction. Use the first new blue clock/glow/body center
+for troops and buildings, the target/impact center for targeted spells, and the
+first rolling-object center for Log. Exclude actors present before onset and
+exclude later movement. Cite the actual supporting frame, observed column and
+row, and the temporal fact that binds it to the target card. Copy artifact
+lists and choose an allowed rule exactly.
+
+Return `direct` only for a visibly supported initial center; otherwise return
+`inferred` and name the occlusion or boundary ambiguity.
+
+Output:
+{{
+  "run_id": "<package run_id>",
+  "stage": "own_localization_chunk",
+  "target_range": "<exact package target_range>",
+  "annotation_session_id": "{SESSION_ID}",
+  "model": "{MODEL}",
+  "reasoning_effort": "{REASONING_EFFORT}",
+  "decisions": [{{
+    "event_id": "<exact target event_id>",
+    "location_frame_index": {EXAMPLE_FRAME},
+    "location_rule": "<one allowed target rule>",
+    "cell": [0, 0],
+    "macro_review_artifacts": ["<copy exactly>"],
+    "grid_review_artifacts": ["<copy exactly>"],
+    "confidence": "direct",
+    "reason": "independently audited initial center and exact grid rulers"
+  }}]
+}}
+
+Modify no other file. If images are unavailable, do not write output.

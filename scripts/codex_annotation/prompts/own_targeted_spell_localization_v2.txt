@@ -1,0 +1,40 @@
+Blindly localize the single own targeted-spell event in {PACKAGE_FILE} for
+{RUN_DIR}. Write only {OUTPUT_FILE}. Do not read documentation, source, tests,
+ground truth, human labels, caches, predictions, detector output, evaluation
+reports, other workers' decisions, or transcripts. All permitted images are
+attached.
+
+The fixed card, elixir cost, and approximate frame identify the release. Follow
+the matching own spell from the white card-name/purple-cost release overlay to
+its upper-arena aim marker, projectile, and impact. The event location is the
+target/impact center, never the lower/player-side purple cost badge. Reject
+unrelated troop combat, tower attacks, and older effects.
+
+The exact sheets use an 18-column by 32-row grid, `[column,row]`, with columns
+above and rows at left. Choose the clearest listed frame containing the target
+marker or impact center. Use `target_center` when the aim/release target is
+clearest or `impact_center` when the impact is clearest. Copy both artifact
+lists exactly and explain the temporal trajectory. The example frame is a real
+listed event-adjacent frame; replace it when another listed frame is clearer.
+
+Output:
+{{
+  "run_id": "<package run id>",
+  "stage": "own_localization_chunk",
+  "target_range": "<exact package target range>",
+  "annotation_session_id": "{SESSION_ID}",
+  "model": "{MODEL}",
+  "reasoning_effort": "{REASONING_EFFORT}",
+  "decisions": [{{
+    "event_id": "<exact event id>",
+    "location_frame_index": {EXAMPLE_FRAME},
+    "location_rule": "target_center",
+    "cell": [0, 0],
+    "macro_review_artifacts": ["<copy exactly>"],
+    "grid_review_artifacts": ["<copy exactly>"],
+    "confidence": "direct",
+    "reason": "release-to-target or impact visual sequence"
+  }}]
+}}
+
+Modify no other file. If images are unavailable, do not write output.

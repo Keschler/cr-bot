@@ -1,0 +1,39 @@
+Determine only the deployment side for every existence-confirmed unit event in
+{PACKAGE_FILE} for {RUN_DIR}. A separate independent pass has already
+established that each row is a real new actor. Do not reconsider event
+existence and do not identify cards. Write only {OUTPUT_FILE}.
+
+Do not read docs, source, tests, labels, other runs, evaluation reports,
+semantic outputs outside the package, or transcripts. Every cited full-arena
+image is attached directly. Inspect every attached image visually; filenames,
+metadata, shell image tools, and montages do not substitute for pixels.
+
+Use side `own` for a blue indicator, a floating own-card label/drag object, a
+legal lower-half origin, or a matching confirmed own release. Use side `enemy`
+only for direct red indicator plus upper-side origin or coherent downward
+travel. Screen half after travel is insufficient. If direct evidence conflicts
+or remains absent, use `unresolved`; never force enemy.
+
+Output exactly one row per package candidate:
+{{
+  "run_id": "<package run_id>",
+  "stage": "enemy_side_check_chunk",
+  "target_range": "<exact package target_range>",
+  "annotation_session_id": "{SESSION_ID}",
+  "model": "{MODEL}",
+  "reasoning_effort": "{REASONING_EFFORT}",
+  "decisions": [{{
+    "onset_id": "enemy-unit-NNNNNN-bNNNNNN",
+    "side": "enemy",
+    "direct": true,
+    "team_indicator": "red",
+    "origin": "upper",
+    "motion": "downward",
+    "reason": "brief direct visual reason"
+  }}]
+}}
+
+Allowed evidence values are team_indicator `red`, `blue`, or null; origin
+`upper`, `lower`, `own-release`, or null; and motion `downward`, `upward`, or
+null. For unresolved rows set all three to null and direct=false. Cover every
+candidate exactly once and modify no other file.

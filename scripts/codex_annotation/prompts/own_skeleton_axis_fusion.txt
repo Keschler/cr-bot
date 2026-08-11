@@ -1,0 +1,41 @@
+Blindly localize the single own Skeletons deployment in {PACKAGE_FILE} for
+{RUN_DIR}. Write only {OUTPUT_FILE}. Inspect only the package and attached
+images. Do not read source, docs, tests, ground truth, labels, caches,
+predictions, detector output, reports, other decisions, or transcripts.
+
+Use the fixed Skeletons card and cost 1 to reject the overlapping cost-3 Cannon
+overlay and all pre-existing/red actors. This crowded swarm needs two direct
+visual cues:
+
+1. Determine the deployment column from the horizontal centroid of the first
+   newly appearing own blue Skeleton group/blue deployment clocks.
+2. Determine the selected deployment row from the matching purple cost-1
+   release badge: read its anchor row and apply the normal two-row downward UI
+   offset. Do not replace this selected row with the group's later moved row.
+
+Combine those visually determined axes into one `[column,row]` cell. The clean
+18x32 grid has columns above and rows at left. Copy a real listed frame and both
+artifact lists exactly, use `spawn_center`, and explain both axis cues without
+mentioning any unsupported actor.
+
+Output:
+{{
+  "run_id": "<package run id>",
+  "stage": "own_localization_chunk",
+  "target_range": "<exact package target range>",
+  "annotation_session_id": "{SESSION_ID}",
+  "model": "{MODEL}",
+  "reasoning_effort": "{REASONING_EFFORT}",
+  "decisions": [{{
+    "event_id": "<exact event id>",
+    "location_frame_index": {EXAMPLE_FRAME},
+    "location_rule": "spawn_center",
+    "cell": [0, 0],
+    "macro_review_artifacts": ["<copy exactly>"],
+    "grid_review_artifacts": ["<copy exactly>"],
+    "confidence": "direct",
+    "reason": "new-group column plus cost-1 release-anchor row"
+  }}]
+}}
+
+Modify no other file. If images are unavailable, do not write output.

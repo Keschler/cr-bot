@@ -1,0 +1,29 @@
+Blindly discover the card rosters visible in {RUN_DIR}.
+
+Inspect only the sparse grid-free sheets under {RUN_DIR}/roster_reviews. Do not
+inspect candidate sheets or infer event times. Identify the smallest plausible
+set of cards used by each side across the prepared interval. Distinguish units
+from transient spawn/evolution effects by comparing later samples. Use canonical
+card slugs from src/cr_bot/domain/card_metadata.py.
+
+Screen half is not team identity: own units can cross into the opponent's half
+and enemy units can cross into the own half. Attribute a card to a side only
+from red/blue health-bar or level-badge color, deployment origin, and movement
+direction across multiple samples. For enemy_cards, exclude every blue/own unit
+even when it is physically beside an enemy tower. Put visually plausible but
+team-ambiguous identities in uncertain_cards instead of copying the own deck.
+
+Write {RUN_DIR}/roster.json with:
+{{
+  "annotation_session_id": "{SESSION_ID}",
+  "model": "{MODEL}",
+  "reasoning_effort": "{REASONING_EFFORT}",
+  "own_cards": [...],
+  "enemy_cards": [...],
+  "uncertain_cards": [...],
+  "notes": "..."
+}}
+
+Do not inspect ground truth, human labels, other annotation runs, replay caches,
+predictions, detector/tracker/OCR/classifier output, or evaluation reports. Do
+not edit any annotation stage, checkpoint, localize, finalize, or evaluate.

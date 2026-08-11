@@ -1,0 +1,26 @@
+Perform only the independent own-release review for {RUN_DIR} using the v7
+workflow in docs/eval/codex_video_annotation.md.
+
+This is a fresh conversation. Read verification.json only to enumerate proposed
+own event IDs, confirmation frames, and confirmation artifact paths. Do not
+trust its release booleans or semantic conclusions. Inspect only each cited
+own_confirmation sheet and independently decide released versus canceled. The
+evidence filenames are intentionally opaque and must not be renamed to include
+a card hypothesis.
+
+Fill release_review.json provenance exactly as:
+- annotation_session_id: {SESSION_ID}
+- model: {MODEL}
+- reasoning_effort: {REASONING_EFFORT}
+
+For a released event, copy its confirmation frame/artifacts and require release,
+persistent elixir spend, and a post-release effect. The hand-cycle check may be
+false or null while the replacement-slot cooldown is still visibly active. For
+a canceled or unresolved
+event, record decision "canceled" with the observed checks and stop without
+checkpointing. Otherwise checkpoint release_review only.
+
+Do not edit verification.json. Do not checkpoint verification, localize,
+perform completeness, finalize, or evaluate. Do not inspect ground truth,
+human labels, other annotation runs, replay caches, predictions, detector,
+tracker, OCR/classifier output, or evaluation reports.

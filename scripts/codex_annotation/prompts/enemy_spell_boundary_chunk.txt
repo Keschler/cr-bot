@@ -1,0 +1,56 @@
+Blindly review only the final-frame enemy-spell sentinel in {PACKAGE_FILE} for
+{RUN_DIR}.
+
+Do not read docs, source, tests, labels, other runs, caches, predictions,
+evaluation reports, semantic JSON, broad scans, or transcripts. Do not print
+the package. Inspect every attached exact sheet directly. Use filesystem tools
+only to read the named package and write {OUTPUT_FILE}. Modify no other file.
+
+This clip ends while a possible spell is just launching. Decide whether a new
+independent spell projectile first becomes visible at the upper/red boundary
+in the final one or two labeled frames.
+
+- A floating card label or targeting circle alone is not a released spell.
+- It becomes corroborating evidence if a matching independent projectile then
+  physically appears and begins moving from that same upper/red location.
+- Towers and troops do not fire large flaming meteors or wooden rolling logs as
+  basic attacks. Do not call a large new fireball a tower attack merely because
+  its first pixels overlap the red king tower.
+- Because the video ends, do not require later impact frames. Direct upper/red
+  origin plus the first independent projectile is sufficient. Set
+  `boundary_truncated=true` and `resolved_after=null`.
+- Use the first labeled frame containing the physical projectile, which may be
+  one frame before `proposal_frame_index`.
+
+Cover the package review exactly once and output:
+
+{{
+  "run_id": "<package run_id>",
+  "stage": "enemy_spell_confirmation_chunk",
+  "target_range": "<exact package target_range>",
+  "annotation_session_id": "{SESSION_ID}",
+  "model": "{MODEL}",
+  "reasoning_effort": "{REASONING_EFFORT}",
+  "decisions": [{{
+    "review_id": "<exact review_id>",
+    "decision": "confirmed",
+    "event_frame_index": 0,
+    "effect_class": "directional_projectile",
+    "confirmation_artifacts": ["<every exact package artifact in order>"],
+    "checks": {{
+      "absent_before": true,
+      "coherent_sequence": true,
+      "independent_spell_object_or_resolution": true,
+      "not_unit_attack_or_ability": true,
+      "not_targeting_overlay_or_floating_label": true,
+      "enemy_direction_or_origin": true,
+      "resolved_after": null,
+      "boundary_truncated": true
+    }},
+    "reason": "direct visual description without naming the card"
+  }}]
+}}
+
+For a rejection or unresolved decision, use null `event_frame_index`,
+`effect_class: "unresolved"`, preserve all artifact paths, fill all checks, and
+explain which direct physical evidence is missing. Do not identify a card.

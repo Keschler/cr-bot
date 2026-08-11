@@ -1,0 +1,84 @@
+Independently adjudicate only the anonymous own-event proposals in
+{PACKAGE_FILE} for {RUN_DIR}. The proposals are the union of two blind sweeps;
+their source/model is intentionally hidden.
+
+Do not read labels, evaluation reports, other runs, source/tests, semantic
+outputs, or transcripts. Read only the package and every cited discovery/exact
+artifact. Write only {OUTPUT_FILE}.
+
+For each proposal decide exactly one accepted release or reject it. A true
+release requires permanent card departure/replacement cooldown and a
+persistent unit/building or resolved spell. Displayed elixir may regenerate
+during a held drag: allow at most one point of compensation, recorded as
+total_released_cost minus observed_elixir_delta. Reject previews,
+emotes/overlays, ongoing combat, and a card that returns.
+
+For spells, targeting overlay, label, reserved elixir, or a temporary empty
+slot is not release. Require the overlay to clear plus a direct projectile,
+rolling object, or impact. Fail closed when the segment ends first. Proposed
+frames are hints, not truth.
+
+For troops/buildings choose event_frame_index at the first labeled independent
+arena deployment effect/body after release; for spells choose the first
+projectile, rolling object, or impact. Do not timestamp the earlier empty hand
+slot or targeting preview. In the evidence object, elixir_drop=true means a
+confirmed spend, including an allowed compensated spend whose displayed digit
+did not fall.
+A floating card-name/level label, translucent placement ghost, targeting ring,
+or drag shadow is still preview UI and never counts as the independent arena
+body/effect. Confirmation must be a listed labeled frame 0.5–1.5 seconds after
+event_frame_index.
+
+If accepted, choose the closest supporting candidate and choose event and
+confirmation frames only from its labeled discovery frames. Use filesystem
+tools only to read the named package/listed artifacts and to write the one
+required output JSON. Do not invoke renderers or inspect any other file; cite
+its discovery artifact for both. Canonicalize The
+Log to `log`. Preserve the complete event schema:
+
+{{
+  "run_id": "<package run_id>",
+  "stage": "own_adjudication_chunk",
+  "target_range": [0, 0],
+  "annotation_session_id": "{SESSION_ID}",
+  "model": "{MODEL}",
+  "reasoning_effort": "{REASONING_EFFORT}",
+  "events": [{{
+    "proposal_id": "own-proposal-0000",
+    "candidate_id": "own:NNNNNN",
+    "card": "canonical-card-slug",
+    "event_frame_index": 0,
+    "evidence": {{
+      "elixir_drop": true,
+      "hand_transition": true,
+      "deployment_onset": true,
+      "first_visible_object": true,
+      "side_direction": null,
+      "impact_sequence": null
+    }},
+    "transition_observation": {{
+      "elixir_before": 0, "elixir_after": 0,
+      "observed_elixir_delta": 0,
+      "total_released_cost": 0,
+      "regeneration_compensated": false,
+      "occupied_slots_before": [0], "cooldown_slots_after": [0]
+    }},
+    "spell_release": null,
+    "verification_artifacts": ["<candidate discovery_artifact>"],
+    "confirmation_frame_index": 0,
+    "confirmation_artifacts": ["<candidate discovery_artifact>"],
+    "own_confirmation": {{
+      "release_confirmed": true,
+      "elixir_spend_persisted": true,
+      "hand_cycle_completed": true,
+      "post_release_effect": true
+    }}
+  }}],
+  "rejected_proposals": [{{
+    "proposal_id": "own-proposal-0000",
+    "reason": "specific visual evidence"
+  }}]
+}}
+
+For spell events include the non-null spell_release object described above.
+Cover every proposal exactly once. Do not modify other JSON.

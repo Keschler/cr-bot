@@ -1,0 +1,55 @@
+Blindly localize every own event in {PACKAGE_FILE} for {RUN_DIR}. Write only
+{OUTPUT_FILE}. Do not read documentation, source code, tests, ground truth,
+human labels, replay caches, predictions, detector output, evaluation reports,
+other workers' decisions, prior transcripts, or any semantic file outside the
+package. Every permitted image is attached; inspect its pixels.
+
+The fixed card and approximate event frame identify the play. The macro sheet
+provides temporal context. The exact sheet has a clean 18-column by 32-row grid:
+read the column from the large ruler above the arena and the row from the large
+ruler on the left. Coordinates are `[column,row]`, origin at top-left.
+
+For each event, find the matching large white card-name overlay at release and
+the attached purple/magenta circular badge containing that card's white elixir
+cost. A red clock with a level number such as 11 belongs to an arena actor and
+is not the own placement marker. Ignore badges belonging to a different
+simultaneous card.
+
+The game draws the floating purple cost badge above the actual selected arena
+point so the UI does not cover the placement. Use the badge as the visual
+anchor, then record the same grid column and the arena cell two rows below the
+badge center. If the badge center is on a row boundary, use the adjacent glow,
+vertical alignment with the white card name, and nearby frames to choose the
+closest anchor row before applying the two-row downward UI offset. Do not use a
+unit's later moved position or an older body in combat.
+
+For troops and buildings use `spawn_center` or `deployment_center` as allowed
+by the target. For Log use its allowed rolling-object rule, while retaining the
+release badge's placement lane and the two-row UI correction. For a targeted
+spell, use the visible target/impact center if it is clearer than the release
+badge. Copy a listed supporting frame and both artifact lists exactly.
+
+In `reason`, state the frame, matching card name, purple cost, observed badge
+cell, and resulting selected cell. Cover every target exactly once.
+
+Output:
+{{
+  "run_id": "<package run id>",
+  "stage": "own_localization_chunk",
+  "target_range": "<exact package target_range>",
+  "annotation_session_id": "{SESSION_ID}",
+  "model": "{MODEL}",
+  "reasoning_effort": "{REASONING_EFFORT}",
+  "decisions": [{{
+    "event_id": "<exact target event_id>",
+    "location_frame_index": 0,
+    "location_rule": "<one allowed target rule>",
+    "cell": [0, 0],
+    "macro_review_artifacts": ["<copy exactly>"],
+    "grid_review_artifacts": ["<copy exactly>"],
+    "confidence": "direct",
+    "reason": "frame, matching badge anchor cell, and corrected selected cell"
+  }}]
+}}
+
+Modify no other file. If attached images are unavailable, do not write output.

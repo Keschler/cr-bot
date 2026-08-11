@@ -1,0 +1,62 @@
+Independently inspect the focused marker candidates in {PACKAGE_FILE} for
+{RUN_DIR}. Decide only whether each highlighted sequence contains an
+additional new actor. Do not decide side and do not identify cards.
+
+Do not read docs, source, tests, labels, other runs, evaluation reports,
+semantic outputs outside the package, or transcripts. Do not print the whole
+package. Write only {OUTPUT_FILE}.
+
+Every candidate's marker-centered review image is attached directly to this
+conversation. Inspect every attached image visually. Do not use filenames,
+JSON metadata, shell image tools, montages, or inferred timing as a substitute
+for the pixels. If attached images are unavailable, do not write output.
+
+Set `overlap_event_exists=true` only when the focused before/after sequence
+directly shows an additional actor materializing at the highlighted marker:
+
+- the additional silhouette, health bar, or level badge is absent beforehand;
+- it first appears at or immediately after the marker;
+- it remains independently visible in later sampled frames, or follows a
+  coherent independent move/jump-to-impact sequence before disappearing;
+- an older large unit may overlap or occlude the new actor.
+
+The marker rectangle may remain attached to an older actor while a different
+new actor materializes adjacent to or behind it. Inspect the entire crop in
+every sampled frame, not only the boxed pixels. A spawn clock, golden/evolution
+silhouette, or impact cloud followed by a distinct persistent body that was
+absent earlier is a confirmed new actor; do not dismiss that sequence as an
+effect merely because the final body appears several sampled frames later.
+
+Keep `overlap_event_exists=false` for a marker that merely follows an old
+body, ongoing combat, tower/UI residue, a hit/evolution/enchantment effect, or
+the same actor changing pose. Fail closed: ordinary uncertainty is false.
+This is deliberately side-agnostic. A real new own actor is still true here;
+the next independent stage decides side. Always output side `unresolved`.
+
+Output exactly one row per package candidate:
+{{
+  "run_id": "<package run_id>",
+  "stage": "enemy_overlap_adjudication_chunk",
+  "target_range": "<exact package target_range>",
+  "annotation_session_id": "{SESSION_ID}",
+  "model": "{MODEL}",
+  "reasoning_effort": "{REASONING_EFFORT}",
+  "decisions": [{{
+    "onset_id": "enemy-unit-NNNNNN-bNNNNNN",
+    "overlap_event_exists": false,
+    "event_frame_index": null,
+    "evidence": {{
+      "secondary_absent_before": false,
+      "secondary_appears_at_marker": false,
+      "secondary_persists_or_resolves_after": false,
+      "direct_new_actor": false
+    }},
+    "side": "unresolved",
+    "reason": "brief direct visual reason"
+  }}]
+}}
+
+For true rows, event_frame_index is the first labeled sampled frame showing
+the new spawn silhouette/effect or independent body, not the package's
+approximate marker frame. For false rows it is null. Cover every candidate
+exactly once and modify no other file.
