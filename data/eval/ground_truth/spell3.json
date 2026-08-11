@@ -102,6 +102,96 @@
       "side": "enemy",
       "card": "earthquake",
       "frame_index": 1169
+    },
+    {
+      "side": "own",
+      "card": "hog-rider",
+      "frame_index": 71
+    },
+    {
+      "side": "own",
+      "card": "ice-spirit",
+      "frame_index": 102
+    },
+    {
+      "side": "own",
+      "card": "ice-golem",
+      "frame_index": 145
+    },
+    {
+      "side": "own",
+      "card": "musketeer",
+      "frame_index": 266
+    },
+    {
+      "side": "own",
+      "card": "skeletons",
+      "frame_index": 297
+    },
+    {
+      "side": "own",
+      "card": "hog-rider",
+      "frame_index": 363
+    },
+    {
+      "side": "own",
+      "card": "ice-spirit",
+      "frame_index": 446
+    },
+    {
+      "side": "own",
+      "card": "ice-golem",
+      "frame_index": 522
+    },
+    {
+      "side": "own",
+      "card": "the-log",
+      "frame_index": 673
+    },
+    {
+      "side": "own",
+      "card": "skeletons",
+      "frame_index": 735
+    },
+    {
+      "side": "own",
+      "card": "cannon",
+      "frame_index": 806
+    },
+    {
+      "side": "own",
+      "card": "fireball",
+      "frame_index": 869
+    },
+    {
+      "side": "own",
+      "card": "ice-golem",
+      "frame_index": 917
+    },
+    {
+      "side": "own",
+      "card": "ice-spirit",
+      "frame_index": 1021
+    },
+    {
+      "side": "own",
+      "card": "hog-rider",
+      "frame_index": 1067
+    },
+    {
+      "side": "own",
+      "card": "skeletons",
+      "frame_index": 1083
+    },
+    {
+      "side": "own",
+      "card": "musketeer",
+      "frame_index": 1131
+    },
+    {
+      "side": "own",
+      "card": "ice-golem",
+      "frame_index": 1164
     }
   ]
 }

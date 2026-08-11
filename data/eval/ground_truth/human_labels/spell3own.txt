@@ -1,0 +1,19 @@
+hog-rider 71
+ice-spirit 102
+ice-golem 145
+musketeer 266
+skeletons 297
+hog-rider 363
+ice-spirit 446
+ice-golem 522
+the-log 673
+skeletons 735
+cannon 806
+fireball 869
+ice-golem 917
+ice-spirit 1021
+hog-rider 1067
+skeletons 1083
+musketeer 1131
+ice-golem 1164
+
