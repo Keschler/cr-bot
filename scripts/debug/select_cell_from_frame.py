@@ -140,6 +140,16 @@ def main() -> None:
     cv2.setMouseCallback(WINDOW_NAME, selector.on_mouse)
 
     print(f"arena_px={arena_px}")
+    ax, ay, aw, ah = arena_px
+    grid_x = ax + ACTION_GRID.x0 * aw
+    grid_y = ay + ACTION_GRID.y0 * ah
+    grid_width = ACTION_GRID.width * aw
+    grid_height = ACTION_GRID.height * ah
+    print(f"grid_area_px=({grid_x:.1f}, {grid_y:.1f}, {grid_width:.1f}, {grid_height:.1f})")
+    print(
+        "block_size_px="
+        f"({grid_width / ACTION_GRID.cols:.8f}, {grid_height / ACTION_GRID.rows:.8f})"
+    )
     while True:
         cv2.imshow(WINDOW_NAME, selector.render())
         key = cv2.waitKey(16) & 0xFF
