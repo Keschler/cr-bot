@@ -14,6 +14,7 @@ from cr_bot.eval.run_action_eval_scenarios import (
     evaluate_scenario,
     filter_events,
     find_cell_mismatches,
+    parse_card_filter,
     print_summary,
     replay_cache_path,
     render_report,
@@ -194,6 +195,88 @@ def test_filter_events_keeps_only_focused_card_and_window():
     assert filtered == [matching]
 
 
+def test_parse_card_filter_accepts_repeated_and_comma_separated_cards():
+    cards = parse_card_filter(["clone", "lightning, arrows", "evo_skeletons"])
+
+    assert cards == {"clone", "lightning", "arrows", "skeletons"}
+
+
+def test_filter_events_excludes_cards():
+    clone = ActionEvent(side="enemy", card="clone", video_time_s=10.0)
+    lightning = ActionEvent(side="enemy", card="lightning", video_time_s=20.0)
+    arrows = ActionEvent(side="enemy", card="evo-arrows", video_time_s=30.0)
+    fireball = ActionEvent(side="enemy", card="fireball", video_time_s=40.0)
+
+    filtered = filter_events(
+        [clone, lightning, arrows, fireball],
+        card=None,
+        side="both",
+        windows=[],
+        excluded_cards={"clone", "lightning", "arrows"},
+    )
+
+    assert filtered == [fireball]
+
+
+def test_evaluate_scenario_excludes_cards_from_expected_and_predicted(tmp_path: Path):
+    ground_truth = tmp_path / "ground_truth.json"
+    predictions = tmp_path / "predictions.txt"
+    ground_truth.write_text(
+        json.dumps(
+            {
+                "events": [
+                    {
+                        "side": "enemy",
+                        "card": "clone",
+                        "time_left_s": 250.0,
+                        "video_time_s": 10.0,
+                    },
+                    {
+                        "side": "enemy",
+                        "card": "fireball",
+                        "time_left_s": 240.0,
+                        "video_time_s": 20.0,
+                    },
+                ]
+            }
+        )
+    )
+    predictions.write_text(
+        "\n".join(
+            [
+                "frame 1 video_time=10.00s",
+                "enemy plays:",
+                "  card=clone                cost=3 time_left=250 track_id=1 cell=None",
+                "frame 2 video_time=20.00s",
+                "enemy plays:",
+                "  card=fireball             cost=4 time_left=240 track_id=2 cell=None",
+                "frame 3 video_time=30.00s",
+                "enemy plays:",
+                "  card=lightning            cost=6 time_left=230 track_id=3 cell=None",
+            ]
+        )
+    )
+    scenario = Scenario(
+        key="sample",
+        label="sample",
+        video=tmp_path / "video.mp4",
+        ground_truth=ground_truth,
+        predictions=predictions,
+        capture_args=(),
+    )
+    args = build_parser().parse_args(
+        ["--scenario", "all", "--side", "enemy", "--exclude-card", "clone,lightning"]
+    )
+
+    results, _ = evaluate_scenario(args, scenario)
+
+    assert len(results) == 1
+    assert len(results[0].matches) == 1
+    assert results[0].matches[0].expected.canonical_card == "fireball"
+    assert results[0].misses == []
+    assert results[0].false_positives == []
+
+
 def test_build_parser_accepts_focus_window_args():
     args = build_parser().parse_args(
         [
@@ -217,6 +300,19 @@ def test_build_parser_accepts_focus_window_args():
     assert args.focus_window_before == 5.0
     assert args.focus_window_after == 10.0
     assert args.focus_video_time == 183.7
+
+
+def test_build_parser_accepts_excluded_cards():
+    args = build_parser().parse_args(
+        [
+            "--exclude-card",
+            "clone",
+            "--exclude-card",
+            "lightning,arrows",
+        ]
+    )
+
+    assert args.exclude_card == ["clone", "lightning,arrows"]
 
 
 def test_build_parser_accepts_replay_modes():

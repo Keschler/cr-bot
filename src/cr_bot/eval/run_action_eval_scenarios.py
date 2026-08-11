@@ -230,6 +230,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Filter detection and evaluation to a specific card, for example fireball.",
     )
     parser.add_argument(
+        "--exclude-card",
+        action="append",
+        default=[],
+        metavar="CARD",
+        help=(
+            "Exclude a card from evaluation. May be repeated or comma-separated, "
+            "for example --exclude-card clone --exclude-card lightning,arrows."
+        ),
+    )
+    parser.add_argument(
         "--focus-side",
         choices=["own", "enemy", "both"],
         default="both",
@@ -298,8 +308,21 @@ def evaluate_scenario(args: argparse.Namespace, scenario: Scenario) -> tuple[lis
         )
 
     predicted = parse_predictions_txt(scenario.predictions)
-    expected = filter_events(expected, card=args.focus_card, side=args.focus_side, windows=focus_windows)
-    predicted = filter_events(predicted, card=args.focus_card, side=args.focus_side, windows=focus_windows)
+    excluded_cards = parse_card_filter(args.exclude_card)
+    expected = filter_events(
+        expected,
+        card=args.focus_card,
+        side=args.focus_side,
+        windows=focus_windows,
+        excluded_cards=excluded_cards,
+    )
+    predicted = filter_events(
+        predicted,
+        card=args.focus_card,
+        side=args.focus_side,
+        windows=focus_windows,
+        excluded_cards=excluded_cards,
+    )
     sides = ["own", "enemy"] if args.side == "both" else [args.side]
     results = [
         evaluate(
@@ -314,6 +337,20 @@ def evaluate_scenario(args: argparse.Namespace, scenario: Scenario) -> tuple[lis
         for side in sides
     ]
     return results, render_report(results)
+
+
+def parse_card_filter(values: list[str] | tuple[str, ...] | None) -> set[str]:
+    if not values:
+        return set()
+    cards: set[str] = set()
+    for value in values:
+        for item in value.split(","):
+            card = item.strip().replace("_", "-")
+            if card.startswith("evo-"):
+                card = card[4:]
+            if card:
+                cards.add(card)
+    return cards
 
 
 def build_focus_windows(
@@ -358,11 +395,21 @@ def build_focus_windows(
     return windows
 
 
-def filter_events(events, *, card: str | None, side: str, windows: list[FocusWindow]):
+def filter_events(
+    events,
+    *,
+    card: str | None,
+    side: str,
+    windows: list[FocusWindow],
+    excluded_cards: set[str] | None = None,
+):
     side_filter = {"own", "enemy"} if side == "both" else {side}
     canonical = card.replace("_", "-") if card is not None else None
+    excluded_cards = excluded_cards or set()
     filtered = []
     for event in events:
+        if event.canonical_card in excluded_cards:
+            continue
         if canonical is not None and event.canonical_card != canonical:
             continue
         if canonical is not None and event.side not in side_filter:
