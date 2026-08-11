@@ -1,4 +1,10 @@
 outputs/
+data/audio_classifier/mined/
+data/eval/replay_cache/
+reviews/
+data/eval/ground_truth/*.audit.json
+data/eval/ground_truth/*.audit.json.lock.json
+data/eval/ground_truth/README_GPT_VIDEO_ANNOTATION(1).md
 capture/runs/inference/
 **/__pycache__/
 *.pyc
