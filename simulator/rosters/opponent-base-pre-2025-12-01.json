@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "roster_id": "opponent-base-pre-2025-12-01",
+  "ruleset_id": "2026-08-04",
+  "release_cutoff_exclusive": "2025-12-01",
+  "evolution_cutoff_exclusive": "2023-06-19",
+  "catalog_source": "src.cr_bot.domain.card_metadata.CARD_METADATA; local card catalog reviewed 2026-08-14",
+  "release_date_status": "catalog-classified-pre-cutoff; exact per-card dates required before held-out release",
+  "eligible_cards": [
+    "archers", "arrows", "baby-dragon", "balloon", "bandit", "barbarian-barrel",
+    "barbarian-hut", "barbarians", "bats", "battle-healer", "battle-ram", "bomb-tower",
+    "bomber", "bowler", "cannon", "cannon-cart", "clone", "dark-prince", "dart-goblin",
+    "earthquake", "electro-dragon", "electro-giant", "electro-spirit", "electro-wizard",
+    "elite-barbarians", "elixir-collector", "elixir-golem", "executioner", "fire-spirit",
+    "fireball", "firecracker", "fisherman", "flying-machine", "freeze", "furnace", "giant",
+    "giant-skeleton", "giant-snowball", "goblin-barrel", "goblin-cage", "goblin-demolisher",
+    "goblin-curse", "goblin-drill", "goblin-gang", "goblin-giant", "goblin-hut", "goblin-machine", "goblins",
+    "golem", "graveyard", "guards", "heal-spirit", "hog-rider", "hunter", "ice-golem",
+    "ice-spirit", "ice-wizard", "inferno-dragon", "inferno-tower", "knight", "lava-hound",
+    "lightning", "log", "lumberjack", "magic-archer", "mega-knight", "mega-minion", "miner",
+    "mini-pekka", "minion-horde", "minions", "mirror", "mortar", "mother-witch", "musketeer",
+    "night-witch", "pekka", "phoenix", "poison", "prince", "princess", "rage", "ram-rider",
+    "rascals", "rocket", "royal-delivery", "royal-ghost", "royal-giant", "royal-hogs",
+    "royal-recruits", "skeleton-army", "skeleton-barrel", "skeleton-dragons", "skeletons",
+    "sparky", "spear-goblins", "suspicious-bush", "tesla", "three-musketeers", "tombstone", "tornado", "valkyrie",
+    "void", "wall-breakers", "witch", "wizard", "x-bow", "zap", "zappies"
+  ],
+  "excluded_cards": {
+    "archer-queen": "champion requires excluded activated ability",
+    "berserker": "released on or after 2025-12-01",
+    "boss-bandit": "released on or after 2025-12-01 and requires excluded activated ability",
+    "goblinstein": "champion requires excluded activated ability",
+    "golden-knight": "champion requires excluded activated ability",
+    "little-prince": "champion requires excluded activated ability",
+    "mighty-miner": "champion requires excluded activated ability",
+    "monk": "champion requires excluded activated ability",
+    "rune-giant": "released on or after 2025-12-01",
+    "skeleton-king": "champion requires excluded activated ability",
+    "spirit-empress": "released on or after 2025-12-01 and requires excluded activated ability",
+    "vines": "released on or after 2025-12-01"
+  }
+}

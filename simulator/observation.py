@@ -1,0 +1,777 @@
+"""Vision-policy compatible observations for authoritative simulator states.
+
+The simulator deliberately keeps its authoritative :class:`BattleState`
+separate from the lossy state exposed to a policy.  This adapter is the only
+place where authoritative state is projected into the existing vision feature
+contract.  In particular, it does not expose an entity's target, attack
+cooldown, either draw pile other than the viewer's next card, the opponent's
+hand, or the opponent's exact elixir.
+
+``vision_v1_exact`` preserves the current ``cr_bot.features`` builders.  The
+legacy spatial building mask uses top-left footprint anchors; the simulator's
+actions use ``(column, row)`` *center* cells.  Consequently ``spatial_masks``
+reproduces the legacy model input while ``legal_play`` is independently
+generated with the authoritative center-cell convention. Consumers should
+train on ``legal_play``; ``spatial_masks`` is a compatibility/debug channel.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from fractions import Fraction
+import hashlib
+import json
+from typing import Callable, Final
+
+import numpy as np
+
+from cr_bot.domain.game_state import (
+    Action as PolicyAction,
+    Detection,
+    GameState,
+    HudState,
+    Match,
+    PrincessTowerState,
+)
+from cr_bot.domain.card_metadata import CARD_METADATA
+from cr_bot.domain.constants import (
+    FEATURE_MAX_KING_TOWER_HP,
+    MAX_ELIXIR,
+    PRINCESS_TOWER_HP,
+    TOTAL_MATCH_SECONDS,
+)
+from cr_bot.features.action_masks import get_action_mask
+from cr_bot.features.action_space import ACTION_GRID, map_ground
+from cr_bot.features.board_rasterizer import build_board
+from cr_bot.features.channels import DYNAMIC_CHANNELS, GLOBAL_SCALAR_FEATURES, STATIC_CHANNELS
+from cr_bot.features.global_features import build_global_vector
+
+from .actions import PlayCardAction, SimAction, UseAbilityAction, WaitAction
+from .geometry import (
+    GRID_COLS,
+    GRID_ROWS,
+    building_footprint_fits,
+    is_basic_deploy_cell,
+    is_spell_cell,
+    mirror_cell,
+    mirror_position,
+    position_to_cell,
+    validate_cell,
+)
+from .ruleset import CardDefinition, Ruleset, normalize_identifier
+from .state import BattleState, EntityState
+
+
+VISION_V1_EXACT: Final = "vision_v1_exact"
+OBSERVATION_SCHEMA_VERSION: Final = "vision-v1-exact-1"
+BOARD_SHAPE: Final = (21, GRID_ROWS, GRID_COLS)
+GLOBAL_VECTOR_SHAPE: Final = (768,)
+ACTION_MASK_SHAPE: Final = (4, GRID_ROWS, GRID_COLS)
+
+# These IDs are part of the existing policy checkpoint contract.  They must
+# not be regenerated from the versioned Level-11 ruleset: changing a policy ID
+# would silently reinterpret historical feature vectors.
+BASE_POLICY_CARD_IDS: Final[dict[str, int]] = {
+    "fireball": 28,
+    "hog-rider": 49,
+    "ice-golem": 51,
+    "ice-spirit": 52,
+    "log": 59,
+    "musketeer": 72,
+    "skeletons": 96,
+    "cannon": 114,
+}
+
+
+def observation_contract_manifest() -> dict[str, object]:
+    """Describe every imported policy feature convention that affects bytes."""
+
+    card_features = {
+        card_id: {
+            key: CARD_METADATA[card_id].get(key)
+            for key in ("id", "placement_class", "damage", "hit_speed", "is_air")
+        }
+        for card_id in sorted(BASE_POLICY_CARD_IDS)
+    }
+    return {
+        "schema_version": OBSERVATION_SCHEMA_VERSION,
+        "board_shape": list(BOARD_SHAPE),
+        "global_vector_shape": list(GLOBAL_VECTOR_SHAPE),
+        "action_mask_shape": list(ACTION_MASK_SHAPE),
+        "static_channels": list(STATIC_CHANNELS),
+        "dynamic_channels": list(DYNAMIC_CHANNELS),
+        "global_scalar_features": list(GLOBAL_SCALAR_FEATURES),
+        "base_policy_card_ids": dict(sorted(BASE_POLICY_CARD_IDS.items())),
+        "base_card_features": card_features,
+        "normalizers": {
+            "max_elixir": MAX_ELIXIR,
+            "total_match_seconds": TOTAL_MATCH_SECONDS,
+            "princess_tower_hp": PRINCESS_TOWER_HP,
+            "king_tower_hp": FEATURE_MAX_KING_TOWER_HP,
+        },
+        "action_grid": {
+            "columns": ACTION_GRID.cols,
+            "rows": ACTION_GRID.rows,
+            "x0": ACTION_GRID.x0,
+            "y0": ACTION_GRID.y0,
+            "x1": ACTION_GRID.x1,
+            "y1": ACTION_GRID.y1,
+            "cell_order": "column,row",
+            "tensor_order": "row,column",
+        },
+        "ground_mask_sha256": hashlib.sha256(map_ground.tobytes(order="C")).hexdigest(),
+        "viewer_one_transform": "rotate-180",
+    }
+
+
+def calculate_observation_contract_hash() -> str:
+    encoded = json.dumps(
+        observation_contract_manifest(),
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+
+PINNED_OBSERVATION_CONTRACT_HASH: Final = (
+    "sha256:1f6bba6a4c67894aed50e869e95a3d37a6025f6e1dfd0051610505ebabe97e1b"
+)
+
+
+def verify_observation_contract() -> None:
+    actual = calculate_observation_contract_hash()
+    if actual != PINNED_OBSERVATION_CONTRACT_HASH:
+        raise RuntimeError(
+            "vision policy feature contract changed; review compatibility and bump "
+            f"the observation schema/hash (pinned={PINNED_OBSERVATION_CONTRACT_HASH}, actual={actual})"
+        )
+
+
+verify_observation_contract()
+
+_POLICY_ALIASES: Final = {
+    "the-log": "log",
+}
+# The legacy policy vocabulary contains only the eight playable cards in the
+# fixed player deck.  The simulator nevertheless exposes every opponent card
+# and every internal child form through the same board/feature boundary.  A
+# child form is therefore rendered with its nearest public-card feature
+# profile; its authoritative card_id, HP, targeting, and split/death behavior
+# remain unchanged in BattleState.  This avoids leaking privileged simulator
+# fields while preventing a Golemite/Lava Pup from crashing the legacy board
+# rasterizer (which obtains air/threat metadata from CARD_METADATA).
+_ENTITY_FEATURE_ALIASES: Final = {
+    "bush-goblin": "goblins",
+    "barbarian": "barbarians",
+    "goblin": "goblins",
+    "goblin-brawler": "goblins",
+    "phoenix-egg": "phoenix",
+    "golemite": "golem",
+    "elixir-golemite": "elixir-golem",
+    "elixir-blob": "elixir-golem",
+    "lava-pup": "lava-hound",
+    "spear-goblin": "spear-goblins",
+    "cannon-cart-building": "cannon-cart",
+}
+_PUBLIC_CARD_PLAY_EVENT: Final = "card_played"
+_FINISHED_PHASES: Final = frozenset(
+    {"complete", "completed", "ended", "finished", "game-over", "match-over", "terminal"}
+)
+_NON_PLAYING_PHASES: Final = _FINISHED_PHASES | frozenset(
+    {"", "countdown", "not-started", "pre-match", "pregame", "tiebreak"}
+)
+_ARENA_PX: Final = (0.0, 0.0, 1.0, 1.0)
+
+LegalityCallback = Callable[[BattleState, PlayCardAction], bool]
+
+
+class UnsupportedPolicyFormError(ValueError):
+    """Raised when ``vision_v1_exact`` cannot represent a visible card form."""
+
+
+@dataclass(frozen=True, slots=True)
+class PolicyObservationV1:
+    """The exact array boundary consumed by the current vision policy."""
+
+    board: np.ndarray
+    global_vector: np.ndarray
+    spatial_masks: np.ndarray
+    legal_play: np.ndarray
+    legal_wait: bool
+    compatibility_mode: str = VISION_V1_EXACT
+    contract_hash: str = PINNED_OBSERVATION_CONTRACT_HASH
+
+    def __post_init__(self) -> None:
+        _validate_array("board", self.board, BOARD_SHAPE, np.dtype(np.float32))
+        _validate_array(
+            "global_vector",
+            self.global_vector,
+            GLOBAL_VECTOR_SHAPE,
+            np.dtype(np.float32),
+        )
+        _validate_array("spatial_masks", self.spatial_masks, ACTION_MASK_SHAPE, np.dtype(bool))
+        _validate_array("legal_play", self.legal_play, ACTION_MASK_SHAPE, np.dtype(bool))
+        if not isinstance(self.legal_wait, (bool, np.bool_)):
+            raise TypeError("legal_wait must be boolean")
+        if self.compatibility_mode != VISION_V1_EXACT:
+            raise ValueError(f"unsupported compatibility mode: {self.compatibility_mode!r}")
+        if self.contract_hash != PINNED_OBSERVATION_CONTRACT_HASH:
+            raise ValueError("observation contract hash does not match vision_v1_exact")
+
+    def as_dict(self, *, copy: bool = False) -> dict[str, np.ndarray | bool | str]:
+        """Return a model-friendly mapping, optionally copying array storage."""
+
+        maybe_copy = (lambda value: value.copy()) if copy else (lambda value: value)
+        return {
+            "board": maybe_copy(self.board),
+            "global_vector": maybe_copy(self.global_vector),
+            "spatial_masks": maybe_copy(self.spatial_masks),
+            "legal_play": maybe_copy(self.legal_play),
+            "legal_wait": bool(self.legal_wait),
+            "compatibility_mode": self.compatibility_mode,
+            "contract_hash": self.contract_hash,
+        }
+
+    def exact_policy_inputs(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Return only the three tensors produced by the live vision feature stack."""
+
+        return self.board, self.global_vector, self.spatial_masks
+
+
+@dataclass(slots=True)
+class ObservationMemory:
+    """Public, viewer-local temporal state used by the observation adapter.
+
+    The opponent estimate starts from the public match rule, regenerates from
+    public match time, and deducts costs only after a public ``card_played``
+    event.  It never reads ``BattleState.players[opponent].elixir_milli``.
+    A :class:`Fraction` keeps sparse and dense observation schedules exactly
+    equivalent without introducing floating-point state into the simulator.
+    """
+
+    viewer: int = 0
+    seen_opponent_cards: list[str] = field(default_factory=list)
+    last_elapsed_us: int = 0
+    last_event_sequence: int = -1
+    ruleset_hash: str | None = None
+    _opponent_elixir_milli: Fraction = field(default_factory=Fraction, repr=False)
+    _initialized: bool = field(default=False, repr=False)
+    _battle_seed: int | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        _validate_viewer(self.viewer)
+
+    @property
+    def opponent_elixir_milli_est(self) -> int:
+        """Floor of the deterministic public estimate in milli-elixir."""
+
+        return self._opponent_elixir_milli.numerator // self._opponent_elixir_milli.denominator
+
+    @property
+    def opponent_elixir_est(self) -> float:
+        return float(self._opponent_elixir_milli / 1_000)
+
+    def reset(self, ruleset: Ruleset, *, battle_seed: int | None = None) -> None:
+        self.seen_opponent_cards.clear()
+        self.last_elapsed_us = 0
+        self.last_event_sequence = -1
+        self.ruleset_hash = ruleset.content_hash
+        self._opponent_elixir_milli = Fraction(ruleset.match.initial_elixir_milli, 1)
+        self._initialized = True
+        self._battle_seed = battle_seed
+
+    def update(self, state: BattleState, ruleset: Ruleset) -> None:
+        """Consume previously unseen public events through ``state.elapsed_us``."""
+
+        _validate_state_ruleset(state, ruleset)
+        if state.elapsed_us < 0:
+            raise ValueError("battle elapsed_us cannot be negative")
+        if (
+            not self._initialized
+            or self.ruleset_hash != ruleset.content_hash
+            or self._battle_seed != state.seed
+            or state.elapsed_us < self.last_elapsed_us
+            or state.event_sequence < self.last_event_sequence
+        ):
+            self.reset(ruleset, battle_seed=state.seed)
+
+        new_events = sorted(
+            (event for event in state.events if event.sequence > self.last_event_sequence),
+            key=lambda event: (event.tick, event.sequence),
+        )
+        for event in new_events:
+            # Engine events are emitted during tick ``t`` after that tick's
+            # resource update. Their public boundary is therefore the end of
+            # the tick, not its beginning. This matters at the elixir cap:
+            # regeneration is discarded before a play rather than banked
+            # after the cost deduction.
+            event_us = max(
+                0,
+                min(state.elapsed_us, (int(event.tick) + 1) * ruleset.tick_us),
+            )
+            # A late-arriving event remains usable without pretending we can
+            # reconstruct past cap ordering.  Deduct it at the current public
+            # estimate instead.
+            event_us = max(self.last_elapsed_us, event_us)
+            self._advance_elixir(event_us, ruleset)
+            if event.kind == _PUBLIC_CARD_PLAY_EVENT:
+                self._consume_card_play(event, ruleset)
+            self.last_event_sequence = max(self.last_event_sequence, event.sequence)
+
+        self._advance_elixir(state.elapsed_us, ruleset)
+
+    def _advance_elixir(self, target_elapsed_us: int, ruleset: Ruleset) -> None:
+        if target_elapsed_us <= self.last_elapsed_us:
+            return
+        cursor = self.last_elapsed_us
+        for segment_end, interval_us in _elixir_segments(ruleset):
+            if cursor >= target_elapsed_us:
+                break
+            if cursor >= segment_end:
+                continue
+            end = min(target_elapsed_us, segment_end)
+            self._opponent_elixir_milli += Fraction((end - cursor) * 1_000, interval_us)
+            self._opponent_elixir_milli = min(
+                self._opponent_elixir_milli,
+                Fraction(ruleset.match.max_elixir_milli, 1),
+            )
+            cursor = end
+        self.last_elapsed_us = target_elapsed_us
+
+    def _consume_card_play(self, event: object, ruleset: Ruleset) -> None:
+        # SimEvent.get is intentionally used rather than looking at PlayerState.
+        player_raw = event.get("player", event.get("owner"))  # type: ignore[attr-defined]
+        if not isinstance(player_raw, int) or isinstance(player_raw, bool):
+            return
+        if player_raw != 1 - self.viewer:
+            return
+        card_raw = event.get("card_id", event.get("card"))  # type: ignore[attr-defined]
+        if not isinstance(card_raw, str):
+            return
+        card = _lookup_card_definition(ruleset, card_raw)
+        if card is None:
+            # An unrepresented form must never be charged at a base-card cost.
+            return
+        policy_name = policy_card_name(card_raw)
+        if policy_name is not None:
+            observed_name = policy_name
+        else:
+            # V1 keeps the *player* hand/action vocabulary fixed, but its
+            # opponent interaction set deliberately contains every eligible
+            # base card.  Those cards must still be charged and remembered at
+            # the public boundary; otherwise playing Furnace/Baby Dragon (or
+            # any other non-deck opponent card) would crash observation and
+            # make the all-opponent-card training surface unusable.  Excluded
+            # Hero/Evolution/ability forms remain fail-closed.
+            canonical = getattr(card, "card_id", None)
+            interaction_set = getattr(ruleset, "interaction_set", None)
+            if not isinstance(canonical, str) or not isinstance(interaction_set, tuple):
+                raise UnsupportedPolicyFormError(
+                    f"vision_v1_exact cannot represent public opponent card form {card_raw!r}"
+                )
+            if canonical not in interaction_set:
+                raise UnsupportedPolicyFormError(
+                    f"vision_v1_exact cannot represent public opponent card form {card_raw!r}"
+                )
+            observed_name = canonical
+        if observed_name not in self.seen_opponent_cards:
+            self.seen_opponent_cards.append(observed_name)
+        self._opponent_elixir_milli = max(
+            Fraction(0, 1),
+            self._opponent_elixir_milli - card.elixir_milli,
+        )
+
+
+def build_policy_observation(
+    state: BattleState,
+    ruleset: Ruleset,
+    *,
+    viewer: int = 0,
+    memory: ObservationMemory | None = None,
+    compatibility_mode: str = VISION_V1_EXACT,
+    legality_callback: LegalityCallback | None = None,
+) -> PolicyObservationV1:
+    """Project an authoritative state into the current policy boundary."""
+
+    _validate_viewer(viewer)
+    _validate_state_ruleset(state, ruleset)
+    if compatibility_mode != VISION_V1_EXACT:
+        raise ValueError(f"unsupported compatibility mode: {compatibility_mode!r}")
+    if memory is None:
+        memory = ObservationMemory(viewer=viewer)
+    elif memory.viewer != viewer:
+        raise ValueError(f"observation memory belongs to viewer {memory.viewer}, not {viewer}")
+    memory.update(state, ruleset)
+
+    observed = battle_state_to_observed_game_state(state, ruleset, viewer=viewer, memory=memory)
+    board = np.ascontiguousarray(build_board(observed, _ARENA_PX), dtype=np.float32)
+    global_vector = np.ascontiguousarray(build_global_vector(observed), dtype=np.float32)
+    spatial_masks = _build_spatial_masks(observed)
+    legal_play = _build_legal_play(
+        state,
+        ruleset,
+        observed,
+        spatial_masks,
+        viewer=viewer,
+        legality_callback=legality_callback,
+    )
+
+    # Feature arrays are immutable snapshots.  This prevents an agent or a
+    # vectorized environment from corrupting a replayable BattleState view.
+    for array in (board, global_vector, spatial_masks, legal_play):
+        array.setflags(write=False)
+    return PolicyObservationV1(
+        board=board,
+        global_vector=global_vector,
+        spatial_masks=spatial_masks,
+        legal_play=legal_play,
+        legal_wait=not state.terminal and _phase_is_active(state.phase),
+        compatibility_mode=compatibility_mode,
+    )
+
+
+def battle_state_to_observed_game_state(
+    state: BattleState,
+    ruleset: Ruleset,
+    *,
+    viewer: int,
+    memory: ObservationMemory,
+) -> GameState:
+    """Build the lossy DTO used by the existing vision feature builders."""
+
+    _validate_viewer(viewer)
+    _validate_state_ruleset(state, ruleset)
+    if memory.viewer != viewer:
+        raise ValueError(f"observation memory belongs to viewer {memory.viewer}, not {viewer}")
+    if len(state.players) != 2:
+        raise ValueError("vision_v1_exact requires exactly two players")
+
+    own = state.players[viewer]
+    own_hand = [_require_policy_feature_name(card, context="viewer hand") for card in own.hand[:4]]
+    own_hand.extend([""] * (4 - len(own_hand)))
+    next_card = (
+        _require_policy_feature_name(own.draw_pile[0], context="viewer next card")
+        if own.draw_pile
+        else ""
+    )
+
+    tower_hp, tower_alive = _viewer_tower_state(state, viewer)
+    princess_towers = PrincessTowerState(
+        own_left_alive=tower_alive[0]["left"],
+        own_right_alive=tower_alive[0]["right"],
+        enemy_left_alive=tower_alive[1]["left"],
+        enemy_right_alive=tower_alive[1]["right"],
+    )
+
+    regulation_us = ruleset.match.regulation_us
+    total_duration_us = regulation_us + ruleset.match.overtime_us
+    total_remaining_s = max(0.0, (total_duration_us - state.elapsed_us) / 1_000_000.0)
+    overtime = state.elapsed_us >= regulation_us or "overtime" in state.phase.casefold()
+    phase_end_us = total_duration_us if overtime else regulation_us
+    time_left_s = max(0.0, (phase_end_us - state.elapsed_us) / 1_000_000.0)
+
+    # ``CARD_COUNT`` in the existing feature stack already has stable IDs for
+    # the complete top-level card catalog.  Keep the eight player-deck IDs
+    # pinned for action/hand encoding, while allowing the opponent seen-card
+    # channel to carry every eligible base card without changing tensor shape.
+    seen_ids = sorted(
+        {
+            int(CARD_METADATA[name]["id"])
+            for name in memory.seen_opponent_cards
+            if name in CARD_METADATA and isinstance(CARD_METADATA[name].get("id"), int)
+        }
+    )
+    own_units: list[Match] = []
+    enemy_units: list[Match] = []
+    for uid in sorted(state.entities):
+        entity = state.entities[uid]
+        if not entity.alive or entity.hp <= 0 or _is_tower(entity) or entity.kind == "spell":
+            continue
+        match = _entity_to_match(entity, viewer)
+        if match is None:
+            raise UnsupportedPolicyFormError(
+                f"vision_v1_exact cannot represent visible entity form {entity.card_id!r}"
+            )
+        (own_units if entity.owner == viewer else enemy_units).append(match)
+
+    return GameState(
+        hud=HudState(
+            time_left_s=time_left_s,
+            overtime=overtime,
+            elixir_self=own.elixir_milli / 1_000.0,
+            hand_cards=own_hand,
+            next_card=next_card,
+            tower_hp_self=[
+                tower_hp[0]["left"],
+                tower_hp[0]["king"],
+                tower_hp[0]["right"],
+            ],
+            tower_hp_enemy=[
+                tower_hp[1]["left"],
+                tower_hp[1]["king"],
+                tower_hp[1]["right"],
+            ],
+            princess_towers=princess_towers,
+        ),
+        total_remaining_s=total_remaining_s,
+        own_units=own_units,
+        enemy_units=enemy_units,
+        seen_enemy_cards=seen_ids,
+        elixir_enemy_est=memory.opponent_elixir_est,
+        own_king_active=own.king_active,
+        enemy_king_active=state.players[1 - viewer].king_active,
+        started=_phase_is_active(state.phase),
+    )
+
+
+def policy_card_name(card_id_or_alias: str | None) -> str | None:
+    """Resolve only forms represented by the existing policy vocabulary."""
+
+    if not isinstance(card_id_or_alias, str) or not card_id_or_alias.strip():
+        return None
+    normalized = normalize_identifier(card_id_or_alias)
+    normalized = _POLICY_ALIASES.get(normalized, normalized)
+    return normalized if normalized in BASE_POLICY_CARD_IDS else None
+
+
+def policy_card_id(card_id_or_alias: str | None) -> int | None:
+    name = policy_card_name(card_id_or_alias)
+    return None if name is None else BASE_POLICY_CARD_IDS[name]
+
+
+def decode_policy_action(action: PolicyAction, *, viewer: int = 0) -> SimAction:
+    """Decode a legacy policy action into authoritative world coordinates."""
+
+    _validate_viewer(viewer)
+    kind = action.kind.strip().casefold().replace("_", "-")
+    if kind in {"wait", "noop", "no-op"}:
+        if action.card_idx is not None or action.cell is not None:
+            raise ValueError("wait action must not carry a card slot or cell")
+        return WaitAction(viewer)
+    if kind != "play":
+        raise ValueError(f"unsupported policy action kind: {action.kind!r}")
+    if action.card_idx is None or not 0 <= action.card_idx < 4:
+        raise ValueError("play action card_idx must be a hand slot in [0, 3]")
+    if action.cell is None:
+        raise ValueError("play action requires a (column, row) cell")
+    validate_cell(action.cell)
+    world_cell = mirror_cell(action.cell) if viewer == 1 else action.cell
+    return PlayCardAction(viewer, action.card_idx, world_cell)
+
+
+def encode_sim_action(action: SimAction, *, viewer: int = 0) -> PolicyAction:
+    """Encode an authoritative base-policy action into viewer coordinates."""
+
+    _validate_viewer(viewer)
+    if action.player != viewer:
+        raise ValueError(f"cannot encode player {action.player} action for viewer {viewer}")
+    if isinstance(action, WaitAction):
+        return PolicyAction(kind="Wait")
+    if isinstance(action, PlayCardAction):
+        if not 0 <= action.card_slot < 4:
+            raise ValueError("play action card_slot must be in [0, 3]")
+        validate_cell(action.cell)
+        relative_cell = mirror_cell(action.cell) if viewer == 1 else action.cell
+        return PolicyAction(kind="Play", card_idx=action.card_slot, cell=relative_cell)
+    if isinstance(action, UseAbilityAction):
+        raise ValueError("vision policy Action has no lossless ability representation")
+    raise TypeError(f"unsupported simulator action: {type(action).__name__}")
+
+
+# Readable aliases for callers that treat the vision policy as an adapter.
+domain_action_to_sim_action = decode_policy_action
+sim_action_to_domain_action = encode_sim_action
+
+
+def _validate_array(name: str, value: np.ndarray, shape: tuple[int, ...], dtype: np.dtype) -> None:
+    if not isinstance(value, np.ndarray):
+        raise TypeError(f"{name} must be a numpy array")
+    if value.shape != shape:
+        raise ValueError(f"{name} must have shape {shape}, got {value.shape}")
+    if value.dtype != dtype:
+        raise TypeError(f"{name} must have dtype {dtype}, got {value.dtype}")
+
+
+def _validate_viewer(viewer: int) -> None:
+    if viewer not in (0, 1):
+        raise ValueError(f"viewer must be 0 or 1, got {viewer!r}")
+
+
+def _validate_state_ruleset(state: BattleState, ruleset: Ruleset) -> None:
+    if state.ruleset_id != ruleset.ruleset_id:
+        raise ValueError(
+            f"state ruleset ID {state.ruleset_id!r} does not match {ruleset.ruleset_id!r}"
+        )
+    if state.ruleset_hash != ruleset.content_hash:
+        raise ValueError("state ruleset hash does not match the supplied immutable ruleset")
+
+
+def _require_policy_feature_name(card_id_or_alias: str | None, *, context: str) -> str:
+    name = policy_card_name(card_id_or_alias)
+    if name is None:
+        raise UnsupportedPolicyFormError(
+            f"vision_v1_exact cannot represent {context} form {card_id_or_alias!r}"
+        )
+    return name
+
+
+def _phase_is_active(phase: str) -> bool:
+    normalized = normalize_identifier(phase)
+    return normalized not in _NON_PLAYING_PHASES
+
+
+def _elixir_segments(ruleset: Ruleset) -> tuple[tuple[int, int], ...]:
+    """Return public regeneration-rate segments through maximum overtime."""
+
+    regulation = ruleset.match.regulation_us
+    overtime = ruleset.match.overtime_us
+    one_minute = 60_000_000
+    regulation_double_start = max(0, regulation - one_minute)
+    overtime_end = regulation + overtime
+    overtime_triple_start = max(regulation, overtime_end - one_minute)
+    return (
+        (regulation_double_start, ruleset.match.normal_elixir_interval_us),
+        (overtime_triple_start, ruleset.match.double_elixir_interval_us),
+        (overtime_end, ruleset.match.triple_elixir_interval_us),
+        (2**63 - 1, ruleset.match.triple_elixir_interval_us),
+    )
+
+
+def _lookup_card_definition(ruleset: Ruleset, card_name: str) -> CardDefinition | None:
+    try:
+        return ruleset.card(card_name)
+    except (KeyError, TypeError, ValueError):
+        policy_name = policy_card_name(card_name)
+        if policy_name is None:
+            return None
+        try:
+            return ruleset.card(policy_name)
+        except (KeyError, TypeError, ValueError):
+            return None
+
+
+def _viewer_position(entity: EntityState, viewer: int) -> tuple[int, int]:
+    if viewer == 0:
+        return entity.x_mtile, entity.y_mtile
+    return mirror_position(entity.x_mtile, entity.y_mtile)
+
+
+def _is_tower(entity: EntityState) -> bool:
+    return entity.kind == "tower" or "tower" in entity.card_id
+
+
+def _entity_to_match(entity: EntityState, viewer: int) -> Match | None:
+    normalized = normalize_identifier(entity.card_id)
+    card_name = normalized if normalized in CARD_METADATA else _ENTITY_FEATURE_ALIASES.get(normalized)
+    if card_name is None:
+        return None
+    x_mtile, y_mtile = _viewer_position(entity, viewer)
+    cell = position_to_cell(x_mtile, y_mtile)
+    if cell is None:
+        return None
+    center_x, center_y = ACTION_GRID.cell_to_norm_center(*cell)
+    hp_fraction = 0.0 if entity.max_hp <= 0 else min(1.0, max(0.0, entity.hp / entity.max_hp))
+    detection = Detection(
+        track_id=entity.uid,
+        class_name=card_name,
+        team="ally" if entity.owner == viewer else "enemy",
+        confidence=1.0,
+        x1=center_x,
+        y1=center_y,
+        x2=center_x,
+        y2=center_y,
+        center_x=center_x,
+        center_y=center_y,
+        estimated_hp=hp_fraction,
+    )
+    return Match(troop=detection, bar=None)
+
+
+def _viewer_tower_state(
+    state: BattleState,
+    viewer: int,
+) -> tuple[list[dict[str, int]], list[dict[str, bool]]]:
+    hp = [
+        {"left": 0, "king": 0, "right": 0},
+        {"left": 0, "king": 0, "right": 0},
+    ]
+    alive = [
+        {"left": False, "king": False, "right": False},
+        {"left": False, "king": False, "right": False},
+    ]
+    for uid in sorted(state.entities):
+        entity = state.entities[uid]
+        if not _is_tower(entity):
+            continue
+        relative_team = 0 if entity.owner == viewer else 1
+        x_mtile, _ = _viewer_position(entity, viewer)
+        if entity.role == "king" or "king" in entity.card_id:
+            role = "king"
+        else:
+            role = "left" if x_mtile < GRID_COLS * 1_000 // 2 else "right"
+        hp[relative_team][role] = max(0, entity.hp)
+        alive[relative_team][role] = bool(entity.alive and entity.hp > 0)
+    return hp, alive
+
+
+def _build_spatial_masks(observed: GameState) -> np.ndarray:
+    masks = np.zeros(ACTION_MASK_SHAPE, dtype=bool)
+    for slot, card_name in enumerate(observed.hud.hand_cards[:4]):
+        if policy_card_name(card_name) is None:
+            continue
+        masks[slot] = get_action_mask(card_name, observed)
+    return np.ascontiguousarray(masks, dtype=bool)
+
+
+def _build_legal_play(
+    state: BattleState,
+    ruleset: Ruleset,
+    observed: GameState,
+    spatial_masks: np.ndarray,
+    *,
+    viewer: int,
+    legality_callback: LegalityCallback | None,
+) -> np.ndarray:
+    legal = np.zeros(ACTION_MASK_SHAPE, dtype=bool)
+    if state.terminal or not _phase_is_active(state.phase):
+        return legal
+
+    elixir_milli = state.players[viewer].elixir_milli
+    for slot, raw_card_name in enumerate(state.players[viewer].hand[:4]):
+        policy_name = policy_card_name(raw_card_name)
+        if policy_name is None:
+            continue
+        card = _lookup_card_definition(ruleset, raw_card_name)
+        if card is None or card.elixir_milli > elixir_milli:
+            continue
+        for row in range(GRID_ROWS):
+            for col in range(GRID_COLS):
+                relative_cell = (col, row)
+                world_cell = mirror_cell(relative_cell) if viewer == 1 else relative_cell
+                action = PlayCardAction(viewer, slot, world_cell)
+                allowed = (
+                    legality_callback(state, action)
+                    if legality_callback is not None
+                    else _conservative_cell_is_legal(card, viewer, world_cell)
+                )
+                if allowed:
+                    legal[slot, row, col] = True
+    return np.ascontiguousarray(legal, dtype=bool)
+
+
+def _conservative_cell_is_legal(
+    card: CardDefinition,
+    player: int,
+    world_cell: tuple[int, int],
+) -> bool:
+    mechanics = getattr(card, "mechanics", {})
+    placement = mechanics.get("placement_class") if hasattr(mechanics, "get") else None
+    if card.kind == "building":
+        return building_footprint_fits(player, world_cell)
+    if card.kind == "spell":
+        if placement == "spell_anywhere" or (placement is None and card.card_id != "log"):
+            return is_spell_cell(world_cell)
+        _, row = world_cell
+        return is_spell_cell(world_cell) and (row >= 17 if player == 0 else row <= 14)
+    return is_basic_deploy_cell(player, world_cell)

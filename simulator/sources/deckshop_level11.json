@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "source_id": "deckshop-battle-healer-2026-08-14",
+  "source_url": "https://www.deckshop.pro/card/detail/battle-healer",
+  "retrieved_at": "2026-08-14",
+  "confidence_tier": "B",
+  "level": 11,
+  "cards": {
+    "battle-healer": {
+      "hitpoints": 1920,
+      "damage": 268,
+      "attack_interval_us": 2000000,
+      "move_speed": "medium"
+    }
+  },
+  "note": "Independent Battle Healer Level-11 card-page snapshot. Use as corroboration; official Supercell patch notes remain higher priority."
+}

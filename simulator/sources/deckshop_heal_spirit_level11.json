@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "source_id": "deckshop-heal-spirit-2026-08-16",
+  "source_url": "https://www.deckshop.pro/card/detail/heal-spirit",
+  "retrieved_at": "2026-08-16",
+  "confidence_tier": "B",
+  "level": 11,
+  "cards": {
+    "heal-spirit": {
+      "healing": 532,
+      "radius_tiles": 1.5,
+      "friendly_targets": ["air", "ground"]
+    }
+  },
+  "note": "DeckShop Level-11 page supplies the 532 healing scalar. The 1.5-tile radius and air/ground recipient classes are the simulator's explicit provisional assumptions until held-out video or in-game testing confirms them; official August 2026 Spirit hitpoint and Crown-Tower-connection changes remain higher priority."
+}

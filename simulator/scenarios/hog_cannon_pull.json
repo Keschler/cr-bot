@@ -1,0 +1,69 @@
+{
+  "actions": [
+    {
+      "action": {
+        "card_slot": 0,
+        "cell": [
+          3,
+          23
+        ],
+        "kind": "play",
+        "player": 0
+      },
+      "tick": 0
+    },
+    {
+      "action": {
+        "card_slot": 1,
+        "cell": [
+          3,
+          13
+        ],
+        "kind": "play",
+        "player": 1
+      },
+      "tick": 30
+    }
+  ],
+  "decks": [
+    [
+      "hog-rider",
+      "cannon",
+      "musketeer",
+      "skeletons",
+      "ice-golem",
+      "ice-spirit",
+      "fireball",
+      "log"
+    ],
+    [
+      "hog-rider",
+      "cannon",
+      "musketeer",
+      "skeletons",
+      "ice-golem",
+      "ice-spirit",
+      "fireball",
+      "log"
+    ]
+  ],
+  "engine_version": "reference-0.28.0",
+  "max_ticks": 160,
+  "oracle": {
+    "note": "Synthetic smoke scenario only; it is not real-game ground truth.",
+    "promoted": false
+  },
+  "ruleset_hash": "sha256:fd0b2fd4f667cd65cf5595d9cdaa405444865269aec4eb201289779b3acb14c4",
+  "ruleset_id": "v1",
+  "scenario_id": "hog-cannon-pull-smoke-v1",
+  "schema_version": 1,
+  "seed": 0,
+  "shuffle_decks": false,
+  "split": "synthetic",
+  "tags": [
+    "hog-rider",
+    "cannon",
+    "targeting",
+    "smoke"
+  ]
+}

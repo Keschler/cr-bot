@@ -1,0 +1,1044 @@
+{
+  "schema_version": 1,
+  "ruleset_id": "2026-08-04",
+  "level": 11,
+  "tick_us": 50000,
+  "content_hash": "sha256:0a5316b50d6fec142b1dda0b5444954031d8f7dcbfb58e5cf86320e9e3aa902e",
+  "units": {
+    "time": "microseconds",
+    "position": "milli-tiles",
+    "elixir": "milli-elixir",
+    "health": "integer-hitpoints",
+    "damage": "integer-hitpoints",
+    "multiplier": "permille"
+  },
+  "match": {
+    "initial_elixir_milli": 5000,
+    "max_elixir_milli": 10000,
+    "deck_size": 8,
+    "hand_size": 4,
+    "regulation_us": 180000000,
+    "overtime_us": 120000000,
+    "normal_elixir_interval_us": 2800000,
+    "double_elixir_interval_us": 1400000,
+    "triple_elixir_interval_us": 933333,
+    "tiebreak_enabled": true
+  },
+  "arena": {
+    "width_mtile": 18000,
+    "height_mtile": 32000,
+    "grid_columns": 18,
+    "grid_rows": 32,
+    "river_y_min_mtile": 15000,
+    "river_y_max_mtile": 17000,
+    "bridge_x_ranges_mtile": [
+      [3000, 4000],
+      [14000, 15000]
+    ]
+  },
+  "sources": {
+    "official-august-2026": {
+      "confidence_tier": "A",
+      "kind": "official-patch-note",
+      "url": "https://supercell.com/en/games/clashroyale/blog/news/final-august-balance-changes-826/",
+      "retrieved_at": "2026-08-11",
+      "published_at": "2026-08-04",
+      "sha256": "39b1892a4ee65d7b73f276933628b799ca71336bc9f87cb885277274a016273e",
+      "lineage": "Supercell",
+      "note": "Explicitly states Level-11 scaling, Spirit HP 230 to 215, and no unassisted Crown Tower connection."
+    },
+    "official-june-2026-spell-crown-damage": {
+      "confidence_tier": "A",
+      "kind": "official-patch-note",
+      "url": "https://supercell.com/en/games/clashroyale/blog/release-notes/june-balance-changes-2026/",
+      "retrieved_at": "2026-08-13",
+      "published_at": "2026-06-01",
+      "sha256": "0f354d7d9796fc7f18dfb11dfdbb163fa1e9a5bc3a9376d085b00449527a86ac",
+      "lineage": "Supercell",
+      "note": "Explicit Level-11 blanket spell nerf: Fireball Crown Tower damage 207 to 172 and The Log 41 to 35."
+    },
+    "official-july-2025-ice-spirit": {
+      "confidence_tier": "A",
+      "kind": "official-patch-note",
+      "url": "https://supercell.com/en/games/clashroyale/blog/release-notes/july-balance-changes-2/",
+      "retrieved_at": "2026-08-13",
+      "published_at": "2025-07-07",
+      "sha256": "404348f71faafe2c3c2d9dd991c4d7d21f0063de78638a045d180a64de174a37",
+      "lineage": "Supercell",
+      "note": "Explicitly reduces Ice Spirit freeze duration from 1.2 seconds to 1.1 seconds."
+    },
+    "official-april-2026-cannon": {
+      "confidence_tier": "A",
+      "kind": "official-patch-note",
+      "url": "https://supercell.com/en/games/clashroyale/blog/release-notes/april26-balance-changes/",
+      "retrieved_at": "2026-08-13",
+      "published_at": "2026-04-07",
+      "sha256": "16530f9a7dde961590cfe5a7badab4ecc768d0d472b5bf36d96d18909bf9b6c9",
+      "lineage": "Supercell",
+      "note": "Explicit Level-11 Cannon damage reduction from 212 to 202, live April 6."
+    },
+    "deckmelon-hog-2026-08-11": {
+      "confidence_tier": "D",
+      "kind": "third-party-card-page",
+      "url": "https://deckmelon.com/cards/hog-rider",
+      "retrieved_at": "2026-08-11",
+      "published_at": null,
+      "sha256": "573fcd675c447e8c7f76ac55f02f0eb1f335e7c06b9c11f6ee4d0379c3ba6db1",
+      "lineage": "DeckMelon",
+      "note": "Current Level-11 display values; not official truth."
+    },
+    "deckmelon-cannon-2026-08-11": {
+      "confidence_tier": "D",
+      "kind": "third-party-card-page",
+      "url": "https://deckmelon.com/cards/cannon",
+      "retrieved_at": "2026-08-11",
+      "published_at": null,
+      "sha256": "22c1b76b5781150ca0a3de371a35670831559e394c2641ee9291ce3ad9b55c0b",
+      "lineage": "DeckMelon",
+      "note": "Current Level-11 display values; not official truth."
+    },
+    "deckmelon-musketeer-2026-08-11": {
+      "confidence_tier": "D",
+      "kind": "third-party-card-page",
+      "url": "https://deckmelon.com/cards/musketeer",
+      "retrieved_at": "2026-08-11",
+      "published_at": null,
+      "sha256": "97e9770e87b43434866f41c09e29d198e1ec899c33b09f289df55d49fc8a7a36",
+      "lineage": "DeckMelon",
+      "note": "Current Level-11 display values; not official truth."
+    },
+    "deckmelon-skeletons-2026-08-11": {
+      "confidence_tier": "D",
+      "kind": "third-party-card-page",
+      "url": "https://deckmelon.com/cards/skeletons",
+      "retrieved_at": "2026-08-11",
+      "published_at": null,
+      "sha256": "eeb3710b5f1f84d28116c22f08302a346d2b3a08fa883e9989d88195b2bb2bdb",
+      "lineage": "DeckMelon",
+      "note": "Current Level-11 display values; not official truth."
+    },
+    "deckmelon-ice-golem-2026-08-11": {
+      "confidence_tier": "D",
+      "kind": "third-party-card-page",
+      "url": "https://deckmelon.com/cards/ice-golem",
+      "retrieved_at": "2026-08-11",
+      "published_at": null,
+      "sha256": "3acd3a6e6c7dcd086fa60a5d7c05acdc386519d57bce88db8d0d4c2ae866f5b2",
+      "lineage": "DeckMelon",
+      "note": "Current Level-11 display values; not official truth."
+    },
+    "deckmelon-ice-spirit-2026-08-11": {
+      "confidence_tier": "D",
+      "kind": "third-party-card-page",
+      "url": "https://deckmelon.com/cards/ice-spirit",
+      "retrieved_at": "2026-08-11",
+      "published_at": null,
+      "sha256": "60a5e1bf578cd16051906d87d3e131ae41e2d273da6cbf74ad4887b8f525b1dd",
+      "lineage": "DeckMelon",
+      "note": "Still reports obsolete 230 HP; official August patch overrides that field."
+    },
+    "deckmelon-fireball-2026-08-11": {
+      "confidence_tier": "D",
+      "kind": "third-party-card-page",
+      "url": "https://deckmelon.com/cards/fireball",
+      "retrieved_at": "2026-08-11",
+      "published_at": null,
+      "sha256": "5e3c041c5bd308227dfae236fc7b6b8636f4c8ddbd09e85bb2bb62995042b321",
+      "lineage": "DeckMelon",
+      "note": "Current Level-11 display values; not official truth."
+    },
+    "deckmelon-log-2026-08-11": {
+      "confidence_tier": "D",
+      "kind": "third-party-card-page",
+      "url": "https://deckmelon.com/cards/the-log",
+      "retrieved_at": "2026-08-11",
+      "published_at": null,
+      "sha256": "9b8b9d4c40fe96889bd32fab68988a35c0fe971fc17f5d013ef461652ab86214",
+      "lineage": "DeckMelon",
+      "note": "Current Level-11 display values; not official truth."
+    },
+    "royaleapi-cards-2026-04-19": {
+      "confidence_tier": "D",
+      "kind": "third-party-structured-snapshot",
+      "url": "https://royaleapi.github.io/cr-api-data/json/cards.json",
+      "retrieved_at": "2026-04-19",
+      "published_at": null,
+      "sha256": "1056c1483fc0dd9288cef99cb97fb30e5a4781de05a01bfa42d798ccf7af4199",
+      "lineage": "RoyaleAPI cr-api-data; likely derived from game data and not independent of other game-data mirrors",
+      "note": "Used for stable external IDs, kinds, costs, and names; predates this ruleset."
+    },
+    "royaleapi-characters-2026-04-19": {
+      "confidence_tier": "D",
+      "kind": "third-party-structured-snapshot",
+      "url": "https://royaleapi.github.io/cr-api-data/json/cards_stats_characters.json",
+      "retrieved_at": "2026-04-19",
+      "published_at": null,
+      "sha256": "5112c354420d57afe8c3fc9f51ae9c0d745b5f22a8b59a03777904c775944d4c",
+      "lineage": "RoyaleAPI cr-api-data",
+      "note": "Used for low-level ranges, radii, delays, speeds, and status mechanics; predates this ruleset."
+    },
+    "royaleapi-buildings-2026-04-19": {
+      "confidence_tier": "D",
+      "kind": "third-party-structured-snapshot",
+      "url": "https://royaleapi.github.io/cr-api-data/json/cards_stats_building.json",
+      "retrieved_at": "2026-04-19",
+      "published_at": null,
+      "sha256": "0e1dea0c9978f5936434beb78d22f2383a9e5b5f1ac3ff21e1410802fa0ca350",
+      "lineage": "RoyaleAPI cr-api-data",
+      "note": "Used for building and crown-tower mechanics; predates this ruleset."
+    },
+    "royaleapi-projectiles-2026-04-19": {
+      "confidence_tier": "D",
+      "kind": "third-party-structured-snapshot",
+      "url": "https://royaleapi.github.io/cr-api-data/json/cards_stats_projectile.json",
+      "retrieved_at": "2026-04-19",
+      "published_at": null,
+      "sha256": "85f809093d6b30a2bbe0d164faa26011829e26cd2ec92ebddfc22819b1fd6100",
+      "lineage": "RoyaleAPI cr-api-data",
+      "note": "Used for projectile mechanics; predates this ruleset."
+    },
+    "policy-grid-2026-08-11": {
+      "confidence_tier": "E",
+      "kind": "repository-calibration",
+      "url": null,
+      "retrieved_at": "2026-08-11",
+      "published_at": null,
+      "sha256": "41b9a2a0c6d23bc3f8e41edf006738f46956e5a43a18a542f5ab6c28085caec7",
+      "lineage": "src/cr_bot/features/action_space.py",
+      "note": "Policy placement geometry, not independently measured physics geometry."
+    },
+    "simulator-baseline-assumptions": {
+      "confidence_tier": "E",
+      "kind": "engineering-assumption",
+      "url": null,
+      "retrieved_at": "2026-08-11",
+      "published_at": null,
+      "sha256": null,
+      "lineage": "simulator implementation",
+      "note": "Executable defaults requiring controlled high-frame-rate calibration; never promoted as game truth."
+    },
+    "local-level11-hog-video-2026-08-12": {
+      "confidence_tier": "C",
+      "kind": "repository-video-observation",
+      "url": null,
+      "retrieved_at": "2026-08-12",
+      "published_at": null,
+      "sha256": "d617a5c5adaa21d80da51149135b39444d34fe5954f0064388e1b01c6612cd4b",
+      "lineage": "dataset_generation/data/video_clips/2.6 Hog Cycle.mp4",
+      "note": "Level badges are 11 and multiple undamaged Tower Princess HP labels visibly read 3052."
+    },
+    "local-level11-hog-movement-2026-08-12": {
+      "confidence_tier": "C",
+      "kind": "repository-video-and-vision-observation",
+      "url": null,
+      "retrieved_at": "2026-08-12",
+      "published_at": null,
+      "sha256": "d617a5c5adaa21d80da51149135b39444d34fe5954f0064388e1b01c6612cd4b",
+      "lineage": "dataset_generation/data/video_clips/2.6 Hog Cycle.mp4; replay cache sha256 84328d14dea95d8ca6c2996524303b88918eeac443ada6a41da78a92b0ca3ca7",
+      "note": "Two automatically isolated Level-11 Hog tracks measure endpoint speeds of 2178 and 2630 milli-tiles/s; their mean is 2404 versus the declared 2400, and both pass the predeclared 240 milli-tile/s tolerance."
+    },
+    "local-level11-spell-log-motion-2026-08-12": {
+      "confidence_tier": "C",
+      "kind": "repository-replay-and-frame-observation",
+      "url": null,
+      "retrieved_at": "2026-08-12",
+      "published_at": null,
+      "sha256": "f984e3001904bcea5ecd0a5e27ab0f41112230612b0a50e0362108bf2dcccde3",
+      "lineage": "data/eval/replay_cache/spell.pkl.gz; ground-truth sha256 c749f3b0937ac0bf1e0c3e43be121c7f046b7e5a4dadf883d1c0f9a0eb70eebd",
+      "note": "Action-anchored monotonic Log segment measures 4301 milli-tiles/s. Direct frame inspection confirms the rolling Log advances through the selected segment."
+    },
+    "local-level11-spell3-log-motion-2026-08-12": {
+      "confidence_tier": "C",
+      "kind": "repository-replay-and-frame-observation",
+      "url": null,
+      "retrieved_at": "2026-08-12",
+      "published_at": null,
+      "sha256": "5f71ca9ebe10a7b66a7fcdcd1ae24a7bd3b95215e2f4f523c7e596e44b93b17d",
+      "lineage": "data/eval/replay_cache/spell3.pkl.gz; ground-truth sha256 c14ce5fbef59c1eac749b75263a6267314c528d61ffa47f97b59b4f2a8d0aa91",
+      "note": "Action-anchored monotonic Log segment measures 3842 milli-tiles/s. Direct frame inspection confirms the rolling Log advances through the selected segment."
+    },
+    "local-level11-spell-fireball-flight-2026-08-13": {
+      "confidence_tier": "C",
+      "kind": "repository-replay-and-frame-observation",
+      "url": null,
+      "retrieved_at": "2026-08-13",
+      "published_at": null,
+      "sha256": "f984e3001904bcea5ecd0a5e27ab0f41112230612b0a50e0362108bf2dcccde3",
+      "lineage": "data/eval/replay_cache/spell.pkl.gz; ground-truth sha256 c749f3b0937ac0bf1e0c3e43be121c7f046b7e5a4dadf883d1c0f9a0eb70eebd",
+      "note": "Two localized enemy Fireballs have directly inspected impact frames. Action-to-impact times are 2002 and 1806 ms versus 2150 and 1700 ms simulated, for 127 ms MAE; target-localization errors are 37 and 911 milli-tiles. This validates only the combined origin/speed/tick approximation."
+    },
+    "local-level11-spell3-tower-hp-2026-08-12": {
+      "confidence_tier": "C",
+      "kind": "repository-video-and-vision-observation",
+      "url": null,
+      "retrieved_at": "2026-08-12",
+      "published_at": null,
+      "sha256": "3db0a7057d57e203ba2f53209d43cfb7f4287720736fb99fb66d883de9864b35",
+      "lineage": "dataset_generation/data/video_clips/spell/spell3.mp4; replay cache sha256 5f71ca9ebe10a7b66a7fcdcd1ae24a7bd3b95215e2f4f523c7e596e44b93b17d",
+      "note": "Native 126 FPS Level-11 capture. Stable OCR plateaus and direct frame inspection show repeated 317 Hog damage, repeated 217 Musketeer damage, and three Hog repeat intervals within 5 ms of 1.6 seconds."
+    },
+    "local-level11-spell2-musketeer-timing-2026-08-12": {
+      "confidence_tier": "C",
+      "kind": "repository-video-and-vision-observation",
+      "url": null,
+      "retrieved_at": "2026-08-12",
+      "published_at": null,
+      "sha256": "4f5405aacf93836d74ba30fbabbb263e5904a1d802b00e8d5215eebeeaf9cce0",
+      "lineage": "dataset_generation/data/video_clips/spell/spell2.mp4; replay cache sha256 61cc106b12cdf6eb604aa4ef8b18a6a08f8ec59bf2215d875527ea2eed45d5c9",
+      "note": "Native 123 FPS Level-11 capture. Stable OCR plateaus and direct frame inspection show four consecutive 217-damage Musketeer tower hits with repeat intervals of 1002, 1004, and 995 ms."
+    },
+    "royaleapi-tower-princess-2024": {
+      "confidence_tier": "D",
+      "kind": "third-party-tower-comparison",
+      "url": "https://royaleapi.com/blog/dagger-duchess-2024-april",
+      "retrieved_at": "2026-08-12",
+      "published_at": "2024-03-30",
+      "sha256": null,
+      "lineage": "RoyaleAPI tower-troop comparison",
+      "note": "Reports tournament-standard Tower Princess HP 3052 and damage 109."
+    },
+    "liquipedia-king-tower-2026-08-12": {
+      "confidence_tier": "D",
+      "kind": "third-party-tower-table",
+      "url": "https://liquipedia.net/clashroyale/King_Tower",
+      "retrieved_at": "2026-08-12",
+      "published_at": null,
+      "sha256": null,
+      "lineage": "Liquipedia Clash Royale wiki",
+      "note": "Level-11 table reports 4824 HP, 109 damage, 1.0 second hit speed, and 7 tile range."
+    }
+  },
+  "cards": {
+    "hog-rider": {
+      "name": "Hog Rider",
+      "aliases": ["hog", "hogrider", "hog_rider"],
+      "kind": "troop",
+      "elixir_milli": 4000,
+      "deploy_time_us": 1000000,
+      "spawn_count": 1,
+      "hitpoints": 1697,
+      "damage": 317,
+      "crown_tower_damage": null,
+      "attack_interval_us": 1600000,
+      "first_hit_delay_us": 1000000,
+      "move_speed_mtile_per_s": 2400,
+      "range_mtile": 800,
+      "sight_range_mtile": 9500,
+      "collision_radius_mtile": 600,
+      "mass": 4,
+      "lifetime_us": null,
+      "targets": ["building", "crown_tower"],
+      "projectile": null,
+      "area_radius_mtile": null,
+      "mechanics": {
+        "placement_class": "own_ground",
+        "movement_layer": "ground",
+        "building_only": true,
+        "spawn_layout_mtile": [[0, 0]],
+        "death": null,
+        "suicide_on_attack": false,
+        "crown_tower_connection": "normal",
+        "projectile_mode": "none",
+        "impact_mode": "melee",
+        "status": null,
+        "knockback_mtile": 0,
+        "piercing": false,
+        "spell_origin": null
+      },
+      "provenance": {
+        "identity": ["royaleapi-cards-2026-04-19"],
+        "elixir_milli": ["royaleapi-cards-2026-04-19", "deckmelon-hog-2026-08-11"],
+        "level_11_stats": ["deckmelon-hog-2026-08-11"],
+        "damage": ["local-level11-spell3-tower-hp-2026-08-12", "deckmelon-hog-2026-08-11"],
+        "attack_interval_us": ["local-level11-spell3-tower-hp-2026-08-12", "royaleapi-characters-2026-04-19", "deckmelon-hog-2026-08-11"],
+        "move_speed_mtile_per_s": ["local-level11-hog-movement-2026-08-12", "royaleapi-characters-2026-04-19"],
+        "mass": ["royaleapi-characters-2026-04-19"],
+        "low_level_mechanics": ["royaleapi-characters-2026-04-19", "deckmelon-hog-2026-08-11"],
+        "speed_conversion": ["royaleapi-characters-2026-04-19", "simulator-baseline-assumptions"]
+      },
+      "uncertainties": [
+        {
+          "field": "move_speed_mtile_per_s",
+          "reason": "Converted from raw speed code 120 using the 20 Hz interpretation. Two isolated Level-11 tracks bracket the declared speed and average 2404 milli-tiles/s, but the calibration sample is still small.",
+          "impact": "medium",
+          "resolution": "Confirm with additional group-independent held-out Hog tracks, including both bridge and unobstructed lane movement."
+        },
+        {
+          "field": "first_hit_delay_us",
+          "reason": "Mapped from reverse-engineered load_time; animation wind-up semantics are not official.",
+          "impact": "high",
+          "resolution": "Measure first-hit timestamps in isolated Hog-versus-building captures."
+        }
+      ]
+    },
+    "cannon": {
+      "name": "Cannon",
+      "aliases": ["cannon-building"],
+      "kind": "building",
+      "elixir_milli": 3000,
+      "deploy_time_us": 1000000,
+      "spawn_count": 1,
+      "hitpoints": 824,
+      "damage": 202,
+      "crown_tower_damage": null,
+      "attack_interval_us": 1000000,
+      "first_hit_delay_us": 0,
+      "move_speed_mtile_per_s": null,
+      "range_mtile": 5500,
+      "sight_range_mtile": 5500,
+      "collision_radius_mtile": 600,
+      "mass": 0,
+      "lifetime_us": 30000000,
+      "targets": ["ground"],
+      "projectile": {
+        "projectile_id": "cannonball",
+        "speed_mtile_per_s": 20000,
+        "radius_mtile": 0,
+        "start_radius_mtile": 1000,
+        "homing": true
+      },
+      "area_radius_mtile": null,
+      "mechanics": {
+        "placement_class": "own_ground",
+        "movement_layer": null,
+        "building_only": false,
+        "spawn_layout_mtile": [[0, 0]],
+        "death": null,
+        "suicide_on_attack": false,
+        "crown_tower_connection": "normal",
+        "projectile_mode": "homing",
+        "impact_mode": "on_target",
+        "status": null,
+        "knockback_mtile": 0,
+        "piercing": false,
+        "spell_origin": null,
+        "lifetime_decay": "linear_hp",
+        "lifetime_start": "placement",
+        "targetable_during_deploy": true
+      },
+      "provenance": {
+        "identity": ["royaleapi-cards-2026-04-19"],
+        "elixir_milli": ["royaleapi-cards-2026-04-19", "deckmelon-cannon-2026-08-11"],
+        "level_11_stats": ["deckmelon-cannon-2026-08-11"],
+        "damage": ["official-april-2026-cannon"],
+        "lifetime_us": ["royaleapi-buildings-2026-04-19", "deckmelon-cannon-2026-08-11"],
+        "mass": ["royaleapi-buildings-2026-04-19"],
+        "projectile.start_radius_mtile": ["royaleapi-buildings-2026-04-19"],
+        "low_level_mechanics": ["royaleapi-buildings-2026-04-19", "royaleapi-projectiles-2026-04-19", "deckmelon-cannon-2026-08-11"],
+        "projectile_speed_conversion": ["royaleapi-projectiles-2026-04-19", "simulator-baseline-assumptions"]
+      },
+      "uncertainties": [
+        {
+          "field": "attack_interval_us",
+          "reason": "The April structured snapshot reports 900 ms while the newer August display source reports 1.0 s. The newer value is retained, but the conflict is unresolved by clean attack footage.",
+          "impact": "high",
+          "resolution": "Measure repeated Cannon muzzle or projectile timestamps in an isolated Level-11 interaction at 60 FPS or higher."
+        },
+        {
+          "field": "projectile.speed_mtile_per_s",
+          "reason": "Converted from raw projectile speed code 1000 using the provisional 20 Hz interpretation.",
+          "impact": "medium",
+          "resolution": "Measure Cannon projectile flight time in controlled captures."
+        },
+        {
+          "field": "first_hit_delay_us",
+          "reason": "The structured snapshot reports zero load time; animation and target-acquisition ordering remain unverified.",
+          "impact": "high",
+          "resolution": "Measure first shot after deployment and after retargeting."
+        },
+        {
+          "field": "lifetime_us.start",
+          "reason": "The structured snapshot independently reports a 30000 ms lifetime and 1000 ms deploy time. Local Level-11 frames show the Cannon and HP bar during deployment, so the engine starts decay at placement; exact sub-frame timing remains unmeasured.",
+          "impact": "medium",
+          "resolution": "Measure placement-to-expiry time for an undamaged Level-11 Cannon in a controlled capture."
+        }
+      ]
+    },
+    "musketeer": {
+      "name": "Musketeer",
+      "aliases": ["base-musketeer", "musk"],
+      "kind": "troop",
+      "elixir_milli": 4000,
+      "deploy_time_us": 1000000,
+      "spawn_count": 1,
+      "hitpoints": 721,
+      "damage": 217,
+      "crown_tower_damage": null,
+      "attack_interval_us": 1000000,
+      "first_hit_delay_us": 200000,
+      "move_speed_mtile_per_s": 1200,
+      "range_mtile": 6000,
+      "sight_range_mtile": 6000,
+      "collision_radius_mtile": 500,
+      "mass": 5,
+      "lifetime_us": null,
+      "targets": ["air", "ground"],
+      "projectile": {
+        "projectile_id": "musketeer-shot",
+        "speed_mtile_per_s": 20000,
+        "radius_mtile": 0,
+        "start_radius_mtile": 450,
+        "homing": true
+      },
+      "area_radius_mtile": null,
+      "mechanics": {
+        "placement_class": "own_ground",
+        "movement_layer": "ground",
+        "building_only": false,
+        "spawn_layout_mtile": [[0, 0]],
+        "death": null,
+        "suicide_on_attack": false,
+        "crown_tower_connection": "normal",
+        "projectile_mode": "homing",
+        "impact_mode": "on_target",
+        "status": null,
+        "knockback_mtile": 0,
+        "piercing": false,
+        "spell_origin": null
+      },
+      "provenance": {
+        "identity": ["royaleapi-cards-2026-04-19"],
+        "elixir_milli": ["royaleapi-cards-2026-04-19", "deckmelon-musketeer-2026-08-11"],
+        "level_11_stats": ["deckmelon-musketeer-2026-08-11"],
+        "damage": ["local-level11-spell3-tower-hp-2026-08-12", "deckmelon-musketeer-2026-08-11"],
+        "attack_interval_us": ["local-level11-spell2-musketeer-timing-2026-08-12", "deckmelon-musketeer-2026-08-11"],
+        "mass": ["royaleapi-characters-2026-04-19"],
+        "projectile.start_radius_mtile": ["royaleapi-characters-2026-04-19"],
+        "low_level_mechanics": ["royaleapi-characters-2026-04-19", "royaleapi-projectiles-2026-04-19", "deckmelon-musketeer-2026-08-11"],
+        "speed_conversion": ["royaleapi-characters-2026-04-19", "royaleapi-projectiles-2026-04-19", "simulator-baseline-assumptions"]
+      },
+      "uncertainties": [
+        {
+          "field": "first_hit_delay_us",
+          "reason": "Mapped from reverse-engineered load_time and not yet calibrated to attack animation ordering.",
+          "impact": "high",
+          "resolution": "Measure first-hit and projectile timestamps in controlled captures."
+        }
+      ]
+    },
+    "skeletons": {
+      "name": "Skeletons",
+      "aliases": ["skeleton", "base-skeletons"],
+      "kind": "troop",
+      "elixir_milli": 1000,
+      "deploy_time_us": 1000000,
+      "spawn_count": 3,
+      "hitpoints": 81,
+      "damage": 81,
+      "crown_tower_damage": null,
+      "attack_interval_us": 1100000,
+      "first_hit_delay_us": 500000,
+      "move_speed_mtile_per_s": 1800,
+      "range_mtile": 500,
+      "sight_range_mtile": 5500,
+      "collision_radius_mtile": 500,
+      "mass": 1,
+      "lifetime_us": null,
+      "targets": ["ground"],
+      "projectile": null,
+      "area_radius_mtile": null,
+      "mechanics": {
+        "placement_class": "own_ground",
+        "movement_layer": "ground",
+        "building_only": false,
+        "spawn_layout_mtile": [[0, 0], [-750, 500], [750, 500]],
+        "death": null,
+        "suicide_on_attack": false,
+        "crown_tower_connection": "normal",
+        "projectile_mode": "none",
+        "impact_mode": "melee",
+        "status": null,
+        "knockback_mtile": 0,
+        "piercing": false,
+        "spell_origin": null
+      },
+      "provenance": {
+        "identity": ["royaleapi-cards-2026-04-19"],
+        "elixir_milli": ["royaleapi-cards-2026-04-19", "deckmelon-skeletons-2026-08-11"],
+        "level_11_stats": ["deckmelon-skeletons-2026-08-11"],
+        "spawn_count": ["royaleapi-cards-2026-04-19", "royaleapi-characters-2026-04-19", "deckmelon-skeletons-2026-08-11"],
+        "spawn_layout_mtile": ["local-level11-hog-video-2026-08-12"],
+        "mass": ["royaleapi-characters-2026-04-19"],
+        "low_level_mechanics": ["royaleapi-characters-2026-04-19", "deckmelon-skeletons-2026-08-11"],
+        "speed_conversion": ["royaleapi-characters-2026-04-19", "simulator-baseline-assumptions"]
+      },
+      "uncertainties": [
+        {
+          "field": "first_hit_delay_us",
+          "reason": "Mapped from an older reverse-engineered load_time while current hit speed differs from that snapshot.",
+          "impact": "medium",
+          "resolution": "Measure first attack timing for all three spawn positions."
+        }
+      ]
+    },
+    "ice-golem": {
+      "name": "Ice Golem",
+      "aliases": ["icegolem", "ice-golemite", "icegolemite", "base-ice-golem"],
+      "kind": "troop",
+      "elixir_milli": 2000,
+      "deploy_time_us": 1000000,
+      "spawn_count": 1,
+      "hitpoints": 1315,
+      "damage": 84,
+      "crown_tower_damage": null,
+      "attack_interval_us": 2500000,
+      "first_hit_delay_us": 1500000,
+      "move_speed_mtile_per_s": 900,
+      "range_mtile": 750,
+      "sight_range_mtile": 7000,
+      "collision_radius_mtile": 700,
+      "mass": 6,
+      "lifetime_us": null,
+      "targets": ["building", "crown_tower"],
+      "projectile": null,
+      "area_radius_mtile": null,
+      "mechanics": {
+        "placement_class": "own_ground",
+        "movement_layer": "ground",
+        "building_only": true,
+        "spawn_layout_mtile": [[0, 0]],
+      "death": {
+        "damage": 84,
+        "radius_mtile": 2000,
+        "targets": ["air", "ground", "building", "crown_tower"],
+        "status": {
+            "kind": "slow",
+            "duration_us": 1500000,
+            "speed_multiplier_milli": 650,
+            "hit_speed_multiplier_milli": 650
+          }
+        },
+        "suicide_on_attack": false,
+        "crown_tower_connection": "normal",
+        "projectile_mode": "none",
+        "impact_mode": "melee",
+        "status": null,
+        "knockback_mtile": 0,
+        "piercing": false,
+        "spell_origin": null
+      },
+      "provenance": {
+        "identity": ["royaleapi-cards-2026-04-19"],
+        "elixir_milli": ["royaleapi-cards-2026-04-19", "deckmelon-ice-golem-2026-08-11"],
+        "level_11_stats": ["deckmelon-ice-golem-2026-08-11"],
+        "mass": ["royaleapi-characters-2026-04-19"],
+        "low_level_mechanics": ["royaleapi-characters-2026-04-19", "deckmelon-ice-golem-2026-08-11"],
+        "death_effect": ["royaleapi-characters-2026-04-19"],
+        "speed_conversion": ["royaleapi-characters-2026-04-19", "simulator-baseline-assumptions"]
+      },
+      "uncertainties": [
+        {
+          "field": "mechanics.death.status",
+          "reason": "Slow duration and multipliers come from an April reverse-engineered snapshot and lack an August independent check.",
+          "impact": "high",
+          "resolution": "Measure movement and attack intervals before and during death slow."
+        },
+        {
+          "field": "first_hit_delay_us",
+          "reason": "Mapped from reverse-engineered load_time rather than official timing documentation.",
+          "impact": "medium",
+          "resolution": "Measure isolated first attacks against a building."
+        }
+      ]
+    },
+    "ice-spirit": {
+      "name": "Ice Spirit",
+      "aliases": ["icespirit", "ice-spirits", "icespirits"],
+      "kind": "troop",
+      "elixir_milli": 1000,
+      "deploy_time_us": 1000000,
+      "spawn_count": 1,
+      "hitpoints": 215,
+      "damage": 110,
+      "crown_tower_damage": null,
+      "attack_interval_us": 300000,
+      "first_hit_delay_us": 100000,
+      "move_speed_mtile_per_s": 2400,
+      "range_mtile": 2500,
+      "sight_range_mtile": 5500,
+      "collision_radius_mtile": 400,
+      "mass": 1,
+      "lifetime_us": null,
+      "targets": ["air", "ground"],
+      "projectile": {
+        "projectile_id": "ice-spirit-jump",
+        "speed_mtile_per_s": 8000,
+        "radius_mtile": 1500,
+        "start_radius_mtile": 0,
+        "homing": true
+      },
+      "area_radius_mtile": 1500,
+      "mechanics": {
+        "placement_class": "own_ground",
+        "movement_layer": "ground",
+        "building_only": false,
+        "spawn_layout_mtile": [[0, 0]],
+        "death": null,
+        "suicide_on_attack": true,
+        "crown_tower_connection": "expected-no-unassisted-connection",
+        "projectile_mode": "homing",
+        "impact_mode": "on_target",
+        "status": {
+          "kind": "freeze",
+          "duration_us": 1100000,
+          "speed_multiplier_milli": 0,
+          "hit_speed_multiplier_milli": 0
+        },
+        "knockback_mtile": 0,
+        "piercing": false,
+        "spell_origin": null
+      },
+      "provenance": {
+        "identity": ["royaleapi-cards-2026-04-19"],
+        "elixir_milli": ["royaleapi-cards-2026-04-19", "deckmelon-ice-spirit-2026-08-11"],
+        "hitpoints": ["official-august-2026"],
+        "damage": ["deckmelon-ice-spirit-2026-08-11", "royaleapi-projectiles-2026-04-19"],
+        "crown_tower_connection": ["official-august-2026"],
+        "freeze_duration_us": ["official-july-2025-ice-spirit"],
+        "mass": ["royaleapi-characters-2026-04-19"],
+        "low_level_mechanics": ["royaleapi-characters-2026-04-19", "royaleapi-projectiles-2026-04-19", "deckmelon-ice-spirit-2026-08-11"],
+        "speed_conversion": ["royaleapi-characters-2026-04-19", "royaleapi-projectiles-2026-04-19", "simulator-baseline-assumptions"]
+      },
+      "uncertainties": [
+        {
+          "field": "mechanics.crown_tower_connection",
+          "reason": "The official note states an expected interaction outcome after the HP nerf, not a special targeting prohibition.",
+          "impact": "high",
+          "resolution": "Treat it as an oracle assertion and verify the outcome emerges from tower timing; do not force a targeting exception."
+        },
+        {
+          "field": "projectile.speed_mtile_per_s",
+          "reason": "Converted from raw jump-projectile speed code 400 using the provisional 20 Hz interpretation.",
+          "impact": "high",
+          "resolution": "Measure jump start and impact timestamps in controlled captures."
+        }
+      ]
+    },
+    "fireball": {
+      "name": "Fireball",
+      "aliases": ["fire-ball"],
+      "kind": "spell",
+      "elixir_milli": 4000,
+      "deploy_time_us": 0,
+      "spawn_count": 0,
+      "hitpoints": null,
+      "damage": 688,
+      "crown_tower_damage": 172,
+      "attack_interval_us": null,
+      "first_hit_delay_us": null,
+      "move_speed_mtile_per_s": null,
+      "range_mtile": null,
+      "sight_range_mtile": null,
+      "collision_radius_mtile": null,
+      "mass": null,
+      "lifetime_us": null,
+      "targets": ["air", "ground", "building", "crown_tower"],
+      "projectile": {
+        "projectile_id": "fireball",
+        "speed_mtile_per_s": 12000,
+        "radius_mtile": 2500,
+        "start_radius_mtile": 0,
+        "homing": false
+      },
+      "area_radius_mtile": 2500,
+      "mechanics": {
+        "placement_class": "spell_anywhere",
+        "movement_layer": null,
+        "building_only": false,
+        "spawn_layout_mtile": [],
+        "death": null,
+        "suicide_on_attack": false,
+        "crown_tower_connection": "normal",
+        "projectile_mode": "ballistic_to_point",
+        "impact_mode": "at_destination",
+        "status": null,
+        "knockback_mtile": 1000,
+        "piercing": false,
+        "spell_origin": "own-king-tower"
+      },
+      "provenance": {
+        "identity": ["royaleapi-cards-2026-04-19"],
+        "elixir_milli": ["royaleapi-cards-2026-04-19", "deckmelon-fireball-2026-08-11"],
+        "level_11_stats": ["deckmelon-fireball-2026-08-11"],
+        "crown_tower_damage": ["official-june-2026-spell-crown-damage"],
+        "area_and_knockback": ["royaleapi-projectiles-2026-04-19", "deckmelon-fireball-2026-08-11"],
+        "projectile_speed_conversion": ["royaleapi-projectiles-2026-04-19", "simulator-baseline-assumptions"],
+        "flight_timing": ["local-level11-spell-fireball-flight-2026-08-13"],
+        "spell_origin": ["simulator-baseline-assumptions"]
+      },
+      "uncertainties": [
+        {
+          "field": "projectile.speed_mtile_per_s",
+          "reason": "Converted from raw projectile speed code 600 using the provisional 20 Hz interpretation. Two localized casts match combined simulated action-to-impact timing with 127 ms MAE, but speed is confounded with the provisional origin.",
+          "impact": "high",
+          "resolution": "Measure impact delay as a function of selected position."
+        },
+        {
+          "field": "mechanics.spell_origin",
+          "reason": "The selected own-King origin is an executable visual-flight approximation, not a sourced game rule. Two localized casts match combined simulated action-to-impact timing with 127 ms MAE, but origin is confounded with projectile speed.",
+          "impact": "high",
+          "resolution": "Fit projectile paths from controlled casts at a grid of positions."
+        }
+      ]
+    },
+    "log": {
+      "name": "The Log",
+      "aliases": ["the-log", "the_log", "log-spell"],
+      "kind": "spell",
+      "elixir_milli": 2000,
+      "deploy_time_us": 0,
+      "spawn_count": 0,
+      "hitpoints": null,
+      "damage": 266,
+      "crown_tower_damage": 35,
+      "attack_interval_us": null,
+      "first_hit_delay_us": null,
+      "move_speed_mtile_per_s": null,
+      "range_mtile": 10100,
+      "sight_range_mtile": null,
+      "collision_radius_mtile": null,
+      "mass": null,
+      "lifetime_us": null,
+      "targets": ["ground", "building", "crown_tower"],
+      "projectile": {
+        "projectile_id": "log-rolling",
+        "speed_mtile_per_s": 4000,
+        "radius_mtile": 1950,
+        "start_radius_mtile": 0,
+        "homing": false
+      },
+      "area_radius_mtile": 1950,
+      "mechanics": {
+        "placement_class": "restricted_spell",
+        "movement_layer": "ground",
+        "building_only": false,
+        "spawn_layout_mtile": [],
+        "death": null,
+        "suicide_on_attack": false,
+        "crown_tower_connection": "normal",
+        "projectile_mode": "rolling_linear",
+        "impact_mode": "continuous",
+        "status": null,
+        "knockback_mtile": 700,
+        "knockback_direction": "projectile_travel",
+        "piercing": true,
+        "spell_origin": "selected-position"
+      },
+      "provenance": {
+        "identity": ["royaleapi-cards-2026-04-19"],
+        "elixir_milli": ["royaleapi-cards-2026-04-19", "deckmelon-log-2026-08-11"],
+        "level_11_stats": ["deckmelon-log-2026-08-11"],
+        "crown_tower_damage": ["official-june-2026-spell-crown-damage"],
+        "range_mtile": ["royaleapi-projectiles-2026-04-19", "deckmelon-log-2026-08-11"],
+        "rolling_mechanics": ["royaleapi-projectiles-2026-04-19"],
+        "knockback_direction": ["royaleapi-projectiles-2026-04-19"],
+        "projectile_speed_conversion": ["local-level11-spell-log-motion-2026-08-12", "local-level11-spell3-log-motion-2026-08-12", "royaleapi-projectiles-2026-04-19", "simulator-baseline-assumptions"],
+        "spell_origin": ["simulator-baseline-assumptions"],
+        "placement_class": ["policy-grid-2026-08-11"]
+      },
+      "uncertainties": [
+        {
+          "field": "projectile.speed_mtile_per_s",
+          "reason": "Converted from raw rolling speed code 200 using the provisional 20 Hz interpretation. Two independent action-anchored Level-11 tracks measure 3842 and 4301 milli-tiles/s, bracketing the declared 4000, but the front position and hit timestamp remain unmeasured.",
+          "impact": "medium",
+          "resolution": "Confirm on additional held-out casts and measure the front position and target-hit timestamps."
+        },
+        {
+          "field": "area_radius_mtile",
+          "reason": "Uses the wrapper projectile radius as half-width; exact continuous collision geometry is not independently verified.",
+          "impact": "high",
+          "resolution": "Sweep targets across the real spell boundary and fit width."
+        },
+        {
+          "field": "mechanics.placement_class",
+          "reason": "Restricted deployment follows the current policy mask: own half initially, with lane patches after an enemy Princess Tower falls. The mask is calibrated policy behavior rather than official physics documentation.",
+          "impact": "high",
+          "resolution": "Validate every boundary cell in-game for both intact and destroyed Princess Tower states."
+        }
+      ]
+    }
+  },
+  "towers": {
+    "princess-tower": {
+      "name": "Princess Tower",
+      "aliases": ["princess", "princess_tower", "tower-princess"],
+      "hitpoints": 3052,
+      "damage": 109,
+      "attack_interval_us": 800000,
+      "first_hit_delay_us": 0,
+      "range_mtile": 7500,
+      "sight_range_mtile": 7500,
+      "collision_radius_mtile": 1000,
+      "targets": ["air", "ground"],
+      "projectile": {
+        "projectile_id": "princess-tower-arrow",
+        "speed_mtile_per_s": 12000,
+        "radius_mtile": 0,
+        "start_radius_mtile": 300,
+        "homing": true
+      },
+      "activated_at_start": true,
+      "crown_value": 1,
+      "provenance": {
+        "level_11_stats": ["local-level11-hog-video-2026-08-12", "royaleapi-tower-princess-2024"],
+        "low_level_mechanics": ["royaleapi-buildings-2026-04-19", "royaleapi-projectiles-2026-04-19"],
+        "projectile.start_radius_mtile": ["royaleapi-buildings-2026-04-19"],
+        "projectile_speed_conversion": ["royaleapi-projectiles-2026-04-19", "simulator-baseline-assumptions"]
+      },
+      "uncertainties": [
+        {
+          "field": "first_hit_delay_us",
+          "reason": "Zero load_time does not establish the full acquisition-to-impact timeline.",
+          "impact": "critical",
+          "resolution": "Measure isolated first and repeat attacks at high frame rate."
+        }
+      ]
+    },
+    "king-tower": {
+      "name": "King Tower",
+      "aliases": ["king", "king_tower", "tower-king"],
+      "hitpoints": 4824,
+      "damage": 109,
+      "attack_interval_us": 1000000,
+      "first_hit_delay_us": 500000,
+      "range_mtile": 7000,
+      "sight_range_mtile": 7000,
+      "collision_radius_mtile": 1400,
+      "targets": ["air", "ground"],
+      "projectile": {
+        "projectile_id": "king-tower-shot",
+        "speed_mtile_per_s": 20000,
+        "radius_mtile": 0,
+        "start_radius_mtile": 750,
+        "homing": true
+      },
+      "activated_at_start": false,
+      "crown_value": 3,
+      "provenance": {
+        "level_11_stats": ["liquipedia-king-tower-2026-08-12"],
+        "low_level_mechanics": ["royaleapi-buildings-2026-04-19", "royaleapi-projectiles-2026-04-19"],
+        "projectile.start_radius_mtile": ["royaleapi-buildings-2026-04-19"],
+        "projectile_speed_conversion": ["royaleapi-projectiles-2026-04-19", "simulator-baseline-assumptions"]
+      },
+      "uncertainties": [
+        {
+          "field": "activation_and_first_hit",
+          "reason": "Activation ordering and load_time interpretation are not established by the structured snapshot.",
+          "impact": "critical",
+          "resolution": "Measure activation by damage and Princess Tower destruction in controlled captures."
+        }
+      ]
+    }
+  },
+  "interaction_set": [
+    "hog-rider",
+    "cannon",
+    "musketeer",
+    "skeletons",
+    "ice-golem",
+    "ice-spirit",
+    "fireball",
+    "log"
+  ],
+  "metadata": {
+    "status": "provisional-executable-baseline",
+    "scope": "Base Hog-cycle cards, Princess Towers, and King Towers at Level 11.",
+    "network_free": true,
+    "source_priority": ["A", "B", "C", "D", "E"],
+    "source_conflicts": [
+      {
+        "field": "cards.ice-spirit.hitpoints",
+        "lower_confidence_value": 230,
+        "resolved_value": 215,
+        "resolution": "Official August patch overrides stale DeckMelon and April structured values."
+      },
+      {
+        "field": "cards.cannon.attack_interval_us",
+        "lower_confidence_value": 900000,
+        "resolved_value": 1000000,
+        "resolution": "Current DeckMelon display supersedes the older April structured snapshot, pending primary verification."
+      },
+      {
+        "field": "cards.skeletons.attack_interval_us",
+        "lower_confidence_value": 1000000,
+        "resolved_value": 1100000,
+        "resolution": "Current DeckMelon display supersedes the older April structured snapshot, pending primary verification."
+      },
+      {
+        "field": "cards.hog-rider.damage",
+        "lower_confidence_value": 318,
+        "resolved_value": 317,
+        "resolution": "An older local video/cache repeatedly shows 318, but the current native-126-FPS Level-11 capture repeatedly shows 317 and matches the current display source."
+      },
+      {
+        "field": "cards.musketeer.damage",
+        "lower_confidence_value": 218,
+        "resolved_value": 217,
+        "resolution": "An older local video/cache and April structured snapshot show 218, but the current native-126-FPS Level-11 capture repeatedly shows 217 and matches the current display source."
+      },
+      {
+        "field": "cards.fireball.crown_tower_damage",
+        "lower_confidence_value": 207,
+        "resolved_value": 172,
+        "resolution": "Official June 2026 Level-11 spell Crown Tower damage change overrides the older third-party value."
+      },
+      {
+        "field": "cards.log.crown_tower_damage",
+        "lower_confidence_value": 40,
+        "resolved_value": 35,
+        "resolution": "Official June 2026 Level-11 spell Crown Tower damage change overrides the older rounded third-party value."
+      },
+      {
+        "field": "cards.ice-spirit.mechanics.status.duration_us",
+        "lower_confidence_value": 1200000,
+        "resolved_value": 1100000,
+        "resolution": "Official July 2025 Ice Spirit freeze-duration nerf overrides the older structured value."
+      },
+      {
+        "field": "cards.cannon.damage",
+        "lower_confidence_value": 212,
+        "resolved_value": 202,
+        "resolution": "Official April 2026 Level-11 Cannon damage nerf overrides the older structured and third-party value."
+      }
+    ],
+    "external_ids": {
+      "hog-rider": 26000021,
+      "cannon": 27000000,
+      "musketeer": 26000014,
+      "skeletons": 26000010,
+      "ice-golem": 26000038,
+      "ice-spirit": 26000030,
+      "fireball": 28000000,
+      "log": 28000011
+    },
+    "match_provenance": ["simulator-baseline-assumptions"],
+    "arena_provenance": ["policy-grid-2026-08-11"],
+    "tick_provenance": ["simulator-baseline-assumptions"]
+  },
+  "uncertainties": [
+    {
+      "field": "tick_us",
+      "reason": "A 50 ms authoritative step is an engineering choice compatible with the integer core, not verified Supercell timing.",
+      "impact": "critical",
+      "resolution": "Run tick-rate convergence and controlled high-frame-rate timing experiments."
+    },
+    {
+      "field": "match",
+      "reason": "Match phase and elixir schedule are an executable ladder baseline without a pinned August primary rules document.",
+      "impact": "high",
+      "resolution": "Pin official mode rules and validate phase boundaries against complete August matches."
+    },
+    {
+      "field": "arena",
+      "reason": "The 18 by 32 policy placement grid is reused as provisional world geometry; it is not a calibrated collision/navigation map.",
+      "impact": "critical",
+      "resolution": "Estimate homography, tower centers, river, bridges, and collision geometry from controlled captures."
+    },
+    {
+      "field": "projectile_speed_conversion",
+      "reason": "Raw speed codes are converted assuming one raw position step per 50 ms simulation tick.",
+      "impact": "critical",
+      "resolution": "Calibrate each projectile family against measured flight-time curves."
+    }
+  ]
+}

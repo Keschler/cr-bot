@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "source_id": "deckshop-core-level11-2026-08-15",
+  "source_url": "https://www.deckshop.pro/card/detail/fireball",
+  "retrieved_at": "2026-08-15",
+  "confidence_tier": "B",
+  "level": 11,
+  "cards": {
+    "furnace": {
+      "hitpoints": 896,
+      "damage": 135,
+      "attack_interval_s": 1.7,
+      "range_tiles": 5.5,
+      "speed": "medium"
+    },
+    "fireball": {
+      "damage": 688
+    },
+    "log": {
+      "damage": 268
+    },
+    "tornado": {
+      "damage": 84,
+      "tower_damage": 27,
+      "radius_tiles": 5.5,
+      "duration_s": 1.1
+    },
+    "goblin-curse": {
+      "damage": 210,
+      "tower_damage": 42,
+      "radius_tiles": 3.0,
+      "duration_s": 6.0
+    }
+  },
+  "note": "Independent DeckShop Level-11 snapshots for Furnace, Tornado, Goblin Curse, and spells; The Log page is https://www.deckshop.pro/pc/card/detail/the-log. Official Crown Tower reductions remain higher priority. Furnace's active troop/rework semantics are sourced from Supercell's August 2025 release note. Tornado's temporal pull schedule and Goblin Curse's transformed-Goblin timing remain provisional until held-out footage confirms them."
+}

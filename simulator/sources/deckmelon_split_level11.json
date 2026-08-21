@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "source_id": "deckmelon-split-level11-2026-08-16",
+  "source_url": "https://deckmelon.com/cards/golem",
+  "retrieved_at": "2026-08-16",
+  "cards": {
+    "golemite": {
+      "hitpoints": 1039,
+      "damage": 84,
+      "death_damage": 99,
+      "attack_interval_s": 2.5,
+      "range_tiles": 0.25,
+      "speed": "slow",
+      "count_on_parent_death": 2,
+      "source_url": "https://deckmelon.com/cards/golem"
+    },
+    "elixir-golemite": {
+      "hitpoints": 762,
+      "damage": 128,
+      "attack_interval_s": 1.1,
+      "range_tiles": 0.8,
+      "speed": "slow",
+      "count_on_parent_death": 2,
+      "source_url": "https://deckmelon.com/cards/elixir-golem"
+    },
+    "elixir-blob": {
+      "hitpoints": 360,
+      "damage": 64,
+      "attack_interval_s": 1.1,
+      "range_tiles": 0.8,
+      "speed": "slow",
+      "count_on_parent_death": 2,
+      "source_url": "https://deckmelon.com/cards/elixir-golem"
+    },
+    "lava-pup": {
+      "hitpoints": 215,
+      "damage": 81,
+      "attack_interval_s": 1.7,
+      "range_tiles": 1.6,
+      "speed": "medium",
+      "count_on_parent_death": 6,
+      "source_url": "https://deckmelon.com/cards/lava-hound",
+      "official_override": "2025-12-01 Lava Pup HP 217 -> 215"
+    },
+    "spear-goblin": {
+      "hitpoints": 133,
+      "damage": 81,
+      "attack_interval_s": 1.6,
+      "range_tiles": 5.0,
+      "speed": "very-fast",
+      "count_on_parent_death": 2,
+      "source_url": "https://www.deckshop.pro/card/detail/goblin-giant"
+    }
+  },
+  "notes": [
+    "Parent Level-11 values are reconciled from the fixed ruleset sources; this file stores internal child forms that are not playable cards.",
+    "Child death radius, first-hit frame, exact spawn offsets, and Goblin Giant carried-body timing remain video-validation targets."
+  ]
+}

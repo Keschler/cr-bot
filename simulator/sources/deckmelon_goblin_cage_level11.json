@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "source_id": "deckmelon-goblin-cage-level11-2026-08-16",
+  "source_url": "https://deckmelon.com/cards/goblin-cage",
+  "retrieved_at": "2026-08-16",
+  "confidence_tier": "B",
+  "level": 11,
+  "cards": {
+    "goblin-brawler": {
+      "hitpoints": 1080,
+      "damage": 337,
+      "attack_interval_s": 1.1,
+      "first_hit_delay_s": 0.2,
+      "range_tiles": 0.8,
+      "speed": "fast",
+      "targets": ["ground"],
+      "count_on_cage_death": 1,
+      "source_url": "https://deckmelon.com/cards/goblin-cage"
+    }
+  },
+  "note": "Goblin Cage releases one hidden Goblin Brawler body when the cage is destroyed. Exact release offset, first active frame, and collision/retarget behavior remain video-validation targets."
+}
