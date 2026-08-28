@@ -176,6 +176,7 @@ def _default_prototype_config() -> PrototypeConfig:
         transformer_ff_dim=256,
         gru_hidden_dim=256,
         explicit_hand_features=True,
+        card_token_features=True,
         spatial_placement_features=True,
     )
 
@@ -1785,7 +1786,7 @@ def _parser() -> argparse.ArgumentParser:
     train.add_argument(
         "--explicit-hand-features",
         action="store_true",
-        help="encode each public hand slot separately for new checkpoints",
+        help="encode each public hand slot as a learned identity token for new checkpoints",
     )
     train.add_argument(
         "--direct-public-action-features",
@@ -1834,8 +1835,8 @@ def _parser() -> argparse.ArgumentParser:
         dest="strategic_model",
         action="store_true",
         help=(
-            "use the larger public recurrent actor with explicit hand-slot and "
-            "spatial placement features (default)"
+            "use the larger public recurrent actor with hand-card identity tokens "
+            "and spatial placement features (default)"
         ),
     )
     model_group.add_argument(
@@ -2059,6 +2060,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 transformer_ff_dim=256 if args.strategic_model else 64,
                 gru_hidden_dim=256 if args.strategic_model else 32,
                 explicit_hand_features=(
+                    True if args.strategic_model else args.explicit_hand_features
+                ),
+                card_token_features=(
                     True if args.strategic_model else args.explicit_hand_features
                 ),
                 spatial_placement_features=(

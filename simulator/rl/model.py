@@ -98,6 +98,11 @@ class ModelConfig:
     # fresh checkpoints that must distinguish a defensive card from Hog when
     # the same slot changes across the deck cycle.
     direct_public_slot_card_features: bool = False
+    # Fresh strategic actors can represent each public hand card as a learned
+    # identity token in the shared Transformer. The legacy hand projection is
+    # retained when this switch is disabled so older checkpoints remain loadable.
+    card_token_features: bool = False
+    card_embedding_dim: int = 64
     # Preserve a board-aligned feature map for placement. The legacy path
     # uses only a globally pooled raster representation; fresh strategic
     # actors can opt into this path without changing the old checkpoint ABI.
@@ -123,6 +128,7 @@ class ModelConfig:
             "belief_card_count",
             "placement_rows",
             "placement_cols",
+            "card_embedding_dim",
             "spatial_placement_dim",
         )
         for field_name in positive_fields:
@@ -148,6 +154,12 @@ class ModelConfig:
             hand_end = self.hand_feature_offset + self.card_slots * self.hand_card_count
             if hand_end > self.global_dim:
                 raise ValueError("explicit hand features must fit inside global_dim")
+        if type(self.card_token_features) is not bool:
+            raise ValueError("card_token_features must be boolean")
+        if self.card_token_features and self.hand_feature_offset < 0:
+            raise ValueError(
+                "card_token_features require explicit public hand features"
+            )
         if type(self.direct_public_action_features) is not bool:
             raise ValueError("direct_public_action_features must be boolean")
         if type(self.direct_public_card_features) is not bool:
@@ -207,7 +219,7 @@ class RecurrentPolicyOutput:
     recurrent_features: torch.Tensor
     final_hidden: torch.Tensor
     belief_logits: OpponentBeliefLogits | None = None
-    # Optional explicit public hand-slot embeddings used by new actor heads.
+    # Optional public hand-card token features used by the action heads.
     hand_features: torch.Tensor | None = None
     # Optional board-aligned features used by the spatial placement head.
     spatial_features: torch.Tensor | None = None
@@ -317,7 +329,7 @@ class PrivilegedCritic(nn.Module):
 
 
 class HybridEncoder(nn.Module):
-    """Encode raster, public entity tokens, and global features into one stream."""
+    """Encode raster, public entity/card tokens, and global features."""
 
     def __init__(self, config: ModelConfig) -> None:
         super().__init__()
@@ -356,14 +368,36 @@ class HybridEncoder(nn.Module):
             nn.LayerNorm(config.model_dim),
         )
         self.hand_projection: nn.Module | None = None
+        self.card_identity_embedding: nn.Embedding | None = None
+        self.card_token_projection: nn.Module | None = None
+        self.hand_slot_embedding: nn.Embedding | None = None
         if config.hand_feature_offset >= 0:
-            self.hand_projection = nn.Sequential(
-                nn.Linear(config.hand_card_count, config.model_dim),
-                nn.GELU(),
-                nn.LayerNorm(config.model_dim),
-            )
+            if config.card_token_features:
+                # Index zero is the empty/unsupported hand slot. The remaining
+                # rows correspond directly to the stable card-ID table used by
+                # the public observation's one-hot hand features.
+                self.card_identity_embedding = nn.Embedding(
+                    config.hand_card_count + 1,
+                    config.card_embedding_dim,
+                    padding_idx=0,
+                )
+                self.card_token_projection = nn.Sequential(
+                    nn.Linear(config.card_embedding_dim, config.model_dim),
+                    nn.GELU(),
+                    nn.LayerNorm(config.model_dim),
+                )
+                self.hand_slot_embedding = nn.Embedding(
+                    config.card_slots,
+                    config.model_dim,
+                )
+            else:
+                self.hand_projection = nn.Sequential(
+                    nn.Linear(config.hand_card_count, config.model_dim),
+                    nn.GELU(),
+                    nn.LayerNorm(config.model_dim),
+                )
         fusion_input_dim = 3 * config.model_dim
-        if self.hand_projection is not None:
+        if config.hand_feature_offset >= 0:
             fusion_input_dim += config.card_slots * config.model_dim
         self.fusion = nn.Sequential(
             nn.Linear(fusion_input_dim, config.encoder_dim),
@@ -371,14 +405,9 @@ class HybridEncoder(nn.Module):
             nn.LayerNorm(config.encoder_dim),
         )
 
-    def public_hand_features(
-        self,
-        global_features: torch.Tensor,
-    ) -> torch.Tensor | None:
-        """Encode each public hand slot separately when the variant enables it."""
+    def _raw_hand_features(self, global_features: torch.Tensor) -> torch.Tensor:
+        """Return the public one-hot hand table as ``[B, T, slots, cards]``."""
 
-        if self.hand_projection is None:
-            return None
         _require_floating("global_features", global_features, ndim=3)
         batch, time, global_dim = global_features.shape
         if global_dim != self.config.global_dim:
@@ -391,12 +420,52 @@ class HybridEncoder(nn.Module):
             config.card_slots,
             config.hand_card_count,
         )
-        return self.hand_projection(hand).reshape(
-            batch,
-            time,
-            config.card_slots,
-            config.model_dim,
-        )
+        return hand.reshape(batch, time, config.card_slots, config.hand_card_count)
+
+    def public_hand_card_ids(
+        self,
+        global_features: torch.Tensor,
+    ) -> torch.Tensor | None:
+        """Decode public one-hot hand slots into learned-table row indices.
+
+        Row zero is reserved for an empty or unsupported slot. Card IDs are
+        shifted by one so a real card whose stable table ID is zero remains
+        distinct from padding.
+        """
+
+        if self.config.hand_feature_offset < 0:
+            return None
+        hand = self._raw_hand_features(global_features)
+        present = hand.abs().sum(dim=-1) > 0
+        card_ids = hand.argmax(dim=-1).to(dtype=torch.long) + 1
+        return torch.where(present, card_ids, torch.zeros_like(card_ids))
+
+    def public_hand_features(
+        self,
+        global_features: torch.Tensor,
+    ) -> torch.Tensor | None:
+        """Encode each public hand slot for action heads and card tokens."""
+
+        if self.config.hand_feature_offset < 0:
+            return None
+        config = self.config
+        if config.card_token_features:
+            if (
+                self.card_identity_embedding is None
+                or self.card_token_projection is None
+            ):  # pragma: no cover - constructor invariant
+                raise RuntimeError("card-token modules are not initialized")
+            card_ids = self.public_hand_card_ids(global_features)
+            if card_ids is None:  # pragma: no cover - validated by ModelConfig
+                raise RuntimeError("card-token features require a public hand")
+            return self.card_token_projection(
+                self.card_identity_embedding(card_ids)
+            )
+
+        if self.hand_projection is None:  # pragma: no cover - constructor invariant
+            raise RuntimeError("legacy hand projection is not initialized")
+        hand = self._raw_hand_features(global_features)
+        return self.hand_projection(hand)
 
     def forward(
         self,
@@ -474,21 +543,67 @@ class HybridEncoder(nn.Module):
         global_features_flat = global_features.reshape(flat_batch_time, config.global_dim)
         global_features_encoded = self.global_projection(global_features_flat)
 
+        hand_features = self.public_hand_features(global_features)
         entity_features = entities.reshape(flat_batch_time, entity_count, config.entity_dim)
         entity_features = self.entity_projection(entity_features)
         entity_mask_flat = entity_mask.reshape(flat_batch_time, entity_count)
         null_entity = self.null_entity.expand(flat_batch_time, -1, -1)
-        transformer_input = torch.cat((entity_features, null_entity), dim=1)
         null_mask = torch.zeros(
             (flat_batch_time, 1), dtype=torch.bool, device=entity_mask.device
         )
-        key_padding_mask = torch.cat((~entity_mask_flat, null_mask), dim=1)
+        hand_card_mask_flat: torch.Tensor | None = None
+        if config.card_token_features:
+            if (
+                hand_features is None
+                or self.hand_slot_embedding is None
+            ):  # pragma: no cover - constructor invariant
+                raise RuntimeError("card-token hand features are not initialized")
+            hand_card_ids = self.public_hand_card_ids(global_features)
+            if hand_card_ids is None:  # pragma: no cover - validated by ModelConfig
+                raise RuntimeError("card-token features require a public hand")
+            hand_card_mask_flat = hand_card_ids.reshape(
+                flat_batch_time,
+                config.card_slots,
+            ).ne(0)
+            slot_indices = torch.arange(
+                config.card_slots,
+                device=global_features.device,
+            )
+            card_tokens = hand_features.reshape(
+                flat_batch_time,
+                config.card_slots,
+                config.model_dim,
+            ) + self.hand_slot_embedding(slot_indices).unsqueeze(0)
+            transformer_input = torch.cat(
+                (entity_features, card_tokens, null_entity),
+                dim=1,
+            )
+            key_padding_mask = torch.cat(
+                (~entity_mask_flat, ~hand_card_mask_flat, null_mask),
+                dim=1,
+            )
+        else:
+            transformer_input = torch.cat((entity_features, null_entity), dim=1)
+            key_padding_mask = torch.cat((~entity_mask_flat, null_mask), dim=1)
         transformed = self.entity_transformer(
             transformer_input,
             src_key_padding_mask=key_padding_mask,
         )
         transformed_entities = transformed[:, :entity_count]
-        transformed_null = transformed[:, entity_count]
+        null_index = entity_count
+        transformed_cards: torch.Tensor | None = None
+        if config.card_token_features:
+            null_index += config.card_slots
+            transformed_cards = transformed[
+                :, entity_count : entity_count + config.card_slots
+            ]
+            if hand_card_mask_flat is None:  # pragma: no cover - constructor invariant
+                raise RuntimeError("card-token mask is not initialized")
+            transformed_cards = transformed_cards.masked_fill(
+                ~hand_card_mask_flat.unsqueeze(-1),
+                0.0,
+            )
+        transformed_null = transformed[:, null_index]
         present = entity_mask_flat.unsqueeze(-1)
         present_count = present.sum(dim=1)
         pooled_entities = (transformed_entities * present).sum(dim=1)
@@ -500,12 +615,17 @@ class HybridEncoder(nn.Module):
         )
 
         fusion_features = [raster_features, pooled_entities, global_features_encoded]
-        hand_features = self.public_hand_features(global_features)
         if hand_features is not None:
-            fusion_features.append(hand_features.reshape(
-                flat_batch_time,
-                config.card_slots * config.model_dim,
-            ))
+            if transformed_cards is not None:
+                fusion_features.append(transformed_cards.reshape(
+                    flat_batch_time,
+                    config.card_slots * config.model_dim,
+                ))
+            else:
+                fusion_features.append(hand_features.reshape(
+                    flat_batch_time,
+                    config.card_slots * config.model_dim,
+                ))
         fused = self.fusion(torch.cat(fusion_features, dim=-1))
         return fused.reshape(batch, time, config.encoder_dim), spatial_features
 
@@ -686,6 +806,9 @@ class MaskedAutoregressivePolicy(nn.Module):
                 nn.Linear(hidden_dim, 2),
             )
         self.card_head = nn.Linear(hidden_dim, config.card_slots)
+        # This is positional context for the four action slots. Card identity
+        # comes from ``hand_features`` (the learned table-ID embeddings) when
+        # the explicit hand/card-token variant is enabled.
         self.card_embedding = nn.Embedding(config.card_slots, hidden_dim)
         self.hand_card_score: nn.Module | None = None
         if config.hand_feature_offset >= 0:
@@ -1067,7 +1190,7 @@ class RecurrentHybridPolicy(nn.Module):
             layers=config.gru_layers,
         )
         self.hand_action_projection: nn.Module | None = None
-        if self.encoder.hand_projection is not None:
+        if config.hand_feature_offset >= 0:
             self.hand_action_projection = nn.Sequential(
                 nn.Linear(config.model_dim, config.gru_hidden_dim),
                 nn.GELU(),

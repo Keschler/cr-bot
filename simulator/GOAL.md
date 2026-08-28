@@ -355,8 +355,11 @@ The implementation progression is:
    simulator-perturbation tests. A finite 100% result against one deterministic
    script is a regression result, not an any-deck claim.
 
-The target actor structure is a public entity/global/spatial encoder feeding a
-GRU with approximately 256 hidden units. Its autoregressive action heads are
+The target actor structure is a public entity/card/global/spatial encoder
+feeding a GRU with approximately 256 hidden units. In the strategic variant,
+the four public hand slots are decoded from the stable card table and entered
+as learned card-identity tokens with slot embeddings in the shared Transformer.
+Its autoregressive action heads are
 `mode/timing -> card-in-hand -> card-conditioned placement`; the placement
 head retains a spatial feature map instead of relying only on global average
 pooling. The critic may receive exact current simulator state, but never future

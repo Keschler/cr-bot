@@ -810,8 +810,11 @@ The global V1 roster remains fail-closed even when a narrower scoped report is
 ready.
 
 The optional [`rl/`](rl/) package contains the recurrent policy foundation: it combines
-the V2-compatible hybrid raster/entity encoder, a Transformer over entities, a
-GRU over time, and WAIT/PLAY → card → placement masked action heads. It stores
+the V2-compatible hybrid raster/entity/card encoder, a Transformer over public
+entity and hand-card tokens, a GRU over time, and WAIT/PLAY → card → placement
+masked action heads. In the strategic variant, each hand slot is decoded from
+the stable public card table, mapped through a learned card-identity embedding,
+and given a slot embedding before entering that shared Transformer. It stores
 recurrent trajectory tensors and reset masks, and includes training-only
 opponent-belief heads, a detached-feature privileged critic, and clipped PPO/
 behavior-cloning objective functions. `RecurrentPPOLearner` now provides
@@ -836,7 +839,8 @@ PyTorch is an optional dependency.
 
 The first end-to-end neural prototype is available as
 [`rl/prototype.py`](rl/prototype.py). It trains the public V2 actor with an
-entity Transformer, GRU, masked autoregressive action head, and recurrent PPO.
+entity/hand-card Transformer, GRU, masked autoregressive action head, and
+recurrent PPO.
 The default critic may use exact simulator state only through a separate
 training-only privileged callback; the checkpoint records that asymmetry and
 fails closed unless the actor is explicitly marked public-only. The opponent
@@ -1100,9 +1104,9 @@ when the sidecar was moved, is unavailable, or a deliberate branch is wanted;
 otherwise omit it and let the sidecar provide the cursor. Keep `--json-out`
 beside the checkpoint if future automatic resume inference is required.
 
-Generalized training defaults to the larger strategic model: explicit public
-hand-slot features, board-aligned spatial placement features, a 256-unit GRU,
-and a 128-step recurrent PPO chunk. Use `--small-model` only for quick smoke
+Generalized training defaults to the larger strategic model: learned public
+hand-card identity tokens, board-aligned spatial placement features, a 256-unit
+GRU, and a 128-step recurrent PPO chunk. Use `--small-model` only for quick smoke
 tests or when resuming a legacy small checkpoint. These architecture choices
 are serialized and must match when resuming; an old checkpoint remains useful
 as an evaluation or self-play opponent, but cannot be resumed into the new

@@ -123,8 +123,12 @@ class PrototypeConfig:
     gru_hidden_dim: int = 32
     gru_layers: int = 1
     # Keep false for legacy checkpoint compatibility; improved fresh runs can
-    # expose the four public hand slots as separate encoder inputs.
+    # expose the four public hand slots as learned card tokens.
     explicit_hand_features: bool = False
+    # New strategic runs promote those public hand cards to identity tokens in
+    # the shared Transformer. Keep false with the legacy hand path so old
+    # checkpoints can still be loaded as frozen opponents.
+    card_token_features: bool = False
     direct_public_action_features: bool = False
     direct_public_card_features: bool = False
     contextual_public_card_features: bool = False
@@ -168,6 +172,7 @@ class PrototypeConfig:
             "collect_belief_targets",
             "dense_reward",
             "explicit_hand_features",
+            "card_token_features",
             "direct_public_action_features",
             "direct_public_card_features",
             "contextual_public_card_features",
@@ -242,6 +247,10 @@ class PrototypeConfig:
         if self.model_dim % self.transformer_heads:
             raise PrototypeConfigurationError(
                 "model_dim must be divisible by transformer_heads"
+            )
+        if self.card_token_features and not self.explicit_hand_features:
+            raise PrototypeConfigurationError(
+                "card_token_features require explicit_hand_features"
             )
         _nonnegative_int("decision_interval_jitter_ticks", self.decision_interval_jitter_ticks)
         _nonnegative_int("action_latency_max_steps", self.action_latency_max_steps)
@@ -343,6 +352,7 @@ def _model_and_learner(config: PrototypeConfig) -> Any:
         placement_cols=18,
         hand_feature_offset=(len(GLOBAL_SCALAR_IDX) if config.explicit_hand_features else -1),
         hand_card_count=(CARD_COUNT if config.explicit_hand_features else 0),
+        card_token_features=config.card_token_features,
         direct_public_action_features=config.direct_public_action_features,
         direct_public_card_features=config.direct_public_card_features,
         contextual_public_card_features=config.contextual_public_card_features,
@@ -681,6 +691,7 @@ def _architecture_config(config: PrototypeConfig) -> tuple[object, ...]:
         config.gru_layers,
         config.use_privileged_critic,
         config.explicit_hand_features,
+        config.card_token_features,
         config.direct_public_action_features,
         config.direct_public_card_features,
         config.contextual_public_card_features,
@@ -2679,7 +2690,8 @@ def _parser() -> argparse.ArgumentParser:
         "--explicit-hand-features",
         action="store_true",
         help=(
-            "encode each public hand slot separately before the recurrent core; "
+            "encode each public hand slot as a learned identity token before the "
+            "shared Transformer; "
             "use for new runs, while legacy checkpoints remain compatible"
         ),
     )
@@ -2731,8 +2743,8 @@ def _parser() -> argparse.ArgumentParser:
         "--strategic-model",
         action="store_true",
         help=(
-            "use the larger public recurrent actor with explicit hand-slot and "
-            "spatial placement features; required for a fresh mainline run"
+            "use the larger public recurrent actor with hand-card identity tokens "
+            "and spatial placement features; required for a fresh mainline run"
         ),
     )
     train.add_argument(
@@ -2911,6 +2923,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 transformer_ff_dim=256 if args.strategic_model else 64,
                 gru_hidden_dim=256 if args.strategic_model else 32,
                 explicit_hand_features=(
+                    True if args.strategic_model else args.explicit_hand_features
+                ),
+                card_token_features=(
                     True if args.strategic_model else args.explicit_hand_features
                 ),
                 spatial_placement_features=(

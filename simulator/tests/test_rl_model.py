@@ -169,6 +169,66 @@ def test_explicit_hand_features_condition_card_and_placement_heads() -> None:
 
 
 @requires_torch
+def test_card_identity_tokens_are_added_to_the_shared_transformer() -> None:
+    from rl import ModelConfig, RecurrentHybridPolicy
+
+    values = {
+        field: getattr(_config(), field)
+        for field in _config().__dataclass_fields__
+    }
+    values.update(
+        global_dim=10,
+        hand_feature_offset=1,
+        hand_card_count=3,
+        card_token_features=True,
+        card_embedding_dim=5,
+    )
+    config = ModelConfig(**values)
+    policy = RecurrentHybridPolicy(config).eval()
+    assert policy.encoder.card_identity_embedding is not None
+    assert policy.encoder.card_token_projection is not None
+    assert policy.encoder.hand_slot_embedding is not None
+    assert policy.encoder.hand_projection is None
+
+    raster = torch.randn(1, 1, config.raster_channels, config.raster_height, config.raster_width)
+    global_features = torch.zeros(1, 1, config.global_dim)
+    # Slot zero contains table row 1, slot one contains table row 2, and slot
+    # two is empty. The model shifts real IDs by one to reserve row zero.
+    global_features[0, 0, 1 + 1] = 1.0
+    global_features[0, 0, 1 + config.hand_card_count + 2] = 1.0
+    entities = torch.randn(1, 1, 2, config.entity_dim)
+    entity_mask = torch.ones(1, 1, 2, dtype=torch.bool)
+
+    captured: dict[str, torch.Tensor] = {}
+
+    def capture_transformer_input(module, args, kwargs):
+        del module
+        captured["tokens"] = args[0].detach()
+        captured["padding_mask"] = kwargs["src_key_padding_mask"].detach()
+
+    handle = policy.encoder.entity_transformer.register_forward_pre_hook(
+        capture_transformer_input,
+        with_kwargs=True,
+    )
+    try:
+        with torch.inference_mode():
+            policy(raster, global_features, entities, entity_mask)
+    finally:
+        handle.remove()
+
+    assert policy.encoder.public_hand_card_ids(global_features).tolist() == [[[2, 3, 0]]]
+    assert captured["tokens"].shape == (1, 2 + config.card_slots + 1, config.model_dim)
+    expected_hand = policy.encoder.public_hand_features(global_features)
+    assert expected_hand is not None
+    expected_cards = expected_hand.reshape(1, config.card_slots, config.model_dim)
+    expected_cards = expected_cards + policy.encoder.hand_slot_embedding(
+        torch.arange(config.card_slots)
+    ).unsqueeze(0)
+    torch.testing.assert_close(captured["tokens"][:, 2:5], expected_cards)
+    assert captured["padding_mask"].tolist() == [[False, False, False, False, True, False]]
+
+
+@requires_torch
 def test_spatial_placement_variant_retains_board_aligned_features() -> None:
     from rl import ModelConfig, RecurrentHybridPolicy
 
