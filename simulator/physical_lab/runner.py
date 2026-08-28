@@ -80,6 +80,52 @@ class ActionLogEntry:
 
 
 @dataclass(frozen=True, slots=True)
+class ClockProvenance:
+    """Identify the authoritative time axis for a physical run.
+
+    The clock rendered by the game is retained as visual diagnostic data, but
+    it is not used to schedule actions or establish match timestamps. The
+    physical runner anchors the provisional match axis to the workstation's
+    monotonic clock after both reviewed detectors report ``BATTLE``.
+    """
+
+    source: str = "workstation_monotonic_us"
+    match_time_axis: str = "elapsed_from_reviewed_battle_boundary"
+    in_game_clock_used_for_timing: bool = False
+    in_game_clock_retained_as_diagnostic: bool = True
+    battle_start_monotonic_us: int | None = None
+    capture_start_monotonic_us: Mapping[str, int] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        for name in ("source", "match_time_axis"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value.strip():
+                raise PhysicalLabError(f"clock provenance {name} must be non-empty")
+        value = self.battle_start_monotonic_us
+        if value is not None and (type(value) is not int or value < 0):
+            raise PhysicalLabError(
+                "clock provenance battle_start_monotonic_us must be a non-negative integer"
+            )
+        for side, value in self.capture_start_monotonic_us.items():
+            if not isinstance(side, str) or not side.strip():
+                raise PhysicalLabError("clock provenance capture side must be non-empty")
+            if type(value) is not int or value < 0:
+                raise PhysicalLabError(
+                    f"clock provenance capture start for {side!r} must be a non-negative integer"
+                )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "source": self.source,
+            "match_time_axis": self.match_time_axis,
+            "in_game_clock_used_for_timing": self.in_game_clock_used_for_timing,
+            "in_game_clock_retained_as_diagnostic": self.in_game_clock_retained_as_diagnostic,
+            "battle_start_monotonic_us": self.battle_start_monotonic_us,
+            "capture_start_monotonic_us": dict(sorted(self.capture_start_monotonic_us.items())),
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class PhysicalRunResult:
     run_id: str
     spec: ExperimentSpec
@@ -94,6 +140,7 @@ class PhysicalRunResult:
     replay: SimulatorReplay | None
     rejection_reasons: tuple[str, ...] = ()
     artifact_refs: tuple[ArtifactRef, ...] = ()
+    clock_provenance: ClockProvenance | None = None
 
     def __post_init__(self) -> None:
         try:
@@ -123,6 +170,9 @@ class PhysicalRunResult:
             "actions": [action.to_dict() for action in self.actions],
             "rejection_reasons": list(self.rejection_reasons),
             "artifacts": [artifact.to_dict() for artifact in self.artifact_refs],
+            "clock_provenance": (
+                None if self.clock_provenance is None else self.clock_provenance.to_dict()
+            ),
         }
         if self.replay is not None:
             result["simulator_replay"] = self.replay.to_dict()
@@ -527,14 +577,44 @@ def write_run_artifacts(
     repository_root: str | Path,
     retention_manifest: str | Path | None = None,
 ) -> dict[str, object]:
-    """Write only small JSON provenance artifacts under the ignored output root."""
+    """Write JSON provenance artifacts and the post-capture handoff.
 
+    The handoff is deliberately a plan, not an observation or a truth
+    promotion.  It binds the sealed run and both capture streams to the
+    replay-cache and ingest paths that a reviewed detector job must produce.
+    Keeping this record beside ``run.json`` prevents the autonomous summary
+    from becoming the accidental source of provenance.
+    """
+
+    repository_root = Path(repository_root).resolve()
     root = physical_output_root(repository_root=repository_root, run_id=result.run_id)
     root.mkdir(parents=True, exist_ok=True)
     run_path = root / "run.json"
-    run_ref = result.save(run_path)
+    run_payload = result.to_dict(include_hash=True)
+    run_ref = seal_json(run_path, run_payload)
     refs = [run_ref]
+    capture_rows: dict[str, dict[str, object]] = {}
     for side, capture in sorted(result.captures.items()):
+        expected_media_path = (
+            Path(capture.media_path)
+            if capture.media_path is not None
+            else root / "raw" / f"{side}.mp4"
+        )
+        replay_cache_path = root / f"replay-cache-{side}.pkl.gz"
+        detector_rows_path = root / f"detector-rows-{side}.json"
+        capture_rows[side] = {
+            "capture_id": capture.capture_id,
+            "source_device": capture.source_device,
+            "media_path": str(expected_media_path),
+            "media_sha256": capture.media_sha256,
+            "replay_cache_path": str(replay_cache_path),
+            "detector_rows_path": str(detector_rows_path),
+            "observation_manifest_path": str(root / "observation.json"),
+            "extractor_command": _physical_extractor_command(
+                expected_media_path,
+                replay_cache_path,
+            ),
+        }
         if capture.media_path is None:
             continue
         media_path = Path(capture.media_path)
@@ -552,6 +632,45 @@ def write_run_artifacts(
     if result.replay is not None:
         replay_ref = seal_json(root / "simulator-replay.json", result.replay.to_dict())
         refs.append(replay_ref)
+    handoff_payload: dict[str, object] = {
+        "schema_version": 1,
+        "kind": "physical_lab_observation_handoff",
+        "run_id": result.run_id,
+        "experiment_hash": result.experiment_hash,
+        "status": result.status.value,
+        "run_manifest": {
+            "path": str(run_path),
+            "sha256": run_ref.sha256,
+            "run_hash": run_payload["run_hash"],
+        },
+        "captures": capture_rows,
+        "primary_observation_side": "A",
+        "auxiliary_capture_side": "B",
+        "clock_provenance": (
+            None if result.clock_provenance is None else result.clock_provenance.to_dict()
+        ),
+        "synchronization": (
+            None if result.synchronization is None else result.synchronization.to_dict()
+        ),
+        "expected_outputs": {
+            "extracted_case": str(root / "extracted-case.json"),
+            "normalized_stream_a": str(root / "normalized-stream-A.json"),
+            "normalized_stream_b": str(root / "normalized-stream-B.json"),
+            "replay_cache_a": str(root / "replay-cache-A.pkl.gz"),
+            "replay_cache_b": str(root / "replay-cache-B.pkl.gz"),
+            "observation_manifest": str(root / "observation.json"),
+            "comparison_report": str(root / "comparison.json"),
+            "fidelity_corpus": str(root / "fidelity-corpus.json"),
+            "fidelity_report": str(root / "fidelity-report.json"),
+        },
+        "admission_boundary": (
+            "candidate-only until reviewed timing, recognized replay cache, "
+            "normalized observations, comparison, and readiness checks pass"
+        ),
+    }
+    handoff_payload["handoff_hash"] = canonical_hash(handoff_payload)
+    handoff_ref = seal_json(root / "observation-handoff.json", handoff_payload)
+    refs.append(handoff_ref)
     manifest_payload = artifact_manifest(
         run_id=result.run_id,
         experiment_hash=result.experiment_hash,
@@ -571,13 +690,37 @@ def write_run_artifacts(
     return {
         "output_root": str(root),
         "run_path": str(run_path),
+        "observation_handoff_path": str(root / "observation-handoff.json"),
         "artifact_manifest": str(root / "artifacts.json"),
         "artifacts": [item.to_dict() for item in refs],
     }
 
 
+def _physical_extractor_command(
+    media_path: Path,
+    replay_cache_path: Path,
+) -> list[str]:
+    """Return the standard lazy extractor command for a handoff.
+
+    Importing the video-pipeline helper here keeps the physical runner's
+    module import cheap while still ensuring the command stays aligned with
+    the repository's supported replay-cache writer.
+    """
+
+    from ..video_pipeline import extractor_command
+
+    return extractor_command(
+        media_path,
+        replay_cache_path,
+        hud_variant="standard",
+        sample_interval_s=0.1,
+        yolo_detections=True,
+    )
+
+
 __all__ = [
     "ActionLogEntry",
+    "ClockProvenance",
     "PhysicalLabRunner",
     "PhysicalRunResult",
     "offline_runner",

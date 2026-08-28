@@ -20,11 +20,11 @@ OPPONENT_RELEASE_CUTOFF = date(2025, 12, 1)
 EVOLUTION_CUTOFF = date(2023, 6, 19)
 PLAYER_DECK: tuple[str, ...] = (
     "hog-rider",
+    "cannon",
     "musketeer",
+    "skeletons",
     "ice-golem",
     "ice-spirit",
-    "cannon",
-    "skeletons",
     "fireball",
     "log",
 )
@@ -164,8 +164,15 @@ def build_mechanic_coverage(
         # consumers cannot disappear from readiness output.
         mechanics = definition.get("mechanics")
         if isinstance(mechanics, Mapping):
+            # Keep the roster/readiness graph aligned with the executable
+            # component inventory used by scenario_factory.  A card can be
+            # instantiated by the engine while one of these exceptional
+            # branches is still provisional; omitting the branch here would
+            # incorrectly make the card look complete in coverage reports.
             if mechanics.get("charge_attack") is not None:
                 required.extend(("charge_attack", "charge_movement"))
+            if mechanics.get("charge_threshold_permille") is not None:
+                required.append("threshold_charge")
             if mechanics.get("chain_attack") is not None:
                 required.append("chain_targeting")
             if mechanics.get("multi_target_attack") is not None:
@@ -174,6 +181,18 @@ def build_mechanic_coverage(
                 required.append("reflected_damage")
             if mechanics.get("persistent_effect") is not None:
                 required.append("persistent_area_effect")
+                persistent = mechanics["persistent_effect"]
+                if isinstance(persistent, Mapping):
+                    if persistent.get("friendly_status") is not None:
+                        required.append("friendly_aura")
+                    if persistent.get("status") is not None:
+                        required.append("status_effect")
+                        persistent_status = persistent["status"]
+                        if (
+                            isinstance(persistent_status, Mapping)
+                            and persistent_status.get("on_death_spawn_card_id") is not None
+                        ):
+                            required.append("death_effect")
             if mechanics.get("dash") is not None:
                 required.extend(("dash_movement", "dash_attack"))
             if mechanics.get("hook") is not None:
@@ -184,6 +203,66 @@ def build_mechanic_coverage(
                 required.extend(("ramp_attack", "ramp_reset"))
             if mechanics.get("revive") is not None:
                 required.extend(("revive", "revive_egg"))
+            if mechanics.get("secondary_attack") is not None:
+                required.append("secondary_attack")
+            if mechanics.get("heal_amount") is not None:
+                required.append("healing")
+            if mechanics.get("heal_on_impact") is not None:
+                required.append("heal_effect")
+            if mechanics.get("attack_windup_mode") is not None:
+                required.append("recharge_windup")
+            if mechanics.get("projectile_speed_code") is not None:
+                required.append("projectile_speed")
+            if mechanics.get("status") is not None:
+                required.append("status_effect")
+            if mechanics.get("health_transform") is not None:
+                required.extend(("health_threshold_transform", "form_change"))
+            if mechanics.get("spawn") is not None:
+                required.append("periodic_spawn")
+            if mechanics.get("spawn_on_impact") is not None:
+                required.append("impact_spawn")
+            if mechanics.get("clone") is not None:
+                required.append("clone_component")
+            if mechanics.get("elixir_generation") is not None:
+                required.append("resource_generation")
+            death = mechanics.get("death")
+            if death is not None:
+                required.append("death_effect")
+                if isinstance(death, Mapping) and death.get("spawn_children"):
+                    required.append("death_split")
+            if mechanics.get("target_limit") is not None:
+                required.append("target_selection")
+            if mechanics.get("carrier") is not None:
+                required.extend(("carrier", "carrier_release"))
+            if mechanics.get("shield") is not None:
+                required.append("shield")
+            if mechanics.get("stealth_recloak_us") is not None:
+                required.append("stealth_lifecycle")
+            if mechanics.get("burrow") is not None:
+                required.append("burrow")
+            if mechanics.get("spawn_children") is not None:
+                required.append("spawn_composition")
+            if mechanics.get("line_piercing") is not None:
+                required.append("line_piercing")
+            if mechanics.get("returning_projectile") is not None:
+                required.append("returning_projectile")
+            if mechanics.get("pellets") is not None:
+                required.append("pellet_spread")
+            if int(mechanics.get("knockback_mtile") or 0) > 0:
+                required.append("knockback")
+            if mechanics.get("jump") is not None:
+                required.append("jump_landing")
+            if mechanics.get("deploy_effect") is not None:
+                required.append("deployment_effect")
+            if mechanics.get("death_rage") is not None:
+                required.append("death_rage")
+            if mechanics.get("snare") is not None:
+                required.append("snare")
+            status = mechanics.get("status")
+            if isinstance(status, Mapping) and status.get("on_death_spawn_card_id") is not None:
+                required.append("death_transform")
+            if isinstance(death, Mapping) and death.get("spawn_card_id") is not None:
+                required.append("death_spawn")
         executable = card_id in implemented_cards
         fidelity_ready = executable and (
             fidelity_ready_cards is None or card_id in fidelity_ready_cards

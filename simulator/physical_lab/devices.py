@@ -243,6 +243,14 @@ class PhoneController(Protocol):
 
     def tap_screen(self, x_px: int, y_px: int) -> ActionReceipt: ...
 
+    def long_press_screen(
+        self,
+        x_px: int,
+        y_px: int,
+        *,
+        duration_ms: int,
+    ) -> ActionReceipt: ...
+
     def press_back(self) -> None: ...
 
     def device_info(self) -> DeviceInfo: ...
@@ -254,6 +262,21 @@ class ScreenCapture(Protocol):
     def start(self) -> CaptureHandle: ...
 
     def stop(self) -> CaptureManifest: ...
+
+
+SCRCPY_LEGAL_MAX_TIME_LIMIT_S = 330
+
+
+class _CaptureProcess(Protocol):
+    returncode: int | None
+
+    def poll(self) -> int | None: ...
+
+    def terminate(self) -> None: ...
+
+    def kill(self) -> None: ...
+
+    def wait(self, timeout: float | None = None) -> int: ...
 
 
 class LogicalPhone:
@@ -290,6 +313,14 @@ class LogicalPhone:
         x_px, y_px = self.calibration.cell_to_pixel(arena_cell)
         return self.controller.tap_screen(x_px, y_px)
 
+    def long_press(self, point: tuple[int, int], *, duration_ms: int) -> ActionReceipt:
+        """Hold a calibrated UI point without exposing ADB coordinates to callers."""
+
+        if not isinstance(point, tuple) or len(point) != 2:
+            raise PhysicalLabError("long-press point must be an (x, y) tuple")
+        x_px, y_px = point
+        return self.controller.long_press_screen(x_px, y_px, duration_ms=duration_ms)
+
     def press_back(self) -> None:
         self.controller.press_back()
 
@@ -317,6 +348,7 @@ class FakePhoneController:
         self._screen_height_px = screen_height_px
         self._frame_index = 0
         self.taps: list[tuple[int, int]] = []
+        self.long_presses: list[tuple[int, int, int]] = []
         self.back_presses = 0
 
     def _require_connected(self) -> None:
@@ -358,6 +390,31 @@ class FakePhoneController:
         completed = self._clock()
         return ActionReceipt(
             receipt_id=f"{self.device_id}-tap-{len(self.taps):04d}",
+            device_id=self.device_id,
+            accepted=True,
+            requested_at_monotonic_us=requested,
+            completed_at_monotonic_us=max(requested, completed),
+            x_px=x_px,
+            y_px=y_px,
+        )
+
+    def long_press_screen(
+        self,
+        x_px: int,
+        y_px: int,
+        *,
+        duration_ms: int,
+    ) -> ActionReceipt:
+        self._require_connected()
+        if type(x_px) is not int or type(y_px) is not int:
+            raise PhysicalLabError("fake long-press coordinates must be integers")
+        if type(duration_ms) is not int or duration_ms <= 0:
+            raise PhysicalLabError("fake long-press duration must be a positive integer")
+        requested = self._clock()
+        self.long_presses.append((x_px, y_px, duration_ms))
+        completed = self._clock()
+        return ActionReceipt(
+            receipt_id=f"{self.device_id}-long-press-{len(self.long_presses):04d}",
             device_id=self.device_id,
             accepted=True,
             requested_at_monotonic_us=requested,
@@ -602,6 +659,184 @@ class AdbScreenCapture:
         return manifest
 
 
+def _media_signature(path: Path) -> tuple[int, int, int] | None:
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        return None
+    return (stat.st_ino, stat.st_size, stat.st_mtime_ns)
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return f"sha256:{digest.hexdigest()}"
+
+
+class ScrcpyScreenCapture:
+    """Long-running local MP4 capture through the installed ``scrcpy`` CLI.
+
+    ``scrcpy`` owns the device stream and writes the recording directly to
+    ``output_path``.  The process is started lazily, and the transport never
+    exposes the raw serial through a capture handle or manifest.  A manifest
+    is complete only when scrcpy exits cleanly and has produced a fresh,
+    non-empty MP4 whose hash can be sealed.
+    """
+
+    def __init__(
+        self,
+        controller: "AdbPhoneController",
+        output_path: str | Path,
+        *,
+        time_limit_s: int | None = None,
+        scrcpy_executable: str = "scrcpy",
+        stop_timeout_s: float = 10.0,
+        popen_factory: Callable[..., _CaptureProcess] | None = None,
+        monotonic_clock: Callable[[], int] = monotonic_time_us,
+    ) -> None:
+        if time_limit_s is not None and (
+            type(time_limit_s) is not int or time_limit_s < SCRCPY_LEGAL_MAX_TIME_LIMIT_S
+        ):
+            raise PhysicalLabError(
+                "scrcpy time_limit_s must be omitted or at least "
+                f"{SCRCPY_LEGAL_MAX_TIME_LIMIT_S} seconds"
+            )
+        if not scrcpy_executable or any(character.isspace() for character in scrcpy_executable):
+            raise PhysicalLabError("scrcpy executable must be a non-empty token")
+        if stop_timeout_s <= 0:
+            raise PhysicalLabError("scrcpy stop timeout must be positive")
+
+        self.controller = controller
+        self.output_path = Path(output_path)
+        if self.output_path.suffix.lower() != ".mp4":
+            raise PhysicalLabError("scrcpy capture output must be an .mp4 file")
+        self.time_limit_s = time_limit_s
+        self.scrcpy_executable = scrcpy_executable
+        self.stop_timeout_s = stop_timeout_s
+        self._popen_factory = popen_factory
+        self._clock = monotonic_clock
+        self._handle: CaptureHandle | None = None
+        self._process: _CaptureProcess | None = None
+        self._frames: list[Frame] = []
+        self._preexisting_media_signature: tuple[int, int, int] | None = None
+
+    def start(self) -> CaptureHandle:
+        if self._handle is not None or self._process is not None:
+            raise PhysicalLabError(f"scrcpy capture for {self.controller.device_id} is already running")
+        self.output_path.parent.mkdir(parents=True, exist_ok=True)
+        self._preexisting_media_signature = _media_signature(self.output_path)
+        now = self._clock()
+        capture_id = f"{self.controller.device_id}-capture-{now}"
+        command = [
+            self.scrcpy_executable,
+            "--serial",
+            self.controller.serial,
+            "--no-window",
+            "--no-audio",
+            "--record",
+            str(self.output_path),
+        ]
+        if self.time_limit_s is not None:
+            command.extend(("--time-limit", str(self.time_limit_s)))
+        popen = self._popen_factory or subprocess.Popen
+        try:
+            process = popen(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            self._preexisting_media_signature = None
+            raise DeviceDisconnectedError(f"cannot start scrcpy capture: {error}") from error
+        self._handle = CaptureHandle(capture_id, self.controller.device_id, now, "scrcpy")
+        self._process = process
+        self._frames = []
+        return self._handle
+
+    def record_frame(self, frame: Frame) -> None:
+        if self._handle is None or self._process is None:
+            raise PhysicalLabError("capture must be started before recording frames")
+        if frame.source_device != self.controller.device_id:
+            raise PhysicalLabError("frame source does not match scrcpy capture")
+        if self._process.poll() is not None:
+            raise PhysicalLabError("scrcpy process exited before the frame was recorded")
+        self._frames.append(frame)
+
+    def stop(self) -> CaptureManifest:
+        if self._handle is None or self._process is None:
+            raise PhysicalLabError(f"scrcpy capture for {self.controller.device_id} is not running")
+
+        handle = self._handle
+        process = self._process
+        frames = tuple(sorted(self._frames, key=lambda frame: frame.frame_index))
+        rejection_reasons: list[str] = []
+        exit_code: int | None = None
+        try:
+            try:
+                exit_code = process.poll()
+            except OSError as error:
+                rejection_reasons.append(f"scrcpy process status unavailable: {error}")
+
+            if exit_code is None and not rejection_reasons:
+                try:
+                    process.terminate()
+                    exit_code = process.wait(timeout=self.stop_timeout_s)
+                except subprocess.TimeoutExpired:
+                    rejection_reasons.append("scrcpy process did not stop before the timeout")
+                    try:
+                        process.kill()
+                        exit_code = process.wait(timeout=self.stop_timeout_s)
+                    except (OSError, subprocess.TimeoutExpired) as error:
+                        rejection_reasons.append(f"scrcpy process could not be killed: {error}")
+                except OSError as error:
+                    rejection_reasons.append(f"scrcpy process could not be stopped: {error}")
+
+            if exit_code != 0:
+                if exit_code is None:
+                    rejection_reasons.append("scrcpy process did not report a clean exit")
+                else:
+                    rejection_reasons.append(f"scrcpy process exited with code {exit_code}")
+
+            media_sha256: str | None = None
+            media_sealed = False
+            try:
+                current_signature = _media_signature(self.output_path)
+                if (
+                    current_signature is not None
+                    and current_signature[1] > 0
+                    and current_signature != self._preexisting_media_signature
+                ):
+                    media_sha256 = _sha256_file(self.output_path)
+                    media_sealed = True
+                else:
+                    rejection_reasons.append("scrcpy MP4 output is absent, empty, or unchanged")
+            except OSError as error:
+                rejection_reasons.append(f"scrcpy MP4 output could not be sealed: {error}")
+
+            status = "complete" if exit_code == 0 and media_sealed and not rejection_reasons else "failed"
+            stopped = max(self._clock(), handle.started_at_monotonic_us)
+            return CaptureManifest(
+                capture_id=handle.capture_id,
+                source_device=handle.source_device,
+                started_at_monotonic_us=handle.started_at_monotonic_us,
+                stopped_at_monotonic_us=stopped,
+                frames=frames,
+                media_path=str(self.output_path),
+                media_sha256=media_sha256 if status == "complete" else None,
+                stream_verified=status == "complete",
+                status=status,
+                rejection_reasons=() if status == "complete" else tuple(rejection_reasons),
+            )
+        finally:
+            self._handle = None
+            self._process = None
+            self._frames = []
+            self._preexisting_media_signature = None
+
+
 class AdbPhoneController:
     """Minimal ADB-backed controller with no import-time or constructor probe."""
 
@@ -717,9 +952,103 @@ class AdbPhoneController:
             y_px=y_px,
         )
 
+    def long_press_screen(
+        self,
+        x_px: int,
+        y_px: int,
+        *,
+        duration_ms: int,
+    ) -> ActionReceipt:
+        """Hold a screen point using ADB's explicit serial-scoped swipe input."""
+
+        if type(x_px) is not int or type(y_px) is not int:
+            raise PhysicalLabError("ADB long-press coordinates must be integers")
+        if type(duration_ms) is not int or duration_ms <= 0:
+            raise PhysicalLabError("ADB long-press duration must be a positive integer")
+        self._require_connected()
+        requested = self._clock()
+        self._run(
+            "shell",
+            "input",
+            "swipe",
+            str(x_px),
+            str(y_px),
+            str(x_px),
+            str(y_px),
+            str(duration_ms),
+        )
+        completed = max(requested, self._clock())
+        return ActionReceipt(
+            receipt_id=f"{self.device_id}-long-press-{requested}",
+            device_id=self.device_id,
+            accepted=True,
+            requested_at_monotonic_us=requested,
+            completed_at_monotonic_us=completed,
+            x_px=x_px,
+            y_px=y_px,
+        )
+
     def press_back(self) -> None:
         self._require_connected()
         self._run("shell", "input", "keyevent", "4")
+
+    def set_keep_awake(self) -> dict[str, object]:
+        """Keep this explicitly selected phone awake while it is powered.
+
+        Android has no portable literal ``never`` timeout through ``settings``.
+        The maximum timeout plus ``stay_on_while_plugged_in=3`` is the reviewed
+        lab equivalent while a phone is connected over USB.  Every command is
+        routed through :meth:`_run`, which always includes this controller's
+        explicit ``-s <serial>`` selector.
+        """
+
+        self._require_connected()
+        timeout_value = "2147483647"
+        plugged_value = "3"
+        self._run("shell", "settings", "put", "system", "screen_off_timeout", timeout_value)
+        self._run("shell", "settings", "put", "global", "stay_on_while_plugged_in", plugged_value)
+        self._run("shell", "svc", "power", "stayon", "true")
+        timeout_readback = str(
+            self._run("shell", "settings", "get", "system", "screen_off_timeout")
+        ).strip()
+        plugged_readback = str(
+            self._run("shell", "settings", "get", "global", "stay_on_while_plugged_in")
+        ).strip()
+        try:
+            plugged_mask = int(plugged_readback)
+        except ValueError:
+            plugged_mask = 0
+        # Some Android builds normalize the requested mask to all supported
+        # charging sources (15).  The lab is connected over USB, so any mask
+        # containing the USB bit is sufficient and stronger values are valid.
+        try:
+            timeout_ms = int(timeout_readback)
+        except ValueError:
+            timeout_ms = 0
+        # Some vendor builds clamp the maximum system timeout (the ASUS build
+        # currently reports 600000 ms).  USB stay-on is the effective
+        # never-sleep contract for the lab because both phones remain powered
+        # over their explicit USB connection.  A numeric timeout is still
+        # required so an unreadable settings surface cannot pass.
+        usb_stay_on = bool(plugged_mask & 2)
+        verified = timeout_ms > 0 and usb_stay_on
+        if not verified:
+            raise DeviceCommandError(
+                f"ADB keep-awake settings were not verified for {self.serial}: "
+                f"screen_off_timeout={timeout_readback!r}, "
+                f"stay_on_while_plugged_in={plugged_readback!r}"
+            )
+        return {
+            "device_id": self.device_id,
+            "serial_hash": self.serial_hash,
+            "screen_off_timeout_requested_ms": int(timeout_value),
+            "screen_off_timeout_ms": timeout_ms,
+            "stay_on_while_plugged_in": int(plugged_readback),
+            "power_stayon": True,
+            "effective_never_sleep_while_usb_powered": usb_stay_on,
+            "timeout_clamped_by_firmware": timeout_ms != int(timeout_value),
+            "verified": True,
+        }
 
 
 __all__ = [
@@ -738,6 +1067,8 @@ __all__ = [
     "LogicalPhone",
     "PhoneController",
     "ScreenCapture",
+    "SCRCPY_LEGAL_MAX_TIME_LIMIT_S",
+    "ScrcpyScreenCapture",
     "monotonic_time_us",
     "sha256_bytes",
 ]

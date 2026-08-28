@@ -1,0 +1,340 @@
+from __future__ import annotations
+
+import importlib
+
+import pytest
+
+try:
+    import torch
+except ModuleNotFoundError:
+    torch = None  # type: ignore[assignment]
+
+
+def test_rl_package_reports_optional_torch_dependency() -> None:
+    import rl
+
+    assert rl.TORCH_AVAILABLE is (torch is not None)
+    if torch is None:
+        with pytest.raises(rl.TorchUnavailableError, match="PyTorch"):
+            importlib.import_module("rl.model")
+
+
+requires_torch = pytest.mark.skipif(torch is None, reason="PyTorch is not installed")
+
+
+def _config():
+    from rl import ModelConfig
+
+    return ModelConfig(
+        raster_channels=3,
+        raster_height=8,
+        raster_width=6,
+        global_dim=7,
+        entity_dim=5,
+        max_entities=10,
+        model_dim=16,
+        encoder_dim=12,
+        transformer_heads=4,
+        transformer_layers=1,
+        transformer_ff_dim=32,
+        gru_hidden_dim=14,
+        gru_layers=2,
+        card_slots=3,
+        placement_rows=5,
+        placement_cols=4,
+    )
+
+
+def _inputs(config, *, batch: int = 2, time: int = 3, entities: int = 6):
+    raster = torch.randn(
+        batch,
+        time,
+        config.raster_channels,
+        config.raster_height,
+        config.raster_width,
+    )
+    global_features = torch.randn(batch, time, config.global_dim)
+    entity_features = torch.randn(batch, time, entities, config.entity_dim)
+    entity_mask = torch.ones(batch, time, entities, dtype=torch.bool)
+    entity_mask[0, 1, 2:] = False
+    entity_mask[1, 2, :] = False
+    reset_mask = torch.zeros(batch, time, dtype=torch.bool)
+    reset_mask[:, 0] = True
+    return raster, global_features, entity_features, entity_mask, reset_mask
+
+
+def _masks(config, *, batch: int = 2, time: int = 3):
+    from rl import ActionMasks
+
+    mode = torch.ones(batch, time, 2, dtype=torch.bool)
+    card = torch.ones(batch, time, config.card_slots, dtype=torch.bool)
+    card[..., 1] = False
+    placement = torch.zeros(
+        batch,
+        time,
+        config.card_slots,
+        config.placement_rows,
+        config.placement_cols,
+        dtype=torch.bool,
+    )
+    placement[..., 0, 1, 2] = True
+    placement[..., 0, 2, 3] = True
+    placement[..., 2, 4, 0] = True
+    return ActionMasks(mode=mode, card=card, placement=placement)
+
+
+@requires_torch
+def test_hybrid_recurrent_policy_shapes_and_trajectory_storage() -> None:
+    from rl import ActionBatch, RecurrentHybridPolicy, RecurrentSequence, TrajectoryBatch
+
+    config = _config()
+    raster, global_features, entities, entity_mask, reset_mask = _inputs(config)
+    policy = RecurrentHybridPolicy(config)
+    output = policy(raster, global_features, entities, entity_mask, reset_mask=reset_mask)
+
+    assert output.encoded_features.shape == (2, 3, config.encoder_dim)
+    assert output.recurrent_features.shape == (2, 3, config.gru_hidden_dim)
+    assert output.mode_logits.shape == (2, 3, 2)
+    assert output.card_logits.shape == (2, 3, config.card_slots)
+    assert output.placement_logits.shape == (
+        2,
+        3,
+        config.card_slots,
+        config.placement_rows,
+        config.placement_cols,
+    )
+    assert output.final_hidden.shape == (config.gru_layers, 2, config.gru_hidden_dim)
+
+    sequence = RecurrentSequence(
+        raster=raster,
+        global_features=global_features,
+        entities=entities,
+        entity_mask=entity_mask,
+        reset_mask=reset_mask,
+        hidden_states=torch.zeros(2, 3, config.gru_layers, config.gru_hidden_dim),
+        initial_hidden=policy.initial_hidden(2),
+    )
+    actions = ActionBatch(
+        mode=torch.zeros(2, 3, dtype=torch.long),
+        card_slot=torch.zeros(2, 3, dtype=torch.long),
+        placement=torch.zeros(2, 3, 2, dtype=torch.long),
+    )
+    masks = _masks(config)
+    trajectory = TrajectoryBatch(
+        sequence=sequence,
+        action_masks=masks,
+        actions=actions,
+        rewards=torch.zeros(2, 3),
+        terminated=torch.zeros(2, 3, dtype=torch.bool),
+        truncated=torch.zeros(2, 3, dtype=torch.bool),
+        old_log_probs=torch.zeros(2, 3),
+    )
+    assert trajectory.batch_size == 2
+    assert trajectory.time_steps == 3
+
+
+@requires_torch
+def test_explicit_hand_features_condition_card_and_placement_heads() -> None:
+    from rl import ModelConfig, RecurrentHybridPolicy
+
+    config = _config()
+    values = {
+        field: getattr(config, field)
+        for field in config.__dataclass_fields__
+    }
+    values.update(
+        global_dim=16,
+        hand_feature_offset=1,
+        hand_card_count=3,
+    )
+    config = ModelConfig(
+        **values
+    )
+    policy = RecurrentHybridPolicy(config)
+    assert policy.encoder.hand_projection is not None
+    assert policy.hand_action_projection is not None
+    assert policy.action_head.hand_card_score is not None
+
+    raster, global_features, entities, entity_mask, reset_mask = _inputs(config)
+    output = policy(
+        raster,
+        global_features,
+        entities,
+        entity_mask,
+        reset_mask=reset_mask,
+    )
+    assert output.hand_features is not None
+    assert output.hand_features.shape == (2, 3, config.card_slots, config.gru_hidden_dim)
+    assert output.card_logits.shape == (2, 3, config.card_slots)
+
+
+@requires_torch
+def test_contextual_public_card_head_keeps_entity_context_in_card_selection() -> None:
+    from rl import ModelConfig, RecurrentHybridPolicy
+
+    values = {
+        field: getattr(_config(), field)
+        for field in _config().__dataclass_fields__
+    }
+    values.update(
+        direct_public_card_features=True,
+        contextual_public_card_features=True,
+    )
+    config = ModelConfig(**values)
+    policy = RecurrentHybridPolicy(config)
+
+    assert policy.action_head.public_card_head is not None
+    assert policy.action_head.public_card_head[0].in_features == (
+        config.global_dim + config.gru_hidden_dim
+    )
+    raster, global_features, entities, entity_mask, reset_mask = _inputs(config)
+    output = policy(
+        raster,
+        global_features,
+        entities,
+        entity_mask,
+        reset_mask=reset_mask,
+    )
+    assert output.card_logits.shape == (2, 3, config.card_slots)
+
+
+@requires_torch
+def test_action_masks_remove_illegal_card_and_placement_probability() -> None:
+    from rl import ActionMasks, MaskedAutoregressivePolicy, ModelConfig
+
+    config = _config()
+    head = MaskedAutoregressivePolicy(config.gru_hidden_dim, config)
+    features = torch.zeros(2, 1, config.gru_hidden_dim)
+    logits = head(features)
+    masks = _masks(config, batch=2, time=1)
+    masked = head.masked_log_probs(logits, masks)
+
+    assert torch.isneginf(masked.card[..., 1]).all()
+    assert torch.isneginf(masked.placement[..., 0, 0, 0]).all()
+    assert torch.isfinite(masked.placement[..., 0, 1, 2]).all()
+
+    illegal_mode = torch.tensor([[[True, False]], [[True, False]]])
+    illegal_masks = ActionMasks(
+        mode=illegal_mode,
+        card=masks.card,
+        placement=masks.placement,
+    )
+    from rl import ActionBatch
+
+    with pytest.raises(ValueError, match="illegal WAIT/PLAY mode"):
+        head.log_prob(
+            logits,
+            ActionBatch(
+                mode=torch.ones(2, 1, dtype=torch.long),
+                card_slot=torch.zeros(2, 1, dtype=torch.long),
+                placement=torch.tensor([[[1, 2]], [[1, 2]]]),
+            ),
+            illegal_masks,
+        )
+
+
+@requires_torch
+def test_log_prob_is_sum_of_selected_mode_card_and_placement_terms() -> None:
+    from rl import ActionBatch, MaskedAutoregressivePolicy
+
+    config = _config()
+    head = MaskedAutoregressivePolicy(config.gru_hidden_dim, config)
+    features = torch.randn(2, 2, config.gru_hidden_dim)
+    logits = head(features)
+    masks = _masks(config, batch=2, time=2)
+    actions = ActionBatch(
+        mode=torch.tensor([[1, 0], [1, 1]]),
+        card_slot=torch.tensor([[0, 0], [2, 0]]),
+        placement=torch.tensor([[[1, 2], [0, 0]], [[4, 0], [2, 3]]]),
+    )
+
+    joint = head.log_prob(logits, actions, masks)
+    masked = head.masked_log_probs(logits, masks)
+    expected = masked.mode.gather(-1, actions.mode.unsqueeze(-1)).squeeze(-1)
+    expected = expected.clone()
+    play = actions.mode == 1
+    selected_cards = actions.card_slot[play]
+    selected_placement = actions.placement[play]
+    selected_card_log_prob = masked.card[play].gather(
+        -1,
+        selected_cards.unsqueeze(-1),
+    ).squeeze(-1)
+    selected_placement_log_prob = masked.placement[play][
+        torch.arange(selected_cards.shape[0]),
+        selected_cards,
+    ]
+    selected_placement_log_prob = selected_placement_log_prob[
+        torch.arange(selected_cards.shape[0]),
+        selected_placement[:, 0],
+        selected_placement[:, 1],
+    ]
+    expected[play] += selected_card_log_prob + selected_placement_log_prob
+    torch.testing.assert_close(joint, expected)
+
+
+@requires_torch
+def test_sampling_returns_legal_hierarchical_actions_and_diagnostics() -> None:
+    from rl import MaskedAutoregressivePolicy
+
+    config = _config()
+    head = MaskedAutoregressivePolicy(config.gru_hidden_dim, config)
+    logits = head(torch.randn(2, 3, config.gru_hidden_dim))
+    masks = _masks(config)
+
+    actions, log_probs, entropy = head.sample(logits, masks)
+
+    assert actions.mode.shape == (2, 3)
+    assert actions.card_slot.shape == (2, 3)
+    assert actions.placement.shape == (2, 3, 2)
+    assert log_probs.shape == entropy.shape == (2, 3)
+    assert torch.isfinite(log_probs).all()
+    assert torch.isfinite(entropy).all()
+    selected_mode = masks.mode.gather(-1, actions.mode.unsqueeze(-1)).squeeze(-1)
+    assert selected_mode.all()
+    play = actions.mode == head.PLAY
+    if bool(play.any().item()):
+        selected_cards = actions.card_slot[play]
+        assert masks.card[play].gather(-1, selected_cards.unsqueeze(-1)).all()
+        selected_mask = masks.placement[play, selected_cards]
+        selected_rows = actions.placement[play, 0]
+        selected_cols = actions.placement[play, 1]
+        assert selected_mask[
+            torch.arange(selected_cards.shape[0]), selected_rows, selected_cols
+        ].all()
+
+
+@requires_torch
+def test_privileged_critic_and_belief_heads_keep_shapes_separate() -> None:
+    from rl import OpponentBeliefHeads, PrivilegedCritic
+
+    belief = OpponentBeliefHeads(hidden_dim=7, card_count=11)
+    recurrent = torch.randn(2, 3, 7)
+    belief_logits = belief(recurrent)
+    assert belief_logits.enemy_elixir.shape == (2, 3)
+    assert belief_logits.enemy_hand.shape == (2, 3, 11)
+    assert belief_logits.enemy_next_card.shape == (2, 3, 11)
+
+    critic = PrivilegedCritic(recurrent_dim=7, privileged_dim=13)
+    value = critic(recurrent, torch.randn(2, 3, 13))
+    assert value.shape == (2, 3)
+
+
+@requires_torch
+def test_gru_reset_discards_previous_episode_hidden_state() -> None:
+    from rl import GRURecurrentCore
+
+    torch.manual_seed(7)
+    core = GRURecurrentCore(input_dim=6, hidden_dim=9, layers=2)
+    features = torch.randn(2, 4, 6)
+    hidden = torch.randn(2, 2, 9)
+    reset_mask = torch.zeros(2, 4, dtype=torch.bool)
+    reset_mask[0, 2] = True
+    output, _ = core(features, hidden=hidden, reset_mask=reset_mask)
+
+    fresh_hidden = core.initial_state(1, dtype=features.dtype)
+    fresh_output, _ = core(
+        features[0:1, 2:],
+        hidden=fresh_hidden,
+        reset_mask=torch.zeros(1, 2, dtype=torch.bool),
+    )
+    torch.testing.assert_close(output[0:1, 2:], fresh_output)

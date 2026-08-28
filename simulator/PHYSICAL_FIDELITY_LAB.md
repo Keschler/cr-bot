@@ -139,6 +139,58 @@ using a versioned calibration artifact. The arena mapping must reuse the
 repository's existing action-grid and homography conventions; it must not
 introduce a second `(x, y)` or row-origin convention.
 
+### Staged one-phone preparation
+
+The deck setup is intentionally separable from the two-phone run. With only
+one handset connected, prepare that handset and record its serial-bound
+manifest:
+
+```bash
+PYTHONPATH=.:src outputs/venv/bin/python -m simulator lab prepare \
+  --serial PHONE_A --side A \
+  --json-out outputs/simulator/fidelity_media/physical_lab/preparation-A.json
+```
+
+The reviewed deck contract is:
+
+```text
+slot 0  hog-rider       opening card 1
+slot 1  cannon          opening card 2
+slot 2  musketeer       opening card 3
+slot 3  skeletons       opening card 4
+slot 4  ice-golem       first replacement
+slot 5  ice-spirit      second replacement
+slot 6  fireball        third replacement
+slot 7  log             fourth replacement
+```
+
+When the second handset is available, prepare it as side B and pass both
+manifests to `scripts/run_physical_lab_autonomous.py`. The host side uses a
+real long press on the Friendly Battle `1v1 Battle` button, taps the reviewed
+fixed-deck-order toggle, and then taps the reviewed start control. Phone B is
+the host and Phone A accepts. The toggle and start points
+are explicit because their positions vary by game build; missing or malformed
+points reject the run before unsafe UI guessing. The resulting run is a
+candidate until the lifecycle, capture, synchronization, observation, and
+readiness gates all pass.
+
+The versioned simple-to-complex campaign is documented in
+`physical_lab/PHYSICAL_FIDELITY_GOAL.md`. Create it with
+`scripts/run_physical_fidelity_campaign.py plan`; its deck mutations and
+first-four opening hands are immutable. After physical corpora are admitted,
+`scripts/run_physical_fidelity_campaign.py evaluate` re-runs every stored case
+against the current simulator and writes a new evaluation snapshot.
+
+To prevent idle phones during a prepared run, use `lab keep-awake` with the
+two explicitly mapped serials. It applies the maximum screen timeout and
+powered-device stay-awake settings, then verifies both readbacks. The command
+does not run ADB device discovery.
+
+The one-phone preparation command returns to the lobby after deck verification.
+It does not start a waiting challenge; fixed starting-hand order is selected at
+the coordinated host start so the later two-phone run begins from a verified
+lobby on both devices.
+
 ## Experiment specification
 
 Every physical run is generated from a canonical, hashed specification. A
@@ -309,6 +361,12 @@ Each event carries evidence references, uncertainty, and whether it is directly
 observed or inferred. Inferred events remain ineligible when the declared gate
 requires direct timing evidence.
 
+Before a physical observation can enter validation, held-out, or regression
+evidence, the ingest boundary also requires a replay cache that has passed the
+existing reader/recognition check and whose sealed SHA-256 is recorded in the
+manifest. Missing, malformed, or unrecognized caches remain rejected; an
+offline `candidate_only` comparison may still be used to plan the next probe.
+
 ## Simulator replay and comparison
 
 For each accepted physical run:
@@ -443,6 +501,11 @@ They must be registered with the existing retention manifest and checked by
 `media-budget`. No physical-lab recording, cache, or generated report should
 be committed to source control merely because it was produced by a run.
 
+The storage guard counts the entire `cr-bot` workspace, not only the media
+directory, and rejects any configured cap above 200,000,000,000 bytes. It is
+checked before capture and after capture; eviction is opt-in and limited to
+already finalized hash-verified raw videos.
+
 ## Verification layers
 
 The lab is one layer in a larger verification stack:
@@ -484,6 +547,10 @@ alignment, and a deterministic simulator replay. Its status is
 `candidate_only`; it is not physical evidence. Run artifacts are written below
 `outputs/simulator/fidelity_media/physical_lab/<run_id>/` and are registered
 with the shared retention manifest when `--retention-manifest` is supplied.
+Each run also writes `observation-handoff.json`. It is a sealed index of the
+run manifest, A/B capture IDs and hashes, the standard replay-cache extractor
+commands, and the expected ingest/comparison/fidelity output paths. It is a
+handoff plan, not evidence or a truth label.
 
 `lab ingest` accepts a detector-produced JSON observation document and retains
 low-confidence, inferred-timing, synchronization-failed, or otherwise
@@ -508,7 +575,7 @@ with:
 ```bash
 PYTHONPATH=.:src outputs/venv/bin/python -m simulator lab ingest observations.json \
   --run outputs/simulator/fidelity_media/physical_lab/<run-id>/run.json \
-  --replay-cache outputs/simulator/fidelity_media/physical_lab/<run-id>/replay-cache.json \
+  --replay-cache outputs/simulator/fidelity_media/physical_lab/<run-id>/replay-cache-A.pkl.gz \
   --retention-manifest outputs/simulator/fidelity_media/retention.json \
   --json-out outputs/simulator/fidelity_media/physical_lab/<run-id>/observations.json
 ```
@@ -522,6 +589,27 @@ workspace before capture and reserves the requested `--reserve-bytes`;
 `--evict` can remove only older finalized registered media. The shared
 `media-budget` command now scans the complete `fidelity_media` tree so public
 and physical raw recordings use the same path-safe cap.
+
+After ingest has produced a non-rejected observation manifest, the physical
+fidelity bridge verifies the run/cache bindings and writes the standard corpus
+and report schemas:
+
+```bash
+PYTHONPATH=.:src outputs/venv/bin/python -m simulator lab fidelity \
+  outputs/simulator/fidelity_media/physical_lab/<run-id>/observations.json \
+  --run outputs/simulator/fidelity_media/physical_lab/<run-id>/run.json \
+  --replay-cache outputs/simulator/fidelity_media/physical_lab/<run-id>/replay-cache-A.pkl.gz \
+  --corpus-out outputs/simulator/fidelity_media/physical_lab/<run-id>/fidelity-corpus.json \
+  --json-out outputs/simulator/fidelity_media/physical_lab/<run-id>/fidelity-report.json
+```
+
+The bridge requires a recognized cache file, accepted synchronization,
+acknowledged direct timing, passed lifecycle, verified A/B captures, and
+matching sealed hashes. One probe can contribute evidence but cannot satisfy
+the training-readiness minimums. The first probe uses the A cache as the
+primary observation-cache admission while retaining B as auxiliary capture
+provenance; a side-by-side cache schema extension remains required before
+claiming dual-cache completeness.
 
 ## Proposed repository workflow
 

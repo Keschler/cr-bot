@@ -92,18 +92,52 @@ def _action_time_map(
 ) -> dict[str, int]:
     result: dict[str, int] = {}
     for action in spec.actions:
-        if action.trigger.type.value == "match_time_us":
-            result[action.action_id] = action.trigger.value
-        else:
-            if action_times is None or action.action_id not in action_times:
-                raise PhysicalLabError(
-                    f"after_observation action {action.action_id!r} lacks an observed match time"
-                )
+        # A physical receipt is the authoritative timing observation for both
+        # trigger kinds.  In particular, a match-time action may be accepted
+        # late because card selection/placement takes non-zero wall-clock
+        # time; replaying it at the requested boundary would compare the
+        # phone against a different simulator input.  Fall back to the
+        # reviewed trigger value only when no receipt was supplied.
+        if action_times is not None and action.action_id in action_times:
             value = action_times[action.action_id]
             if type(value) is not int or value < 0:
                 raise PhysicalLabError(f"action time for {action.action_id!r} must be non-negative")
             result[action.action_id] = value
+            continue
+        if action.trigger.type.value == "match_time_us":
+            result[action.action_id] = action.trigger.value
+            continue
+        raise PhysicalLabError(
+            f"after_observation action {action.action_id!r} lacks an observed match time"
+        )
     return result
+
+
+def action_match_time_us(run: Mapping[str, Any], action: Mapping[str, Any]) -> int | None:
+    """Return the best internal match timestamp for one acknowledged action.
+
+    The placement receipt is the authoritative boundary: the old
+    ``actual_match_time_us`` field was recorded after a follow-up screenshot
+    and can therefore be several seconds late.  The fallback keeps older
+    manifests usable when they predate placement receipts.
+    """
+
+    clock = run.get("clock_provenance")
+    receipt = action.get("placement_receipt")
+    if isinstance(clock, Mapping) and isinstance(receipt, Mapping):
+        battle_start = clock.get("battle_start_monotonic_us")
+        completed = receipt.get("completed_at_monotonic_us")
+        if (
+            receipt.get("accepted") is True
+            and type(battle_start) is int
+            and type(completed) is int
+            and completed >= battle_start
+        ):
+            return completed - battle_start
+    value = action.get("actual_match_time_us")
+    if type(value) is int and value >= 0:
+        return value
+    return None
 
 
 def _card_slot(spec: ExperimentSpec, action: PhysicalAction, decks: tuple[tuple[str, ...], tuple[str, ...]]) -> int:
@@ -290,6 +324,7 @@ def replay_hash_pair(spec: ExperimentSpec, *, action_times: Mapping[str, int] | 
 __all__ = [
     "ReplayAction",
     "SimulatorReplay",
+    "action_match_time_us",
     "build_scenario",
     "replay_hash_pair",
     "run_simulator_replay",

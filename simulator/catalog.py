@@ -178,9 +178,9 @@ SPAWNER_DEFINITIONS: Mapping[str, Mapping[str, int | str | None]] = {
     "barbarian-hut": {
         "card_id": "barbarians",
         # The pinned Level-11 source reports one three-Barbarian wave every
-        # 14 seconds.  This used to be a 7-second placeholder, which doubled
+        # 15 seconds.  This used to be a 7-second placeholder, which doubled
         # the defensive pressure of every Barbarian Hut trace.
-        "interval_us": 14_000_000,
+        "interval_us": 15_000_000,
         "start_delay_us": 1_000_000,
         "max_alive": 6,
         "count": 3,
@@ -198,22 +198,25 @@ SPAWNER_DEFINITIONS: Mapping[str, Mapping[str, int | str | None]] = {
         "count": 1,
     },
     "goblin-hut": {
-        "card_id": "spear-goblins",
+        "card_id": "spear-goblin",
         "interval_us": 2_200_000,
         "start_delay_us": 1_000_000,
         "max_alive": 6,
-        "count": 3,
+        "count": 1,
+        "activation_range_mtile": 6_000,
+        "requires_visible_enemy": True,
+        "child_deploy_time_us": 500_000,
     },
     "goblin-drill": {
         "card_id": "goblins",
-        "interval_us": 3_500_000,
+        "interval_us": 3_000_000,
         "start_delay_us": 1_000_000,
         "max_alive": 6,
         "count": 1,
     },
     "tombstone": {
         "card_id": "skeletons",
-        "interval_us": 3_500_000,
+        "interval_us": 4_000_000,
         "start_delay_us": 1_000_000,
         "max_alive": 8,
         "count": 2,
@@ -243,9 +246,9 @@ STATUS_DEFINITIONS: Mapping[str, Mapping[str, int | str]] = {
     },
     "giant-snowball": {
         "kind": "slow",
-        "duration_us": 2_000_000,
-        "speed_multiplier_milli": 500,
-        "hit_speed_multiplier_milli": 500,
+        "duration_us": 3_000_000,
+        "speed_multiplier_milli": 700,
+        "hit_speed_multiplier_milli": 700,
     },
     "ice-wizard": {
         "kind": "slow",
@@ -254,12 +257,10 @@ STATUS_DEFINITIONS: Mapping[str, Mapping[str, int | str]] = {
         "hit_speed_multiplier_milli": 650,
     },
     "poison": {
-        "kind": "poison",
-        "duration_us": 8_000_000,
-        "speed_multiplier_milli": 1_000,
+        "kind": "poison-slow",
+        "duration_us": 1_000_000,
+        "speed_multiplier_milli": 850,
         "hit_speed_multiplier_milli": 1_000,
-        "damage_per_tick": 100,
-        "tick_interval_us": 1_000_000,
     },
     "zap": {
         "kind": "stun",
@@ -289,6 +290,18 @@ STATUS_DEFINITIONS: Mapping[str, Mapping[str, int | str]] = {
         "speed_multiplier_milli": 0,
         "hit_speed_multiplier_milli": 0,
     },
+    "electro-spirit": {
+        "kind": "stun",
+        "duration_us": 500_000,
+        "speed_multiplier_milli": 0,
+        "hit_speed_multiplier_milli": 0,
+    },
+    "zappies": {
+        "kind": "stun",
+        "duration_us": 500_000,
+        "speed_multiplier_milli": 0,
+        "hit_speed_multiplier_milli": 0,
+    },
 }
 
 # Targeting components are intentionally data-driven.  A normal splash attack
@@ -304,6 +317,12 @@ CHAIN_ATTACK_DEFINITIONS: Mapping[str, Mapping[str, int | str]] = {
         "max_targets": 3,
         "chain_range_mtile": 3_500,
         "selection": "nearest",
+    },
+    "electro-spirit": {
+        "max_targets": 9,
+        "chain_range_mtile": 3_000,
+        "selection": "nearest",
+        "chain_delay_us": 250_000,
     },
 }
 
@@ -425,15 +444,35 @@ REVIVE_DEFINITIONS: Mapping[str, Mapping[str, int | str]] = {
 }
 
 DEATH_DEFINITIONS: Mapping[str, Mapping[str, Any]] = {
+    "bomb-tower": {
+        "damage": 222,
+        "crown_tower_damage": 222,
+        "radius_mtile": 3_000,
+        "delay_us": 3_000_000,
+        "targets": ["air", "ground", "building", "crown_tower"],
+    },
+    "barbarian-hut": {
+        "damage": 0, "radius_mtile": 0, "targets": ["ground"],
+        "spawn_card_id": "barbarian", "spawn_count": 1,
+    },
+    "goblin-hut": {
+        "damage": 0, "radius_mtile": 0, "targets": ["ground"],
+        "spawn_card_id": "spear-goblin", "spawn_count": 1,
+    },
+    "tombstone": {
+        "damage": 0, "radius_mtile": 0, "targets": ["ground"],
+        "spawn_card_id": "skeletons", "spawn_count": 4,
+    },
     # Balloon drops its bomb when the body is destroyed.  The Level-11
     # DeckShop snapshot reports 240 death damage; the bomb is a normal area
     # impact and therefore also damages Crown Towers at the same value.
     "balloon": {
         "damage": 240,
         "crown_tower_damage": 240,
-        "radius_mtile": 1_500,
+        "radius_mtile": 3_000,
         "targets": ["air", "ground", "building", "crown_tower"],
         "knockback_mtile": 0,
+        "delay_us": 3_000_000,
     },
     "golem": {
         "damage": 225,
@@ -450,6 +489,7 @@ DEATH_DEFINITIONS: Mapping[str, Mapping[str, Any]] = {
         "targets": ["ground"],
         "knockback_mtile": 0,
         "spawn_children": [{"card_id": "elixir-golemite", "count": 2}],
+        "opponent_elixir_milli": 1_000,
     },
     "lava-hound": {
         "damage": 0,
@@ -484,6 +524,11 @@ DEATH_DEFINITIONS: Mapping[str, Mapping[str, Any]] = {
         "targets": ["ground"],
         "knockback_mtile": 0,
         "spawn_children": [{"card_id": "elixir-blob", "count": 2}],
+        "opponent_elixir_milli": 500,
+    },
+    "elixir-blob": {
+        "damage": 0, "crown_tower_damage": 0, "radius_mtile": 0,
+        "targets": ["ground"], "opponent_elixir_milli": 500,
     },
     # Battle Ram is a carrier: whether it reaches a building or is destroyed
     # on the way, the two Barbarians emerge from the broken ram.  The body
@@ -498,9 +543,12 @@ DEATH_DEFINITIONS: Mapping[str, Mapping[str, Any]] = {
         "spawn_count": 2,
     },
     "giant-skeleton": {
-        "damage": 500,
-        "crown_tower_damage": 125,
-        "radius_mtile": 1_000,
+        "damage": 269,
+        "crown_tower_damage": 269,
+        # Current bomb splash radius is three tiles; the pre-rework row's
+        # one-tile placeholder was never a faithful death payload.
+        "radius_mtile": 3_000,
+        "delay_us": 3_000_000,
         "targets": ["air", "ground", "building", "crown_tower"],
         "knockback_mtile": 0,
     },
@@ -515,15 +563,24 @@ DEATH_DEFINITIONS: Mapping[str, Mapping[str, Any]] = {
         "spawn_card_id": "goblin-brawler",
         "spawn_count": 1,
     },
+    "goblin-drill": {
+        "damage": 0,
+        "crown_tower_damage": 0,
+        "radius_mtile": 0,
+        "targets": ["ground"],
+        "spawn_card_id": "goblins",
+        "spawn_count": 2,
+    },
     "skeleton-barrel": {
         # The current Level-11 DeckShop page reports 145 death damage.  The
-        # barrel still releases its three Skeletons in the same death event.
+        # base barrel releases seven Skeletons when the payload drops, either
+        # on destruction or on contact with its building/tower target.
         "damage": 145,
         "crown_tower_damage": 145,
         "radius_mtile": 1_500,
         "targets": ["air", "ground", "building", "crown_tower"],
         "spawn_card_id": "skeletons",
-        "spawn_count": 3,
+        "spawn_count": 7,
     },
     "witch": {
         "damage": 0,
@@ -544,6 +601,10 @@ DEATH_DEFINITIONS: Mapping[str, Mapping[str, Any]] = {
         "targets": ["ground"],
         "spawn_card_id": "bush-goblin",
         "spawn_count": 2,
+        # The authored Long trigger releases the two Bush Goblins in a
+        # stretched two-point formation rather than the generic close death
+        # spread used by ordinary multi-body payloads.
+        "spawn_offsets_mtile": [[-1_600, 0], [1_600, 0]],
     },
     # These Level-11 values come from the official July 2024 balance note;
     # the 10-second low-health fuse is an official June 2025 change and is
@@ -605,8 +666,7 @@ SPAWN_ON_IMPACT: Mapping[str, Mapping[str, int | str]] = {
 }
 
 ELIXIR_GENERATION: Mapping[str, Mapping[str, int]] = {
-    # The current Level-11 card table reports a 12-second collector cycle.
-    "elixir-collector": {"interval_us": 12_000_000, "amount_milli": 1_000},
+    "elixir-collector": {"interval_us": 13_000_000, "amount_milli": 1_000},
 }
 
 # These structures create pressure only through their child/resource stream.
@@ -633,6 +693,15 @@ PASSIVE_SPAWNER_IDS = frozenset(
 # gate remains closed until each duration, pulse, victim set, and spawn stream
 # is reconciled against held-out footage.
 PERSISTENT_EFFECT_DEFINITIONS: Mapping[str, Mapping[str, Any]] = {
+    "arrows": {
+        "duration_us": 400_000,
+        "tick_interval_us": 200_000,
+        "max_pulses": 3,
+        "targets": ["air", "ground", "building", "crown_tower"],
+        "damage_schedule": [123, 123, 123],
+        "crown_damage_schedule": [25, 25, 25],
+        "duration_anchor": "creation",
+    },
     "poison": {
         "duration_us": 8_000_000,
         "tick_interval_us": 1_000_000,
@@ -642,6 +711,11 @@ PERSISTENT_EFFECT_DEFINITIONS: Mapping[str, Mapping[str, Any]] = {
         # eight deterministic 21-damage pulses.
         "damage_per_tick": 92,
         "crown_damage_per_tick": 21,
+        "status": {
+            "kind": "poison-slow", "duration_us": 1_000_000,
+            "speed_multiplier_milli": 850,
+            "hit_speed_multiplier_milli": 1_000,
+        },
     },
     "earthquake": {
         "duration_us": 3_000_000,
@@ -650,12 +724,20 @@ PERSISTENT_EFFECT_DEFINITIONS: Mapping[str, Mapping[str, Any]] = {
         "damage_per_tick": 82,
         # Three one-second pulses produce the official 147 Crown-Tower total.
         "crown_damage_per_tick": 49,
+        "building_damage_per_tick": 287,
+        "status": {
+            "kind": "earthquake-slow", "duration_us": 1_000_000,
+            "speed_multiplier_milli": 500,
+            "hit_speed_multiplier_milli": 1_000,
+        },
     },
     "graveyard": {
         # The official June 2026 note pins the current field to 12 total
         # Skeletons; the older structured row reports 19 and is deliberately
         # overridden below rather than silently treated as truth.
         "duration_us": 9_000_000,
+        "duration_anchor": "creation",
+        "initial_delay_us": 2_200_000,
         "tick_interval_us": 500_000,
         "targets": ["air", "ground", "building", "crown_tower"],
         "damage_per_tick": 0,
@@ -664,17 +746,23 @@ PERSISTENT_EFFECT_DEFINITIONS: Mapping[str, Mapping[str, Any]] = {
             "card_id": "skeletons",
             "count": 1,
             "max_spawns": 12,
+            # Current Graveyard uses a fixed, outward-biased pattern rather
+            # than sampling a fresh random point for every Skeleton.
+            "offsets_mtile": [
+                [-3300, -300], [3100, 1100], [-900, 3200], [500, -3300],
+                [2700, -1900], [-2800, 1800], [1900, 2800], [-2000, -2700],
+            ],
         },
     },
-    # Void is a field, not a one-shot projectile.  The official August 2026
-    # patch gives the three target-count damage tiers and a 1.2 s hit
+    # Void is a field, not a one-shot projectile.  The pinned current balance
+    # update gives the three target-count damage tiers and a 1.0 s hit
     # frequency.  The fixed component applies three pulses (the fourth
     # second of field lifetime is visual/temporal slack); this remains an
     # explicitly audited assumption until a high-confidence trace confirms
     # the exact first/last pulse timestamps.
     "void": {
         "duration_us": 4_000_000,
-        "tick_interval_us": 1_200_000,
+        "tick_interval_us": 1_000_000,
         "max_pulses": 3,
         "radius_mtile": 2_500,
         "targets": ["air", "ground", "building", "crown_tower"],
@@ -947,6 +1035,8 @@ def _generated_card(card_id: str, metadata: Mapping[str, Any]) -> dict[str, Any]
         if kind == "building" and source_lifetime is not None
         else (30_000_000 if kind == "building" else None)
     )
+    if card_id == "elixir-collector":
+        lifetime = 93_000_000
     mechanics = {
         "placement_class": placement,
         "movement_layer": "air" if is_air else None,
@@ -1002,6 +1092,26 @@ def _generated_card(card_id: str, metadata: Mapping[str, Any]) -> dict[str, Any]
             "stealth": True,
             "trigger_on_target": True,
         })
+    if card_id == "goblin-drill":
+        mechanics["deploy_effect"] = {
+            "kind": "goblin-drill-emergence",
+            "duration_us": 0,
+            "speed_multiplier_milli": 1_000,
+            "hit_speed_multiplier_milli": 1_000,
+            "damage": 84,
+            "crown_tower_damage": 0,
+            "radius_mtile": 2_000,
+            "knockback_mtile": 500,
+            "targets": ["ground", "building"],
+        }
+    if card_id == "elixir-collector":
+        mechanics["death"] = {
+            "damage": 0,
+            "crown_tower_damage": 0,
+            "radius_mtile": 0,
+            "targets": ["ground"],
+            "owner_elixir_milli": 1_000,
+        }
     if card_id in SHIELD_DEFINITIONS:
         mechanics["shield"] = dict(SHIELD_DEFINITIONS[card_id])
     if card_id == "royal-ghost":
@@ -1046,6 +1156,15 @@ def _generated_card(card_id: str, metadata: Mapping[str, Any]) -> dict[str, Any]
         mechanics.update({
             "knockback_mtile": 1_500,
             "knockback_direction": "projectile_travel",
+            # The boulder keeps travelling through the acquired target and
+            # damages ground bodies along its swept path.  The endpoint is
+            # capped at Bowler's authored seven-tile range; the width is the
+            # conservative V1 collision envelope for the boulder.
+            "piercing": True,
+            "line_piercing": {
+                "length_mtile": 7_000,
+                "width_mtile": 500,
+            },
         })
     if card_id == "mega-knight":
         mechanics["jump"] = dict(JUMP_DEFINITIONS[card_id])
@@ -1067,12 +1186,70 @@ def _generated_card(card_id: str, metadata: Mapping[str, Any]) -> dict[str, Any]
             "on_death_spawn_count": 1,
         }
     if card_id == "ram-rider":
+        mechanics["primary_targets"] = ["building", "crown_tower"]
         mechanics["snare"] = {
             "duration_us": 1_500_000,
-            "speed_multiplier_milli": 550,
+            "speed_multiplier_milli": 300,
             "hit_speed_multiplier_milli": 1_000,
             "targets": ["air", "ground"],
         }
+        mechanics["secondary_attack"] = {
+            "min_range_mtile": 0,
+            "max_range_mtile": 5_500,
+            "attack_interval_us": 1_100_000,
+            "first_hit_delay_us": 400_000,
+            "damage": 104,
+            "crown_tower_damage": 0,
+            "area_radius_mtile": 0,
+            "projectile_speed_mtile_per_s": 20_000,
+            "projectile_radius_mtile": 0,
+            "targets": ["air", "ground"],
+            "status": {"kind": "slow", **dict(mechanics["snare"])},
+            "troops_only": True,
+        }
+        mechanics.pop("snare", None)
+    if card_id == "three-musketeers":
+        mechanics["spawn_stagger_us"] = 100_000
+        mechanics["spread_targets"] = True
+        mechanics["bayonet"] = {
+            "range_mtile": 1_600,
+            "damage": 314,
+            "crown_tower_damage": 314,
+            "targets": ["ground", "building", "crown_tower"],
+        }
+    if card_id in {
+        "archers", "goblins", "spear-goblins", "goblin-gang", "minions",
+        "barbarians", "minion-horde", "rascals", "guards", "royal-recruits",
+        "bats", "zappies", "wall-breakers", "skeleton-dragons", "elite-barbarians",
+    }:
+        mechanics["spawn_stagger_us"] = 100_000
+    if card_id in {
+        "royal-recruits", "royal-hogs", "guards", "rascals", "goblins",
+        "barbarians", "skeleton-army", "skeleton-barrel", "zappies", "bats",
+        "minions", "minion-horde",
+    }:
+        mechanics["mirror_spawn_layout"] = True
+    if card_id in {"hog-rider", "royal-hogs", "ram-rider", "prince", "dark-prince"}:
+        mechanics["river_jump"] = {"duration_us": 500_000}
+    if card_id == "tesla":
+        mechanics["concealment"] = {
+            "reveal_range_mtile": 6_000,
+            "starts_concealed": True,
+            "earthquake_hits": True,
+            "freeze_suppresses_reveal": True,
+        }
+    if card_id == "barbarian-barrel":
+        mechanics.update({
+            "projectile_mode": "rolling_linear",
+            "impact_mode": "continuous_path",
+            "piercing": True,
+            "rolling_range_mtile": 4_500,
+            "impact_targets": ["ground", "building", "crown_tower"],
+        })
+    if card_id == "giant-snowball":
+        mechanics["knockback_mtile"] = 1_800
+    if card_id == "mortar":
+        mechanics["min_attack_range_mtile"] = 3_500
     if card_id == "goblin-demolisher":
         mechanics.update({
             "charge_threshold_permille": 500,
@@ -1092,7 +1269,23 @@ def _generated_card(card_id: str, metadata: Mapping[str, Any]) -> dict[str, Any]
     if card_id in REVIVE_DEFINITIONS:
         mechanics["revive"] = dict(REVIVE_DEFINITIONS[card_id])
     if card_id == "firecracker":
-        mechanics["recoil_mtile"] = 1_500
+        mechanics.update({
+            "recoil_mtile": 1_500,
+            # Firecracker's primary projectile bursts into five independent
+            # swept shrapnels behind its acquired target.  ``pellets`` is
+            # reused for the validated fan-count schema; the engine handles
+            # this component at impact rather than launching five primary
+            # homing shots.
+            "pellets": {"count": 5, "spread_mtile": 800},
+            "line_piercing": {
+                "length_mtile": 3_500,
+                "width_mtile": 250,
+            },
+        })
+    if card_id == "skeleton-barrel":
+        # The barrel is consumed on physical contact with its building/tower
+        # target; it must not enter the ordinary melee attack scheduler first.
+        mechanics["trigger_on_target"] = True
     if card_id == "sparky":
         # Sparky charges its first shot for four seconds and immediately
         # starts the next charge after firing.  The engine treats this as a
@@ -1155,7 +1348,7 @@ def _generated_card(card_id: str, metadata: Mapping[str, Any]) -> dict[str, Any]
         mechanics["spawn"] = dict(SPAWNER_DEFINITIONS[card_id])
     if card_id in STATUS_DEFINITIONS:
         mechanics["status"] = dict(STATUS_DEFINITIONS[card_id])
-        if card_id in {"electro-dragon", "electro-wizard"}:
+        if card_id in {"electro-dragon", "electro-wizard", "electro-spirit", "zappies"}:
             mechanics["reset_attack"] = True
     if card_id in CHAIN_ATTACK_DEFINITIONS:
         mechanics["chain_attack"] = dict(CHAIN_ATTACK_DEFINITIONS[card_id])
@@ -1280,6 +1473,45 @@ def _generated_card(card_id: str, metadata: Mapping[str, Any]) -> dict[str, Any]
     raw, _ = apply_official_overrides(card_id, raw)
     if card_id == "sparky":
         raw["first_hit_delay_us"] = 4_000_000
+    if card_id == "ram-rider":
+        raw["targets"] = ["building", "crown_tower"]
+        raw["attack_interval_us"] = 1_700_000
+        raw["first_hit_delay_us"] = 600_000
+    if card_id == "three-musketeers":
+        raw.update({
+            "hitpoints": 883,
+            "damage": 204,
+            "attack_interval_us": 1_300_000,
+            "first_hit_delay_us": 700_000,
+        })
+    if card_id == "giant-skeleton":
+        # The May 2026 balance snapshot reduced the Level-11 Giant Skeleton
+        # body to 1,313 HP and uses a 0.75-tile collision footprint.  The
+        # older structured table still contains the pre-rework 3,617 HP and
+        # generic 0.4-tile fallback, so keep the current values explicit here
+        # rather than allowing those stale scalars to leak into the generated
+        # rulesets.  The death bomb is authored independently above.
+        raw["hitpoints"] = 1_313
+        raw["collision_radius_mtile"] = 750
+    if card_id == "goblin-drill":
+        raw["lifetime_us"] = 10_000_000
+    if card_id == "suspicious-bush":
+        raw["range_mtile"] = 1_600
+    if card_id == "electro-giant":
+        raw["attack_interval_us"] = 1_800_000
+        raw["first_hit_delay_us"] = 1_000_000
+        raw["mechanics"]["reflection"]["crown_tower_damage"] = 38
+    if card_id == "dark-prince":
+        raw["attack_interval_us"] = 1_400_000
+    if card_id == "skeleton-dragons":
+        raw["damage"] = 151
+    if card_id == "ice-golem" and raw["mechanics"].get("death"):
+        raw["mechanics"]["death"]["status"] = {
+            "kind": "slow",
+            "duration_us": 2_000_000,
+            "speed_multiplier_milli": 700,
+            "hit_speed_multiplier_milli": 700,
+        }
     return raw
 
 
@@ -1978,6 +2210,22 @@ def build_roster_ruleset_raw(base_raw: Mapping[str, Any] | None = None) -> dict[
             if GOBLIN_BRAWLER_SOURCE_ID not in generated:
                 generated.append(GOBLIN_BRAWLER_SOURCE_ID)
             cards[card_id]["provenance"] = provenance
+    # A few legacy hand-curated rows predate the generated mechanic overlay.
+    # Apply cross-card terrain components here as well so authored and
+    # generated cards share the same current base-card behavior.
+    for card_id in {"hog-rider", "royal-hogs", "ram-rider", "prince", "dark-prince"}:
+        if card_id not in cards:
+            continue
+        cards[card_id] = deepcopy(cards[card_id])
+        mechanics = dict(cards[card_id].get("mechanics", {}))
+        mechanics["river_jump"] = {"duration_us": 500_000}
+        cards[card_id]["mechanics"] = mechanics
+    if "battle-ram" in cards:
+        cards["battle-ram"] = deepcopy(cards["battle-ram"])
+        mechanics = dict(cards["battle-ram"].get("mechanics", {}))
+        mechanics.pop("river_jump", None)
+        cards["battle-ram"]["mechanics"] = mechanics
+
     # Internal child forms are executable entities but are not playable cards;
     # keeping them outside ``interaction_set`` preserves the fixed V1 roster
     # contract while preventing generic Goblin stats from being substituted.

@@ -12,7 +12,8 @@ from typing import Any, Mapping
 
 
 STORAGE_SCHEMA_VERSION = 1
-DEFAULT_MAX_WORKSPACE_BYTES = 200_000_000_000
+HARD_MAX_WORKSPACE_BYTES = 200_000_000_000
+DEFAULT_MAX_WORKSPACE_BYTES = HARD_MAX_WORKSPACE_BYTES
 DEFAULT_LOW_WATER_BYTES = 190_000_000_000
 VIDEO_SUFFIXES = frozenset({".avi", ".m4v", ".mkv", ".mov", ".mp4", ".webm"})
 _SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -137,6 +138,10 @@ def enforce_workspace_budget(
         raise StorageBudgetError("manifest and raw-media roots must be inside workspace") from error
     if max_bytes <= 0:
         raise StorageBudgetError("max_bytes must be positive")
+    if max_bytes > HARD_MAX_WORKSPACE_BYTES:
+        raise StorageBudgetError(
+            f"max_bytes cannot exceed the hard workspace cap of {HARD_MAX_WORKSPACE_BYTES} bytes"
+        )
     if not 0 <= low_water_bytes <= max_bytes:
         raise StorageBudgetError("low_water_bytes must be between zero and max_bytes")
     if not 0 <= reserve_bytes <= max_bytes:
@@ -234,6 +239,7 @@ def enforce_workspace_budget(
 __all__ = [
     "DEFAULT_LOW_WATER_BYTES",
     "DEFAULT_MAX_WORKSPACE_BYTES",
+    "HARD_MAX_WORKSPACE_BYTES",
     "STORAGE_SCHEMA_VERSION",
     "StorageBudgetError",
     "enforce_workspace_budget",

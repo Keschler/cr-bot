@@ -70,6 +70,34 @@ def card_mechanics(ruleset: Ruleset, card_id: str) -> tuple[str, ...]:
         mechanics.update({"spell_geometry", "effect_timing", "victim_selection"})
     if card.projectile is not None:
         mechanics.update({"projectile_origin", "projectile_motion"})
+    if card.mechanics.get("secondary_attack") is not None:
+        mechanics.add("secondary_attack")
+    if card.mechanics.get("primary_targets") is not None:
+        mechanics.add("primary_target_restriction")
+    if card.mechanics.get("spread_targets"):
+        mechanics.add("target_distribution")
+    if card.mechanics.get("bayonet") is not None:
+        mechanics.add("bayonet")
+    if card.mechanics.get("min_attack_range_mtile") is not None:
+        mechanics.add("minimum_attack_range")
+    if card.mechanics.get("spawn_stagger_us") is not None:
+        mechanics.add("deployment_stagger")
+    if card.mechanics.get("mirror_spawn_layout"):
+        mechanics.add("formation_mirroring")
+    if card.mechanics.get("river_jump") is not None:
+        mechanics.add("river_jump")
+    if card.mechanics.get("concealment") is not None:
+        mechanics.add("concealment")
+    if card.card_id == "mirror":
+        mechanics.add("mirror_level_scaling")
+    if card.mechanics.get("charge_threshold_permille") is not None:
+        mechanics.add("threshold_charge")
+    if card.mechanics.get("heal_amount") is not None:
+        mechanics.add("healing")
+    if card.mechanics.get("attack_windup_mode") is not None:
+        mechanics.add("recharge_windup")
+    if card.mechanics.get("projectile_speed_code") is not None:
+        mechanics.add("projectile_speed")
     if card.mechanics.get("status") is not None:
         mechanics.add("status_effect")
     if card.mechanics.get("heal_on_impact") is not None:
@@ -324,6 +352,19 @@ _TROOP_TARGET_MECHANICS = frozenset(
         "snare",
         "death_transform",
         "shield",
+        "secondary_attack",
+        "primary_target_restriction",
+        "target_distribution",
+        "bayonet",
+        "minimum_attack_range",
+        "deployment_stagger",
+        "formation_mirroring",
+        "river_jump",
+        "concealment",
+        "mirror_level_scaling",
+        "threshold_charge",
+        "recharge_windup",
+        "projectile_speed",
     }
 )
 
@@ -335,6 +376,7 @@ _TROOP_VICTIM_MECHANICS = _TROOP_TARGET_MECHANICS | frozenset(
         "projectile_motion",
         "target_acquisition",
         "target_legality",
+        "bayonet",
     }
 )
 
@@ -370,6 +412,7 @@ def _generated_support_plan(
         card.card_id == "mirror"
         or card.mechanics.get("clone") is not None
         or persistent.get("friendly_status") is not None
+        or mechanic == "healing"
     )
     passive_spawner = (
         card.kind == "building"
@@ -419,6 +462,11 @@ def _generated_support_plan(
         not in {"deployment", "lifecycle", "building_navigation", "lifetime", "passive_spawner", "periodic_spawn", "resource_generation"}
     ) or troop_target_case
 
+    if mechanic == "projectile_speed":
+        # The X-Bow probe uses a defensive Cannon as a durable ground target;
+        # row 20 is the legal player-0 building side for this fixture.
+        support_cell = (3, 20)
+
     if friendly_setup:
         support_card = _support_card_for_opponent(ruleset, card_id)
         support_cell = (3, 9)
@@ -431,7 +479,7 @@ def _generated_support_plan(
         # The player Hog is placed on the same lane.  Spells can target its
         # own side directly; buildings wait until tick 520 so the Hog is fully
         # deployed and walking when the defensive building appears.
-        support_cell = (3, 17)
+        support_cell = (3, 20) if mechanic == "projectile_speed" else (3, 17)
         # A building-targeting Hog is the useful opponent for a defensive
         # building.  Troop-target branches instead need Musketeer so the
         # tested entity can acquire and damage a troop (and eventually die),
@@ -443,10 +491,6 @@ def _generated_support_plan(
             and mechanic in _TROOP_VICTIM_MECHANICS
             and "cannon" in ruleset.cards
         )
-        use_ice_golem = (
-            mechanic in {"hook_pull", "hook_targeting"}
-            and "ice-golem" in ruleset.cards
-        )
         use_musketeer = (
             (
                 card.kind == "troop"
@@ -454,18 +498,31 @@ def _generated_support_plan(
             )
             or card_id in {"cannon-cart", "electro-giant"}
             or (card.kind == "spell" and mechanic == "knockback")
+            or mechanic in {"secondary_attack", "threshold_charge", "recharge_windup", "projectile_speed"}
         ) and "musketeer" in ruleset.cards
-        if use_cannon:
+        if card_id == "sparky" and mechanic == "area_damage":
+            # Sparky needs a full four-second recharge.  A Musketeer plus
+            # swarm fixture kills it before the first shot, so use the
+            # durable Cannon as its single ground/building target here.
+            support_card = "cannon"
+            support_slot = PLAYER_DECK.index(support_card)
+            support_cell = (3, 20)
+        elif mechanic == "projectile_speed":
+            support_card = "cannon"
+            support_slot = PLAYER_DECK.index(support_card)
+        elif mechanic in {"hook_pull", "hook_targeting"}:
+            # Hook semantics are troop-only; use the slot-0 Hog body rather
+            # than a ranged support unit that the normal attack scheduler may
+            # kill before the hook reaches its target.
+            support_card = "hog-rider"
+            support_slot = PLAYER_DECK.index(support_card)
+        elif use_cannon:
             support_card = "cannon"
             support_slot = 0
             support_cell = (3, 20)
-        elif use_ice_golem:
-            support_card = "ice-golem"
-            support_slot = 2
-            support_cell = (3, 23)
         else:
             support_card = "musketeer" if use_musketeer else "hog-rider"
-            support_slot = 1 if support_card == "musketeer" else 0
+            support_slot = PLAYER_DECK.index(support_card)
         # Building-only troops need to reach a building before the defensive
         # Cannon is played.  If the Cannon is already live at tick 400 its
         # first three shots plus a Princess Tower shot can kill short-lived
@@ -482,6 +539,15 @@ def _generated_support_plan(
         )
         support_actions.append(ScheduledAction(support_tick, PlayCardAction(0, support_slot, support_cell)))
         required_support.append({"player": 0, "card_id": support_card})
+        if mechanic == "secondary_attack":
+            # The rocket has a blind inner range and excludes the primary
+            # target.  Keep two legal bodies in its 2.5--5 tile window so the
+            # independent weapon must acquire and launch rather than passing
+            # with only one primary victim.
+            support_actions.append(
+                ScheduledAction(401, PlayCardAction(0, 0, (4, 17)))
+            )
+            required_support.append({"player": 0, "card_id": "hog-rider"})
         if card.kind == "spell":
             main_cell = (
                 # The target body starts at row 17 and is already walking
@@ -526,23 +592,54 @@ def _generated_support_plan(
         )
         required_support.append({"player": 1, "card_id": friendly_card})
 
+    if mechanic == "healing":
+        # Battle Healer must have a friendly damaged troop nearby and an
+        # enemy target to attack.  The fixed player Musketeer supplies the
+        # latter; the opponent support troop is the legal heal recipient.
+        support_actions.append(
+            ScheduledAction(
+                400,
+                PlayCardAction(0, PLAYER_DECK.index("musketeer"), (3, 17)),
+            )
+        )
+        required_support.append({"player": 0, "card_id": "musketeer"})
+        main_cell = support_cell
+    if mechanic == "projectile_speed":
+        # X-Bow's authored range is shorter than the generic center anchor;
+        # use the calibrated left-lane defensive cell so its first shot is
+        # guaranteed to reach the opposing Princess Tower.
+        main_cell = (3, 13)
+
     # Area, chain, multi-target, and Lightning selection cases need more than
     # one legal victim.  Play two additional fixed-deck bodies on the same
     # lane after Musketeer so the engine must perform its real candidate
     # ordering rather than only hitting a Crown Tower.
     if mechanic in _MULTI_VICTIM_MECHANICS and enemy_target_setup and not (
         card.kind == "troop" and bool(card.mechanics.get("building_only"))
-    ):
+    ) and not (card_id == "sparky" and mechanic == "area_damage"):
+        if support_card == "musketeer":
+            extra_first = "cannon"
+            extra_first_slot = 1
+            extra_first_cell = (3, 20)
+        else:
+            extra_first = "musketeer"
+            extra_first_slot = 1
+            extra_first_cell = (2, 17)
         support_actions.append(
-            ScheduledAction(401, PlayCardAction(0, 1, (2, 17)))
+            ScheduledAction(401, PlayCardAction(0, extra_first_slot, extra_first_cell))
         )
-        required_support.append({"player": 0, "card_id": "ice-golem"})
+        required_support.append({"player": 0, "card_id": extra_first})
         support_actions.append(
-            ScheduledAction(402, PlayCardAction(0, 0, (4, 17)))
+            ScheduledAction(402, PlayCardAction(0, 1, (4, 17)))
         )
-        required_support.append({"player": 0, "card_id": "hog-rider"})
+        required_support.append({"player": 0, "card_id": "skeletons"})
 
-    main_action = ScheduledAction(main_tick, PlayCardAction(1, 0, main_cell))
+    # Mirror is intentionally excluded from the opening hand by the engine.
+    # The support play above draws it into the fourth slot, so its generated
+    # action must follow the actual hand transition instead of assuming every
+    # opponent card starts in slot zero.
+    main_slot = 3 if card.card_id == "mirror" and friendly_setup else 0
+    main_action = ScheduledAction(main_tick, PlayCardAction(1, main_slot, main_cell))
     actions = tuple(sorted((*support_actions, main_action), key=lambda row: (row.tick, row.action.player)))
     varied_actions = _variant_actions(actions, variant)
     varied_main_cell = _variant_cell(main_cell, variant)
@@ -557,6 +654,27 @@ def _required_event_kinds(card: Any, mechanic: str) -> tuple[str, ...]:
     scenario silently exercises only deployment while claiming to cover an
     attack, spell victim, status, spawn, or transformation component.
     """
+
+    # The roster's generic deployment/lifecycle components are still useful
+    # behavioral contracts: a legal card play must materialize the authored
+    # body, and that body must leave its deployment phase (or a spell must
+    # finish its projectile lifecycle).  Keep Mirror on its explicit event
+    # path because it copies the previous card immediately instead of making
+    # a projectile of its own.
+    if mechanic == "deployment":
+        if card.card_id == "mirror":
+            return ("card_mirrored",)
+        return ("projectile_spawned",) if card.kind == "spell" else ("entity_created",)
+    if mechanic == "lifecycle":
+        if card.card_id == "mirror":
+            return ("card_mirrored",)
+        # Mixed cards (Goblin Gang/Rascals) materialize their child bodies
+        # directly.  The child definitions have zero deploy time, so the
+        # engine intentionally emits no entity_deployed transition for them;
+        # entity_created is the authoritative lifecycle boundary instead.
+        if card.mechanics.get("spawn_children") is not None:
+            return ("entity_created",)
+        return ("projectile_resolved",) if card.kind == "spell" else ("entity_deployed",)
 
     if card.kind == "building":
         passive_spawner = (
@@ -575,6 +693,7 @@ def _required_event_kinds(card: Any, mechanic: str) -> tuple[str, ...]:
             "area_damage": ("damage_applied",),
             "projectile_origin": ("projectile_spawned",),
             "projectile_motion": ("projectile_resolved",),
+            "projectile_speed": ("projectile_spawned",),
             "target_acquisition": ("target_changed",),
             "target_legality": ("target_changed",) if not passive_spawner else (),
             "death": ("entity_died",),
@@ -589,6 +708,14 @@ def _required_event_kinds(card: Any, mechanic: str) -> tuple[str, ...]:
             "lifetime": ("building_expired",),
             "periodic_spawn": ("entity_spawned",),
             "resource_generation": ("elixir_generated",),
+            "primary_target_restriction": ("target_changed",),
+            "target_distribution": ("target_changed",),
+            "minimum_attack_range": ("target_changed",),
+            "deployment_stagger": ("entity_created",),
+            "formation_mirroring": ("entity_created",),
+            "river_jump": ("river_airborne_changed",),
+            "concealment": ("entity_concealment_changed",),
+            "mirror_level_scaling": ("card_mirrored",),
             # A shield case is not complete when the child merely spawned:
             # it must take a real incoming hit that consumes the layer and
             # then expose the broken transition.  The target fixture below
@@ -609,6 +736,7 @@ def _required_event_kinds(card: Any, mechanic: str) -> tuple[str, ...]:
             "area_damage": ("damage_applied",),
             "projectile_origin": ("projectile_spawned",),
             "projectile_motion": ("projectile_resolved",),
+            "projectile_speed": ("projectile_spawned",),
             "target_acquisition": ("target_changed",),
             "target_legality": ("target_changed",),
             "periodic_spawn": ("entity_spawned",),
@@ -658,6 +786,19 @@ def _required_event_kinds(card: Any, mechanic: str) -> tuple[str, ...]:
             "snare": ("status_applied",),
             "death_transform": ("death_transform",),
             "death_spawn": ("death_spawn",),
+            "secondary_attack": ("secondary_attack_started", "projectile_spawned"),
+            "primary_target_restriction": ("target_changed",),
+            "target_distribution": ("target_changed",),
+            "bayonet": ("bayonet_attack",),
+            "minimum_attack_range": ("target_changed",),
+            "deployment_stagger": ("entity_created",),
+            "formation_mirroring": ("entity_created",),
+            "river_jump": ("river_airborne_changed",),
+            "concealment": ("entity_concealment_changed",),
+            "mirror_level_scaling": ("card_mirrored",),
+            "threshold_charge": ("phase_changed",),
+            "healing": ("healing_applied",),
+            "recharge_windup": ("attack_started",),
         }
         return mapping.get(mechanic, ())
     if card.kind == "spell":
@@ -674,6 +815,7 @@ def _required_event_kinds(card: Any, mechanic: str) -> tuple[str, ...]:
             "impact_spawn": ("entity_spawned",),
             "clone_component": ("entity_cloned",),
             "target_selection": ("projectile_resolved",),
+            "mirror_level_scaling": ("card_mirrored",),
         }
         return mapping.get(mechanic, ())
     return ()
@@ -713,12 +855,107 @@ def _required_event_matches(card: Any, mechanic: str) -> tuple[dict[str, Any], .
     source_card_id = event_source_card_id(mechanic)
     if card_id == "mirror":
         return ({"kind": "card_mirrored", "filters": {"player": 1}},)
+    if mechanic == "deployment":
+        if card.kind == "spell":
+            return (
+                {
+                    "kind": "projectile_spawned",
+                    "filters": {"card_id": card_id, "player": 1},
+                },
+            )
+        return (
+            {
+                "kind": "entity_created",
+                "filters": {"card_id": source_card_id, "player": 1},
+            },
+        )
+    if mechanic == "lifecycle":
+        if card.kind == "spell":
+            return (
+                {
+                    "kind": "projectile_resolved",
+                    "filters": {"card_id": card_id},
+                },
+            )
+        if card.mechanics.get("spawn_children") is not None:
+            return (
+                {
+                    "kind": "entity_created",
+                    "filters": {"card_id": source_card_id, "player": 1},
+                },
+            )
+        return (
+            {
+                "kind": "entity_deployed",
+                "filters": {"card_id": source_card_id, "player": 1},
+            },
+        )
     if mechanic == "attack" and card.mechanics.get("trigger_on_target"):
         return ({"kind": "entity_triggered", "filters": {"card_id": card_id}},)
     if mechanic in {"attack", "charge_attack", "dash_attack"}:
         return ({"kind": "attack_started", "filters": {"card_id": source_card_id}},)
     if mechanic in {"damage", "area_damage"}:
         return ({"kind": "damage_applied", "filters": {"source_card_id": source_card_id}},)
+    if mechanic == "projectile_speed":
+        speed_code = card.mechanics.get("projectile_speed_code")
+        return (
+            {
+                "kind": "projectile_spawned",
+                "filters": {
+                    "card_id": source_card_id,
+                    "player": 1,
+                    "projectile_speed_code": int(speed_code),
+                },
+            },
+        )
+    if mechanic == "secondary_attack":
+        return (
+            {
+                "kind": "secondary_attack_started",
+                "filters": {"card_id": card_id, "player": 1},
+            },
+            {
+                "kind": "projectile_spawned",
+                "filters": {
+                    "card_id": card_id,
+                    "player": 1,
+                    "attack_kind": "secondary",
+                },
+            },
+        )
+    if mechanic in {"primary_target_restriction", "target_distribution", "minimum_attack_range"}:
+        return ({"kind": "target_changed", "filters": {}},)
+    if mechanic == "bayonet":
+        return ({"kind": "bayonet_attack", "filters": {"card_id": card_id}},)
+    if mechanic in {"deployment_stagger", "formation_mirroring"}:
+        return ({"kind": "entity_created", "filters": {"card_id": card_id, "player": 1}},)
+    if mechanic == "river_jump":
+        return ({"kind": "river_airborne_changed", "filters": {"card_id": card_id}},)
+    if mechanic == "concealment":
+        return ({"kind": "entity_concealment_changed", "filters": {"card_id": card_id}},)
+    if mechanic == "mirror_level_scaling":
+        return ({"kind": "card_mirrored", "filters": {"player": 1}},)
+    if mechanic == "threshold_charge":
+        return (
+            {
+                "kind": "phase_changed",
+                "filters": {"card_id": card_id, "phase": "charge"},
+            },
+        )
+    if mechanic == "healing":
+        return (
+            {
+                "kind": "healing_applied",
+                "filters": {"source_card_id": card_id},
+            },
+        )
+    if mechanic == "recharge_windup":
+        return (
+            {
+                "kind": "attack_started",
+                "filters": {"card_id": card_id, "attack_number": 2},
+            },
+        )
     if mechanic == "projectile_origin":
         return ({"kind": "projectile_spawned", "filters": {"card_id": source_card_id, "player": 1}},)
     if mechanic in {"projectile_motion", "spell_geometry", "victim_selection", "effect_timing"}:

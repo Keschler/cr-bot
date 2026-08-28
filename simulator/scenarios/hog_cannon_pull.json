@@ -47,7 +47,7 @@
       "log"
     ]
   ],
-  "engine_version": "reference-0.28.0",
+  "engine_version": "reference-0.29.0",
   "max_ticks": 160,
   "oracle": {
     "note": "Synthetic smoke scenario only; it is not real-game ground truth.",

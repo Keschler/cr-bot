@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
 import hashlib
+from itertools import combinations
 import json
 import multiprocessing
 from pathlib import Path
@@ -19,10 +20,11 @@ from typing import Any, Iterable, Mapping
 
 from .engine import ENGINE_VERSION, BattleEngine
 from .geometry import cell_center_mtile
+from .roster import PLAYER_DECK, load_opponent_roster
 from .runner import run_scenario
-from .ruleset import load_ruleset
+from .ruleset import Ruleset, load_ruleset
 from .scenario import Scenario, scenario_from_dict
-from .scenario_factory import GeneratedScenario
+from .scenario_factory import GeneratedScenario, card_mechanics
 
 
 GENERATED_VALIDATION_SCHEMA_VERSION = 1
@@ -240,6 +242,26 @@ def _required_state_errors(scenario: Scenario, state: object) -> list[str]:
     return errors
 
 
+def _behavioral_obligation_fields(scenario: Scenario) -> tuple[list[str], list[str]]:
+    """Return malformed obligation fields and the fields that are present."""
+
+    malformed: list[str] = []
+    present: list[str] = []
+    for field_name in (
+        "required_event_kinds",
+        "required_event_matches",
+        "required_state_checks",
+    ):
+        raw = scenario.oracle.get(field_name, [])
+        if raw is None:
+            continue
+        if not isinstance(raw, list):
+            malformed.append(f"oracle.{field_name} must be an array")
+        elif raw:
+            present.append(field_name)
+    return malformed, present
+
+
 def _validate_one_scenario(
     engine: BattleEngine,
     scenario: Scenario,
@@ -392,6 +414,23 @@ def validate_generated_scenarios(
     elapsed_ns = perf_counter_ns() - started_ns
     rows.sort(key=lambda row: row["scenario_id"])
     failures = [row for row in rows if not row["passed"]]
+    behavioral_gaps = []
+    behavioral_malformed = []
+    for scenario in materialized:
+        malformed, present = _behavioral_obligation_fields(scenario)
+        if malformed:
+            behavioral_malformed.append(
+                {"scenario_id": scenario.scenario_id, "errors": malformed}
+            )
+        if not present:
+            card_id, mechanic = _scenario_labels(scenario)
+            behavioral_gaps.append(
+                {
+                    "scenario_id": scenario.scenario_id,
+                    "card_id": card_id,
+                    "mechanic": mechanic,
+                }
+            )
     pair_keys = {
         tuple(
             sorted(
@@ -436,12 +475,234 @@ def validate_generated_scenarios(
         "card_counts": dict(sorted(card_counts.items())),
         "mechanic_counts": dict(sorted(mechanic_counts.items())),
         "failures": failures,
+        "behavioral_obligation_count": len(materialized) - len(behavioral_gaps),
+        "behavioral_obligation_gap_count": len(behavioral_gaps),
+        "behavioral_obligation_gaps": sorted(
+            behavioral_gaps, key=lambda row: row["scenario_id"]
+        ),
+        "behavioral_obligation_malformed": sorted(
+            behavioral_malformed, key=lambda row: row["scenario_id"]
+        ),
         "cases": rows,
     }
     if pair_keys:
         report["unordered_pair_count"] = len(pair_keys)
         report["pair_card_count"] = len(pair_card_ids)
     return report
+
+
+def validate_generated_behavioral_obligations(
+    scenarios: Iterable[Scenario],
+) -> dict[str, Any]:
+    """Fail closed when a generated case has no behavioral oracle.
+
+    ``required_card_plays`` proves that a card action was accepted, but it is
+    not a mechanic oracle.  Release validation therefore requires at least
+    one event-kind, event-predicate, or final-state check for every roster
+    mechanic case.  Fixed-deck interaction and unordered-pair manifests are
+    intentionally action-boundary scopes and are reported as not applicable.
+    This gate is separate from matrix membership so focused manifests remain
+    convenient during development.
+    """
+
+    gaps: list[dict[str, str]] = []
+    malformed: list[dict[str, Any]] = []
+    materialized = tuple(scenarios)
+    scopes = {
+        (
+            "opponent_pairs"
+            if scenario.oracle.get("first_opponent_card_id") is not None
+            else "fixed_deck_interactions"
+            if scenario.oracle.get("player_card_id") is not None
+            else "roster_mechanics"
+        )
+        for scenario in materialized
+    }
+    if len(scopes) != 1:
+        return {
+            "passed": False,
+            "applicable": False,
+            "scope": "mixed",
+            "scenario_count": len(materialized),
+            "behavioral_obligation_count": 0,
+            "behavioral_obligation_gap_count": 0,
+            "gaps": [],
+            "malformed": [],
+            "errors": ["behavioral obligation gate received mixed scopes"],
+        }
+    scope = next(iter(scopes), "roster_mechanics")
+    if scope != "roster_mechanics":
+        # Interaction and unordered-pair manifests are explicitly action-
+        # boundary matrices. Their required card-play oracle is the intended
+        # contract; mechanic-specific behavior belongs to the roster scope.
+        return {
+            "passed": True,
+            "applicable": False,
+            "scope": scope,
+            "scenario_count": len(materialized),
+            "behavioral_obligation_count": 0,
+            "behavioral_obligation_gap_count": 0,
+            "gaps": [],
+            "malformed": [],
+            "errors": [],
+        }
+    for scenario in materialized:
+        field_errors, present = _behavioral_obligation_fields(scenario)
+        if field_errors:
+            malformed.append(
+                {"scenario_id": scenario.scenario_id, "errors": field_errors}
+            )
+        if not present:
+            card_id, mechanic = _scenario_labels(scenario)
+            gaps.append(
+                {
+                    "scenario_id": scenario.scenario_id,
+                    "card_id": card_id,
+                    "mechanic": mechanic,
+                }
+            )
+    errors: list[str] = []
+    if malformed:
+        errors.append(f"malformed behavioral obligation fields: {len(malformed)}")
+    if gaps:
+        errors.append(f"generated cases without behavioral obligations: {len(gaps)}")
+    return {
+        "passed": not errors,
+        "applicable": True,
+        "scope": scope,
+        "scenario_count": len(materialized),
+        "behavioral_obligation_count": len(materialized) - len(gaps),
+        "behavioral_obligation_gap_count": len(gaps),
+        "gaps": sorted(gaps, key=lambda row: row["scenario_id"]),
+        "malformed": sorted(malformed, key=lambda row: row["scenario_id"]),
+        "errors": errors,
+    }
+
+
+def validate_complete_generated_coverage(
+    payload: Mapping[str, Any],
+    scenarios: Iterable[Scenario],
+    *,
+    ruleset: Ruleset,
+) -> dict[str, Any]:
+    """Require a generated manifest to cover the complete declared V1 scope.
+
+    The ordinary validator intentionally accepts focused manifests for fast
+    iteration.  This separate gate is used by release/readiness commands and
+    derives its expected keys from the checked-in roster and ruleset rather
+    than trusting the manifest's summary fields.
+    """
+
+    materialized = tuple(scenarios)
+    roster = load_opponent_roster()
+    eligible = frozenset(roster.eligible_cards)
+    oracles = tuple(scenario.oracle for scenario in materialized)
+    pair_rows = tuple(
+        oracle
+        for oracle in oracles
+        if isinstance(oracle.get("first_opponent_card_id"), str)
+        and isinstance(oracle.get("second_opponent_card_id"), str)
+    )
+    interaction_rows = tuple(
+        oracle
+        for oracle in oracles
+        if isinstance(oracle.get("player_card_id"), str)
+        and isinstance(oracle.get("opponent_card_id"), str)
+    )
+
+    if pair_rows and interaction_rows:
+        scope = "mixed"
+    elif pair_rows:
+        scope = "opponent_pairs"
+    elif interaction_rows:
+        scope = "fixed_deck_interactions"
+    else:
+        scope = "roster_mechanics"
+
+    observed_cards: set[str] = set()
+    observed_keys: set[tuple[str, ...]] = set()
+    if scope == "opponent_pairs":
+        for oracle in pair_rows:
+            first = oracle["first_opponent_card_id"]
+            second = oracle["second_opponent_card_id"]
+            observed_cards.update((first, second))
+            if first != second:
+                observed_keys.add(tuple(sorted((first, second))))
+        expected_keys = {
+            tuple(pair)
+            for pair in combinations(sorted(eligible), 2)
+        }
+        key_label = "unordered_opponent_pairs"
+    elif scope == "fixed_deck_interactions":
+        for oracle in interaction_rows:
+            player = oracle["player_card_id"]
+            opponent = oracle["opponent_card_id"]
+            observed_cards.add(opponent)
+            observed_keys.add((player, opponent))
+        expected_keys = {
+            (player, opponent)
+            for player in PLAYER_DECK
+            for opponent in sorted(eligible)
+        }
+        key_label = "fixed_deck_interactions"
+    elif scope == "roster_mechanics":
+        for oracle in oracles:
+            card_id = oracle.get("card_id")
+            mechanic = oracle.get("mechanic")
+            if isinstance(card_id, str):
+                observed_cards.add(card_id)
+            if isinstance(card_id, str) and isinstance(mechanic, str):
+                observed_keys.add((card_id, mechanic))
+        expected_keys = {
+            (card_id, mechanic)
+            for card_id in sorted(eligible)
+            for mechanic in card_mechanics(ruleset, card_id)
+        }
+        key_label = "roster_mechanics"
+    else:
+        expected_keys = set()
+        key_label = "generated_scope"
+
+    missing_cards = sorted(eligible - observed_cards)
+    unexpected_cards = sorted(observed_cards - eligible)
+    missing_keys = sorted(expected_keys - observed_keys)
+    unexpected_keys = sorted(observed_keys - expected_keys)
+    errors: list[str] = []
+    if scope == "mixed":
+        errors.append("manifest mixes incompatible generated coverage scopes")
+    if ruleset.ruleset_id != "v1":
+        errors.append(
+            f"complete generated coverage requires ruleset v1, got {ruleset.ruleset_id}"
+        )
+    if missing_cards:
+        errors.append(f"missing eligible cards: {', '.join(missing_cards)}")
+    if unexpected_cards:
+        errors.append(f"unexpected cards: {', '.join(unexpected_cards)}")
+    if missing_keys:
+        errors.append(f"missing {key_label}: {len(missing_keys)}")
+    if unexpected_keys:
+        errors.append(f"unexpected {key_label}: {len(unexpected_keys)}")
+
+    summary = payload.get("summary") if isinstance(payload, Mapping) else None
+    declared_case_count = summary.get("scenario_count") if isinstance(summary, Mapping) else None
+    if declared_case_count != len(materialized):
+        errors.append("manifest summary.scenario_count does not match its cases")
+    return {
+        "passed": not errors,
+        "scope": scope,
+        "ruleset_id": ruleset.ruleset_id,
+        "roster_id": roster.roster_id,
+        "expected_card_count": len(eligible),
+        "observed_card_count": len(observed_cards),
+        "missing_cards": missing_cards,
+        "unexpected_cards": unexpected_cards,
+        "key_label": key_label,
+        "expected_coverage_count": len(expected_keys),
+        "observed_coverage_count": len(observed_keys),
+        "missing_coverage_count": len(missing_keys),
+        "unexpected_coverage_count": len(unexpected_keys),
+        "errors": errors,
+    }
 
 
 def write_generated_validation_report(path: str | Path, report: Mapping[str, Any]) -> Path:
@@ -463,6 +724,8 @@ def write_generated_validation_report(path: str | Path, report: Mapping[str, Any
 __all__ = [
     "GENERATED_VALIDATION_SCHEMA_VERSION",
     "load_generated_manifest",
+    "validate_complete_generated_coverage",
+    "validate_generated_behavioral_obligations",
     "validate_generated_scenarios",
     "write_generated_validation_report",
 ]

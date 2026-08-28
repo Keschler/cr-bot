@@ -46,6 +46,7 @@ class StatusState:
     # movement and attack speed).  Goblin Curse uses 850 for movement and
     # 1000 for attack speed.
     hit_speed_magnitude_permille: int | None = None
+    source_level_multiplier_permille: int = 1_000
 
 
 @dataclass(slots=True)
@@ -59,6 +60,9 @@ class EntityState:
     hp: int
     max_hp: int
     spawn_tick: int
+    # Per-entity level scaling is used by Mirror.  Normal Level-11 bodies use
+    # 1000; a Level-12 mirrored body uses the game's 10% level step (1100).
+    level_multiplier_permille: int = 1_000
     role: str | None = None
     target_uid: int | None = None
     pending_target_uid: int | None = None
@@ -78,6 +82,9 @@ class EntityState:
     spawn_cooldown_us: int = 0
     spawn_time_remainder: int = 0
     spawned_count: int = 0
+    # Proximity-triggered spawners serialize their current visible-enemy gate
+    # so a paused cadence resumes identically after replay restoration.
+    spawner_active: bool = False
     movement_remainder: int = 0
     attack_time_remainder: int = 0
     navigation_target_uid: int | None = None
@@ -142,6 +149,10 @@ class EntityState:
     # not move, acquire targets, or receive ordinary target selection until
     # the tunnel phase ends.
     burrow_active: bool = False
+    # Tesla's underground state differs from stealth: ordinary spells and
+    # troops cannot affect it, while Earthquake and Freeze are exceptions.
+    concealed_active: bool = False
+    river_airborne_active: bool = False
     # Mega Knight-style jump/landing attacks use an explicit in-flight phase
     # so a jump cannot be mistaken for ordinary path movement.
     jump_remaining_us: int = 0
@@ -163,12 +174,16 @@ class ProjectileState:
     damage: int
     crown_damage: int
     speed_mtile_per_s: int
+    # Preserve a versioned ruleset projectile speed code alongside the
+    # normalized physical speed when a card supplies one.
+    speed_code: int | None = None
     homing: bool = False
     radius_mtile: int = 0
     target_uid: int | None = None
     status_kind: str | None = None
     status_duration_us: int = 0
     status_magnitude_permille: int = 1_000
+    status_hit_speed_magnitude_permille: int = 1_000
     status_damage_per_tick: int = 0
     status_tick_interval_us: int = 0
     knockback_mtile: int = 0
@@ -181,6 +196,7 @@ class ProjectileState:
     hit_uids: list[int] = field(default_factory=list)
     alive: bool = True
     movement_remainder: int = 0
+    level_multiplier_permille: int = 1_000
     # Fixed line geometry for piercing projectiles (Magic Archer).  The
     # legacy target coordinates remain the endpoint for ordinary projectiles.
     origin_x_mtile: int = 0
@@ -195,6 +211,11 @@ class ProjectileState:
     # Hunter's fan is represented by independent pellet projectiles; indices
     # make event streams and generated truth unambiguous.
     pellet_index: int = 0
+    # Electro Spirit's later bounces are authoritative delayed impacts.
+    chain_target_uids: list[int] = field(default_factory=list)
+    chain_next_index: int = 0
+    chain_delay_us: int = 0
+    chain_delay_remaining_us: int = 0
 
 
 @dataclass(slots=True)
@@ -218,6 +239,7 @@ class AreaEffectState:
     remaining_us: int
     tick_interval_us: int
     tick_remainder_us: int = 0
+    initial_delay_remaining_us: int = 0
     damage_per_tick: int = 0
     crown_damage_per_tick: int = 0
     status_kind: str | None = None
@@ -236,6 +258,7 @@ class AreaEffectState:
     pulses_applied: int = 0
     max_pulses: int | None = None
     alive: bool = True
+    level_multiplier_permille: int = 1_000
     # Optional per-pulse damage schedules.  Tuples are canonical in the
     # authoritative state; JSON round-trips normalize lists back to tuples.
     # A schedule may end before the area lifetime (for example Tornado keeps
@@ -376,6 +399,7 @@ def battle_state_from_primitive(raw: dict[str, Any]) -> BattleState:
         entity_row.setdefault("spawn_cooldown_us", 0)
         entity_row.setdefault("spawn_time_remainder", 0)
         entity_row.setdefault("spawned_count", 0)
+        entity_row.setdefault("spawner_active", False)
         entity_row.setdefault("navigation_target_uid", None)
         entity_row.setdefault("navigation_revision", -1)
         entity_row.setdefault("navigation_goal_x_mtile", 0)
@@ -399,6 +423,8 @@ def battle_state_from_primitive(raw: dict[str, Any]) -> BattleState:
         entity_row.setdefault("stealth_active", False)
         entity_row.setdefault("stealth_remaining_us", 0)
         entity_row.setdefault("burrow_active", False)
+        entity_row.setdefault("concealed_active", False)
+        entity_row.setdefault("river_airborne_active", False)
         entity_row.setdefault("jump_remaining_us", 0)
         entity_row.setdefault("jump_target_uid", None)
         entity_row.setdefault("jump_landing_x_mtile", 0)
@@ -408,10 +434,16 @@ def battle_state_from_primitive(raw: dict[str, Any]) -> BattleState:
         entity_row.setdefault("secondary_pending_target_uid", None)
         entity_row.setdefault("secondary_attack_time_remainder", 0)
         entity_row.setdefault("secondary_attack_count", 0)
+        entity_row.setdefault("level_multiplier_permille", 1_000)
         entity_row["navigation_waypoints"] = [
             tuple(point) for point in entity_row.get("navigation_waypoints", [])
         ]
-        entity_row["statuses"] = [StatusState(**status) for status in row.get("statuses", [])]
+        statuses = []
+        for status in row.get("statuses", []):
+            status_row = dict(status)
+            status_row.setdefault("source_level_multiplier_permille", 1_000)
+            statuses.append(StatusState(**status_row))
+        entity_row["statuses"] = statuses
         entity = EntityState(**entity_row)
         if type(entity.uid) is not int:
             raise ValueError("entity.uid must be an integer")
@@ -421,7 +453,14 @@ def battle_state_from_primitive(raw: dict[str, Any]) -> BattleState:
     projectiles: dict[int, ProjectileState] = {}
     for row in raw["projectiles"]:
         projectile_row = dict(row)
+        projectile_row.setdefault("speed_code", None)
         projectile_row.setdefault("homing", False)
+        projectile_row.setdefault("status_hit_speed_magnitude_permille", 1_000)
+        projectile_row.setdefault("level_multiplier_permille", 1_000)
+        projectile_row.setdefault("chain_target_uids", [])
+        projectile_row.setdefault("chain_next_index", 0)
+        projectile_row.setdefault("chain_delay_us", 0)
+        projectile_row.setdefault("chain_delay_remaining_us", 0)
         projectile_row.setdefault("allowed_targets", ())
         projectile_row.setdefault("origin_x_mtile", projectile_row.get("x_mtile", 0))
         projectile_row.setdefault("origin_y_mtile", projectile_row.get("y_mtile", 0))
@@ -433,6 +472,7 @@ def battle_state_from_primitive(raw: dict[str, Any]) -> BattleState:
         projectile_row.setdefault("return_phase", False)
         projectile_row.setdefault("pellet_index", 0)
         projectile_row["allowed_targets"] = tuple(projectile_row["allowed_targets"])
+        projectile_row["chain_target_uids"] = list(projectile_row["chain_target_uids"])
         projectile = ProjectileState(**projectile_row)
         if type(projectile.uid) is not int:
             raise ValueError("projectile.uid must be an integer")
@@ -451,11 +491,13 @@ def battle_state_from_primitive(raw: dict[str, Any]) -> BattleState:
             effect_row.get("friendly_allowed_targets", ())
         )
         effect_row.setdefault("pulses_applied", 0)
+        effect_row.setdefault("initial_delay_remaining_us", 0)
         effect_row.setdefault("max_pulses", None)
         effect_row.setdefault("friendly_status_kind", None)
         effect_row.setdefault("friendly_status_duration_us", 0)
         effect_row.setdefault("friendly_status_magnitude_permille", 1_000)
         effect_row.setdefault("friendly_status_linger_us", 0)
+        effect_row.setdefault("level_multiplier_permille", 1_000)
         effect = AreaEffectState(**effect_row)
         if type(effect.uid) is not int:
             raise ValueError("effect.uid must be an integer")

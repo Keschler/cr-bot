@@ -86,6 +86,7 @@ def segment_is_walkable(
     *,
     agent_radius_mtile: int,
     obstacles: Iterable[NavigationObstacle] = (),
+    allow_river_crossing: bool = False,
 ) -> bool:
     """Check terrain and dynamic obstacles along one straight segment."""
 
@@ -95,7 +96,11 @@ def segment_is_walkable(
         return False
     low_y = min(start[1], end[1])
     high_y = max(start[1], end[1])
-    if high_y > arena.river_y_min_mtile and low_y < arena.river_y_max_mtile:
+    if (
+        not allow_river_crossing
+        and high_y > arena.river_y_min_mtile
+        and low_y < arena.river_y_max_mtile
+    ):
         dx = end[0] - start[0]
         dy = end[1] - start[1]
         span = abs(dx) if dy == 0 else abs(dy)

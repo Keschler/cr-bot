@@ -570,6 +570,23 @@ def _validate_mechanics(row: dict[str, Any], context: str) -> None:
             "deploy_effect",
             "death_rage",
             "snare",
+            "river_jump",
+            "concealment",
+            "rolling_range_mtile",
+            "spawn_stagger_us",
+            "mirror_spawn_layout",
+            "primary_targets",
+            "spread_targets",
+            "bayonet",
+            "min_attack_range_mtile",
+            # Balance values for currently excluded Hero/Evolution/champion
+            # variants.  These are typed metadata blocks only; the V1 engine
+            # remains fail-closed until the corresponding action/component is
+            # implemented.
+            "ability",
+            "hero_ability",
+            "evolution",
+            "monster",
         }
     )
     if missing or unknown:
@@ -577,6 +594,9 @@ def _validate_mechanics(row: dict[str, Any], context: str) -> None:
     for name in ("building_only", "suicide_on_attack", "piercing"):
         if not isinstance(row[name], bool):
             raise RulesetError(f"{context}.mechanics.{name} must be boolean")
+    layout = row["spawn_layout_mtile"]
+    if layout or row.get("placement_class") not in {"spell_anywhere", "spells", "restricted_spell"}:
+        _validate_offsets(layout, f"{context}.mechanics.spawn_layout_mtile")
     if "target_limit" in row:
         _require_int(row, "target_limit", minimum=1)
     if "target_selection" in row and row["target_selection"] not in {
@@ -658,9 +678,7 @@ def _validate_mechanics(row: dict[str, Any], context: str) -> None:
     if secondary is not None:
         secondary_context = f"{context}.mechanics.secondary_attack"
         secondary = _as_dict(secondary, secondary_context)
-        _reject_unknown(
-            secondary,
-            {
+        secondary_required = {
                 "min_range_mtile",
                 "max_range_mtile",
                 "attack_interval_us",
@@ -671,9 +689,16 @@ def _validate_mechanics(row: dict[str, Any], context: str) -> None:
                 "projectile_speed_mtile_per_s",
                 "projectile_radius_mtile",
                 "targets",
-            },
-            secondary_context,
+            }
+        missing_secondary = sorted(secondary_required - set(secondary))
+        unknown_secondary = sorted(
+            set(secondary) - secondary_required - {"status", "troops_only"}
         )
+        if missing_secondary or unknown_secondary:
+            raise RulesetError(
+                f"{secondary_context} keys mismatch: missing={missing_secondary}, "
+                f"unknown={unknown_secondary}"
+            )
         for name in (
             "min_range_mtile",
             "max_range_mtile",
@@ -685,9 +710,20 @@ def _validate_mechanics(row: dict[str, Any], context: str) -> None:
             "projectile_speed_mtile_per_s",
             "projectile_radius_mtile",
         ):
-            _require_int(secondary, name, minimum=0 if name in {"first_hit_delay_us", "area_radius_mtile", "projectile_radius_mtile"} else 1)
+            _require_int(
+                secondary,
+                name,
+                minimum=0
+                if name in {
+                    "min_range_mtile", "first_hit_delay_us", "crown_tower_damage",
+                    "area_radius_mtile", "projectile_radius_mtile",
+                }
+                else 1,
+            )
         if secondary["max_range_mtile"] < secondary["min_range_mtile"]:
             raise RulesetError(f"{secondary_context}.max_range_mtile must be >= min_range_mtile")
+        if "troops_only" in secondary and type(secondary["troops_only"]) is not bool:
+            raise RulesetError(f"{secondary_context}.troops_only must be boolean")
         targets = secondary.get("targets")
         if (
             not isinstance(targets, list)
@@ -697,6 +733,94 @@ def _validate_mechanics(row: dict[str, Any], context: str) -> None:
             raise RulesetError(
                 f"{secondary_context}.targets must be a non-empty list of valid target classes"
             )
+        _validate_status(secondary.get("status"), f"{secondary_context}.status")
+
+    # Cross-cutting card mechanics introduced by the base-card audit are kept
+    # in the permissive mechanics object for forward compatibility, but their
+    # shapes still need strict validation so malformed generated rulesets fail
+    # at load time rather than during a replay.
+    if "spawn_stagger_us" in row:
+        _require_int(row, "spawn_stagger_us", minimum=0)
+    if "mirror_spawn_layout" in row and not isinstance(row["mirror_spawn_layout"], bool):
+        raise RulesetError(f"{context}.mechanics.mirror_spawn_layout must be boolean")
+    if "spread_targets" in row and not isinstance(row["spread_targets"], bool):
+        raise RulesetError(f"{context}.mechanics.spread_targets must be boolean")
+    if "min_attack_range_mtile" in row:
+        _require_int(row, "min_attack_range_mtile", minimum=0)
+    for name in ("primary_targets",):
+        if name in row:
+            values = row[name]
+            if (
+                not isinstance(values, list)
+                or not values
+                or any(not isinstance(value, str) or value not in _TARGETS for value in values)
+            ):
+                raise RulesetError(
+                    f"{context}.mechanics.{name} must be a non-empty list of valid target classes"
+                )
+    bayonet = row.get("bayonet")
+    if bayonet is not None:
+        bayonet_context = f"{context}.mechanics.bayonet"
+        bayonet_row = _as_dict(bayonet, bayonet_context)
+        _reject_unknown(
+            bayonet_row,
+            {"range_mtile", "damage", "crown_tower_damage", "targets"},
+            bayonet_context,
+        )
+        _require_int(bayonet_row, "range_mtile", minimum=0)
+        _require_int(bayonet_row, "damage", minimum=0)
+        _require_int(bayonet_row, "crown_tower_damage", minimum=0)
+        targets = bayonet_row.get("targets")
+        if (
+            not isinstance(targets, list)
+            or not targets
+            or any(not isinstance(value, str) or value not in _TARGETS for value in targets)
+        ):
+            raise RulesetError(
+                f"{bayonet_context}.targets must be a non-empty list of valid target classes"
+            )
+    river_jump = row.get("river_jump")
+    if river_jump is not None:
+        river_context = f"{context}.mechanics.river_jump"
+        river_row = _as_dict(river_jump, river_context)
+        _reject_unknown(river_row, {"duration_us"}, river_context)
+        _require_int(river_row, "duration_us", minimum=1)
+    concealment = row.get("concealment")
+    if concealment is not None:
+        concealment_context = f"{context}.mechanics.concealment"
+        concealment_row = _as_dict(concealment, concealment_context)
+        _reject_unknown(
+            concealment_row,
+            {"reveal_range_mtile", "starts_concealed", "earthquake_hits", "freeze_suppresses_reveal"},
+            concealment_context,
+        )
+        _require_int(concealment_row, "reveal_range_mtile", minimum=0)
+        for name in ("starts_concealed", "earthquake_hits", "freeze_suppresses_reveal"):
+            if not isinstance(concealment_row.get(name), bool):
+                raise RulesetError(f"{concealment_context}.{name} must be boolean")
+
+    # Keep balance-only fields for unsupported special variants explicit and
+    # integer-valued.  They are deliberately separate from the executable
+    # action components above: loading a future card with one of these blocks
+    # must not imply that the current engine can play its Hero/Evolution
+    # ability.
+    balance_blocks = {
+        "ability": {"charge_damage"},
+        "hero_ability": {"duration_us"},
+        "evolution": {"spear_damage", "rage_duration_us"},
+        "monster": {"hitpoints"},
+    }
+    for name, allowed in balance_blocks.items():
+        block = row.get(name)
+        if block is None:
+            continue
+        block_context = f"{context}.mechanics.{name}"
+        block = _as_dict(block, block_context)
+        _reject_unknown(block, allowed, block_context)
+        if not block:
+            raise RulesetError(f"{block_context} must not be empty")
+        for field_name in block:
+            _require_int(block, field_name, minimum=1)
     for component_name in ("chain_attack", "multi_target_attack"):
         component = row.get(component_name)
         if component is None:
@@ -704,7 +828,7 @@ def _validate_mechanics(row: dict[str, Any], context: str) -> None:
         component_context = f"{context}.mechanics.{component_name}"
         component = _as_dict(component, component_context)
         unknown_component_fields = sorted(
-            set(component) - {"max_targets", "chain_range_mtile", "selection", "range_mtile"}
+            set(component) - {"max_targets", "chain_range_mtile", "selection", "range_mtile", "chain_delay_us"}
         )
         if unknown_component_fields:
             raise RulesetError(
@@ -724,6 +848,8 @@ def _validate_mechanics(row: dict[str, Any], context: str) -> None:
             _require_int(component, "chain_range_mtile", minimum=1)
         if component.get("range_mtile") is not None:
             _require_int(component, "range_mtile", minimum=1)
+        if component.get("chain_delay_us") is not None:
+            _require_int(component, "chain_delay_us", minimum=0)
         if component.get("selection") not in {"nearest", "highest_hp"}:
             raise RulesetError(
                 f"{component_context}.selection must be 'nearest' or 'highest_hp'"
@@ -974,12 +1100,22 @@ def _validate_mechanics(row: dict[str, Any], context: str) -> None:
     if deploy_effect is not None:
         deploy_context = f"{context}.mechanics.deploy_effect"
         deploy_row = _as_dict(deploy_effect, deploy_context)
-        _reject_unknown(deploy_row, {"kind", "duration_us", "radius_mtile", "speed_multiplier_milli", "hit_speed_multiplier_milli", "targets"}, deploy_context)
+        deploy_required = {"kind", "duration_us", "radius_mtile", "speed_multiplier_milli", "hit_speed_multiplier_milli", "targets"}
+        deploy_optional = {"damage", "crown_tower_damage", "knockback_mtile"}
+        missing_deploy = sorted(deploy_required - set(deploy_row))
+        unknown_deploy = sorted(set(deploy_row) - deploy_required - deploy_optional)
+        if missing_deploy or unknown_deploy:
+            raise RulesetError(
+                f"{deploy_context} keys mismatch: missing={missing_deploy}, unknown={unknown_deploy}"
+            )
         _require_str(deploy_row, "kind")
-        _require_int(deploy_row, "duration_us", minimum=1)
+        _require_int(deploy_row, "duration_us", minimum=0)
         _require_int(deploy_row, "radius_mtile", minimum=0)
         _require_int(deploy_row, "speed_multiplier_milli", minimum=0)
         _require_int(deploy_row, "hit_speed_multiplier_milli", minimum=0)
+        for name in deploy_optional:
+            if name in deploy_row:
+                _require_int(deploy_row, name, minimum=0)
         targets = deploy_row.get("targets")
         if not isinstance(targets, list) or not targets or any(value not in _TARGETS for value in targets):
             raise RulesetError(f"{deploy_context}.targets must contain valid target classes")
@@ -1068,11 +1204,19 @@ def _validate_mechanics(row: dict[str, Any], context: str) -> None:
     spawn = row.get("spawn")
     if spawn is not None:
         spawn_row = _as_dict(spawn, f"{context}.mechanics.spawn")
-        _reject_unknown(
-            spawn_row,
-            {"card_id", "interval_us", "start_delay_us", "max_alive", "count"},
-            f"{context}.mechanics.spawn",
-        )
+        spawn_required = {
+            "card_id", "interval_us", "start_delay_us", "max_alive", "count"
+        }
+        spawn_allowed = spawn_required | {
+            "activation_range_mtile", "requires_visible_enemy", "child_deploy_time_us"
+        }
+        missing_spawn = sorted(spawn_required - set(spawn_row))
+        unknown_spawn = sorted(set(spawn_row) - spawn_allowed)
+        if missing_spawn or unknown_spawn:
+            raise RulesetError(
+                f"{context}.mechanics.spawn keys mismatch: "
+                f"missing={missing_spawn}, unknown={unknown_spawn}"
+            )
         _require_str(spawn_row, "card_id")
         _require_int(spawn_row, "interval_us", minimum=1)
         _require_int(spawn_row, "start_delay_us", minimum=0)
@@ -1080,6 +1224,16 @@ def _validate_mechanics(row: dict[str, Any], context: str) -> None:
         if max_alive is not None:
             _require_int(spawn_row, "max_alive", minimum=1)
         _require_int(spawn_row, "count", minimum=1)
+        if "activation_range_mtile" in spawn_row:
+            _require_int(spawn_row, "activation_range_mtile", minimum=1)
+        if "child_deploy_time_us" in spawn_row:
+            _require_int(spawn_row, "child_deploy_time_us", minimum=0)
+        if "requires_visible_enemy" in spawn_row and not isinstance(
+            spawn_row["requires_visible_enemy"], bool
+        ):
+            raise RulesetError(
+                f"{context}.mechanics.spawn.requires_visible_enemy must be boolean"
+            )
     spawn_on_impact = row.get("spawn_on_impact")
     if spawn_on_impact is not None:
         impact_row = _as_dict(
@@ -1144,10 +1298,12 @@ def _validate_mechanics(row: dict[str, Any], context: str) -> None:
         persistent_allowed = {
             "duration_us",
             "duration_anchor",
+            "initial_delay_us",
             "tick_interval_us",
             "radius_mtile",
             "damage_per_tick",
             "crown_damage_per_tick",
+            "building_damage_per_tick",
             "targets",
             "status",
             "knockback_mtile",
@@ -1169,6 +1325,8 @@ def _validate_mechanics(row: dict[str, Any], context: str) -> None:
             )
         _require_int(persistent_row, "duration_us", minimum=1)
         _require_int(persistent_row, "tick_interval_us", minimum=1)
+        if "initial_delay_us" in persistent_row:
+            _require_int(persistent_row, "initial_delay_us", minimum=0)
         if persistent_row.get("duration_anchor") not in {None, "after_immediate", "creation"}:
             raise RulesetError(
                 f"{context}.mechanics.persistent_effect.duration_anchor must be null, 'after_immediate', or 'creation'"
@@ -1177,6 +1335,7 @@ def _validate_mechanics(row: dict[str, Any], context: str) -> None:
             "radius_mtile",
             "damage_per_tick",
             "crown_damage_per_tick",
+            "building_damage_per_tick",
             "knockback_mtile",
             "pull_to_center_mtile",
         ):
@@ -1274,12 +1433,14 @@ def _validate_mechanics(row: dict[str, Any], context: str) -> None:
             )
             _reject_unknown(
                 spawn_row,
-                {"card_id", "count", "max_spawns"},
+                {"card_id", "count", "max_spawns", "offsets_mtile"},
                 f"{context}.mechanics.persistent_effect.spawn",
             )
             _require_str(spawn_row, "card_id")
             _require_int(spawn_row, "count", minimum=1)
             _require_int(spawn_row, "max_spawns", minimum=1)
+            if "offsets_mtile" in spawn_row:
+                _validate_offsets(spawn_row["offsets_mtile"], f"{context}.mechanics.persistent_effect.spawn.offsets_mtile")
     death = row["death"]
     if death is not None:
         death_row = _as_dict(death, f"{context}.mechanics.death")
@@ -1292,7 +1453,11 @@ def _validate_mechanics(row: dict[str, Any], context: str) -> None:
             "knockback_mtile",
             "spawn_card_id",
             "spawn_count",
+            "spawn_offsets_mtile",
             "spawn_children",
+            "opponent_elixir_milli",
+            "owner_elixir_milli",
+            "delay_us",
         }
         unknown_death = sorted(set(death_row) - allowed)
         if unknown_death:
@@ -1306,12 +1471,29 @@ def _validate_mechanics(row: dict[str, Any], context: str) -> None:
                 raise RulesetError(
                     f"{context}.mechanics.death.{name} must be a non-negative integer"
                 )
+        if "opponent_elixir_milli" in death_row:
+            _require_int(death_row, "opponent_elixir_milli", minimum=1)
+        if "owner_elixir_milli" in death_row:
+            _require_int(death_row, "owner_elixir_milli", minimum=1)
+        if "delay_us" in death_row:
+            _require_int(death_row, "delay_us", minimum=1)
         if "spawn_card_id" in death_row:
             _require_str(death_row, "spawn_card_id")
             _require_int(death_row, "spawn_count", minimum=1)
+            if "spawn_offsets_mtile" in death_row:
+                offsets = death_row["spawn_offsets_mtile"]
+                _validate_offsets(offsets, f"{context}.mechanics.death.spawn_offsets_mtile")
+                if len(offsets) != int(death_row["spawn_count"]):
+                    raise RulesetError(
+                        f"{context}.mechanics.death.spawn_offsets_mtile must contain exactly spawn_count entries"
+                    )
         elif "spawn_count" in death_row:
             raise RulesetError(
                 f"{context}.mechanics.death.spawn_count requires spawn_card_id"
+            )
+        elif "spawn_offsets_mtile" in death_row:
+            raise RulesetError(
+                f"{context}.mechanics.death.spawn_offsets_mtile requires spawn_card_id"
             )
         spawn_children = death_row.get("spawn_children")
         if spawn_children is not None:
@@ -1322,13 +1504,26 @@ def _validate_mechanics(row: dict[str, Any], context: str) -> None:
             for index, child in enumerate(spawn_children):
                 child_context = f"{context}.mechanics.death.spawn_children[{index}]"
                 child_row = _as_dict(child, child_context)
-                _reject_unknown(child_row, {"card_id", "count"}, child_context)
+                unknown_child = sorted(set(child_row) - {"card_id", "count", "offsets_mtile"})
+                missing_child = sorted({"card_id", "count"} - set(child_row))
+                if unknown_child or missing_child:
+                    raise RulesetError(
+                        f"{child_context} keys mismatch: "
+                        f"missing={missing_child}, unknown={unknown_child}"
+                    )
                 child_id = _require_str(child_row, "card_id")
                 if not _CARD_ID_RE.fullmatch(child_id):
                     raise RulesetError(
                         f"{child_context}.card_id is not a valid card ID"
                     )
                 _require_int(child_row, "count", minimum=1)
+                if "offsets_mtile" in child_row:
+                    offsets = child_row["offsets_mtile"]
+                    _validate_offsets(offsets, f"{child_context}.offsets_mtile")
+                    if len(offsets) != int(child_row["count"]):
+                        raise RulesetError(
+                            f"{child_context}.offsets_mtile must contain exactly count entries"
+                        )
         death_targets = death_row.get("targets")
         if not isinstance(death_targets, list) or not death_targets:
             raise RulesetError(f"{context}.mechanics.death.targets must be non-empty")
@@ -1356,6 +1551,10 @@ def _validate_status(value: Any, context: str) -> None:
         "tick_interval_us",
         "on_death_spawn_card_id",
         "on_death_spawn_count",
+        # A few projectile/status definitions carry their victim vocabulary
+        # alongside the effect (Ram Rider's bola is the current consumer).
+        # Keep it optional so ordinary status rows remain compact.
+        "targets",
     }
     unknown = sorted(set(row) - expected - optional)
     missing = sorted(expected - set(row))
@@ -1383,6 +1582,16 @@ def _validate_status(value: Any, context: str) -> None:
         raise RulesetError(
             f"{context}.on_death_spawn_count requires on_death_spawn_card_id"
         )
+    if "targets" in row:
+        targets = row["targets"]
+        if (
+            not isinstance(targets, list)
+            or not targets
+            or any(not isinstance(value, str) or value not in _TARGETS for value in targets)
+        ):
+            raise RulesetError(
+                f"{context}.targets must be a non-empty list of valid target classes"
+            )
 
 
 def _parse_tower(tower_id: str, value: Any, sources: Mapping[str, SourceRecord]) -> TowerDefinition:
@@ -1577,6 +1786,18 @@ def _as_dict(value: Any, context: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise RulesetError(f"{context} must be an object")
     return value
+
+
+def _validate_offsets(value: Any, context: str) -> None:
+    if not isinstance(value, list) or not value:
+        raise RulesetError(f"{context} must be a non-empty list")
+    if any(
+        not isinstance(point, list)
+        or len(point) != 2
+        or any(type(coordinate) is not int for coordinate in point)
+        for point in value
+    ):
+        raise RulesetError(f"{context} must contain integer [x, y] pairs")
 
 
 def _require_dict(row: Mapping[str, Any], key: str) -> dict[str, Any]:

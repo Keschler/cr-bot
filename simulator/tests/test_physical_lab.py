@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import argparse
+from dataclasses import replace
+import gzip
 import json
 from pathlib import Path
+import pickle
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,6 +15,7 @@ from simulator.physical_lab import (
     EvidenceStatus,
     ExperimentSpec,
     Frame,
+    PhysicalLabError,
     LIFECYCLE_PATH,
     LifecycleMachine,
     LifecyclePolicy,
@@ -29,13 +35,20 @@ from simulator.physical_lab import (
 )
 from simulator.physical_lab.artifacts import ArtifactRef, hash_file, register_retention_records
 from simulator.physical_lab.cli import main as physical_lab_main
-from simulator.physical_lab.devices import sha256_bytes
+from simulator.physical_lab.cli import _adb_runner, _bound_device_specs, _parser, _prepare_command
+from simulator.physical_lab.devices import DeviceInfo, sha256_bytes
 from simulator.physical_lab.devices import AdbPhoneController
 from simulator.physical_lab.cache import ReplayCacheError, seal_replay_cache
 from simulator.physical_lab.planner import load_readiness_questions
 from simulator.physical_lab.observation import ObservationManifest
 from simulator.physical_lab.replay import replay_hash_pair
 from simulator.physical_lab.schema import canonical_hash
+from simulator.physical_lab.automation import (
+    FIXED_HOG_CYCLE_DECK,
+    bind_spec_to_devices,
+    AutomationError,
+)
+import simulator.physical_lab.cli as physical_lab_cli
 
 
 def test_experiment_is_canonical_and_round_trips(tmp_path: Path) -> None:
@@ -44,6 +57,35 @@ def test_experiment_is_canonical_and_round_trips(tmp_path: Path) -> None:
     path = tmp_path / "experiment.json"
     spec.save(path)
     assert ExperimentSpec.load(path).experiment_hash() == spec.experiment_hash()
+
+
+def test_hog_probe_records_the_complete_fixed_starting_hand_contract() -> None:
+    spec = hog_cannon_probe()
+
+    assert spec.initial_conditions.hand_slots == {
+        "A": {
+            "hog-rider": 0,
+            "cannon": 1,
+            "musketeer": 2,
+            "skeletons": 3,
+        },
+        "B": {
+            "hog-rider": 0,
+            "cannon": 1,
+            "musketeer": 2,
+            "skeletons": 3,
+        },
+    }
+
+
+def test_duplicate_physical_serials_are_rejected_at_all_bindings() -> None:
+    spec = hog_cannon_probe()
+    with pytest.raises(AutomationError, match="distinct devices"):
+        bind_spec_to_devices(spec, "same-phone", "same-phone")
+    with pytest.raises(PhysicalLabError, match="distinct devices"):
+        _bound_device_specs("same-phone", "same-phone")
+    with pytest.raises(PhysicalLabError, match="distinct serial hashes"):
+        replace(spec, devices={"A": spec.devices["A"], "B": spec.devices["A"]})
 
 
 def test_calibration_uses_the_shared_18_by_32_grid() -> None:
@@ -55,6 +97,171 @@ def test_calibration_uses_the_shared_18_by_32_grid() -> None:
     point = calibration.cell_to_pixel((3, 20))
     assert calibration.pixel_to_cell(point) == (3, 20)
     assert calibration.slot_to_pixel(0)[1] > point[1]
+
+
+def test_adb_runner_rejects_missing_reviewed_prerequisites_before_device_access(
+    tmp_path: Path,
+) -> None:
+    args = argparse.Namespace(
+        serial_a="phone-a",
+        serial_b="phone-b",
+        calibration_a=None,
+        calibration_b=None,
+        lifecycle_templates_a=None,
+        lifecycle_templates_b=None,
+        run_id=None,
+        repository_root=tmp_path,
+    )
+
+    with pytest.raises(PhysicalLabError, match="explicit reviewed calibrations"):
+        _adb_runner(args, hog_cannon_probe())
+
+
+def test_one_phone_cli_prepare_records_fixed_testspiel_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    serial = "phone-a"
+    calls: list[tuple[str, object]] = []
+
+    class FakeController:
+        def __init__(self, raw_serial: str, *, device_label: str) -> None:
+            assert raw_serial == serial
+            self.info = DeviceInfo(
+                device_id=device_label,
+                serial_hash=sha256_bytes(serial.encode("utf-8")),
+                model="test-phone",
+                os_version="test-os",
+                screen_width_px=1080,
+                screen_height_px=2400,
+                transport="adb",
+                connected=True,
+                observed_at_monotonic_us=123,
+            )
+
+        def device_info(self) -> DeviceInfo:
+            return self.info
+
+    class FakePhone:
+        def __init__(self, controller: FakeController, profile: object, vision: object) -> None:
+            del profile, vision
+            self.controller = controller
+            self.returned_to_lobby = False
+
+        def configure_fixed_deck(self, *, max_swipes: int) -> tuple[str, ...]:
+            calls.append(("configure", max_swipes))
+            return FIXED_HOG_CYCLE_DECK
+
+        def open_testspiel_solo(self, **kwargs: object) -> dict[str, object]:
+            calls.append(("testspiel", kwargs))
+            return {"state": "testspiel_waiting_for_opponent", "started": True}
+
+        def return_to_lobby(self) -> None:
+            self.returned_to_lobby = True
+            calls.append(("lobby", True))
+
+    monkeypatch.setattr(physical_lab_cli, "AdbPhoneController", FakeController)
+    monkeypatch.setattr(physical_lab_cli, "AutonomousPhone", FakePhone)
+    args = _parser().parse_args(
+        [
+            "prepare",
+            "--serial",
+            serial,
+            "--repository-root",
+            str(tmp_path),
+            "--fixed-deck-order",
+            "--fixed-deck-toggle-point",
+            "700,1600",
+            "--start-test-match",
+            "--test-match-start-point",
+            "540,1800",
+            "--json-out",
+            "preparation-A.json",
+        ]
+    )
+
+    assert _prepare_command(args) == 0
+    payload = json.loads((tmp_path / "preparation-A.json").read_text(encoding="utf-8"))
+    assert payload["kind"] == "physical_lab_autonomous_preparation"
+    assert payload["devices"]["A"]["serial_hash"] == sha256_bytes(serial.encode("utf-8"))
+    assert payload["decks"]["A"] == list(FIXED_HOG_CYCLE_DECK)
+    assert payload["fixed_deck"]["opening_hand"] == list(FIXED_HOG_CYCLE_DECK[:4])
+    assert calls[0] == ("configure", 36)
+    assert calls[1][0] == "testspiel"
+    assert calls[1][1]["fixed_deck_toggle_point"] == (700, 1600)
+
+
+def test_one_phone_cli_prepare_returns_to_lobby_after_fixed_order_without_start(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    class FakeController:
+        def __init__(self, raw_serial: str, *, device_label: str) -> None:
+            self.info = DeviceInfo(
+                device_id=device_label,
+                serial_hash=sha256_bytes(raw_serial.encode("utf-8")),
+                screen_width_px=1080,
+                screen_height_px=2400,
+                connected=True,
+                observed_at_monotonic_us=123,
+            )
+
+        def device_info(self) -> DeviceInfo:
+            return self.info
+
+    class FakePhone:
+        def __init__(self, controller: FakeController, profile: object, vision: object) -> None:
+            del controller, profile, vision
+
+        def configure_fixed_deck(self, *, max_swipes: int) -> tuple[str, ...]:
+            del max_swipes
+            calls.append("configure")
+            return FIXED_HOG_CYCLE_DECK
+
+        def open_testspiel_solo(self, **kwargs: object) -> dict[str, object]:
+            del kwargs
+            calls.append("testspiel")
+            return {"state": "fixed_deck_options_enabled", "started": False}
+
+        def return_to_lobby(self) -> None:
+            calls.append("lobby")
+
+    monkeypatch.setattr(physical_lab_cli, "AdbPhoneController", FakeController)
+    monkeypatch.setattr(physical_lab_cli, "AutonomousPhone", FakePhone)
+    args = _parser().parse_args(
+        [
+            "prepare",
+            "--serial",
+            "phone-a",
+            "--repository-root",
+            str(tmp_path),
+            "--fixed-deck-order",
+            "--fixed-deck-toggle-point",
+            "700,1600",
+            "--json-out",
+            "preparation-A.json",
+        ]
+    )
+
+    assert _prepare_command(args) == 0
+    payload = json.loads((tmp_path / "preparation-A.json").read_text(encoding="utf-8"))
+    assert calls == ["configure", "testspiel", "lobby"]
+    assert payload["testspiel"]["returned_to_lobby"] is True
+    unsigned = {key: value for key, value in payload.items() if key != "manifest_hash"}
+    from simulator.physical_lab.schema import canonical_hash
+
+    assert payload["manifest_hash"] == canonical_hash(unsigned)
+
+
+def test_one_phone_cli_prepare_requires_reviewed_fixed_deck_points() -> None:
+    args = _parser().parse_args(
+        ["prepare", "--serial", "phone-a", "--fixed-deck-order"]
+    )
+
+    with pytest.raises(PhysicalLabError, match="fixed-deck-toggle-point"):
+        _prepare_command(args)
 
 
 def test_sync_gate_accepts_precise_markers_and_rejects_uncertain_markers() -> None:
@@ -94,6 +301,17 @@ def test_offline_replay_preserves_requested_initial_elixir() -> None:
     spec = hog_cannon_probe()
     replay = run_simulator_replay(spec, action_times={"deploy-cannon": 17_000})
     assert [player.elixir_milli for player in replay.snapshots[0].players] == [10_000, 10_000]
+
+
+def test_physical_receipt_overrides_requested_match_time_for_replay() -> None:
+    spec = hog_cannon_probe()
+    replay = run_simulator_replay(
+        spec,
+        action_times={"deploy-hog": 9_931_676, "deploy-cannon": 17_000},
+    )
+    hog = next(action for action in replay.actions if action.action_id == "deploy-hog")
+    assert hog.match_time_us == 9_931_676
+    assert hog.simulator_tick > 0
 
 
 def test_lifecycle_requires_both_devices_to_agree() -> None:
@@ -305,6 +523,7 @@ def test_physical_raw_media_is_promoted_only_after_sealed_ingest(tmp_path: Path)
         "captures": {
             side: {
                 "capture_id": f"capture-{side}",
+                "source_device": side,
                 "media_path": str(path),
                 "media_sha256": media_hash,
                 "stream_verified": True,
@@ -313,6 +532,7 @@ def test_physical_raw_media_is_promoted_only_after_sealed_ingest(tmp_path: Path)
             }
             for side, (path, media_hash) in media.items()
         },
+        "synchronization": {"accepted": True},
         "lifecycle": {
             "initial_state": "recovery",
             "final_state": "recovery",
@@ -333,8 +553,18 @@ def test_physical_raw_media_is_promoted_only_after_sealed_ingest(tmp_path: Path)
     }
     run_payload["run_hash"] = canonical_hash(run_payload)
     run_path.write_text(json.dumps(run_payload), encoding="utf-8")
-    replay_cache = root / "replay-cache.json"
-    replay_cache.write_bytes(b"recognized-replay-cache")
+    replay_cache = root / "replay-cache.pkl.gz"
+    with gzip.open(replay_cache, "wb") as handle:
+        pickle.dump({"schema_version": 1}, handle)
+        pickle.dump(
+            SimpleNamespace(
+                frame_idx=0,
+                video_time_s=0.0,
+                frame_png=b"encoded-frame",
+            ),
+            handle,
+        )
+    assert seal_replay_cache(replay_cache).recognized is True
     observation_path = root / "observation.json"
     observation_payload = {
         "kind": "physical_lab_observation_manifest",

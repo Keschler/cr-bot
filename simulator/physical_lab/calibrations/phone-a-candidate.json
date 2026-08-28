@@ -1,0 +1,29 @@
+{
+  "arena_px": [
+    0.0,
+    300.0,
+    1080.0,
+    1500.0
+  ],
+  "calibration_hash": "sha256:f023d32554a280e87ce8cd9bbd51586a134537ee207e076237c47cfeeb288b18",
+  "calibration_id": "a-physical-candidate-v1",
+  "coordinate_system": "cr_bot_action_grid_v1",
+  "device_label": "ASUS_AI2302",
+  "device_serial_hash": "sha256:334e7e7f3c19664295b7e73a78e9be964d2ea77ae3448827acc2f5c9f67e8df3",
+  "grid_norm_bounds": [
+    -0.0016409266409266403,
+    0.0809667673716012,
+    1.002220077220077,
+    0.9821148036253777
+  ],
+  "hand_px": [
+    237.0,
+    1900.0,
+    808.0,
+    500.0
+  ],
+  "hand_slot_count": 4,
+  "schema_version": 1,
+  "screen_height_px": 2400,
+  "screen_width_px": 1080
+}

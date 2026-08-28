@@ -11,7 +11,7 @@ Corpus schema version 1::
     {
       "schema_version": 1,
       "corpus_id": "hog-cycle-controlled-001",
-      "engine_version": "reference-0.28.0",
+      "engine_version": "reference-0.29.0",
       "ruleset_id": "2026-08-04",
       "ruleset_hash": "sha256:...",
       "cases": [

@@ -23,8 +23,8 @@ Current implementation checkpoints are intentionally visible: the fixed
 `v1.json` artifact exposes all 109 classified opponent cards but is marked
 `training_ready: false`; `2026-08-04-roster` remains a compatibility/source-
 build artifact only. `generate-scenarios` creates deterministic
-card/mechanic cases; the current V1 one-per-mechanic run covers 1,071 cases
-across 61 mechanics, including passive-spawner lifecycle cases (Goblin Drill,
+card/mechanic cases; the current V1 one-per-mechanic run covers 1,076 cases
+across 66 mechanics, including passive-spawner lifecycle cases (Goblin Drill,
 Goblin Cage, huts and Tombstone), Furnace movement/spawning, Cannon Cart form
 change, and nested Golem/Elixir-Golem/Lava-Hound/Goblin-Giant death streams,
 with zero repeated-hash failures. The Phase-0 `physical_lab` harness now
@@ -35,8 +35,15 @@ budget-aware provenance. These are coverage and evidence-pipeline milestones.
 None of these results is a claim that the final real-game fidelity gates have
 passed.
 
+The v1 generated validator now separates action acceptance from behavioral
+obligation. The regenerated 1,076-case matrix passes its event/state
+exercises and determinism checks, but `--require-complete` remains red for
+259 deployment/lifecycle/target-legality/navigation cases that still lack an
+event predicate or final-state check. This is intentional fail-closed status,
+not a readiness claim.
+
 Large synthetic matrices can be validated with `validate-generated --workers
-N`. The current four-variant V1 roster run covers 4,284 cases (109 cards, 61
+N`. The current four-variant V1 roster run covers 4,304 cases (109 cards, 66
 mechanics) with four isolated workers, final-state invariant checks, two
 replays per case, and zero failures or determinism mismatches. Worker count is
 not an accuracy shortcut: every process reconstructs the pinned ruleset and
@@ -84,20 +91,22 @@ isolated workers and final-state invariant validation. This is synthetic
 coexistence/exercisability coverage; card-specific timing, targeting, path,
 damage, and outcome claims still require the independent video/in-game gates.
 
-The policy runtime also exposes a deterministic `VectorSimulatorEnv` process
-backend. It runs independent lanes concurrently, restores canonical
-state/event logs in the parent, and rebuilds observations using persistent
-per-lane observation memory. A parity test covers policy actions, rewards,
-observations, state hashes, and event-log hashes against the sequential
-reference backend. This is an intermediate parallel-reference baseline: it is
-not yet the final structure-of-arrays/JIT backend or a production throughput
-claim.
+The policy runtime also exposes deterministic `VectorSimulatorEnv` process
+backends. The ordinary process backend runs independent lanes concurrently,
+and the packed-process backend crosses the worker boundary through a bounded,
+fixed-stride, deterministic binary state ABI with explicit capacities and no
+pickle. Both restore canonical state/event logs in the parent and rebuild
+observations using persistent per-lane observation memory. Parity tests cover
+policy actions, rewards, observations, state hashes, and event-log hashes
+against the sequential reference backend. This is an intermediate transport
+and parallel-reference milestone: it is not yet the final
+structure-of-arrays/JIT backend or a production throughput claim.
 
 The current fixed-`v1` throughput snapshots are
 `outputs/simulator/benchmark-vector-v1-reference-074.json` and
 `outputs/simulator/benchmark-vector-v1-process-075.json`: 16 independent
 environments completed 20 policy-boundary steps at 41.59 and 39.69
-environment-steps/second respectively under `reference-0.28.0`. These numbers
+environment-steps/second respectively under `reference-0.29.0`. These numbers
 are reproducibility baselines, not a claim that the final production-scale RL
 backend is finished; a structure-of-arrays/JIT/vectorized implementation and
 long-horizon throughput gate remain future work after fidelity gates pass.
@@ -109,7 +118,7 @@ reported as stronger candidates; unmatched observations are retained as
 rejections, and dual-HUD agreement can never satisfy a held-out gate because
 both profiles render the same underlying video.
 
-The current engine version is `reference-0.28.0`.  This release adds
+The current engine version is `reference-0.29.0`.  This release adds
 first-class deterministic components for shield layers, Royal Ghost stealth,
 Miner burrow, mixed Goblin Gang/Rascals child composition, Magic Archer line
 piercing, Executioner return passes, Hunter pellets, Bowler knockback, Mega
@@ -125,9 +134,9 @@ resolves it.
 
 ## Latest autonomous audit (2026-08-18)
 
-The current `reference-0.28.0` engine passes the regenerated deterministic
+The current `reference-0.29.0` engine passes the regenerated deterministic
 roster matrix (`outputs/simulator/generated-roster-validation-v1-per1-041.json`):
-1,071/1,071 scenarios pass with zero repeated-run determinism failures. The
+1,076/1,076 scenarios pass with zero repeated-run determinism failures. The
 fixed-player/opponent interaction matrix also passes 872/872 in
 `outputs/simulator/generated-interactions-validation-v1-042.json`.
 
@@ -195,9 +204,12 @@ offline/fake harness is an integration test only and remains
 `candidate_only`; the ADB path now has a hash-verified reviewed-template
 lifecycle detector, but connected-device runs remain rejected until continuous
 capture, replay-cache extraction, and the downstream observation/readiness
-boundaries are complete. No Phase-0 result changes training readiness.
+gates are complete. Run artifacts now include a sealed post-capture handoff,
+and admitted observations can be projected into the existing fidelity corpus
+and report schema; neither path promotes candidate data or changes training
+readiness.
 
-### Physical-lab status (2026-08-20)
+### Physical-lab status (2026-08-22)
 
 Phase 0 of the controlled fidelity lab is implemented and covered by focused
 tests. It proves canonical experiment hashing, logical phone calibration,
@@ -208,8 +220,63 @@ offline run is `candidate_only`, and no connected physical run has yet been
 admitted to a validation or held-out corpus. The lifecycle boundary now accepts
 only per-device reviewed templates with sealed file/manifest hashes and records
 that detector provenance. The next fidelity milestone is one complete
-connected `hog_cannon_pull` or isolated Hog probe whose sealed artifacts can
-flow into the existing fidelity/readiness reports.
+connected `hog_cannon_pull` or isolated Hog probe whose real captures,
+recognized cache, reviewed timing, and normalized observations pass through
+the new handoff, ingest, comparison, and fidelity-report commands.
+
+### RL reproducibility status (2026-08-28)
+
+The RL policy remains a provisional research harness, not a completed
+any-deck player. The pinned [`v1` ruleset](rulesets/v1.json) has
+`metadata.training_ready=false`, engine `reference-0.31.0` in the retained RL
+checkpoints, and content hash
+`sha256:84be7cc2c6476a6609fce80dbe0c834b648b4791919c4d492cb6bfb609c4234b`.
+The actor uses public observation contract `public-hybrid-v2-1` with contract
+hash `sha256:3bd60d514eb919de1ace676e8a2faa14f6130cecfd217cb78a5d3c538e01689e`;
+the critic may use training-only privileged state. Reproducible commands and
+report interpretation rules are maintained in the [RL section of the
+README](README.md#generalized-opponent-training-and-held-out-evaluation).
+
+The latest retained generalized actor is
+`outputs/simulator/training/generalized-coverage-ppo-v2.pt`, with training
+sidecar `outputs/simulator/training/generalized-coverage-ppo-v2.json`. It is a
+teacher-free continuation from
+`outputs/simulator/training/generalized-strategic-context-card-v7-factor-full.pt`: eight segments,
+one rollout per scenario, four lanes, 16,384 transitions, and
+`final_update=32`. Its training sidecar reports zero completed matches because
+the 512-decision segment boundaries ended before a terminal result; that field
+is not a training win rate. The v7 warm-start sidecar records four segments,
+three rollouts per scenario, 24,576 transitions, `final_update=24`, and only
+the deterministic-cycle deck with a strategic-counter teacher.
+
+Retained actor evaluations are deliberately separated by scope:
+
+- The coverage actor won 8/8 fixed deterministic-cycle regression matches at
+  the 1,200-decision cap (`outputs/simulator/training/generalized-coverage-ppo-v2-fixed-8.json`).
+- On six disjoint held-out archetype variants with the deterministic-cycle
+  strategy and seed `10000`, it won 1/6
+  (`outputs/simulator/training/generalized-coverage-ppo-v2-heldout-smoke.json`).
+  The v7 actor won 0/6 on the same cells
+  (`outputs/simulator/training/v7-on-coverage-heldout-smoke.json`).
+- The v7 actor's 36-cell, six-archetype × six-strategy, one-seed matrix won
+  1/36 (`generalized-strategic-context-card-v7-factor-full-matrix-10000.json`).
+- A 2/2 v7 self-play result is marked `held_out=false` and uses the same fixed
+  player deck on both sides; it is an identity-style smoke check, not diverse
+  deck or previous-policy evidence.
+
+These results do not establish the mission's any-deck policy goal, and they do
+not cover every legal deck, strategy, seed, card interaction, or previous
+checkpoint. A finite `all_wins=true` result is not a universal-win claim. The
+held-out matrix is the diverse-deck axis; self-play is a separate fixed-player-
+deck axis against frozen public actor checkpoints. The external 2.6 Hog Cycle
+page is used only for high-level role, timing, and placement sanity checks; it
+is not a ruleset authority or a scripted policy target. Keep the exact deck,
+strategy, seeds, shuffle setting, decision cap, ruleset/engine identity,
+`policy_mode`, and `held_out_audit.disjointness_verified` field with every
+comparison. Matrix `target_play_trace` is a PLAY-attempt audit, while
+prototype `--trace-out` contains every decision and per-decision troop/tower
+snapshot; `troop_positions_end` and `tower_hp_end` are only terminal/cap-time
+snapshots.
 
 ### Player
 
@@ -674,7 +741,8 @@ for 16 lanes × 20 policy steps: 45.58 environment-steps/s in the sequential
 reference and 43.69 environment-steps/s with four serialized workers after
 removing redundant worker-side observation projection. Hash parity is proven,
 but this throughput is explicitly below a production gate and full state
-serialization remains the next optimization target. The final SoA backend must
+full physics serialization and engine-side layout remain the next optimization
+targets. The final SoA backend must
 beat a trainer-derived target rather than this local baseline.
 
 ## Delivery order

@@ -15,9 +15,9 @@ def _parser() -> argparse.ArgumentParser:
         prog="python -m simulator",
         description="Deterministic, versioned Level-11 Hog-cycle simulator",
     )
-    # Resolve the default after parsing: simulation/benchmark commands use
-    # immutable V1, while corpus/roster inspection keeps the historical
-    # date-stamped compatibility default so old manifests remain replayable.
+    # Resolve the default after parsing so every command that consumes the
+    # simulator uses the immutable V1 artifact.  Date-stamped rulesets remain
+    # available for compatibility and source-build audits via --ruleset.
     parser.add_argument("--ruleset", default=None, help="ruleset ID (V1 is the runtime default)")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -565,6 +565,14 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="use final-state invariant validation for large generated matrices",
     )
+    validate_generated.add_argument(
+        "--require-complete",
+        action="store_true",
+        help=(
+            "require complete V1 matrix coverage and a behavioral event/state "
+            "obligation for every generated case"
+        ),
+    )
 
     reconcile = subparsers.add_parser(
         "reconcile-data",
@@ -626,12 +634,98 @@ def _parser() -> argparse.ArgumentParser:
     benchmark_vector.add_argument("--seed", type=int, default=0)
     benchmark_vector.add_argument(
         "--backend",
-        choices=("reference", "process"),
+        choices=("reference", "process", "packed-process"),
         default="reference",
-        help="reference sequential lanes or isolated process lanes",
+        help="reference lanes, serialized process lanes, or packed-state process lanes",
     )
     benchmark_vector.add_argument("--workers", type=int)
     benchmark_vector.add_argument("--json-out", type=Path)
+
+    train = subparsers.add_parser(
+        "train",
+        help="run a bounded NumPy PPO smoke-training job against the simulator",
+    )
+    train.add_argument("--steps", type=int, default=10_000, help="requested policy transitions")
+    train.add_argument("--envs", type=int, default=8, help="parallel simulator lanes")
+    train.add_argument("--rollout-steps", type=int, default=128)
+    train.add_argument("--update-epochs", type=int, default=2)
+    train.add_argument("--learning-rate", type=float, default=3e-4)
+    train.add_argument("--entropy-coef", type=float, default=0.01)
+    train.add_argument(
+        "--opponent",
+        choices=("scripted", "deterministic-cycle", "self-play"),
+        default="scripted",
+        help="deterministic-cycle is an alias for scripted",
+    )
+    train.add_argument(
+        "--backend",
+        choices=("reference", "process", "packed-process"),
+        default="reference",
+    )
+    train.add_argument("--workers", type=int)
+    train.add_argument("--seed", type=int, default=0)
+    train.add_argument("--checkpoint", type=Path, help="resume from a compatible .npz checkpoint")
+    train.add_argument(
+        "--checkpoint-out",
+        type=Path,
+        default=Path("outputs/simulator/training/ppo-smoke.npz"),
+    )
+    train.add_argument("--checkpoint-every", type=int, default=10_000)
+    train.add_argument("--eval-every", type=int, default=10_000)
+    train.add_argument("--eval-episodes", type=int, default=8)
+    train.add_argument(
+        "--eval-max-decisions",
+        type=int,
+        default=None,
+        help="evaluation decision cap; omit to evaluate a complete regulation-plus-overtime match",
+    )
+    train.add_argument(
+        "--allow-provisional-smoke",
+        action="store_true",
+        help="allow bounded smoke training even though the bundled ruleset is not fidelity-ready",
+    )
+    train.add_argument(
+        "--training-profile",
+        type=Path,
+        help="JSON scope/readiness profile for a serious or explicitly scoped smoke run",
+    )
+    train.add_argument("--json-out", type=Path)
+
+    evaluate = subparsers.add_parser(
+        "evaluate",
+        help="evaluate a saved NumPy PPO checkpoint on deterministic held-out seeds",
+    )
+    evaluate.add_argument("--checkpoint", type=Path, required=True)
+    evaluate.add_argument("--episodes", type=int, default=8)
+    evaluate.add_argument("--seed", type=int, default=10_000)
+    evaluate.add_argument(
+        "--opponent",
+        choices=("scripted", "deterministic-cycle", "self-play"),
+        default=None,
+        help="defaults to the opponent recorded in the checkpoint",
+    )
+    evaluate.add_argument(
+        "--max-decisions",
+        type=int,
+        default=None,
+        help="decision cap; omit to evaluate a complete regulation-plus-overtime match",
+    )
+    evaluate.add_argument(
+        "--training-profile",
+        type=Path,
+        help="JSON scope/readiness profile required for a scoped serious evaluation",
+    )
+    evaluate.add_argument("--json-out", type=Path)
+
+    recurrent_prototype = subparsers.add_parser(
+        "recurrent-prototype",
+        help="run the PyTorch public-observation recurrent PPO prototype",
+    )
+    recurrent_prototype.add_argument(
+        "prototype_args",
+        nargs=argparse.REMAINDER,
+        help="arguments forwarded to `python -m simulator.rl.prototype`",
+    )
 
     media_budget = subparsers.add_parser(
         "media-budget",
@@ -660,12 +754,12 @@ def _parser() -> argparse.ArgumentParser:
 
     lab = subparsers.add_parser(
         "lab",
-        help="run the physical-fidelity lab planner, fake harness, ingest, or comparison tools",
+        help="run the physical-fidelity lab planner, capture, ingest, comparison, or fidelity tools",
     )
     lab.add_argument(
         "lab_args",
         nargs=argparse.REMAINDER,
-        help="arguments for `lab plan|run|ingest|compare|status`",
+        help="arguments for `lab plan|run|ingest|compare|fidelity|status`",
     )
 
     return parser
@@ -750,11 +844,39 @@ def main(argv: Sequence[str] | None = None) -> int:
         from .physical_lab.cli import main as physical_lab_main
 
         return physical_lab_main(args.lab_args)
+    if args.command == "recurrent-prototype":
+        from .rl.prototype import main as recurrent_prototype_main
+
+        return recurrent_prototype_main(args.prototype_args)
     if args.ruleset is None:
+        # Coverage, simulation, and release/readiness commands target the
+        # fixed V1 artifact.  Corpus evaluation keeps the historical default
+        # so an old manifest remains replayable; pass --ruleset v1 when
+        # evaluating a V1 corpus explicitly.
         args.ruleset = (
             "v1"
             if args.command
-            in {"run", "scenario", "check-determinism", "audit", "soak", "benchmark"}
+            in {
+                "ruleset",
+                "roster",
+                "run",
+                "scenario",
+                "readiness",
+                "generate-scenarios",
+                "generate-interactions",
+                "generate-opponent-pairs",
+                "validate-generated",
+                "reconcile-data",
+                "compile-video-truth",
+                "check-determinism",
+                "audit",
+                "soak",
+                "benchmark",
+                "benchmark-vector",
+                "train",
+                "evaluate",
+                "recurrent-prototype",
+            }
             else "2026-08-04"
         )
     if args.command == "media-budget":
@@ -1175,12 +1297,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "validate-generated":
         from .generated_validation import (
             load_generated_manifest,
+            validate_complete_generated_coverage,
+            validate_generated_behavioral_obligations,
             validate_generated_scenarios,
             write_generated_validation_report,
         )
 
         try:
-            _, scenarios = load_generated_manifest(args.manifest)
+            manifest_payload, scenarios = load_generated_manifest(args.manifest)
             validation_engine = BattleEngine(
                 ruleset,
                 validate_every_tick=not args.no_tick_validation,
@@ -1191,6 +1315,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                 repeats=args.repeats,
                 workers=args.workers,
             )
+            coverage_gate = None
+            behavioral_gate = None
+            if args.require_complete:
+                coverage_gate = validate_complete_generated_coverage(
+                    manifest_payload,
+                    scenarios,
+                    ruleset=ruleset,
+                )
+                report["coverage_gate"] = coverage_gate
+                behavioral_gate = validate_generated_behavioral_obligations(scenarios)
+                report["behavioral_obligation_gate"] = behavioral_gate
             write_generated_validation_report(args.json_out, report)
             _write_json(
                 None,
@@ -1201,9 +1336,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "passed_count": report["passed_count"],
                     "failed_count": report["failed_count"],
                     "determinism_failures": report["determinism_failures"],
+                    "coverage_passed": (
+                        coverage_gate is None or coverage_gate["passed"]
+                    ),
+                    "behavioral_obligations_passed": (
+                        behavioral_gate is None or behavioral_gate["passed"]
+                    ),
                 },
             )
-            return 0 if report["failed_count"] == 0 else 2
+            return 0 if report["failed_count"] == 0 and (
+                coverage_gate is None or coverage_gate["passed"]
+            ) and (behavioral_gate is None or behavioral_gate["passed"]) else 2
         except (OSError, ValueError, json.JSONDecodeError) as error:
             raise SystemExit(str(error)) from error
 
@@ -1773,5 +1916,120 @@ def main(argv: Sequence[str] | None = None) -> int:
             "note": "Deterministic policy-boundary throughput; not a live-game fidelity metric.",
         }
         _write_json(args.json_out, result)
+        return 0
+
+    if args.command == "train":
+        from .trainer import PPOConfig, PPOTrainer, TrainingConfigurationError
+        from .training_profiles import TrainingProfile, TrainingProfileError
+
+        opponent = "scripted" if args.opponent == "deterministic-cycle" else args.opponent
+        training_profile = None
+        if args.training_profile is not None:
+            try:
+                training_profile = TrainingProfile.from_json(args.training_profile)
+            except TrainingProfileError as error:
+                raise SystemExit(str(error)) from error
+        config = PPOConfig(
+            ruleset_id=ruleset.ruleset_id,
+            training_profile=training_profile,
+            num_envs=args.envs,
+            backend=args.backend,
+            workers=args.workers,
+            rollout_steps=args.rollout_steps,
+            total_steps=args.steps,
+            update_epochs=args.update_epochs,
+            learning_rate=args.learning_rate,
+            entropy_coef=args.entropy_coef,
+            seed=args.seed,
+            opponent=opponent,
+            checkpoint_out=args.checkpoint_out,
+            checkpoint_every=args.checkpoint_every,
+            eval_every=args.eval_every,
+            eval_episodes=args.eval_episodes,
+            eval_max_decisions=args.eval_max_decisions,
+            allow_provisional_smoke=args.allow_provisional_smoke,
+        )
+        try:
+            trainer = PPOTrainer(config)
+            if args.checkpoint is not None:
+                trainer.load_checkpoint(args.checkpoint)
+            report = trainer.train()
+        except TrainingConfigurationError as error:
+            raise SystemExit(str(error)) from error
+        _write_json(args.json_out, report)
+        if args.json_out is not None:
+            _write_json(
+                None,
+                {
+                    "kind": report["kind"],
+                    "ruleset_id": report["ruleset_id"],
+                    "total_steps": report["total_steps"],
+                    "episodes": report["episodes"],
+                    "checkpoint": report["checkpoint"],
+                    "json_out": str(args.json_out),
+                },
+            )
+        return 0
+
+    if args.command == "evaluate":
+        from .trainer import FactorizedPolicy, evaluate_policy
+        from .observation import PINNED_OBSERVATION_CONTRACT_HASH
+        from .training_profiles import TrainingProfile, TrainingProfileError, validate_training_profile
+
+        policy, metadata = FactorizedPolicy.load(
+            args.checkpoint,
+            expected_metadata={
+                "ruleset_id": ruleset.ruleset_id,
+                "ruleset_hash": ruleset.content_hash,
+                "engine_version": ENGINE_VERSION,
+                "observation_contract_hash": PINNED_OBSERVATION_CONTRACT_HASH,
+            },
+        )
+        opponent_value = args.opponent or str(metadata.get("opponent", "scripted"))
+        if opponent_value == "deterministic-cycle":
+            opponent_value = "scripted"
+        if opponent_value not in {"scripted", "self-play"}:
+            raise SystemExit(f"unsupported checkpoint opponent: {opponent_value!r}")
+        reward_version = str(metadata.get("reward_version", "terminal-outcome-v1"))
+        if reward_version not in {"terminal-outcome-v1", "tower-damage-crowns-v1"}:
+            raise SystemExit(f"unsupported checkpoint reward version: {reward_version!r}")
+        profile_result = None
+        if args.training_profile is not None:
+            try:
+                profile = TrainingProfile.from_json(args.training_profile)
+                profile_result = validate_training_profile(profile, ruleset=ruleset)
+            except TrainingProfileError as error:
+                raise SystemExit(str(error)) from error
+            checkpoint_profile_id = metadata.get("training_profile_id")
+            if checkpoint_profile_id not in {None, profile.profile_id}:
+                raise SystemExit("checkpoint belongs to a different training profile")
+        elif metadata.get("training_profile_purpose") in {"training", "evaluation"}:
+            raise SystemExit(
+                "this checkpoint has a serious training profile; pass --training-profile for evaluation"
+            )
+        report = evaluate_policy(
+            policy,
+            ruleset=ruleset,
+            opponent=opponent_value,
+            episodes=args.episodes,
+            seed_start=args.seed,
+            max_decisions=args.max_decisions,
+            reward_version=reward_version,
+        )
+        report.update(
+            {
+                "kind": "simulator_ppo_checkpoint_evaluation",
+                "checkpoint": str(args.checkpoint),
+                "ruleset_id": ruleset.ruleset_id,
+                "ruleset_hash": ruleset.content_hash,
+                "engine_version": ENGINE_VERSION,
+                "observation_contract_hash": PINNED_OBSERVATION_CONTRACT_HASH,
+                "reward_version": reward_version,
+                "training_profile": profile_result,
+            }
+        )
+        _write_json(args.json_out, report)
+        if args.json_out is not None:
+            _write_json(None, report)
         return 0
     raise AssertionError(args.command)

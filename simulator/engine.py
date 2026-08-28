@@ -38,7 +38,8 @@ from .navigation import (
     point_is_walkable,
     segment_is_walkable,
 )
-from .ruleset import CardDefinition, Ruleset, TowerDefinition, load_ruleset
+from .ruleset import CardDefinition, Ruleset, RulesetError, TowerDefinition, load_ruleset
+from .roster import PLAYER_DECK
 from .state import (
     AreaEffectState,
     BattleState,
@@ -49,26 +50,16 @@ from .state import (
 )
 
 
-# The legacy reference deck order is retained for backwards-compatible
-# low-level engine fixtures.  The production policy contract uses the explicit
-# ``PLAYER_DECK`` order from ``roster.py`` through ``SimulatorEnv`` and the
-# scenario factory; callers that care about the observation boundary should
-# pass that deck explicitly rather than relying on this fixture default.
-BASE_HOG_CYCLE_DECK = (
-    "hog-rider",
-    "cannon",
-    "musketeer",
-    "skeletons",
-    "ice-golem",
-    "ice-spirit",
-    "fireball",
-    "log",
-)
+# Keep the engine default, policy observation slots, scenario factory, and
+# physical Testspiel fixed-deck order on one canonical contract.  In fixed
+# order the first four cards are the opening hand and the remaining four are
+# the replacement sequence.
+BASE_HOG_CYCLE_DECK = PLAYER_DECK
 # Behavior-changing mechanics (fixed V1 roster dispatch, persistent effects,
 # phase/fuse entities, and structure-safe navigation) are part of this engine
 # identity.  Replays and mined evidence must never be silently interpreted by
 # a newer algorithm.
-ENGINE_VERSION = "reference-0.28.0"
+ENGINE_VERSION = "reference-0.31.0"
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,6 +114,19 @@ class BattleEngine:
             if shuffle_decks:
                 rng.shuffle(draw_order)
             hand_size = self.ruleset.match.hand_size
+            # Mirror is the one base card which is explicitly excluded from
+            # an opening hand. Preserve deterministic order by swapping it
+            # with the first later card instead of reshuffling the deck.
+            if "mirror" in draw_order[:hand_size]:
+                mirror_index = draw_order.index("mirror")
+                replacement_index = next(
+                    index
+                    for index in range(hand_size, len(draw_order))
+                    if draw_order[index] != "mirror"
+                )
+                draw_order[mirror_index], draw_order[replacement_index] = (
+                    draw_order[replacement_index], draw_order[mirror_index]
+                )
             players.append(
                 PlayerState(
                     deck=tuple(deck),
@@ -194,6 +198,7 @@ class BattleEngine:
         self._advance_deployments(state)
         self._advance_area_effects(state)
         self._advance_statuses_and_lifetimes(state)
+        self._advance_concealment(state)
         self._sync_carried_entities(state)
         self._invalidate_and_acquire_targets(state)
         self._move_entities(state)
@@ -261,16 +266,27 @@ class BattleEngine:
         if type(action.card_slot) is not int or not (0 <= action.card_slot < len(player.hand)):
             return "invalid_card_slot"
         card = self.ruleset.card(player.hand[action.card_slot])
-        if player.elixir_milli < card.elixir_milli:
+        placement_card = card
+        if card.card_id == "mirror":
+            if player.last_played_card_id is None:
+                return "mirror_no_target"
+            placement_card = self.ruleset.card(player.last_played_card_id)
+        effective_cost = self._effective_card_cost(player, card)
+        if player.elixir_milli < effective_cost:
             return "insufficient_elixir"
         if card.card_id == "mirror" and player.last_played_card_id == "mirror":
             return "mirror_chain_not_allowed"
-        if not self._legal_deployment(state, action.player, card, action.cell):
+        if not self._legal_deployment(state, action.player, placement_card, action.cell):
             return "illegal_placement"
         return None
 
     def legal_cells(self, state: BattleState, player: int, card_id: str) -> tuple[tuple[int, int], ...]:
         card = self.ruleset.card(card_id)
+        if card.card_id == "mirror":
+            previous = state.players[player].last_played_card_id
+            if previous is None or previous == "mirror":
+                return ()
+            card = self.ruleset.card(previous)
         return tuple(
             (col, row)
             for row in range(GRID_ROWS)
@@ -310,7 +326,8 @@ class BattleEngine:
         player = state.players[action.player]
         card = self.ruleset.card(card_id)
         previous_card_id = player.last_played_card_id
-        player.elixir_milli -= card.elixir_milli
+        effective_cost = self._effective_card_cost(player, card)
+        player.elixir_milli -= effective_cost
         used = player.hand.pop(action.card_slot)
         next_card = player.draw_pile.pop(0)
         player.hand.append(next_card)
@@ -328,7 +345,7 @@ class BattleEngine:
             card_slot=action.card_slot,
             col=col,
             row=row,
-            cost_milli=card.elixir_milli,
+            cost_milli=effective_cost,
         )
         if card.card_id == "mirror":
             if previous_card_id is None:
@@ -336,14 +353,22 @@ class BattleEngine:
             else:
                 mirrored = self.ruleset.card(previous_card_id)
                 if mirrored.kind == "spell":
-                    self._spawn_spell(state, action.player, mirrored, action.cell)
+                    self._spawn_spell(
+                        state, action.player, mirrored, action.cell,
+                        level_multiplier_permille=1_100,
+                    )
                 else:
-                    self._spawn_card_entities(state, action.player, mirrored, action.cell)
+                    self._spawn_card_entities(
+                        state, action.player, mirrored, action.cell,
+                        level_multiplier_permille=1_100,
+                    )
                 self._emit(
                     state,
                     "card_mirrored",
                     player=action.player,
                     source_card_id=previous_card_id,
+                    cost_milli=effective_cost,
+                    level_delta=1,
                 )
             # Mirror consumes itself.  It is deliberately the new previous
             # card, so a second Mirror cannot mirror a Mirror (or recursively
@@ -357,12 +382,22 @@ class BattleEngine:
             self._spawn_card_entities(state, action.player, card, action.cell)
             player.last_played_card_id = card.card_id
 
+    def _effective_card_cost(self, player: PlayerState, card: CardDefinition) -> int:
+        """Return a card's payable cost, including Mirror's dynamic surcharge."""
+
+        if card.card_id != "mirror" or player.last_played_card_id is None:
+            return card.elixir_milli
+        previous = self.ruleset.card(player.last_played_card_id)
+        return min(self.ruleset.match.max_elixir_milli, previous.elixir_milli + 1_000)
+
     def _spawn_card_entities(
         self,
         state: BattleState,
         player: int,
         card: CardDefinition,
         cell: tuple[int, int],
+        *,
+        level_multiplier_permille: int = PERMILLE,
     ) -> None:
         center_x, center_y = cell_center_mtile(cell)
         raw_layout = card.mechanics.get("spawn_layout_mtile")
@@ -372,6 +407,9 @@ class BattleEngine:
             layout = self._default_spawn_layout(card)
         if len(layout) != card.spawn_count:
             raise ValueError(f"{card.card_id}: spawn layout does not match spawn_count")
+        if player == 1 and card.mechanics.get("mirror_spawn_layout"):
+            layout = tuple((-offset_x, -offset_y) for offset_x, offset_y in layout)
+        spawn_stagger_us = int(card.mechanics.get("spawn_stagger_us") or 0)
         mixed_children = card.mechanics.get("spawn_children")
         if mixed_children:
             layout_index = 0
@@ -386,7 +424,13 @@ class BattleEngine:
                 )
                 if len(offsets) != count:
                     raise ValueError(f"{card.card_id}: mixed child offset/count mismatch")
-                for offset_x, offset_y in offsets:
+                if (
+                    explicit_offsets is not None
+                    and player == 1
+                    and card.mechanics.get("mirror_spawn_layout")
+                ):
+                    offsets = tuple((-offset_x, -offset_y) for offset_x, offset_y in offsets)
+                for child_index, (offset_x, offset_y) in enumerate(offsets):
                     x = min(self.ruleset.arena.width_mtile - 1, max(0, center_x + offset_x))
                     y = min(self.ruleset.arena.height_mtile - 1, max(0, center_y + offset_y))
                     self._spawn_single_at(
@@ -396,18 +440,24 @@ class BattleEngine:
                         x_mtile=x,
                         y_mtile=y,
                         event_kind="entity_created",
+                        deploy_remaining_us=(
+                            child.deploy_time_us
+                            + (layout_index + child_index) * spawn_stagger_us
+                        ),
+                        level_multiplier_permille=level_multiplier_permille,
                     )
                 layout_index += count
             if layout_index != card.spawn_count:
                 raise ValueError(f"{card.card_id}: mixed child count does not match spawn_count")
             return
-        for offset_x, offset_y in layout:
+        for spawn_index, (offset_x, offset_y) in enumerate(layout):
             x = min(self.ruleset.arena.width_mtile - 1, max(0, center_x + offset_x))
             y = min(self.ruleset.arena.height_mtile - 1, max(0, center_y + offset_y))
             uid = self._allocate_uid(state)
             burrow = card.mechanics.get("burrow")
             shield = card.mechanics.get("shield")
             stealth = bool(card.mechanics.get("stealth"))
+            concealment = card.mechanics.get("concealment")
             entity = EntityState(
                 uid=uid,
                 card_id=card.card_id,
@@ -415,13 +465,14 @@ class BattleEngine:
                 kind=card.kind,
                 x_mtile=x,
                 y_mtile=y,
-                hp=int(card.hitpoints or 0),
-                max_hp=int(card.hitpoints or 0),
+                hp=self._scale_level_value(int(card.hitpoints or 0), level_multiplier_permille),
+                max_hp=self._scale_level_value(int(card.hitpoints or 0), level_multiplier_permille),
                 spawn_tick=state.tick,
+                level_multiplier_permille=level_multiplier_permille,
                 deploy_remaining_us=(
                     int(burrow.get("duration_us"))
                     if hasattr(burrow, "get")
-                    else card.deploy_time_us
+                    else card.deploy_time_us + spawn_index * spawn_stagger_us
                 ),
                 lifetime_remaining_us=card.lifetime_us,
                 spawn_cooldown_us=(
@@ -431,11 +482,20 @@ class BattleEngine:
                     if card.mechanics.get("elixir_generation")
                     else 0
                 ),
-                shield_hp=(int(shield["hitpoints"]) if hasattr(shield, "get") else 0),
-                shield_max_hp=(int(shield["hitpoints"]) if hasattr(shield, "get") else 0),
+                shield_hp=(
+                    self._scale_level_value(int(shield["hitpoints"]), level_multiplier_permille)
+                    if hasattr(shield, "get") else 0
+                ),
+                shield_max_hp=(
+                    self._scale_level_value(int(shield["hitpoints"]), level_multiplier_permille)
+                    if hasattr(shield, "get") else 0
+                ),
                 stealth_active=stealth,
                 stealth_remaining_us=0,
                 burrow_active=burrow is not None,
+                concealed_active=bool(
+                    concealment and concealment.get("starts_concealed", False)
+                ),
             )
             state.entities[uid] = entity
             if entity.kind == "building":
@@ -492,6 +552,7 @@ class BattleEngine:
                 deploy_remaining_us=carrier.deploy_remaining_us,
                 carried_by_uid=carrier.uid,
                 carried_offset_mtile=(offset_x, offset_y),
+                level_multiplier_permille=carrier.level_multiplier_permille,
             )
 
     @staticmethod
@@ -519,22 +580,50 @@ class BattleEngine:
         player: int,
         card: CardDefinition,
         cell: tuple[int, int],
+        *,
+        level_multiplier_permille: int = PERMILLE,
     ) -> None:
         if card.projectile is None:
             raise ValueError(f"spell {card.card_id} lacks an executable projectile")
         target_x, target_y = cell_center_mtile(cell)
-        mode = card.mechanics.get("projectile_mode")
-        if mode == "rolling_linear":
+        mechanics = card.mechanics
+        mode = mechanics.get("projectile_mode")
+        impact_mode = mechanics.get("impact_mode")
+        origin = mechanics.get("spell_origin")
+
+        # Spell origin is an executable part of the card definition.  A
+        # selected-position origin is used by The Log; rolling spells also
+        # begin at their selected endpoint and then continue along their
+        # authored travel direction.  Ballistic spells originate at the
+        # player's King Tower.  Keeping this dispatch here (rather than
+        # inferring it from the card id) makes mirrored and future spells use
+        # the same deterministic path.
+        if mode == "rolling_linear" or origin == "selected-position":
             start_x, start_y = target_x, target_y
+        elif origin == "own-king-tower":
+            king = self._tower(state, player, "king")
+            start_x, start_y = king.x_mtile, king.y_mtile
+        else:
+            raise RulesetError(
+                f"{card.card_id}: unsupported spell origin {origin!r}"
+            )
+
+        if mode == "rolling_linear":
             direction = -1 if player == 0 else 1
             target_y = min(
                 self.ruleset.arena.height_mtile - 1,
-                max(0, start_y + direction * int(card.range_mtile or 0)),
+                max(
+                    0,
+                    start_y
+                    + direction
+                    * int(card.mechanics.get("rolling_range_mtile") or card.range_mtile or 0),
+                ),
             )
-        else:
-            king = self._tower(state, player, "king")
-            start_x, start_y = king.x_mtile, king.y_mtile
         raw_status = card.mechanics.get("status")
+        # Continuous impact modes are swept along the projectile path.  The
+        # explicit component is authoritative even if an older generated
+        # card omitted the redundant ``piercing`` boolean.
+        continuous = impact_mode in {"continuous", "continuous_path"}
         projectile = ProjectileState(
             uid=self._allocate_uid(state),
             source_uid=None,
@@ -544,9 +633,17 @@ class BattleEngine:
             y_mtile=start_y,
             target_x_mtile=target_x,
             target_y_mtile=target_y,
-            damage=int(card.damage or 0),
-            crown_damage=int(card.crown_tower_damage if card.crown_tower_damage is not None else card.damage or 0),
+            damage=self._scale_level_value(int(card.damage or 0), level_multiplier_permille),
+            crown_damage=self._scale_level_value(
+                int(card.crown_tower_damage if card.crown_tower_damage is not None else card.damage or 0),
+                level_multiplier_permille,
+            ),
             speed_mtile_per_s=card.projectile.speed_mtile_per_s,
+            speed_code=(
+                int(card.mechanics["projectile_speed_code"])
+                if card.mechanics.get("projectile_speed_code") is not None
+                else None
+            ),
             homing=card.projectile.homing,
             radius_mtile=int(card.area_radius_mtile or card.projectile.radius_mtile),
             status_kind=None if not raw_status else str(raw_status.get("kind")),
@@ -566,8 +663,18 @@ class BattleEngine:
             status_tick_interval_us=0
             if not raw_status
             else int(raw_status.get("tick_interval_us") or 0),
-            knockback_mtile=int(card.mechanics.get("knockback_mtile") or 0),
-            piercing=bool(card.mechanics.get("piercing")),
+            knockback_mtile=int(mechanics.get("knockback_mtile") or 0),
+            piercing=bool(mechanics.get("piercing")) or continuous,
+            allowed_targets=tuple(
+                str(value) for value in mechanics.get("impact_targets", ())
+            ),
+            origin_x_mtile=start_x,
+            origin_y_mtile=start_y,
+            line_end_x_mtile=target_x,
+            line_end_y_mtile=target_y,
+            direction_x_mtile=target_x - start_x,
+            direction_y_mtile=target_y - start_y,
+            level_multiplier_permille=level_multiplier_permille,
         )
         state.projectiles[projectile.uid] = projectile
         self._emit(
@@ -578,6 +685,7 @@ class BattleEngine:
             card_id=card.card_id,
             source_uid=None,
             target_uid=None,
+            projectile_speed_code=projectile.speed_code,
         )
 
     def _legal_deployment(
@@ -736,7 +844,11 @@ class BattleEngine:
                     player=entity.owner,
                     card_id=entity.card_id,
                 )
-                deploy_effect = mechanics.get("deploy_effect")
+                # Clone bodies still deploy normally, but cloned deployment
+                # pulses are suppressed. This covers the copied Electro/Ice
+                # Wizard, Mega Knight, and Battle Healer interactions while
+                # preserving the ordinary body after the deploy event.
+                deploy_effect = None if entity.is_clone else mechanics.get("deploy_effect")
                 if deploy_effect is not None:
                     self._impact_area(
                         state,
@@ -745,11 +857,17 @@ class BattleEngine:
                         source_card_id=entity.card_id,
                         x=entity.x_mtile,
                         y=entity.y_mtile,
-                        damage=0,
-                        crown_damage=0,
+                        damage=self._scale_level_value(
+                            int(deploy_effect.get("damage") or 0),
+                            entity.level_multiplier_permille,
+                        ),
+                        crown_damage=self._scale_level_value(
+                            int(deploy_effect.get("crown_tower_damage") or 0),
+                            entity.level_multiplier_permille,
+                        ),
                         radius=int(deploy_effect.get("radius_mtile") or 0),
                         status=deploy_effect,
-                        knockback=0,
+                        knockback=int(deploy_effect.get("knockback_mtile") or 0),
                         primary_target_uid=None,
                         allowed_targets=tuple(str(value) for value in deploy_effect.get("targets", ())),
                     )
@@ -761,7 +879,11 @@ class BattleEngine:
                         effect_kind=str(deploy_effect.get("kind")),
                     )
                 jump = mechanics.get("jump")
-                if jump is not None and bool(jump.get("spawn_damage", True)):
+                if (
+                    not entity.is_clone
+                    and jump is not None
+                    and bool(jump.get("spawn_damage", True))
+                ):
                     self._impact_area(
                         state,
                         owner=entity.owner,
@@ -769,8 +891,12 @@ class BattleEngine:
                         source_card_id=entity.card_id,
                         x=entity.x_mtile,
                         y=entity.y_mtile,
-                        damage=int(jump.get("damage") or 0),
-                        crown_damage=int(jump.get("damage") or 0),
+                        damage=self._scale_level_value(
+                            int(jump.get("damage") or 0), entity.level_multiplier_permille
+                        ),
+                        crown_damage=self._scale_level_value(
+                            int(jump.get("damage") or 0), entity.level_multiplier_permille
+                        ),
                         radius=int(jump.get("radius_mtile") or 0),
                         status=None,
                         knockback=0,
@@ -809,6 +935,22 @@ class BattleEngine:
                     uid=effect.uid,
                     card_id=effect.source_card_id,
                 )
+                continue
+            if effect.initial_delay_remaining_us > 0:
+                effect.initial_delay_remaining_us = max(
+                    0, effect.initial_delay_remaining_us - dt
+                )
+                effect.remaining_us = max(0, effect.remaining_us - dt)
+                if effect.initial_delay_remaining_us == 0 and effect.remaining_us > 0:
+                    self._apply_area_effect_tick(state, effect)
+                if effect.remaining_us == 0:
+                    effect.alive = False
+                    self._emit(
+                        state,
+                        "area_effect_expired",
+                        uid=effect.uid,
+                        card_id=effect.source_card_id,
+                    )
                 continue
             numerator = dt + effect.tick_remainder_us
             ticks, effect.tick_remainder_us = divmod(numerator, effect.tick_interval_us)
@@ -876,6 +1018,7 @@ class BattleEngine:
                     if effect.status_on_death_spawn_card_id is not None
                     else None
                 ),
+                "source_level_multiplier_permille": effect.level_multiplier_permille,
             }
         raw_effect = self.ruleset.cards[effect.source_card_id].mechanics.get(
             "persistent_effect", {}
@@ -907,10 +1050,30 @@ class BattleEngine:
         for target in candidates:
             if target.kind == "tower":
                 damage_map = raw_effect.get("crown_damage_by_target_count", {}) if hasattr(raw_effect, "get") else {}
-                damage = int(damage_map.get(target_count_bucket, crown_damage)) if target_count_bucket else crown_damage
+                damage = (
+                    self._scale_level_value(
+                        int(damage_map[target_count_bucket]),
+                        effect.level_multiplier_permille,
+                    )
+                    if target_count_bucket in damage_map
+                    else crown_damage
+                )
             else:
                 damage_map = raw_effect.get("damage_by_target_count", {}) if hasattr(raw_effect, "get") else {}
-                damage = int(damage_map.get(target_count_bucket, body_damage)) if target_count_bucket else body_damage
+                damage = (
+                    self._scale_level_value(
+                        int(damage_map[target_count_bucket]),
+                        effect.level_multiplier_permille,
+                    )
+                    if target_count_bucket in damage_map
+                    else body_damage
+                )
+                if target.kind == "building" and hasattr(raw_effect, "get"):
+                    if raw_effect.get("building_damage_per_tick") is not None:
+                        damage = self._scale_level_value(
+                            int(raw_effect.get("building_damage_per_tick") or 0),
+                            effect.level_multiplier_permille,
+                        )
             # A curse must be attached before a lethal pulse so the death
             # conversion still fires.  Ordinary statuses retain the legacy
             # post-damage ordering, which keeps existing projectile timing
@@ -974,13 +1137,30 @@ class BattleEngine:
             for _ in range(
                 min(effect.spawn_count, effect.max_spawns - effect.spawned_count)
             ):
+                spawn_x, spawn_y = effect.x_mtile, effect.y_mtile
+                source_definition = self.ruleset.cards.get(effect.source_card_id)
+                persistent = (
+                    None
+                    if source_definition is None
+                    else source_definition.mechanics.get("persistent_effect")
+                )
+                spawn_spec = None if not persistent else persistent.get("spawn")
+                offsets = None if not spawn_spec else spawn_spec.get("offsets_mtile")
+                if offsets:
+                    offset = offsets[effect.spawned_count % len(offsets)]
+                    offset_x, offset_y = int(offset[0]), int(offset[1])
+                    if effect.owner == 1:
+                        offset_x, offset_y = -offset_x, -offset_y
+                    spawn_x += offset_x
+                    spawn_y += offset_y
                 self._spawn_single_at(
                     state,
                     child,
                     owner=effect.owner,
-                    x_mtile=effect.x_mtile,
-                    y_mtile=effect.y_mtile,
+                    x_mtile=spawn_x,
+                    y_mtile=spawn_y,
                     parent_uid=effect.source_uid,
+                    level_multiplier_permille=effect.level_multiplier_permille,
                 )
                 effect.spawned_count += 1
         self._emit(
@@ -1063,8 +1243,12 @@ class BattleEngine:
                         source_card_id=entity.card_id,
                         x=entity.x_mtile,
                         y=entity.y_mtile,
-                        damage=int(jump.get("damage") or 0),
-                        crown_damage=int(jump.get("damage") or 0),
+                        damage=self._scale_level_value(
+                            int(jump.get("damage") or 0), entity.level_multiplier_permille
+                        ),
+                        crown_damage=self._scale_level_value(
+                            int(jump.get("damage") or 0), entity.level_multiplier_permille
+                        ),
                         radius=int(jump.get("radius_mtile") or 0),
                         status=None,
                         knockback=0,
@@ -1201,6 +1385,31 @@ class BattleEngine:
             if not raw_spawn or parent.kind not in {"building", "troop"}:
                 continue
             spawn = raw_spawn
+            activation_range = int(spawn.get("activation_range_mtile") or 0)
+            if activation_range > 0:
+                visible_enemy = any(
+                    target.owner != parent.owner
+                    and target.kind != "tower"
+                    and self._targetable_for_acquisition(state, target)
+                    and distance_mtile(
+                        parent.x_mtile,
+                        parent.y_mtile,
+                        target.x_mtile,
+                        target.y_mtile,
+                    ) <= activation_range + self._collision_radius(target)
+                    for target in self._alive_entities(state)
+                )
+                if visible_enemy != parent.spawner_active:
+                    parent.spawner_active = visible_enemy
+                    self._emit(
+                        state,
+                        "spawner_activation_changed",
+                        uid=parent.uid,
+                        card_id=parent.card_id,
+                        active=visible_enemy,
+                    )
+                if not visible_enemy:
+                    continue
             parent.spawn_cooldown_us = max(0, parent.spawn_cooldown_us - clock_progress)
             if parent.spawn_cooldown_us > 0:
                 continue
@@ -1228,12 +1437,61 @@ class BattleEngine:
                         state,
                         parent,
                         self.ruleset.card(child_card_id),
+                        deploy_remaining_us=(
+                            int(spawn["child_deploy_time_us"])
+                            if spawn.get("child_deploy_time_us") is not None
+                            else None
+                        ),
                     )
                     alive_children += 1
                     parent.spawned_count += 1
             # A blocked spawner still waits one complete interval; this avoids
             # a death burst when a crowded lane suddenly becomes available.
             parent.spawn_cooldown_us = int(spawn["interval_us"])
+
+    def _advance_concealment(self, state: BattleState) -> None:
+        """Raise and lower Tesla-style structures from visible enemy sight."""
+
+        for entity in self._alive_entities(state):
+            definition = self.ruleset.cards.get(entity.card_id)
+            if definition is None:
+                continue
+            component = definition.mechanics.get("concealment")
+            if not component:
+                continue
+            if (
+                bool(component.get("freeze_suppresses_reveal"))
+                and self._is_frozen(entity)
+            ):
+                should_conceal = True
+            else:
+                reveal_range = int(component.get("reveal_range_mtile") or 0)
+                should_conceal = not any(
+                    target.owner != entity.owner
+                    and target.kind != "tower"
+                    and self._targetable_for_acquisition(state, target)
+                    and distance_mtile(
+                        entity.x_mtile,
+                        entity.y_mtile,
+                        target.x_mtile,
+                        target.y_mtile,
+                    ) <= reveal_range + self._collision_radius(target)
+                    for target in self._alive_entities(state)
+                )
+            if should_conceal == entity.concealed_active:
+                continue
+            entity.concealed_active = should_conceal
+            if should_conceal:
+                entity.target_uid = None
+                entity.pending_target_uid = None
+                entity.windup_remaining_us = 0
+            self._emit(
+                state,
+                "entity_concealment_changed",
+                uid=entity.uid,
+                card_id=entity.card_id,
+                concealed=should_conceal,
+            )
 
     def _spawn_single_child(
         self,
@@ -1242,7 +1500,22 @@ class BattleEngine:
         child: CardDefinition,
         *,
         offset_mtile: tuple[int, int] = (0, 0),
+        deploy_remaining_us: int | None = None,
     ) -> None:
+        # Clone provenance applies to the whole lifecycle. Death payloads,
+        # spawner waves, and status conversions produced by a copied body are
+        # copied bodies too; they keep the one-HP clone cap and clone shield
+        # semantics instead of silently becoming full-stat children.
+        is_clone = bool(parent.is_clone)
+        parent_mechanics = self._definition(parent).mechanics
+        authored_child_hp = parent_mechanics.get("spawn_child_hitpoints")
+        child_hp_override = (
+            self._scale_level_value(
+                int(authored_child_hp), parent.level_multiplier_permille
+            )
+            if authored_child_hp is not None and not is_clone
+            else (1 if is_clone else None)
+        )
         self._spawn_single_at(
             state,
             child,
@@ -1251,6 +1524,11 @@ class BattleEngine:
             y_mtile=parent.y_mtile + offset_mtile[1],
             parent_uid=parent.uid,
             event_kind="entity_spawned",
+            is_clone=is_clone,
+            hp_override=child_hp_override,
+            max_hp_override=child_hp_override,
+            deploy_remaining_us=deploy_remaining_us,
+            level_multiplier_permille=parent.level_multiplier_permille,
         )
 
     @staticmethod
@@ -1298,14 +1576,18 @@ class BattleEngine:
         deploy_remaining_us: int | None = None,
         carried_by_uid: int | None = None,
         carried_offset_mtile: tuple[int, int] = (0, 0),
+        level_multiplier_permille: int = PERMILLE,
     ) -> EntityState:
         uid = self._allocate_uid(state)
         x = min(self.ruleset.arena.width_mtile - 1, max(0, x_mtile))
         y = min(self.ruleset.arena.height_mtile - 1, max(0, y_mtile))
-        maximum_hp = int(child.hitpoints or 1)
+        maximum_hp = self._scale_level_value(
+            int(child.hitpoints or 1), level_multiplier_permille
+        )
         burrow = child.mechanics.get("burrow")
         shield = child.mechanics.get("shield")
         stealth = bool(child.mechanics.get("stealth"))
+        concealment = child.mechanics.get("concealment")
         entity = EntityState(
             uid=uid,
             card_id=child.card_id,
@@ -1316,6 +1598,7 @@ class BattleEngine:
             hp=maximum_hp if hp_override is None else int(hp_override),
             max_hp=maximum_hp if max_hp_override is None else int(max_hp_override),
             spawn_tick=state.tick,
+            level_multiplier_permille=level_multiplier_permille,
             deploy_remaining_us=(
                 int(deploy_remaining_us)
                 if deploy_remaining_us is not None
@@ -1331,11 +1614,31 @@ class BattleEngine:
             carried_by_uid=carried_by_uid,
             carried_offset_x_mtile=int(carried_offset_mtile[0]),
             carried_offset_y_mtile=int(carried_offset_mtile[1]),
-            shield_hp=(int(shield["hitpoints"]) if hasattr(shield, "get") else 0),
-            shield_max_hp=(int(shield["hitpoints"]) if hasattr(shield, "get") else 0),
+            shield_hp=(
+                # Cloned shielded troops keep the shield layer, but the
+                # shield itself is capped at one HP just like the copied
+                # body (Guards, Dark Prince, Royal Recruits, ...).
+                1
+                if is_clone and hasattr(shield, "get")
+                else (
+                    self._scale_level_value(int(shield["hitpoints"]), level_multiplier_permille)
+                    if hasattr(shield, "get") else 0
+                )
+            ),
+            shield_max_hp=(
+                1
+                if is_clone and hasattr(shield, "get")
+                else (
+                    self._scale_level_value(int(shield["hitpoints"]), level_multiplier_permille)
+                    if hasattr(shield, "get") else 0
+                )
+            ),
             stealth_active=stealth,
             stealth_remaining_us=0,
             burrow_active=burrow is not None,
+            concealed_active=bool(
+                concealment and concealment.get("starts_concealed", False)
+            ),
         )
         if entity.max_hp <= 0 or not 0 < entity.hp <= entity.max_hp:
             raise ValueError(f"{child.card_id}: invalid spawned HP override")
@@ -1392,7 +1695,7 @@ class BattleEngine:
                     # A newly deployed defender/building must be able to pull a
                     # unit which was previously pathing to a Crown Tower.
                     nearby = self._nearby_non_tower_targets(state, entity)
-                    replacement = self._nearest_uid(entity, nearby)
+                    replacement = self._preferred_target_uid(state, entity, nearby)
                     if replacement is not None:
                         old_target = entity.target_uid
                         self._reset_attack_charge(state, entity, reason="retargeted")
@@ -1434,6 +1737,8 @@ class BattleEngine:
             target = state  # type: ignore[assignment]
             state = None  # type: ignore[assignment]
         definition = self.ruleset.cards.get(target.card_id)
+        if target.concealed_active:
+            return False
         if target.stealth_active or (
             definition is not None
             and definition.mechanics.get("stealth")
@@ -1462,6 +1767,8 @@ class BattleEngine:
 
     def _choose_target(self, state: BattleState, source: EntityState) -> int | None:
         definition = self._definition(source)
+        if source.concealed_active:
+            return None
         # Passive collectors/spawners have no attack cadence or range.  They
         # remain valid entities in the roster-complete ruleset but must not be
         # assigned a target (which would otherwise reach ``int(None)`` in the
@@ -1495,19 +1802,30 @@ class BattleEngine:
             and target.kind == "tower"
             and self._target_allowed(source, target)
             and self._edge_distance(source, target) <= sight
+            and self._edge_distance(source, target)
+            >= int(definition.mechanics.get("min_attack_range_mtile") or 0)
         )
         if nearby:
-            return self._nearest_uid(source, nearby)
+            return self._preferred_target_uid(state, source, nearby)
         towers = [
             target
             for target in self._alive_entities(state)
-            if target.owner != source.owner and target.kind == "tower" and target.role != "king"
+            if target.owner != source.owner
+            and target.kind == "tower"
+            and target.role != "king"
+            and self._target_allowed(source, target)
+            and self._edge_distance(source, target)
+            >= int(definition.mechanics.get("min_attack_range_mtile") or 0)
         ]
         if not towers:
             towers = [
                 target
                 for target in self._alive_entities(state)
-                if target.owner != source.owner and target.kind == "tower"
+                if target.owner != source.owner
+                and target.kind == "tower"
+                and self._target_allowed(source, target)
+                and self._edge_distance(source, target)
+                >= int(definition.mechanics.get("min_attack_range_mtile") or 0)
             ]
         return self._nearest_uid(source, towers)
 
@@ -1528,6 +1846,8 @@ class BattleEngine:
             and self._targetable_for_acquisition(state, target)
             and self._target_allowed(source, target)
             and self._edge_distance(source, target) <= sight
+            and self._edge_distance(source, target)
+            >= int(definition.mechanics.get("min_attack_range_mtile") or 0)
         ]
 
     @staticmethod
@@ -1542,18 +1862,60 @@ class BattleEngine:
             ),
         ).uid
 
+    def _preferred_target_uid(
+        self,
+        state: BattleState,
+        source: EntityState,
+        candidates: list[EntityState],
+    ) -> int | None:
+        if not candidates:
+            return None
+        definition = self._definition(source)
+        if source.kind == "tower" or not definition.mechanics.get("spread_targets"):
+            return self._nearest_uid(source, candidates)
+        sibling_targets: dict[int, int] = {}
+        for sibling in self._alive_entities(state):
+            if (
+                sibling.owner == source.owner
+                and sibling.card_id == source.card_id
+                and sibling.spawn_tick == source.spawn_tick
+                and sibling.uid != source.uid
+                and sibling.target_uid is not None
+            ):
+                sibling_targets[sibling.target_uid] = (
+                    sibling_targets.get(sibling.target_uid, 0) + 1
+                )
+        return min(
+            candidates,
+            key=lambda target: (
+                sibling_targets.get(target.uid, 0),
+                (source.x_mtile - target.x_mtile) ** 2
+                + (source.y_mtile - target.y_mtile) ** 2,
+                target.uid,
+            ),
+        ).uid
+
     def _target_allowed(self, source: EntityState, target: EntityState) -> bool:
         definition = self._definition(source)
-        targets = set(definition.targets)
-        if source.charge_active and definition.mechanics.get("charge_threshold_permille") is not None:
+        mechanics = {} if source.kind == "tower" else definition.mechanics
+        authored_primary = mechanics.get("primary_targets")
+        targets = set(authored_primary if authored_primary is not None else definition.targets)
+        if source.charge_active and mechanics.get("charge_threshold_permille") is not None:
             # Goblin Demolisher's low-health phase becomes building-only.
             targets = {"building", "crown_tower"}
         if target.kind == "tower":
+            # The August 2026 Spirit rules explicitly remove an unassisted
+            # Crown-Tower connection.  This is distinct from the authored
+            # movement/impact target classes: Spirits may still acquire and
+            # attack ordinary ground/building targets, but a bare Crown Tower
+            # must not be selected as their fallback target.
+            if mechanics.get("crown_tower_connection") == "expected-no-unassisted-connection":
+                return False
             return "crown_tower" in targets or "ground" in targets or "building" in targets
         if target.kind == "building":
             return "building" in targets or "ground" in targets
         target_definition = self.ruleset.cards[target.card_id]
-        layer = target_definition.mechanics.get("movement_layer") or "ground"
+        layer = self._movement_layer(target)
         return str(layer) in targets
 
     def _sync_carried_entities(self, state: BattleState) -> None:
@@ -1608,7 +1970,6 @@ class BattleEngine:
                     int(jump.get("min_range_mtile") or 0)
                     <= edge_distance
                     <= int(jump.get("max_range_mtile") or 0)
-                    and target.kind != "tower"
                 ):
                     entity.jump_remaining_us = int(jump.get("duration_us") or 1)
                     entity.jump_target_uid = target.uid
@@ -1667,48 +2028,71 @@ class BattleEngine:
                     )
                     continue
             in_range = self._in_attack_range(entity, target)
+            # Some contact-spawn bodies publish their trigger reach as a
+            # semantic range (currently Suspicious Bush's ``long`` range)
+            # instead of a separate attack weapon.  Read that authored field
+            # explicitly so a future numeric range can extend the trigger
+            # without turning the parent into a damaging attack.
+            authored_spawn_range = definition.mechanics.get("spawn_range")
+            if (
+                definition.mechanics.get("trigger_on_target")
+                and authored_spawn_range is not None
+            ):
+                if isinstance(authored_spawn_range, (int, float)):
+                    spawn_range_mtile = int(authored_spawn_range)
+                elif str(authored_spawn_range).lower() == "long":
+                    # The card's Level-11 range scalar is the normalized
+                    # world-space value for the authored Long trigger.
+                    spawn_range_mtile = int(definition.range_mtile or 0)
+                else:
+                    spawn_range_mtile = 0
+                in_range = in_range or (
+                    spawn_range_mtile > 0
+                    and self._edge_distance(entity, target) <= spawn_range_mtile
+                )
             # Suicide contact troops (Suspicious Bush/Wall Breakers) stop at
             # the navigation collision boundary, which can leave a small
             # fixed-point gap while their authored attack range is zero.  A
             # quarter-tile contact tolerance represents the same physical
             # collision envelope and prevents a troop from parking forever in
             # front of its building-only target.
+            trigger_limit_mtile = 250
+            if (
+                definition.mechanics.get("trigger_on_target")
+                and authored_spawn_range is not None
+            ):
+                if isinstance(authored_spawn_range, (int, float)):
+                    trigger_limit_mtile = max(250, int(authored_spawn_range))
+                elif str(authored_spawn_range).lower() == "long":
+                    trigger_limit_mtile = max(
+                        250, int(definition.range_mtile or 0)
+                    )
             trigger_contact = bool(
                 definition.mechanics.get("trigger_on_target")
                 and target.kind in {"building", "tower"}
-                and self._edge_distance(entity, target) <= 250
+                and self._edge_distance(entity, target) <= trigger_limit_mtile
             )
+            if trigger_contact and definition.mechanics.get("trigger_on_target"):
+                # Contact-trigger carriers (Skeleton Barrel and Suspicious
+                # Bush) are consumed at their authored trigger reach. Their
+                # melee fields must not turn the transport into a normal
+                # damaging attack before the payload drops.
+                entity.hp = 0
+                self._emit(
+                    state,
+                    "entity_triggered",
+                    uid=entity.uid,
+                    card_id=entity.card_id,
+                    target_uid=target.uid,
+                )
+                continue
             if in_range or trigger_contact:
                 if (
-                    definition.mechanics.get("trigger_on_target")
-                    and target.kind in {"building", "tower"}
-                ) or (
                     entity.charge_active
                     and definition.mechanics.get("trigger_on_building_contact")
                     and target.kind in {"building", "tower"}
+                    and trigger_contact
                 ):
-                    # Trigger/contact troops still deal their authored impact
-                    # before the body is consumed (Suspicious Bush is the V1
-                    # example).  Previously the trigger only set hp=0, which
-                    # made the card appear to connect while silently omitting
-                    # its damage event and tower HP change.
-                    if definition.mechanics.get("trigger_on_target"):
-                        damage = (
-                            int(
-                                definition.crown_tower_damage
-                                if definition.crown_tower_damage is not None
-                                else definition.damage or 0
-                            )
-                            if target.kind == "tower"
-                            else int(definition.damage or 0)
-                        )
-                        self._deal_damage(
-                            state,
-                            target,
-                            damage,
-                            source_uid=entity.uid,
-                            source_card_id=entity.card_id,
-                        )
                     entity.hp = 0
                     self._emit(
                         state,
@@ -1735,6 +2119,21 @@ class BattleEngine:
                 waypoint_y,
                 travel,
             )
+            river_airborne = bool(
+                definition.mechanics.get("river_jump")
+                and self.ruleset.arena.river_y_min_mtile
+                < entity.y_mtile
+                < self.ruleset.arena.river_y_max_mtile
+            )
+            if river_airborne != entity.river_airborne_active:
+                entity.river_airborne_active = river_airborne
+                self._emit(
+                    state,
+                    "river_airborne_changed",
+                    uid=entity.uid,
+                    card_id=entity.card_id,
+                    airborne=river_airborne,
+                )
             if charge_attack is not None and not entity.attack_charge_active:
                 moved = distance_mtile(old_x, old_y, entity.x_mtile, entity.y_mtile)
                 if moved > 0:
@@ -1771,6 +2170,21 @@ class BattleEngine:
             return goal
         radius = self._collision_radius(entity)
         obstacles = self._navigation_obstacles(state, target.uid)
+        if self._definition(entity).mechanics.get("river_jump") and segment_is_walkable(
+            self.ruleset.arena,
+            start,
+            goal,
+            agent_radius_mtile=radius,
+            obstacles=obstacles,
+            allow_river_crossing=True,
+        ):
+            entity.navigation_waypoints = [goal]
+            entity.navigation_cursor = 0
+            entity.navigation_target_uid = target.uid
+            entity.navigation_revision = state.navigation_revision
+            entity.navigation_goal_x_mtile = target.x_mtile
+            entity.navigation_goal_y_mtile = target.y_mtile
+            return goal
         cache_valid = (
             entity.navigation_target_uid == target.uid
             and entity.navigation_revision == state.navigation_revision
@@ -1862,6 +2276,7 @@ class BattleEngine:
         y: int,
         *,
         exclude_target: bool = True,
+        excluded_structure_uid: int | None = None,
     ) -> bool:
         radius = self._collision_radius(entity)
         if self._movement_layer(entity) == "air":
@@ -1870,7 +2285,11 @@ class BattleEngine:
             return False
         for obstacle in self._navigation_obstacles(
             state,
-            entity.target_uid if exclude_target else None,
+            (
+                excluded_structure_uid
+                if excluded_structure_uid is not None
+                else entity.target_uid if exclude_target else None
+            ),
         ):
             if distance_mtile(x, y, obstacle.x_mtile, obstacle.y_mtile) < (
                 radius + obstacle.radius_mtile
@@ -2073,7 +2492,7 @@ class BattleEngine:
                 and self._definition(entity).mechanics.get("attack_windup_mode") == "recharge"
             ):
                 continue
-            if entity.deploy_remaining_us > 0 or self._is_frozen(entity):
+            if entity.deploy_remaining_us > 0 or entity.concealed_active or self._is_frozen(entity):
                 continue
             if entity.attack_cooldown_us > 0:
                 progress = self._attack_time_progress(entity, dt)
@@ -2086,6 +2505,16 @@ class BattleEngine:
             if target is None or not target.alive or not self._in_attack_range(entity, target):
                 continue
             definition = self._definition(entity)
+            if (
+                entity.kind != "tower"
+                and
+                definition.mechanics.get("trigger_on_target")
+                and target.kind in {"building", "tower"}
+            ):
+                # Transport cards resolve through their contact trigger.  Do
+                # not allow the generic attack scheduler to fire while they
+                # are still inside their authored attack range.
+                continue
             if (
                 definition.attack_interval_us is None
                 or definition.damage is None
@@ -2142,7 +2571,7 @@ class BattleEngine:
         """
 
         for entity in self._alive_entities(state):
-            if entity.deploy_remaining_us > 0 or self._is_frozen(entity):
+            if entity.deploy_remaining_us > 0 or entity.concealed_active or self._is_frozen(entity):
                 continue
             definition = self._definition(entity)
             if entity.kind == "tower":
@@ -2160,7 +2589,7 @@ class BattleEngine:
                 self._resolve_secondary_attack(state, entity)
 
         for entity in self._alive_entities(state):
-            if entity.deploy_remaining_us > 0 or self._is_frozen(entity):
+            if entity.deploy_remaining_us > 0 or entity.concealed_active or self._is_frozen(entity):
                 continue
             definition = self._definition(entity)
             if entity.kind == "tower":
@@ -2190,6 +2619,7 @@ class BattleEngine:
                 "secondary_attack_started",
                 uid=entity.uid,
                 card_id=entity.card_id,
+                player=entity.owner,
                 target_uid=target_uid,
                 attack_number=entity.secondary_attack_count + 1,
             )
@@ -2210,25 +2640,42 @@ class BattleEngine:
     ) -> int | None:
         if not hasattr(raw, "get"):
             return None
-        min_range = int(raw.get("min_range_mtile") or 0)
-        max_range = int(raw.get("max_range_mtile") or 0)
-        allowed = tuple(str(value) for value in raw.get("targets", ()))
         primary_uid = source.target_uid
         candidates = []
         for target in self._alive_entities(state):
-            if target.owner == source.owner or target.uid == primary_uid:
+            if target.uid == primary_uid:
                 continue
-            if not self._targetable_for_acquisition(state, target):
-                continue
-            if not self._spell_can_hit(source.card_id, target, allowed_targets=allowed):
-                continue
-            distance = self._edge_distance(source, target)
-            if min_range <= distance <= max_range:
-                candidates.append((distance, target.uid))
+            if self._valid_secondary_target(state, source, target, raw):
+                candidates.append((self._edge_distance(source, target), target.uid))
         if not candidates:
             return None
         candidates.sort()
         return candidates[0][1]
+
+    def _valid_secondary_target(
+        self,
+        state: BattleState,
+        source: EntityState,
+        target: EntityState,
+        raw: object,
+    ) -> bool:
+        if not hasattr(raw, "get"):
+            return False
+        if target.owner == source.owner or not target.alive or target.hp <= 0:
+            return False
+        if bool(raw.get("troops_only")) and target.kind != "troop":
+            return False
+        if not self._targetable_for_acquisition(state, target):
+            return False
+        allowed = tuple(str(value) for value in raw.get("targets", ()))
+        if not self._spell_can_hit(source.card_id, target, allowed_targets=allowed):
+            return False
+        distance = self._edge_distance(source, target)
+        return (
+            int(raw.get("min_range_mtile") or 0)
+            <= distance
+            <= int(raw.get("max_range_mtile") or 0)
+        )
 
     def _resolve_secondary_attack(self, state: BattleState, source: EntityState) -> None:
         target_uid = source.secondary_pending_target_uid
@@ -2240,12 +2687,13 @@ class BattleEngine:
         raw = definition.mechanics.get("secondary_attack")
         if target is None or not target.alive or not raw:
             return
-        if self._choose_secondary_target(state, source, {**dict(raw), "targets": list(raw.get("targets", ()))}) != target_uid:
+        if not self._valid_secondary_target(state, source, target, raw):
             # The target may have moved into the blind range or died while the
             # rocket was winding up.  A cancelled shot does not retarget at
             # impact; the next cadence will acquire a fresh target.
             return
         source.secondary_attack_count += 1
+        raw_status = raw.get("status")
         projectile = ProjectileState(
             uid=self._allocate_uid(state),
             source_uid=source.uid,
@@ -2256,12 +2704,24 @@ class BattleEngine:
             target_x_mtile=target.x_mtile,
             target_y_mtile=target.y_mtile,
             target_uid=target.uid,
-            damage=int(raw["damage"]),
-            crown_damage=int(raw["crown_tower_damage"]),
+            damage=self._scale_level_value(int(raw["damage"]), source.level_multiplier_permille),
+            crown_damage=self._scale_level_value(
+                int(raw["crown_tower_damage"]), source.level_multiplier_permille
+            ),
             speed_mtile_per_s=int(raw["projectile_speed_mtile_per_s"]),
+            speed_code=None,
             homing=False,
             radius_mtile=int(raw["area_radius_mtile"]),
             allowed_targets=tuple(str(value) for value in raw["targets"]),
+            level_multiplier_permille=source.level_multiplier_permille,
+            status_kind=None if not raw_status else str(raw_status.get("kind") or "slow"),
+            status_duration_us=0 if not raw_status else int(raw_status.get("duration_us") or 0),
+            status_magnitude_permille=(
+                PERMILLE if not raw_status else int(raw_status.get("speed_multiplier_milli") or PERMILLE)
+            ),
+            status_hit_speed_magnitude_permille=(
+                PERMILLE if not raw_status else int(raw_status.get("hit_speed_multiplier_milli") or PERMILLE)
+            ),
         )
         state.projectiles[projectile.uid] = projectile
         self._emit(
@@ -2273,6 +2733,7 @@ class BattleEngine:
             source_uid=source.uid,
             target_uid=target.uid,
             attack_kind="secondary",
+            projectile_speed_code=projectile.speed_code,
         )
 
     def _attack_time_progress(self, entity: EntityState, dt: int) -> int:
@@ -2284,7 +2745,7 @@ class BattleEngine:
     def _resolve_attack(self, state: BattleState, source: EntityState) -> None:
         target_uid = source.pending_target_uid
         source.pending_target_uid = None
-        if target_uid is None or not source.alive:
+        if target_uid is None or not source.alive or source.concealed_active:
             return
         target = state.entities.get(target_uid)
         if target is None or not target.alive:
@@ -2299,6 +2760,16 @@ class BattleEngine:
             self._break_stealth(state, source)
         source.attack_count += 1
         projectile_definition = definition.projectile
+        bayonet = mechanics.get("bayonet")
+        bayonet_active = bool(
+            bayonet
+            and self._edge_distance(source, target) <= int(bayonet.get("range_mtile") or 0)
+            and self._spell_can_hit(
+                source.card_id,
+                target,
+                allowed_targets=tuple(str(value) for value in bayonet.get("targets", ())),
+            )
+        )
         status = None if source.kind == "tower" else definition.mechanics.get("status")
         snare = None if source.kind == "tower" else definition.mechanics.get("snare")
         if status is None and snare is not None:
@@ -2308,6 +2779,11 @@ class BattleEngine:
                 "speed_multiplier_milli": int(snare.get("speed_multiplier_milli") or 1_000),
                 "hit_speed_multiplier_milli": int(snare.get("hit_speed_multiplier_milli") or 1_000),
             }
+        if status is not None and source.kind != "tower":
+            status = {
+                **dict(status),
+                "source_level_multiplier_permille": source.level_multiplier_permille,
+            }
         charge_attack = (
             None
             if source.kind == "tower"
@@ -2316,6 +2792,8 @@ class BattleEngine:
         dash = None if source.kind == "tower" else definition.mechanics.get("dash")
         ramp_attack = None if source.kind == "tower" else definition.mechanics.get("ramp_attack")
         attack_damage = int(definition.damage or 0)
+        if bayonet_active:
+            attack_damage = int(bayonet.get("damage") or attack_damage)
         if charge_attack is not None and source.attack_charge_active:
             attack_damage = int(charge_attack.get("charge_damage") or attack_damage)
         if dash is not None and source.dash_attack_active:
@@ -2331,6 +2809,23 @@ class BattleEngine:
             if definition_crown_damage is not None
             else attack_damage
         )
+        if bayonet_active:
+            crown_damage = int(bayonet.get("crown_tower_damage") or attack_damage)
+            projectile_definition = None
+            self._emit(
+                state,
+                "bayonet_attack",
+                uid=source.uid,
+                card_id=source.card_id,
+                target_uid=target.uid,
+            )
+        if source.kind != "tower":
+            attack_damage = self._scale_level_value(
+                attack_damage, source.level_multiplier_permille
+            )
+            crown_damage = self._scale_level_value(
+                crown_damage, source.level_multiplier_permille
+            )
         if projectile_definition is None:
             hook = None if source.kind == "tower" else definition.mechanics.get("hook")
             if hook is not None:
@@ -2388,8 +2883,22 @@ class BattleEngine:
                     ),
                 ),
             )
-            projectile_count = int(mechanics.get("pellets", {}).get("count", 1)) if hasattr(mechanics.get("pellets"), "get") else 1
-            pellet_spread = int(mechanics.get("pellets", {}).get("spread_mtile", 0)) if hasattr(mechanics.get("pellets"), "get") else 0
+            # Hunter launches a fan of primary pellets.  Firecracker's five
+            # pellets are a post-impact shrapnel stream, so its attack still
+            # creates one homing primary projectile here; the shrapnels are
+            # materialized by ``_impact_projectile`` at the burst point.
+            raw_pellets = mechanics.get("pellets")
+            primary_pellets = raw_pellets if source.card_id != "firecracker" else None
+            projectile_count = (
+                int(primary_pellets.get("count", 1))
+                if hasattr(primary_pellets, "get")
+                else 1
+            )
+            pellet_spread = (
+                int(primary_pellets.get("spread_mtile", 0))
+                if hasattr(primary_pellets, "get")
+                else 0
+            )
             base_dx = target.x_mtile - source.x_mtile
             base_dy = target.y_mtile - source.y_mtile
             base_distance = max(1, distance_mtile(source.x_mtile, source.y_mtile, target.x_mtile, target.y_mtile))
@@ -2427,6 +2936,11 @@ class BattleEngine:
                 damage=attack_damage,
                 crown_damage=crown_damage,
                 speed_mtile_per_s=projectile_definition.speed_mtile_per_s,
+                speed_code=(
+                    int(mechanics["projectile_speed_code"])
+                    if mechanics.get("projectile_speed_code") is not None
+                    else None
+                ),
                     # A Hunter shot is a fan of independent pellets.  The
                     # card's generic projectile definition is homing because
                     # it is also used by single-target ranged troops, but a
@@ -2439,6 +2953,9 @@ class BattleEngine:
                 status_kind=None if not status else str(status.get("kind")),
                 status_duration_us=0 if not status else int(status.get("duration_us") or 0),
                 status_magnitude_permille=PERMILLE if not status else int(status.get("speed_multiplier_milli") or 0),
+                status_hit_speed_magnitude_permille=(
+                    PERMILLE if not status else int(status.get("hit_speed_multiplier_milli") or PERMILLE)
+                ),
                 status_damage_per_tick=0 if not status else int(status.get("damage_per_tick") or 0),
                 status_tick_interval_us=0 if not status else int(status.get("tick_interval_us") or 0),
                 knockback_mtile=int(mechanics.get("knockback_mtile") or 0),
@@ -2454,6 +2971,7 @@ class BattleEngine:
                 direction_y_mtile=base_dy,
                 returning=bool(mechanics.get("returning_projectile")),
                 pellet_index=pellet_index,
+                level_multiplier_permille=source.level_multiplier_permille,
             )
                 state.projectiles[projectile.uid] = projectile
                 self._emit(
@@ -2465,6 +2983,7 @@ class BattleEngine:
                     source_uid=source.uid,
                     target_uid=target.uid,
                     pellet_index=pellet_index,
+                    projectile_speed_code=projectile.speed_code,
                 )
         if charge_attack is not None and bool(charge_attack.get("reset_on_hit")):
             self._reset_attack_charge(state, source, reason="hit_consumed")
@@ -2560,7 +3079,26 @@ class BattleEngine:
         )
         desired_gap = pull_distance + self._collision_radius(source) + self._collision_radius(target)
         travel = max(0, center_distance - desired_gap)
+        jump_was_active = target.jump_remaining_us > 0
         if travel <= 0:
+            if jump_was_active:
+                # Fisherman's hook is the documented exception that can
+                # cancel a Mega Knight already in flight.  A hook that lands
+                # at the existing reel gap still cancels the pending landing
+                # pulse; otherwise the jump would explode at its stale
+                # pre-hook coordinates on the next tick.
+                target.jump_remaining_us = 0
+                target.jump_target_uid = None
+                target.jump_landing_x_mtile = 0
+                target.jump_landing_y_mtile = 0
+                self._emit(
+                    state,
+                    "jump_cancelled",
+                    uid=target.uid,
+                    card_id=target.card_id,
+                    reason="hooked",
+                    source_uid=source.uid,
+                )
             return
         old_x, old_y = target.x_mtile, target.y_mtile
         target.x_mtile, target.y_mtile = move_towards(
@@ -2575,6 +3113,23 @@ class BattleEngine:
         target.navigation_revision = -1
         self._reset_attack_charge(state, target, reason="hooked")
         self._reset_dash(state, target, reason="hooked")
+        if jump_was_active:
+            # The hook interrupts the airborne phase rather than allowing the
+            # old landing target/coordinates to survive the reel.  Clearing
+            # all jump state also suppresses the landing splash, matching the
+            # Fisherman-versus-Mega-Knight interaction.
+            target.jump_remaining_us = 0
+            target.jump_target_uid = None
+            target.jump_landing_x_mtile = 0
+            target.jump_landing_y_mtile = 0
+            self._emit(
+                state,
+                "jump_cancelled",
+                uid=target.uid,
+                card_id=target.card_id,
+                reason="hooked",
+                source_uid=source.uid,
+            )
         self._emit(
             state,
             "hook_pulled",
@@ -2597,7 +3152,10 @@ class BattleEngine:
         """
 
         definition = self.ruleset.cards[source.card_id]
-        amount = int(definition.mechanics.get("heal_amount") or 0)
+        amount = self._scale_level_value(
+            int(definition.mechanics.get("heal_amount") or 0),
+            source.level_multiplier_permille,
+        )
         radius = int(definition.mechanics.get("heal_radius_mtile") or 0)
         if amount <= 0 or radius <= 0:
             return
@@ -2635,6 +3193,7 @@ class BattleEngine:
         x: int,
         y: int,
         raw_component: object,
+        level_multiplier_permille: int = PERMILLE,
     ) -> None:
         """Apply a one-shot friendly troop heal at a projectile impact.
 
@@ -2648,7 +3207,9 @@ class BattleEngine:
 
         if not hasattr(raw_component, "get"):
             return
-        amount = int(raw_component.get("amount") or 0)
+        amount = self._scale_level_value(
+            int(raw_component.get("amount") or 0), level_multiplier_permille
+        )
         radius = int(raw_component.get("radius_mtile") or 0)
         allowed_layers = {
             str(value) for value in raw_component.get("targets", ("air", "ground"))
@@ -2699,6 +3260,32 @@ class BattleEngine:
         for projectile in [state.projectiles[uid] for uid in sorted(state.projectiles)]:
             if not projectile.alive:
                 continue
+            if projectile.chain_next_index < len(projectile.chain_target_uids):
+                projectile.chain_delay_remaining_us = max(
+                    0, projectile.chain_delay_remaining_us - dt
+                )
+                if projectile.chain_delay_remaining_us == 0:
+                    target = state.entities.get(
+                        projectile.chain_target_uids[projectile.chain_next_index]
+                    )
+                    if target is not None and target.alive:
+                        self._apply_chain_hit(
+                            state,
+                            projectile,
+                            target,
+                            projectile.chain_next_index + 1,
+                        )
+                    projectile.chain_next_index += 1
+                    projectile.chain_delay_remaining_us = projectile.chain_delay_us
+                if projectile.chain_next_index >= len(projectile.chain_target_uids):
+                    projectile.alive = False
+                    self._emit(
+                        state,
+                        "projectile_resolved",
+                        uid=projectile.uid,
+                        card_id=projectile.source_card_id,
+                    )
+                continue
             if projectile.target_uid is not None:
                 target = state.entities.get(projectile.target_uid)
                 if target is not None and target.alive and projectile.homing:
@@ -2730,6 +3317,8 @@ class BattleEngine:
             if remaining <= travel or projectile.speed_mtile_per_s <= 0:
                 if not projectile.piercing:
                     self._impact_projectile(state, projectile)
+                    if projectile.chain_next_index < len(projectile.chain_target_uids):
+                        continue
                 if projectile.returning and not projectile.return_phase:
                     source = state.entities.get(projectile.source_uid) if projectile.source_uid is not None else None
                     if source is not None and source.alive:
@@ -2756,6 +3345,25 @@ class BattleEngine:
                             source_uid=projectile.source_uid,
                         )
                         continue
+                if projectile.piercing:
+                    definition = self.ruleset.cards.get(projectile.source_card_id)
+                    spawn = (
+                        None
+                        if definition is None
+                        else definition.mechanics.get("spawn_on_impact")
+                    )
+                    if spawn:
+                        child = self.ruleset.card(str(spawn["card_id"]))
+                        for _ in range(int(spawn["count"])):
+                            self._spawn_single_at(
+                                state,
+                                child,
+                                owner=projectile.owner,
+                                x_mtile=projectile.target_x_mtile,
+                                y_mtile=projectile.target_y_mtile,
+                                parent_uid=projectile.source_uid,
+                                level_multiplier_permille=projectile.level_multiplier_permille,
+                            )
                 projectile.alive = False
                 self._emit(
                     state,
@@ -2765,13 +3373,26 @@ class BattleEngine:
                 )
 
     def _impact_projectile(self, state: BattleState, projectile: ProjectileState) -> None:
+        # Component-boundary fixtures sometimes call the terminal impact
+        # helper directly instead of advancing a projectile through the
+        # physics loop.  Preserve the same swept-path semantics for piercing
+        # projectiles by resolving them at their authored endpoint.
+        if projectile.piercing:
+            if (
+                projectile.x_mtile == projectile.origin_x_mtile
+                and projectile.y_mtile == projectile.origin_y_mtile
+            ):
+                projectile.x_mtile = projectile.target_x_mtile
+                projectile.y_mtile = projectile.target_y_mtile
+            self._impact_piercing_projectile(state, projectile)
+            return
         status = None
         if projectile.status_kind:
             status = {
                 "kind": projectile.status_kind,
                 "duration_us": projectile.status_duration_us,
                 "speed_multiplier_milli": projectile.status_magnitude_permille,
-                "hit_speed_multiplier_milli": projectile.status_magnitude_permille,
+                "hit_speed_multiplier_milli": projectile.status_hit_speed_magnitude_permille,
                 "damage_per_tick": projectile.status_damage_per_tick,
                 "tick_interval_us": projectile.status_tick_interval_us,
                 "on_death_spawn_card_id": (
@@ -2793,6 +3414,7 @@ class BattleEngine:
                     and self.ruleset.cards[projectile.source_card_id].mechanics.get("status", {}).get("on_death_spawn_card_id") is not None
                     else None
                 ),
+                "source_level_multiplier_permille": projectile.level_multiplier_permille,
             }
         definition = self.ruleset.cards.get(projectile.source_card_id)
         clone = None if definition is None else definition.mechanics.get("clone")
@@ -2806,6 +3428,7 @@ class BattleEngine:
                 y=projectile.target_y_mtile,
                 radius=projectile.radius_mtile,
                 raw_clone=clone,
+                level_multiplier_permille=projectile.level_multiplier_permille,
             )
             return
         chain_attack = None if definition is None else definition.mechanics.get("chain_attack")
@@ -2833,6 +3456,7 @@ class BattleEngine:
                 default_status=status,
                 default_knockback=projectile.knockback_mtile,
                 raw_effect=persistent,
+                level_multiplier_permille=projectile.level_multiplier_permille,
             )
         else:
             self._impact_area(
@@ -2885,7 +3509,14 @@ class BattleEngine:
                             x_mtile=projectile.target_x_mtile,
                             y_mtile=projectile.target_y_mtile,
                             parent_uid=projectile.source_uid,
+                            level_multiplier_permille=projectile.level_multiplier_permille,
                         )
+        if (
+            definition is not None
+            and projectile.source_card_id == "firecracker"
+            and projectile.target_uid is not None
+        ):
+            self._spawn_firecracker_shrapnels(state, projectile, definition)
         if definition is not None:
             heal_on_impact = definition.mechanics.get("heal_on_impact")
             if heal_on_impact is not None:
@@ -2897,11 +3528,16 @@ class BattleEngine:
                     x=projectile.target_x_mtile,
                     y=projectile.target_y_mtile,
                     raw_component=heal_on_impact,
+                    level_multiplier_permille=projectile.level_multiplier_permille,
                 )
         if definition is not None and projectile.source_uid is not None:
             recoil = int(definition.mechanics.get("recoil_mtile") or 0)
             source = state.entities.get(projectile.source_uid)
-            if recoil > 0 and source is not None and source.alive:
+            # Shrapnel projectiles retain the source UID for attribution but
+            # have no acquired target.  Only the primary burst may recoil the
+            # Firecracker; applying recoil once per shrapnel would move the
+            # source five extra times.
+            if recoil > 0 and projectile.target_uid is not None and source is not None and source.alive:
                 before = (source.x_mtile, source.y_mtile)
                 self._apply_knockback(
                     state,
@@ -2921,6 +3557,96 @@ class BattleEngine:
                     to_y_mtile=source.y_mtile,
                     distance_mtile=recoil,
                 )
+
+    def _spawn_firecracker_shrapnels(
+        self,
+        state: BattleState,
+        projectile: ProjectileState,
+        definition: CardDefinition | TowerDefinition,
+    ) -> None:
+        """Launch Firecracker's five non-homing swept shrapnels.
+
+        The primary firework resolves its normal splash at the acquired
+        target.  Its fragments then travel away from the attacker in a small
+        fan, each retaining a swept collision path so bodies behind the
+        primary target can be hit once.  The acquired target is seeded into
+        every fragment's hit set: it already received the primary burst and
+        must not be double-counted by the fragment paths.
+        """
+
+        mechanics = definition.mechanics
+        raw_pellets = mechanics.get("pellets")
+        line = mechanics.get("line_piercing")
+        if not hasattr(raw_pellets, "get") or not hasattr(line, "get"):
+            return
+        count = int(raw_pellets.get("count") or 0)
+        spread = int(raw_pellets.get("spread_mtile") or 0)
+        length = int(line.get("length_mtile") or 0)
+        if count <= 0 or length <= 0:
+            return
+
+        origin_x = projectile.target_x_mtile
+        origin_y = projectile.target_y_mtile
+        base_dx = origin_x - projectile.origin_x_mtile
+        base_dy = origin_y - projectile.origin_y_mtile
+        base_distance = distance_mtile(0, 0, base_dx, base_dy)
+        if base_distance <= 0:
+            base_dx = 0
+            base_dy = -1 if projectile.owner == 0 else 1
+            base_distance = 1
+        perp_x, perp_y = -base_dy, base_dx
+        primary_uid = projectile.target_uid
+        for index in range(count):
+            offset = (
+                spread * (2 * index - (count - 1)) // (count - 1)
+                if count > 1
+                else 0
+            )
+            endpoint_x = origin_x + base_dx * length // base_distance + perp_x * offset // base_distance
+            endpoint_y = origin_y + base_dy * length // base_distance + perp_y * offset // base_distance
+            endpoint_x = min(self.ruleset.arena.width_mtile - 1, max(0, endpoint_x))
+            endpoint_y = min(self.ruleset.arena.height_mtile - 1, max(0, endpoint_y))
+            shrapnel = ProjectileState(
+                uid=self._allocate_uid(state),
+                source_uid=projectile.source_uid,
+                source_card_id=projectile.source_card_id,
+                owner=projectile.owner,
+                x_mtile=origin_x,
+                y_mtile=origin_y,
+                target_x_mtile=endpoint_x,
+                target_y_mtile=endpoint_y,
+                target_uid=None,
+                damage=projectile.damage,
+                crown_damage=projectile.crown_damage,
+                speed_mtile_per_s=projectile.speed_mtile_per_s,
+                speed_code=projectile.speed_code,
+                homing=False,
+                radius_mtile=0,
+                allowed_targets=projectile.allowed_targets,
+                hit_uids=[] if primary_uid is None else [primary_uid],
+                piercing=True,
+                origin_x_mtile=origin_x,
+                origin_y_mtile=origin_y,
+                line_end_x_mtile=endpoint_x,
+                line_end_y_mtile=endpoint_y,
+                direction_x_mtile=base_dx,
+                direction_y_mtile=base_dy,
+                pellet_index=index + 1,
+                level_multiplier_permille=projectile.level_multiplier_permille,
+            )
+            state.projectiles[shrapnel.uid] = shrapnel
+            self._emit(
+                state,
+                "projectile_spawned",
+                uid=shrapnel.uid,
+                player=projectile.owner,
+                card_id=projectile.source_card_id,
+                source_uid=projectile.source_uid,
+                target_uid=None,
+                attack_kind="shrapnel",
+                pellet_index=shrapnel.pellet_index,
+                projectile_speed_code=shrapnel.speed_code,
+            )
 
     def _impact_multi_target(
         self,
@@ -2969,6 +3695,7 @@ class BattleEngine:
                 if target.kind == "tower" and definition.crown_tower_damage is not None
                 else int(definition.damage or 0)
             )
+            dealt = self._scale_level_value(dealt, source.level_multiplier_permille)
             self._deal_damage(state, target, dealt, source.uid, source.card_id)
             if status and target.hp > 0:
                 self._apply_status(state, target, status)
@@ -3042,23 +3769,55 @@ class BattleEngine:
             )
             selected.append(candidates[0])
             anchor_x, anchor_y = selected[-1].x_mtile, selected[-1].y_mtile
-        for index, target in enumerate(selected, start=1):
-            dealt = projectile.crown_damage if target.kind == "tower" else projectile.damage
-            self._deal_damage(state, target, dealt, projectile.source_uid, projectile.source_card_id)
-            if status and target.hp > 0:
-                self._apply_status(state, target, status)
-            if reset_attack and target.hp > 0:
-                target.attack_cooldown_us = 0
-                target.windup_remaining_us = 0
-                target.pending_target_uid = None
-            self._emit(
+        delay = int(raw_component.get("chain_delay_us") or 0)
+        if not selected:
+            return
+        if delay <= 0:
+            for index, target in enumerate(selected, start=1):
+                self._apply_chain_hit(state, projectile, target, index)
+            return
+        projectile.chain_target_uids = [target.uid for target in selected]
+        projectile.chain_next_index = 1
+        projectile.chain_delay_us = delay
+        projectile.chain_delay_remaining_us = delay
+        self._apply_chain_hit(state, projectile, selected[0], 1)
+
+    def _apply_chain_hit(
+        self,
+        state: BattleState,
+        projectile: ProjectileState,
+        target: EntityState,
+        target_index: int,
+    ) -> None:
+        dealt = projectile.crown_damage if target.kind == "tower" else projectile.damage
+        self._deal_damage(
+            state, target, dealt, projectile.source_uid, projectile.source_card_id
+        )
+        if projectile.status_kind and target.hp > 0:
+            self._apply_status(
                 state,
-                "chain_hit",
-                source_uid=projectile.source_uid,
-                source_card_id=projectile.source_card_id,
-                target_uid=target.uid,
-                target_index=index,
+                target,
+                {
+                    "kind": projectile.status_kind,
+                    "duration_us": projectile.status_duration_us,
+                    "speed_multiplier_milli": projectile.status_magnitude_permille,
+                    "hit_speed_multiplier_milli": projectile.status_hit_speed_magnitude_permille,
+                    "source_level_multiplier_permille": projectile.level_multiplier_permille,
+                },
             )
+        definition = self.ruleset.cards[projectile.source_card_id]
+        if definition.mechanics.get("reset_attack") and target.hp > 0:
+            target.attack_cooldown_us = 0
+            target.windup_remaining_us = 0
+            target.pending_target_uid = None
+        self._emit(
+            state,
+            "chain_hit",
+            source_uid=projectile.source_uid,
+            source_card_id=projectile.source_card_id,
+            target_uid=target.uid,
+            target_index=target_index,
+        )
 
     def _impact_clone(
         self,
@@ -3071,6 +3830,7 @@ class BattleEngine:
         y: int,
         radius: int,
         raw_clone: object,
+        level_multiplier_permille: int = PERMILLE,
     ) -> None:
         """Copy eligible friendly troop bodies at a Clone impact.
 
@@ -3116,6 +3876,7 @@ class BattleEngine:
                 is_clone=True,
                 hp_override=clone_hp,
                 max_hp_override=clone_max_hp,
+                level_multiplier_permille=level_multiplier_permille,
             )
             cloned += 1
         self._emit(
@@ -3144,6 +3905,7 @@ class BattleEngine:
         default_status: object,
         default_knockback: int,
         raw_effect: object,
+        level_multiplier_permille: int = PERMILLE,
     ) -> None:
         """Create and immediately pulse a data-driven persistent effect."""
 
@@ -3152,6 +3914,7 @@ class BattleEngine:
         effect = raw_effect
         duration_us = int(effect.get("duration_us") or 0)
         interval_us = int(effect.get("tick_interval_us") or 0)
+        initial_delay_us = int(effect.get("initial_delay_us") or 0)
         if duration_us <= 0 or interval_us <= 0:
             raise ValueError(f"{source_card_id}: persistent effect has invalid timing")
         status = effect.get("status")
@@ -3192,7 +3955,10 @@ class BattleEngine:
                 return ()
             if not isinstance(values, (list, tuple)) or not values:
                 raise ValueError(f"{source_card_id}: {name} must be a non-empty sequence")
-            parsed = tuple(int(value) for value in values)
+            parsed = tuple(
+                self._scale_level_value(int(value), level_multiplier_permille)
+                for value in values
+            )
             if any(value < 0 for value in parsed):
                 raise ValueError(f"{source_card_id}: {name} contains negative damage")
             return parsed
@@ -3235,9 +4001,20 @@ class BattleEngine:
                 else max(0, duration_us - interval_us)
             ),
             tick_interval_us=interval_us,
-            damage_per_tick=int(effect.get("damage_per_tick") or default_damage),
-            crown_damage_per_tick=int(
-                effect.get("crown_damage_per_tick") or default_crown_damage
+            initial_delay_remaining_us=initial_delay_us,
+            damage_per_tick=(
+                default_damage
+                if effect.get("damage_per_tick") is None
+                else self._scale_level_value(
+                    int(effect.get("damage_per_tick") or 0), level_multiplier_permille
+                )
+            ),
+            crown_damage_per_tick=(
+                default_crown_damage
+                if effect.get("crown_damage_per_tick") is None
+                else self._scale_level_value(
+                    int(effect.get("crown_damage_per_tick") or 0), level_multiplier_permille
+                )
             ),
             status_kind=status_kind,
             status_duration_us=status_duration,
@@ -3269,6 +4046,7 @@ class BattleEngine:
                 if effect.get("max_pulses") is None
                 else int(effect.get("max_pulses"))
             ),
+            level_multiplier_permille=level_multiplier_permille,
         )
         state.effects[uid] = area
         self._emit(
@@ -3280,7 +4058,8 @@ class BattleEngine:
             x_mtile=x_mtile,
             y_mtile=y_mtile,
         )
-        self._apply_area_effect_tick(state, area)
+        if initial_delay_us == 0:
+            self._apply_area_effect_tick(state, area)
         if area.remaining_us == 0:
             area.alive = False
             self._emit(
@@ -3294,11 +4073,17 @@ class BattleEngine:
         mechanics = self.ruleset.cards[projectile.source_card_id].mechanics
         line = mechanics.get("line_piercing")
         returning = mechanics.get("returning_projectile")
+        impact_mode = mechanics.get("impact_mode")
         # Executioner's axe uses the same swept-path collision model as a
         # line projectile, but has a separately sourced width and a second
-        # pass on the way back.  Ordinary radial projectiles (Log's legacy
-        # representation, for example) retain their point-impact behavior.
-        swept_path = line is not None or returning is not None
+        # pass on the way back.  Rolling spell components opt into the same
+        # sweep through their continuous impact mode; ordinary radial
+        # projectiles retain point-impact behavior.
+        swept_path = (
+            line is not None
+            or returning is not None
+            or impact_mode in {"continuous", "continuous_path"}
+        )
         line_width = (
             int(line.get("width_mtile") or projectile.radius_mtile)
             if hasattr(line, "get")
@@ -3307,13 +4092,31 @@ class BattleEngine:
             else projectile.radius_mtile
         )
         ax, ay = projectile.origin_x_mtile, projectile.origin_y_mtile
+        # Older replay fixtures (and a few component-level callers) construct
+        # ``ProjectileState`` directly, before the fixed line-origin fields
+        # were added.  Their zero-valued origin is not an authored launch
+        # point; the current projectile position is the only available start
+        # coordinate.  Use it as the fallback so a direct impact resolves at
+        # the endpoint/point instead of sweeping an accidental diagonal from
+        # the arena origin through unrelated bodies.  Engine-created
+        # projectiles always carry explicit origin metadata and are unchanged.
+        if (
+            ax == 0
+            and ay == 0
+            and (projectile.x_mtile != 0 or projectile.y_mtile != 0)
+        ):
+            ax, ay = projectile.x_mtile, projectile.y_mtile
         bx, by = projectile.x_mtile, projectile.y_mtile
         vx, vy = bx - ax, by - ay
         denominator = vx * vx + vy * vy
         for target in self._alive_entities(state):
             if target.owner == projectile.owner or target.uid in projectile.hit_uids:
                 continue
-            if not self._spell_can_hit(projectile.source_card_id, target):
+            if not self._spell_can_hit(
+                projectile.source_card_id,
+                target,
+                allowed_targets=projectile.allowed_targets or None,
+            ):
                 continue
             if line is None and not swept_path:
                 if distance_mtile(
@@ -3341,9 +4144,14 @@ class BattleEngine:
             direction: tuple[int, int] | None = None
             if mechanics.get("knockback_direction") == "projectile_travel":
                 direction = (
-                    projectile.target_x_mtile - projectile.x_mtile,
-                    projectile.target_y_mtile - projectile.y_mtile,
+                    projectile.direction_x_mtile,
+                    projectile.direction_y_mtile,
                 )
+                if direction == (0, 0):
+                    direction = (
+                        projectile.target_x_mtile - projectile.x_mtile,
+                        projectile.target_y_mtile - projectile.y_mtile,
+                    )
                 if direction == (0, 0):
                     direction = (0, -1 if projectile.owner == 0 else 1)
             self._apply_knockback(
@@ -3430,6 +4238,7 @@ class BattleEngine:
                     y,
                     knockback,
                     direction=knockback_direction,
+                    excluded_structure_uid=source_uid,
                 )
 
     def _spell_can_hit(
@@ -3439,10 +4248,19 @@ class BattleEngine:
         *,
         allowed_targets: tuple[str, ...] | None = None,
     ) -> bool:
+        if target.concealed_active and card_id not in {"earthquake", "freeze"}:
+            return False
         if allowed_targets is not None or card_id in self.ruleset.cards:
+            authored_impact_targets = (
+                None
+                if card_id not in self.ruleset.cards
+                else self.ruleset.cards[card_id].mechanics.get("impact_targets")
+            )
             targets = set(
                 allowed_targets
                 if allowed_targets is not None
+                else authored_impact_targets
+                if authored_impact_targets is not None
                 else self.ruleset.cards[card_id].targets
             )
             if target.kind == "tower":
@@ -3453,7 +4271,7 @@ class BattleEngine:
                 )
             if target.kind == "building":
                 return "building" in targets or "ground" in targets
-            layer = self.ruleset.cards[target.card_id].mechanics.get("movement_layer") or "ground"
+            layer = self._movement_layer(target)
             return str(layer) in targets
         return True
 
@@ -3467,6 +4285,22 @@ class BattleEngine:
     ) -> None:
         if damage <= 0 or not target.alive or target.hp <= 0:
             return
+        source_definition = self.ruleset.cards.get(source_card_id)
+        if (
+            source_definition is not None
+            and source_definition.mechanics.get("spirit_one_shot")
+            and target.card_id in {
+                "electro-spirit",
+                "fire-spirit",
+                "heal-spirit",
+                "ice-spirit",
+            }
+        ):
+            # August 2026's Archer interaction is authored as a mechanic on
+            # the attacker rather than as a Spirit stat override.  Resolve
+            # it at the common damage boundary so direct projectile impacts,
+            # replay-loaded projectiles, and normal attack scheduling agree.
+            damage = max(damage, target.hp + target.shield_hp)
         if target.shield_hp > 0:
             before_shield = target.shield_hp
             target.shield_hp = max(0, target.shield_hp - damage)
@@ -3548,6 +4382,14 @@ class BattleEngine:
         before_max_hp = entity.max_hp
         preserve_hp = bool(component.get("preserve_hp", True))
         preserve_max_hp = bool(component.get("preserve_max_hp", True))
+        # The May-2025 Cannon Cart rework keeps the same target lock when the
+        # wheel form becomes a stationary building.  Snapshot both channels
+        # before replacing the card definition; validation is performed after
+        # the destination kind/targets are installed below.
+        preserved_target_uid = entity.target_uid
+        preserved_pending_target_uid = entity.pending_target_uid
+        preserved_windup_remaining_us = entity.windup_remaining_us
+        preserved_attack_cooldown_us = entity.attack_cooldown_us
 
         entity.card_id = target_definition.card_id
         entity.kind = target_definition.kind
@@ -3599,6 +4441,21 @@ class BattleEngine:
         entity.secondary_attack_count = 0
         entity.attack_count = 0
         entity.revive_eligible = False
+        if preserved_target_uid is not None:
+            preserved_target = state.entities.get(preserved_target_uid)
+            if (
+                preserved_target is not None
+                and preserved_target.alive
+                and self._valid_target(state, entity, preserved_target_uid)
+            ):
+                entity.target_uid = preserved_target_uid
+                entity.attack_cooldown_us = preserved_attack_cooldown_us
+                if (
+                    preserved_pending_target_uid == preserved_target_uid
+                    and preserved_windup_remaining_us > 0
+                ):
+                    entity.pending_target_uid = preserved_pending_target_uid
+                    entity.windup_remaining_us = preserved_windup_remaining_us
         state.navigation_revision += 1
         self._emit(
             state,
@@ -3657,6 +4514,9 @@ class BattleEngine:
             if attacker.kind == "tower"
             else int(reflection.get("damage") or 0)
         )
+        damage = self._scale_level_value(
+            damage, target.level_multiplier_permille
+        )
         self._deal_damage(
             state,
             attacker,
@@ -3687,7 +4547,10 @@ class BattleEngine:
             target_uid=attacker.uid,
             damage=damage,
             crown_tower_damage=(
-                int(reflection.get("crown_tower_damage") or 0)
+                self._scale_level_value(
+                    int(reflection.get("crown_tower_damage") or 0),
+                    target.level_multiplier_permille,
+                )
                 if attacker.kind == "tower"
                 else 0
             ),
@@ -3731,6 +4594,9 @@ class BattleEngine:
         on_death_spawn_card_id = status.get("on_death_spawn_card_id")
         on_death_spawn_count = int(status.get("on_death_spawn_count") or 0)
         on_death_spawn_owner = status.get("on_death_spawn_owner")
+        source_level_multiplier = int(
+            status.get("source_level_multiplier_permille") or PERMILLE
+        )
         if on_death_spawn_card_id is not None:
             on_death_spawn_card_id = str(on_death_spawn_card_id)
             if on_death_spawn_count <= 0:
@@ -3755,6 +4621,7 @@ class BattleEngine:
                     on_death_spawn_count,
                     on_death_spawn_owner,
                     hit_speed_magnitude_permille=hit_speed_magnitude,
+                    source_level_multiplier_permille=source_level_multiplier,
                 )
             )
         else:
@@ -3783,6 +4650,10 @@ class BattleEngine:
                     on_death_spawn_count,
                 )
                 existing.on_death_spawn_owner = on_death_spawn_owner
+                existing.source_level_multiplier_permille = max(
+                    existing.source_level_multiplier_permille,
+                    source_level_multiplier,
+                )
         target.statuses.sort(key=lambda row: row.kind)
         self._emit(state, "status_applied", uid=target.uid, status=kind, duration_us=duration)
 
@@ -3795,6 +4666,7 @@ class BattleEngine:
         distance: int,
         *,
         direction: tuple[int, int] | None = None,
+        excluded_structure_uid: int | None = None,
     ) -> None:
         if distance <= 0 or target.kind in {"tower", "building"} or not target.alive or target.hp <= 0:
             return
@@ -3822,6 +4694,7 @@ class BattleEngine:
                     target,
                     *candidate(travel * index // steps),
                     exclude_target=False,
+                    excluded_structure_uid=excluded_structure_uid,
                 )
                 for index in range(1, steps + 1)
             )
@@ -4012,6 +4885,10 @@ class BattleEngine:
                     y_mtile=entity.y_mtile,
                     parent_uid=entity.uid,
                     event_kind="entity_transformed",
+                    is_clone=entity.is_clone,
+                    hp_override=1 if entity.is_clone else None,
+                    max_hp_override=1 if entity.is_clone else None,
+                    level_multiplier_permille=status.source_level_multiplier_permille,
                 )
             self._emit(
                 state,
@@ -4034,26 +4911,105 @@ class BattleEngine:
         definition = self.ruleset.cards[entity.card_id]
         death = definition.mechanics.get("death")
         if death:
-            self._impact_area(
-                state,
-                owner=entity.owner,
-                source_uid=entity.uid,
-                source_card_id=entity.card_id,
-                x=entity.x_mtile,
-                y=entity.y_mtile,
-                damage=int(death.get("damage") or 0),
-                crown_damage=int(death.get("crown_tower_damage") or death.get("damage") or 0),
-                radius=int(death.get("radius_mtile") or 0),
-                status=death.get("status"),
-                knockback=int(death.get("knockback_mtile") or 0),
-                primary_target_uid=None,
-                allowed_targets=tuple(str(item) for item in death.get("targets", ())),
+            death_damage = self._scale_level_value(
+                int(death.get("damage") or 0), entity.level_multiplier_permille
             )
+            death_crown_damage = self._scale_level_value(
+                int(
+                    death["crown_tower_damage"]
+                    if death.get("crown_tower_damage") is not None
+                    else death.get("damage") or 0
+                ),
+                entity.level_multiplier_permille,
+            )
+            owner_reward = int(death.get("owner_elixir_milli") or 0)
+            if owner_reward > 0:
+                player = state.players[entity.owner]
+                before = player.elixir_milli
+                player.elixir_milli = min(
+                    self.ruleset.match.max_elixir_milli,
+                    player.elixir_milli + owner_reward,
+                )
+                self._emit(
+                    state,
+                    "elixir_awarded",
+                    uid=entity.uid,
+                    card_id=entity.card_id,
+                    player=entity.owner,
+                    amount_milli=player.elixir_milli - before,
+                )
+            reward = int(death.get("opponent_elixir_milli") or 0)
+            if reward > 0:
+                recipient = 1 - entity.owner
+                player = state.players[recipient]
+                before = player.elixir_milli
+                player.elixir_milli = min(
+                    self.ruleset.match.max_elixir_milli,
+                    player.elixir_milli + reward,
+                )
+                self._emit(
+                    state,
+                    "elixir_awarded",
+                    uid=entity.uid,
+                    card_id=entity.card_id,
+                    player=recipient,
+                    amount_milli=player.elixir_milli - before,
+                )
+            delay_us = int(death.get("delay_us") or 0)
+            if delay_us > 0:
+                effect = AreaEffectState(
+                    uid=self._allocate_uid(state), source_uid=entity.uid,
+                    source_card_id=entity.card_id, owner=entity.owner,
+                    x_mtile=entity.x_mtile, y_mtile=entity.y_mtile,
+                    radius_mtile=int(death.get("radius_mtile") or 0),
+                    remaining_us=delay_us, tick_interval_us=delay_us,
+                    damage_per_tick=death_damage,
+                    crown_damage_per_tick=death_crown_damage,
+                    knockback_mtile=int(death.get("knockback_mtile") or 0),
+                    allowed_targets=tuple(str(item) for item in death.get("targets", ())),
+                    max_pulses=1,
+                    level_multiplier_permille=entity.level_multiplier_permille,
+                )
+                state.effects[effect.uid] = effect
+                self._emit(
+                    state, "death_effect_scheduled", uid=effect.uid,
+                    source_uid=entity.uid, card_id=entity.card_id, delay_us=delay_us,
+                )
+            else:
+                self._impact_area(
+                    state,
+                    owner=entity.owner,
+                    source_uid=entity.uid,
+                    source_card_id=entity.card_id,
+                    x=entity.x_mtile,
+                    y=entity.y_mtile,
+                    damage=death_damage,
+                    crown_damage=death_crown_damage,
+                    radius=int(death.get("radius_mtile") or 0),
+                    status=death.get("status"),
+                    knockback=int(death.get("knockback_mtile") or 0),
+                    primary_target_uid=None,
+                    allowed_targets=tuple(str(item) for item in death.get("targets", ())),
+                )
             spawn_card_id = death.get("spawn_card_id")
             if spawn_card_id is not None:
                 child = self.ruleset.card(str(spawn_card_id))
                 count = int(death.get("spawn_count") or 1)
-                for offset in self._death_spawn_offsets(count):
+                authored_offsets = death.get("spawn_offsets_mtile")
+                if authored_offsets is not None:
+                    offsets = tuple(
+                        (int(pair[0]), int(pair[1])) for pair in authored_offsets
+                    )
+                    if len(offsets) != count:
+                        raise RulesetError(
+                            f"{entity.card_id}.mechanics.death.spawn_offsets_mtile "
+                            "must contain exactly spawn_count entries"
+                        )
+                else:
+                    offsets = self._death_spawn_offsets(count)
+                if entity.owner == 1 and definition.mechanics.get("mirror_spawn_layout"):
+                    offsets = tuple((-x, -y) for x, y in offsets)
+                for offset in offsets:
                     self._spawn_single_child(state, entity, child, offset_mtile=offset)
                 self._emit(
                     state,
@@ -4083,7 +5039,21 @@ class BattleEngine:
                 )
                 if has_materialized_carrier_children:
                     continue
-                for offset in self._death_spawn_offsets(count):
+                authored_offsets = child_spec.get("offsets_mtile")
+                if authored_offsets is not None:
+                    offsets = tuple(
+                        (int(pair[0]), int(pair[1])) for pair in authored_offsets
+                    )
+                    if len(offsets) != count:
+                        raise RulesetError(
+                            f"{entity.card_id}.mechanics.death.spawn_children "
+                            "offsets_mtile must contain exactly count entries"
+                        )
+                else:
+                    offsets = self._death_spawn_offsets(count)
+                if entity.owner == 1 and definition.mechanics.get("mirror_spawn_layout"):
+                    offsets = tuple((-x, -y) for x, y in offsets)
+                for offset in offsets:
                     self._spawn_single_child(state, entity, child, offset_mtile=offset)
                 self._emit(
                     state,
@@ -4152,6 +5122,7 @@ class BattleEngine:
                 parent_uid=entity.uid,
                 event_kind="phoenix_egg_created",
                 revive_eligible=False,
+                level_multiplier_permille=entity.level_multiplier_permille,
             )
             self._emit(
                 state,
@@ -4172,6 +5143,10 @@ class BattleEngine:
         revive_values = source.mechanics.get("revive") if source is not None else None
         if revive_values is None:
             raise ValueError(f"{entity.card_id}: hatch card lacks revive component")
+        revived_hitpoints = self._scale_level_value(
+            int(revive_values["revived_hitpoints"]),
+            entity.level_multiplier_permille,
+        )
         revived = self._spawn_single_at(
             state,
             phoenix,
@@ -4180,9 +5155,10 @@ class BattleEngine:
             y_mtile=entity.y_mtile,
             parent_uid=entity.uid,
             event_kind="phoenix_reborn",
-            hp_override=int(revive_values["revived_hitpoints"]),
-            max_hp_override=int(revive_values["revived_hitpoints"]),
+            hp_override=revived_hitpoints,
+            max_hp_override=revived_hitpoints,
             revive_eligible=False,
+            level_multiplier_permille=entity.level_multiplier_permille,
         )
         self._emit(
             state,
@@ -4191,7 +5167,10 @@ class BattleEngine:
             card_id=entity.card_id,
             revived_uid=revived.uid,
             hitpoints=revived.hp,
-            damage=int(revive_values["revived_damage"]),
+            damage=self._scale_level_value(
+                int(revive_values["revived_damage"]),
+                entity.level_multiplier_permille,
+            ),
         )
 
     def _resolve_tower_outcomes(self, state: BattleState, destroyed: list[EntityState]) -> None:
@@ -4294,7 +5273,13 @@ class BattleEngine:
             range_mtile = int(definition.mechanics["charge_range_mtile"])
         if range_mtile is None:
             return False
-        return self._edge_distance(source, target) <= int(range_mtile)
+        distance = self._edge_distance(source, target)
+        minimum = (
+            0
+            if source.kind == "tower"
+            else int(definition.mechanics.get("min_attack_range_mtile") or 0)
+        )
+        return minimum <= distance <= int(range_mtile)
 
     def _sight_range(self, entity: EntityState) -> int:
         definition = self._definition(entity)
@@ -4395,6 +5380,8 @@ class BattleEngine:
         definition = self.ruleset.cards.get(entity.card_id)
         if definition is None:
             return "ground"
+        if entity.river_airborne_active:
+            return "air"
         return str(definition.mechanics.get("movement_layer") or "ground")
 
     @staticmethod
@@ -4416,6 +5403,14 @@ class BattleEngine:
         if rage:
             result = result * max(rage) // PERMILLE
         return result
+
+    @staticmethod
+    def _scale_level_value(value: int, multiplier_permille: int) -> int:
+        """Scale an integer stat using the deterministic Clash level step."""
+
+        if value <= 0:
+            return value
+        return max(1, (value * multiplier_permille + 500) // PERMILLE)
 
     @staticmethod
     def _hit_speed_multiplier(entity: EntityState) -> int:
@@ -4658,6 +5653,9 @@ class BattleEngine:
                 or type(entity.hatch_due) is not bool
                 or type(entity.is_clone) is not bool
                 or type(entity.stealth_active) is not bool
+                or type(entity.spawner_active) is not bool
+                or type(entity.concealed_active) is not bool
+                or type(entity.river_airborne_active) is not bool
                 or type(entity.burrow_active) is not bool
             ):
                 raise ValueError("entity lifecycle flags must be boolean")
@@ -4691,6 +5689,8 @@ class BattleEngine:
                 or entity.shield_hp > entity.shield_max_hp
                 or entity.stealth_remaining_us < 0
                 or entity.jump_remaining_us < 0
+                or type(entity.level_multiplier_permille) is not int
+                or entity.level_multiplier_permille <= 0
             ):
                 raise ValueError("entity special-mechanic state is outside bounds")
             if entity.shield_max_hp == 0 and entity.shield_hp != 0:
@@ -4752,6 +5752,8 @@ class BattleEngine:
                 or status.tick_remainder_us < 0
                 or type(status.on_death_spawn_count) is not int
                 or status.on_death_spawn_count < 0
+                or type(status.source_level_multiplier_permille) is not int
+                or status.source_level_multiplier_permille <= 0
                 or (
                     status.on_death_spawn_card_id is not None
                     and (
@@ -4819,6 +5821,7 @@ class BattleEngine:
                 projectile.radius_mtile,
                 projectile.status_duration_us,
                 projectile.status_magnitude_permille,
+                projectile.status_hit_speed_magnitude_permille,
                 projectile.status_damage_per_tick,
                 projectile.status_tick_interval_us,
                 projectile.knockback_mtile,
@@ -4830,14 +5833,22 @@ class BattleEngine:
                 projectile.direction_x_mtile,
                 projectile.direction_y_mtile,
                 projectile.pellet_index,
+                projectile.chain_next_index,
+                projectile.chain_delay_us,
+                projectile.chain_delay_remaining_us,
+                projectile.level_multiplier_permille,
             )
             if any(type(value) is not int for value in projectile_integer_fields):
                 raise ValueError("projectile fixed-point fields must be integers")
+            if any(type(value) is not int or value <= 0 for value in projectile.chain_target_uids):
+                raise ValueError("projectile chain targets must be positive integer UIDs")
             if (
                 projectile.status_duration_us < 0
                 or projectile.status_damage_per_tick < 0
                 or projectile.status_tick_interval_us < 0
                 or not 0 <= projectile.status_magnitude_permille <= PERMILLE
+                or not 0 <= projectile.status_hit_speed_magnitude_permille <= PERMILLE
+                or projectile.level_multiplier_permille <= 0
             ):
                 raise ValueError("projectile status fields are outside bounds")
             for reference in (projectile.source_uid, projectile.target_uid):
@@ -4889,6 +5900,7 @@ class BattleEngine:
                 effect.remaining_us,
                 effect.tick_interval_us,
                 effect.tick_remainder_us,
+                effect.initial_delay_remaining_us,
                 effect.damage_per_tick,
                 effect.crown_damage_per_tick,
                 effect.status_duration_us,
@@ -4906,6 +5918,7 @@ class BattleEngine:
                 effect.max_spawns,
                 effect.spawned_count,
                 effect.pulses_applied,
+                effect.level_multiplier_permille,
             )
             if any(type(value) is not int for value in integer_fields):
                 raise ValueError("effect fixed-point fields must be integers")
@@ -4914,6 +5927,7 @@ class BattleEngine:
                 or effect.remaining_us < 0
                 or effect.tick_interval_us <= 0
                 or effect.tick_remainder_us < 0
+                or effect.initial_delay_remaining_us < 0
                 or effect.damage_per_tick < 0
                 or effect.crown_damage_per_tick < 0
                 or effect.status_duration_us < 0
@@ -4932,6 +5946,7 @@ class BattleEngine:
                 or effect.spawned_count < 0
                 or effect.spawned_count > effect.max_spawns
                 or effect.pulses_applied < 0
+                or effect.level_multiplier_permille <= 0
                 or (
                     effect.max_pulses is not None
                     and (
@@ -5025,14 +6040,26 @@ class DeterministicCycleController:
 
     def choose_action(self, engine: BattleEngine, state: BattleState, player: int) -> SimAction:
         hand = state.players[player].hand
+        player_state = state.players[player]
         affordable = [
             slot
             for slot, card_id in enumerate(hand)
-            if engine.ruleset.card(card_id).elixir_milli <= state.players[player].elixir_milli
+            if (
+                card_id != "mirror"
+                or player_state.last_played_card_id not in {None, "mirror"}
+            )
+            and engine._effective_card_cost(player_state, engine.ruleset.card(card_id))
+            <= player_state.elixir_milli
         ]
         if not affordable:
             return WaitAction(player)
-        slot = min(affordable, key=lambda index: (engine.ruleset.card(hand[index]).elixir_milli, index))
+        slot = min(
+            affordable,
+            key=lambda index: (
+                engine._effective_card_cost(player_state, engine.ruleset.card(hand[index])),
+                index,
+            ),
+        )
         card = engine.ruleset.card(hand[slot])
         use_left = self.lane == "left" or (
             self.lane == "alternate" and state.players[player].cards_played % 2 == 0

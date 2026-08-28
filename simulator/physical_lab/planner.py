@@ -105,11 +105,17 @@ def hog_cannon_probe(
 
     ruleset = load_fixed_ruleset()
     deck = tuple(BASE_HOG_CYCLE_DECK)
+    opening_slots = {
+        card_id: slot for slot, card_id in enumerate(deck[:4])
+    }
     initial = InitialConditions(
         tower_state="default",
         requested_elixir_milli={"A": 10_000, "B": 10_000},
         decks={"A": deck, "B": deck},
-        hand_slots={"A": {"hog-rider": 0, "cannon": 1}, "B": {"hog-rider": 0, "cannon": 1}},
+        # The physical Testspiel fixed-deck option makes the first four deck
+        # entries the opening hand.  Preserve the complete contract in the
+        # experiment instead of only recording cards used by this probe.
+        hand_slots={"A": opening_slots, "B": opening_slots},
     )
     actions = (
         PhysicalAction(

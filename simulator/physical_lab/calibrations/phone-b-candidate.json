@@ -1,0 +1,29 @@
+{
+  "arena_px": [
+    0.0,
+    285.0,
+    1080.0,
+    1425.0
+  ],
+  "calibration_hash": "sha256:9b52469d7f7e93c6dfa8b0f0f1af2013d1c3344297019c6e54e71ce4d5e0e4e5",
+  "calibration_id": "b-physical-candidate-v1",
+  "coordinate_system": "cr_bot_action_grid_v1",
+  "device_label": "SM-G970F",
+  "device_serial_hash": "sha256:3a199127abfc1894ce1e050cc0f9e9d0c73b670f7c3c79e2587c1efb8e1f5e10",
+  "grid_norm_bounds": [
+    -0.0016409266409266403,
+    0.0809667673716012,
+    1.002220077220077,
+    0.9821148036253777
+  ],
+  "hand_px": [
+    237.0,
+    1780.0,
+    808.0,
+    500.0
+  ],
+  "hand_slot_count": 4,
+  "schema_version": 1,
+  "screen_height_px": 2280,
+  "screen_width_px": 1080
+}

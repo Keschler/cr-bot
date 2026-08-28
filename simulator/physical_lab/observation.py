@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 import json
 import math
 from pathlib import Path
+import re
 from typing import Any, Mapping
 
 from .schema import (
@@ -21,11 +22,30 @@ from .sync import SynchronizationResult
 
 
 OBSERVATION_SCHEMA_VERSION = 1
+_REPLAY_CACHE_HASH_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
+_PHYSICAL_EVIDENCE_STATUSES = frozenset(
+    {
+        EvidenceStatus.CALIBRATED_ONLY,
+        EvidenceStatus.VALIDATION,
+        EvidenceStatus.HELDOUT,
+        EvidenceStatus.REGRESSION,
+    }
+)
+_REPLAY_CACHE_REQUIRED_REASON = (
+    "recognized replay cache is required before a physical observation can be treated as evidence"
+)
+_EVIDENCE_STATUS_BY_SPLIT = {
+    EvidenceSplit.CALIBRATION: EvidenceStatus.CALIBRATED_ONLY,
+    EvidenceSplit.VALIDATION: EvidenceStatus.VALIDATION,
+    EvidenceSplit.HELDOUT: EvidenceStatus.HELDOUT,
+    EvidenceSplit.REGRESSION: EvidenceStatus.REGRESSION,
+}
 
 
 class ObservationCertainty(str, Enum):
     DIRECT = "direct"
     INFERRED = "inferred"
+    TENTATIVE = "tentative"
 
 
 def _name(value: object, field_name: str) -> str:
@@ -57,6 +77,65 @@ def _number(value: object, field_name: str) -> int | float:
     if type(value) not in (int, float) or (isinstance(value, float) and not math.isfinite(value)):
         raise PhysicalLabError(f"{field_name} must be a finite number")
     return value
+
+
+def _replay_cache_admission_reason(
+    replay_cache_hash: object,
+    replay_cache_error: object = None,
+) -> str | None:
+    """Return why the CLI cache-recognition attestation cannot admit evidence.
+
+    ``seal_replay_cache`` is the recognition boundary.  The CLI passes its
+    digest only on success and passes ``replay_cache_error`` on failure; this
+    module deliberately consumes that bounded attestation instead of opening
+    an arbitrary cache during observation normalization.  A candidate-only
+    offline manifest is handled separately and does not call this gate.
+    """
+
+    if replay_cache_error is not None:
+        if isinstance(replay_cache_error, str) and replay_cache_error.strip():
+            return replay_cache_error
+        return "replay cache recognition failed"
+    if replay_cache_hash is None:
+        return _REPLAY_CACHE_REQUIRED_REASON
+    if not isinstance(replay_cache_hash, str) or _REPLAY_CACHE_HASH_RE.fullmatch(replay_cache_hash) is None:
+        return "replay cache admission requires a sealed sha256 hash"
+    return None
+
+
+def _replay_cache_rejection(
+    replay_cache_hash: object,
+    replay_cache_error: object = None,
+) -> RejectedObservation | None:
+    reason = _replay_cache_admission_reason(replay_cache_hash, replay_cache_error)
+    if reason is None:
+        return None
+    return RejectedObservation(
+        record_id="replay-cache",
+        record_type="replay_cache",
+        reason=reason,
+    )
+
+
+def _admit_manifest_replay_cache(manifest: "ObservationManifest") -> "ObservationManifest":
+    """Keep evidence statuses fail-closed when a manifest lacks cache proof.
+
+    ``candidate_only`` is intentionally exempt: the offline runner and its
+    comparison report are not physical evidence and must remain usable before
+    a recognized replay cache exists.  Rejected manifests are already
+    fail-closed and are not rewritten with a duplicate cache rejection.
+    """
+
+    if manifest.status not in _PHYSICAL_EVIDENCE_STATUSES:
+        return manifest
+    rejection = _replay_cache_rejection(manifest.replay_cache_hash)
+    if rejection is None:
+        return manifest
+    return replace(
+        manifest,
+        status=EvidenceStatus.REJECTED,
+        rejected=manifest.rejected + (rejection,),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -309,6 +388,19 @@ class ObservationManifest:
         object.__setattr__(self, "synchronization", json.loads(canonical_json(dict(self.synchronization))))
         if self.replay_cache_hash is not None:
             object.__setattr__(self, "replay_cache_hash", _name(self.replay_cache_hash, "replay_cache_hash"))
+        # The CLI may load a normalized evidence manifest first and attach the
+        # successfully sealed cache digest in a subsequent ``replace``.  Let
+        # that recognized attachment undo only this gate's provisional
+        # rejection; any other rejection remains fail-closed.
+        if (
+            status is EvidenceStatus.REJECTED
+            and len(self.rejected) == 1
+            and self.rejected[0].record_id == "replay-cache"
+            and self.rejected[0].reason == _REPLAY_CACHE_REQUIRED_REASON
+            and _replay_cache_admission_reason(self.replay_cache_hash) is None
+        ):
+            object.__setattr__(self, "status", _EVIDENCE_STATUS_BY_SPLIT[split])
+            object.__setattr__(self, "rejected", ())
 
     def to_dict(self, *, include_hash: bool = False) -> dict[str, object]:
         result: dict[str, object] = {
@@ -393,7 +485,7 @@ class ObservationManifest:
             raise PhysicalLabError(
                 f"manifest_hash mismatch: declared={declared!r}, actual={manifest.manifest_hash()!r}"
             )
-        return manifest
+        return _admit_manifest_replay_cache(manifest)
 
     @classmethod
     def load(cls, path: str | Path) -> "ObservationManifest":
@@ -562,14 +654,9 @@ def ingest_extracted_observations(
                 reason="capture synchronization failed its declared timing gate",
             )
         )
-    if replay_cache_error is not None:
-        rejected.append(
-            RejectedObservation(
-                record_id="replay-cache",
-                record_type="replay_cache",
-                reason=replay_cache_error,
-            )
-        )
+    replay_cache_rejection = _replay_cache_rejection(replay_cache_hash, replay_cache_error)
+    if replay_cache_rejection is not None:
+        rejected.append(replay_cache_rejection)
     status = EvidenceStatus.CANDIDATE_ONLY
     try:
         split = evidence_split if isinstance(evidence_split, EvidenceSplit) else EvidenceSplit(evidence_split)

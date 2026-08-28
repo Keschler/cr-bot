@@ -58,6 +58,7 @@
             0
           ]
         ],
+        "spawn_stagger_us": 100000,
         "spell_origin": null,
         "spirit_one_shot": true,
         "status": null,
@@ -132,7 +133,28 @@
         "lifetime_decay": null,
         "lifetime_start": null,
         "movement_layer": null,
-        "persistent_effect": null,
+        "persistent_effect": {
+          "crown_damage_schedule": [
+            25,
+            25,
+            25
+          ],
+          "damage_schedule": [
+            123,
+            123,
+            123
+          ],
+          "duration_anchor": "creation",
+          "duration_us": 400000,
+          "max_pulses": 3,
+          "targets": [
+            "air",
+            "ground",
+            "building",
+            "crown_tower"
+          ],
+          "tick_interval_us": 200000
+        },
         "piercing": false,
         "placement_class": "spell_anywhere",
         "projectile_mode": "ballistic_to_point",
@@ -292,8 +314,9 @@
         "death": {
           "crown_tower_damage": 240,
           "damage": 240,
+          "delay_us": 3000000,
           "knockback_mtile": 0,
-          "radius_mtile": 1500,
+          "radius_mtile": 3000,
           "targets": [
             "air",
             "ground",
@@ -458,6 +481,7 @@
         "knockback_mtile": 0,
         "lifetime_decay": null,
         "lifetime_start": null,
+        "mirror_spawn_layout": true,
         "movement_layer": null,
         "persistent_effect": null,
         "piercing": false,
@@ -469,6 +493,7 @@
             0
           ]
         ],
+        "spawn_stagger_us": 100000,
         "spell_origin": null,
         "status": null,
         "suicide_on_attack": false,
@@ -530,15 +555,21 @@
         "building_only": false,
         "crown_tower_connection": "normal",
         "death": null,
-        "impact_mode": "at_destination",
+        "impact_mode": "continuous_path",
+        "impact_targets": [
+          "ground",
+          "building",
+          "crown_tower"
+        ],
         "knockback_mtile": 0,
         "lifetime_decay": null,
         "lifetime_start": null,
         "movement_layer": null,
         "persistent_effect": null,
-        "piercing": false,
+        "piercing": true,
         "placement_class": "spells",
-        "projectile_mode": "ballistic_to_point",
+        "projectile_mode": "rolling_linear",
+        "rolling_range_mtile": 4500,
         "spawn_layout_mtile": [],
         "spawn_on_impact": {
           "card_id": "barbarian",
@@ -610,7 +641,15 @@
       "mechanics": {
         "building_only": false,
         "crown_tower_connection": "normal",
-        "death": null,
+        "death": {
+          "damage": 0,
+          "radius_mtile": 0,
+          "spawn_card_id": "barbarian",
+          "spawn_count": 1,
+          "targets": [
+            "ground"
+          ]
+        },
         "impact_mode": "melee",
         "knockback_mtile": 0,
         "lifetime_decay": "linear_hp",
@@ -623,7 +662,7 @@
         "spawn": {
           "card_id": "barbarians",
           "count": 3,
-          "interval_us": 14000000,
+          "interval_us": 15000000,
           "max_alive": 6,
           "start_delay_us": 1000000
         },
@@ -695,6 +734,7 @@
         "knockback_mtile": 0,
         "lifetime_decay": null,
         "lifetime_start": null,
+        "mirror_spawn_layout": true,
         "movement_layer": null,
         "persistent_effect": null,
         "piercing": false,
@@ -722,6 +762,7 @@
             0
           ]
         ],
+        "spawn_stagger_us": 100000,
         "spell_origin": null,
         "status": null,
         "suicide_on_attack": false,
@@ -787,6 +828,7 @@
         "knockback_mtile": 0,
         "lifetime_decay": null,
         "lifetime_start": null,
+        "mirror_spawn_layout": true,
         "movement_layer": "air",
         "persistent_effect": null,
         "piercing": false,
@@ -814,6 +856,7 @@
             0
           ]
         ],
+        "spawn_stagger_us": 100000,
         "spell_origin": null,
         "status": null,
         "suicide_on_attack": false,
@@ -1053,7 +1096,18 @@
       "mechanics": {
         "building_only": false,
         "crown_tower_connection": "normal",
-        "death": null,
+        "death": {
+          "crown_tower_damage": 222,
+          "damage": 222,
+          "delay_us": 3000000,
+          "radius_mtile": 3000,
+          "targets": [
+            "air",
+            "ground",
+            "building",
+            "crown_tower"
+          ]
+        },
         "impact_mode": "on_target",
         "knockback_mtile": 0,
         "lifetime_decay": "linear_hp",
@@ -1217,9 +1271,13 @@
         "knockback_mtile": 1500,
         "lifetime_decay": null,
         "lifetime_start": null,
+        "line_piercing": {
+          "length_mtile": 7000,
+          "width_mtile": 500
+        },
         "movement_layer": null,
         "persistent_effect": null,
-        "piercing": false,
+        "piercing": true,
         "placement_class": "own_ground",
         "projectile_mode": "homing",
         "spawn_layout_mtile": [
@@ -1299,6 +1357,7 @@
         "knockback_mtile": 0,
         "lifetime_decay": null,
         "lifetime_start": null,
+        "mirror_spawn_layout": true,
         "movement_layer": null,
         "persistent_effect": null,
         "piercing": false,
@@ -1310,6 +1369,7 @@
             0
           ]
         ],
+        "spawn_stagger_us": 100000,
         "spell_origin": null,
         "status": null,
         "stealth": false,
@@ -1752,6 +1812,9 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "none",
+        "river_jump": {
+          "duration_us": 500000
+        },
         "spawn_layout_mtile": [
           [
             0,
@@ -1799,7 +1862,7 @@
         "dark_prince"
       ],
       "area_radius_mtile": 1100,
-      "attack_interval_us": 1300000,
+      "attack_interval_us": 1400000,
       "collision_radius_mtile": 400,
       "crown_tower_damage": null,
       "damage": 266,
@@ -1829,6 +1892,9 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "none",
+        "river_jump": {
+          "duration_us": 500000
+        },
         "shield": {
           "hitpoints": 240
         },
@@ -1982,9 +2048,16 @@
         "lifetime_start": null,
         "movement_layer": null,
         "persistent_effect": {
+          "building_damage_per_tick": 287,
           "crown_damage_per_tick": 49,
           "damage_per_tick": 82,
           "duration_us": 3000000,
+          "status": {
+            "duration_us": 1000000,
+            "hit_speed_multiplier_milli": 1000,
+            "kind": "earthquake-slow",
+            "speed_multiplier_milli": 500
+          },
           "targets": [
             "ground",
             "building",
@@ -2148,13 +2221,13 @@
         "electro_giant"
       ],
       "area_radius_mtile": null,
-      "attack_interval_us": 2100000,
+      "attack_interval_us": 1800000,
       "collision_radius_mtile": 400,
       "crown_tower_damage": null,
-      "damage": 163,
+      "damage": 184,
       "deploy_time_us": 1000000,
       "elixir_milli": 7000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 1000000,
       "hitpoints": 3952,
       "kind": "troop",
       "lifetime_us": null,
@@ -2173,7 +2246,7 @@
         "placement_class": "own_ground",
         "projectile_mode": "none",
         "reflection": {
-          "crown_tower_damage": 128,
+          "crown_tower_damage": 38,
           "damage": 192,
           "radius_mtile": 3500,
           "stun_duration_us": 500000,
@@ -2201,6 +2274,9 @@
       "provenance": {
         "catalog_values": [
           "local-card-metadata-2026-08-14"
+        ],
+        "damage": [
+          "user-supplied-balance-update-2026-08-26"
         ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
@@ -2250,6 +2326,12 @@
       "mass": 1,
       "mechanics": {
         "building_only": false,
+        "chain_attack": {
+          "chain_delay_us": 250000,
+          "chain_range_mtile": 3000,
+          "max_targets": 9,
+          "selection": "nearest"
+        },
         "crown_tower_connection": "expected-no-unassisted-connection",
         "death": null,
         "impact_mode": "on_target",
@@ -2261,6 +2343,7 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "homing",
+        "reset_attack": true,
         "spawn_layout_mtile": [
           [
             0,
@@ -2268,7 +2351,12 @@
           ]
         ],
         "spell_origin": null,
-        "status": null,
+        "status": {
+          "duration_us": 500000,
+          "hit_speed_multiplier_milli": 0,
+          "kind": "stun",
+          "speed_multiplier_milli": 0
+        },
         "suicide_on_attack": true,
         "targetable_during_deploy": false
       },
@@ -2296,6 +2384,9 @@
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.chain_attack.chain_range_mtile": [
+          "user-supplied-balance-update-2026-08-26"
         ],
         "mechanics.crown_tower_connection": [
           "official-august-2026"
@@ -2436,6 +2527,10 @@
         "building_only": false,
         "crown_tower_connection": "normal",
         "death": null,
+        "evolution": {
+          "rage_duration_us": 2500000,
+          "spear_damage": 220
+        },
         "impact_mode": "melee",
         "knockback_mtile": 0,
         "lifetime_decay": null,
@@ -2455,6 +2550,7 @@
             0
           ]
         ],
+        "spawn_stagger_us": 100000,
         "spell_origin": null,
         "status": null,
         "suicide_on_attack": false,
@@ -2475,6 +2571,12 @@
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.evolution.rage_duration_us": [
+          "user-supplied-balance-update-2026-08-26"
+        ],
+        "mechanics.evolution.spear_damage": [
+          "user-supplied-balance-update-2026-08-26"
         ]
       },
       "range_mtile": 1200,
@@ -2512,7 +2614,15 @@
       "mechanics": {
         "building_only": true,
         "crown_tower_connection": "normal",
-        "death": null,
+        "death": {
+          "crown_tower_damage": 0,
+          "damage": 0,
+          "opponent_elixir_milli": 500,
+          "radius_mtile": 0,
+          "targets": [
+            "ground"
+          ]
+        },
         "impact_mode": "melee",
         "knockback_mtile": 0,
         "lifetime_decay": null,
@@ -2577,15 +2687,23 @@
       "first_hit_delay_us": null,
       "hitpoints": 1070,
       "kind": "building",
-      "lifetime_us": 65000000,
+      "lifetime_us": 93000000,
       "mass": 0,
       "mechanics": {
         "building_only": false,
         "crown_tower_connection": "normal",
-        "death": null,
+        "death": {
+          "crown_tower_damage": 0,
+          "damage": 0,
+          "owner_elixir_milli": 1000,
+          "radius_mtile": 0,
+          "targets": [
+            "ground"
+          ]
+        },
         "elixir_generation": {
           "amount_milli": 1000,
-          "interval_us": 12000000
+          "interval_us": 13000000
         },
         "impact_mode": "melee",
         "knockback_mtile": 0,
@@ -2663,6 +2781,7 @@
           "crown_tower_damage": 0,
           "damage": 0,
           "knockback_mtile": 0,
+          "opponent_elixir_milli": 1000,
           "radius_mtile": 0,
           "spawn_children": [
             {
@@ -2752,6 +2871,7 @@
           "crown_tower_damage": 0,
           "damage": 0,
           "knockback_mtile": 0,
+          "opponent_elixir_milli": 500,
           "radius_mtile": 0,
           "spawn_children": [
             {
@@ -3104,7 +3224,15 @@
         "knockback_mtile": 0,
         "lifetime_decay": null,
         "lifetime_start": null,
+        "line_piercing": {
+          "length_mtile": 3500,
+          "width_mtile": 250
+        },
         "movement_layer": null,
+        "pellets": {
+          "count": 5,
+          "spread_mtile": 800
+        },
         "persistent_effect": null,
         "piercing": false,
         "placement_class": "own_ground",
@@ -3581,13 +3709,13 @@
       ],
       "area_radius_mtile": null,
       "attack_interval_us": 1300000,
-      "collision_radius_mtile": 400,
+      "collision_radius_mtile": 750,
       "crown_tower_damage": null,
       "damage": 276,
       "deploy_time_us": 1000000,
       "elixir_milli": 6000,
       "first_hit_delay_us": 0,
-      "hitpoints": 3617,
+      "hitpoints": 1313,
       "kind": "troop",
       "lifetime_us": null,
       "mass": 1,
@@ -3595,10 +3723,11 @@
         "building_only": false,
         "crown_tower_connection": "normal",
         "death": {
-          "crown_tower_damage": 125,
-          "damage": 500,
+          "crown_tower_damage": 269,
+          "damage": 269,
+          "delay_us": 3000000,
           "knockback_mtile": 0,
-          "radius_mtile": 1000,
+          "radius_mtile": 3000,
           "targets": [
             "air",
             "ground",
@@ -3680,7 +3809,7 @@
         "crown_tower_connection": "normal",
         "death": null,
         "impact_mode": "at_destination",
-        "knockback_mtile": 0,
+        "knockback_mtile": 1800,
         "lifetime_decay": null,
         "lifetime_start": null,
         "movement_layer": null,
@@ -3691,10 +3820,10 @@
         "spawn_layout_mtile": [],
         "spell_origin": "own-king-tower",
         "status": {
-          "duration_us": 2000000,
-          "hit_speed_multiplier_milli": 500,
+          "duration_us": 3000000,
+          "hit_speed_multiplier_milli": 700,
           "kind": "slow",
-          "speed_multiplier_milli": 500
+          "speed_multiplier_milli": 700
         },
         "suicide_on_attack": false,
         "targetable_during_deploy": false
@@ -3769,6 +3898,7 @@
         "knockback_mtile": 0,
         "lifetime_decay": null,
         "lifetime_start": null,
+        "mirror_spawn_layout": true,
         "movement_layer": null,
         "persistent_effect": null,
         "piercing": false,
@@ -3780,6 +3910,7 @@
             0
           ]
         ],
+        "spawn_stagger_us": 100000,
         "spell_origin": null,
         "status": null,
         "suicide_on_attack": false,
@@ -3926,6 +4057,7 @@
         "knockback_mtile": 0,
         "lifetime_decay": null,
         "lifetime_start": null,
+        "mirror_spawn_layout": true,
         "movement_layer": null,
         "piercing": false,
         "placement_class": "own_ground",
@@ -3936,6 +4068,7 @@
             0
           ]
         ],
+        "spawn_stagger_us": 100000,
         "spell_origin": null,
         "status": null,
         "suicide_on_attack": false,
@@ -4273,7 +4406,30 @@
       "mechanics": {
         "building_only": false,
         "crown_tower_connection": "normal",
-        "death": null,
+        "death": {
+          "crown_tower_damage": 0,
+          "damage": 0,
+          "radius_mtile": 0,
+          "spawn_card_id": "goblins",
+          "spawn_count": 2,
+          "targets": [
+            "ground"
+          ]
+        },
+        "deploy_effect": {
+          "crown_tower_damage": 0,
+          "damage": 84,
+          "duration_us": 0,
+          "hit_speed_multiplier_milli": 1000,
+          "kind": "goblin-drill-emergence",
+          "knockback_mtile": 500,
+          "radius_mtile": 2000,
+          "speed_multiplier_milli": 1000,
+          "targets": [
+            "ground",
+            "building"
+          ]
+        },
         "impact_mode": "melee",
         "knockback_mtile": 0,
         "lifetime_decay": "linear_hp",
@@ -4286,7 +4442,7 @@
         "spawn": {
           "card_id": "goblins",
           "count": 1,
-          "interval_us": 3500000,
+          "interval_us": 3000000,
           "max_alive": 6,
           "start_delay_us": 1000000
         },
@@ -4408,6 +4564,7 @@
             450
           ]
         ],
+        "spawn_stagger_us": 100000,
         "spell_origin": null,
         "status": null,
         "suicide_on_attack": false,
@@ -4578,7 +4735,15 @@
       "mechanics": {
         "building_only": false,
         "crown_tower_connection": "normal",
-        "death": null,
+        "death": {
+          "damage": 0,
+          "radius_mtile": 0,
+          "spawn_card_id": "spear-goblin",
+          "spawn_count": 1,
+          "targets": [
+            "ground"
+          ]
+        },
         "impact_mode": "melee",
         "knockback_mtile": 0,
         "lifetime_decay": "linear_hp",
@@ -4589,10 +4754,13 @@
         "placement_class": "own_ground",
         "projectile_mode": "none",
         "spawn": {
-          "card_id": "spear-goblins",
-          "count": 3,
+          "activation_range_mtile": 6000,
+          "card_id": "spear-goblin",
+          "child_deploy_time_us": 500000,
+          "count": 1,
           "interval_us": 2200000,
           "max_alive": 6,
+          "requires_visible_enemy": true,
           "start_delay_us": 1000000
         },
         "spawn_layout_mtile": [
@@ -4776,6 +4944,7 @@
         "knockback_mtile": 0,
         "lifetime_decay": null,
         "lifetime_start": null,
+        "mirror_spawn_layout": true,
         "movement_layer": null,
         "persistent_effect": null,
         "piercing": false,
@@ -4799,6 +4968,7 @@
             0
           ]
         ],
+        "spawn_stagger_us": 100000,
         "spell_origin": null,
         "status": null,
         "suicide_on_attack": false,
@@ -5041,11 +5211,47 @@
         "persistent_effect": {
           "crown_damage_per_tick": 0,
           "damage_per_tick": 0,
+          "duration_anchor": "creation",
           "duration_us": 9000000,
+          "initial_delay_us": 2200000,
           "spawn": {
             "card_id": "skeletons",
             "count": 1,
-            "max_spawns": 12
+            "max_spawns": 12,
+            "offsets_mtile": [
+              [
+                -3300,
+                -300
+              ],
+              [
+                3100,
+                1100
+              ],
+              [
+                -900,
+                3200
+              ],
+              [
+                500,
+                -3300
+              ],
+              [
+                2700,
+                -1900
+              ],
+              [
+                -2800,
+                1800
+              ],
+              [
+                1900,
+                2800
+              ],
+              [
+                -2000,
+                -2700
+              ]
+            ]
           },
           "targets": [
             "air",
@@ -5133,6 +5339,7 @@
         "knockback_mtile": 0,
         "lifetime_decay": null,
         "lifetime_start": null,
+        "mirror_spawn_layout": true,
         "movement_layer": null,
         "persistent_effect": null,
         "piercing": false,
@@ -5155,6 +5362,7 @@
             0
           ]
         ],
+        "spawn_stagger_us": 100000,
         "spell_origin": null,
         "status": null,
         "suicide_on_attack": false,
@@ -5316,6 +5524,9 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "none",
+        "river_jump": {
+          "duration_us": 500000
+        },
         "spawn_layout_mtile": [
           [
             0,
@@ -6915,6 +7126,7 @@
         "knockback_mtile": 0,
         "lifetime_decay": null,
         "lifetime_start": null,
+        "mirror_spawn_layout": true,
         "movement_layer": "air",
         "persistent_effect": null,
         "piercing": false,
@@ -6946,6 +7158,7 @@
             450
           ]
         ],
+        "spawn_stagger_us": 100000,
         "spell_origin": null,
         "status": null,
         "suicide_on_attack": false,
@@ -7015,6 +7228,7 @@
         "knockback_mtile": 0,
         "lifetime_decay": null,
         "lifetime_start": null,
+        "mirror_spawn_layout": true,
         "movement_layer": "air",
         "persistent_effect": null,
         "piercing": false,
@@ -7034,6 +7248,7 @@
             0
           ]
         ],
+        "spawn_stagger_us": 100000,
         "spell_origin": null,
         "status": null,
         "suicide_on_attack": false,
@@ -7180,6 +7395,7 @@
         "knockback_mtile": 0,
         "lifetime_decay": "linear_hp",
         "lifetime_start": "placement",
+        "min_attack_range_mtile": 3500,
         "movement_layer": null,
         "persistent_effect": null,
         "piercing": false,
@@ -7783,6 +7999,12 @@
           "crown_damage_per_tick": 21,
           "damage_per_tick": 92,
           "duration_us": 8000000,
+          "status": {
+            "duration_us": 1000000,
+            "hit_speed_multiplier_milli": 1000,
+            "kind": "poison-slow",
+            "speed_multiplier_milli": 850
+          },
           "targets": [
             "air",
             "ground",
@@ -7797,12 +8019,10 @@
         "spawn_layout_mtile": [],
         "spell_origin": "own-king-tower",
         "status": {
-          "damage_per_tick": 100,
-          "duration_us": 8000000,
+          "duration_us": 1000000,
           "hit_speed_multiplier_milli": 1000,
-          "kind": "poison",
-          "speed_multiplier_milli": 1000,
-          "tick_interval_us": 1000000
+          "kind": "poison-slow",
+          "speed_multiplier_milli": 850
         },
         "suicide_on_attack": false,
         "targetable_during_deploy": false
@@ -7893,6 +8113,9 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "none",
+        "river_jump": {
+          "duration_us": 500000
+        },
         "spawn_layout_mtile": [
           [
             0,
@@ -8139,7 +8362,7 @@
       "damage": 250,
       "deploy_time_us": 1000000,
       "elixir_milli": 5000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 600000,
       "hitpoints": 1766,
       "kind": "troop",
       "lifetime_us": null,
@@ -8162,15 +8385,39 @@
         "persistent_effect": null,
         "piercing": false,
         "placement_class": "own_ground",
+        "primary_targets": [
+          "building",
+          "crown_tower"
+        ],
         "projectile_mode": "none",
-        "snare": {
-          "duration_us": 1500000,
-          "hit_speed_multiplier_milli": 1000,
-          "speed_multiplier_milli": 550,
+        "river_jump": {
+          "duration_us": 500000
+        },
+        "secondary_attack": {
+          "area_radius_mtile": 0,
+          "attack_interval_us": 1100000,
+          "crown_tower_damage": 0,
+          "damage": 104,
+          "first_hit_delay_us": 400000,
+          "max_range_mtile": 5500,
+          "min_range_mtile": 0,
+          "projectile_radius_mtile": 0,
+          "projectile_speed_mtile_per_s": 20000,
+          "status": {
+            "duration_us": 1500000,
+            "hit_speed_multiplier_milli": 1000,
+            "kind": "slow",
+            "speed_multiplier_milli": 300,
+            "targets": [
+              "air",
+              "ground"
+            ]
+          },
           "targets": [
             "air",
             "ground"
-          ]
+          ],
+          "troops_only": true
         },
         "spawn_layout_mtile": [
           [
@@ -8208,9 +8455,7 @@
       "spawn_count": 1,
       "targets": [
         "building",
-        "crown_tower",
-        "air",
-        "ground"
+        "crown_tower"
       ],
       "uncertainties": [
         {
@@ -8246,6 +8491,7 @@
         "knockback_mtile": 0,
         "lifetime_decay": null,
         "lifetime_start": null,
+        "mirror_spawn_layout": true,
         "movement_layer": null,
         "piercing": false,
         "placement_class": "own_ground",
@@ -8256,6 +8502,7 @@
             0
           ]
         ],
+        "spawn_stagger_us": 100000,
         "spell_origin": null,
         "status": null,
         "suicide_on_attack": false,
@@ -8315,6 +8562,7 @@
         "knockback_mtile": 0,
         "lifetime_decay": null,
         "lifetime_start": null,
+        "mirror_spawn_layout": true,
         "movement_layer": null,
         "piercing": false,
         "placement_class": "own_ground",
@@ -8325,6 +8573,7 @@
             0
           ]
         ],
+        "spawn_stagger_us": 100000,
         "spell_origin": null,
         "status": null,
         "suicide_on_attack": false,
@@ -8391,6 +8640,7 @@
         "knockback_mtile": 0,
         "lifetime_decay": null,
         "lifetime_start": null,
+        "mirror_spawn_layout": true,
         "movement_layer": null,
         "persistent_effect": null,
         "piercing": false,
@@ -8420,6 +8670,7 @@
             0
           ]
         ],
+        "spawn_stagger_us": 100000,
         "spell_origin": null,
         "status": null,
         "suicide_on_attack": false,
@@ -8808,11 +9059,15 @@
         "knockback_mtile": 0,
         "lifetime_decay": null,
         "lifetime_start": null,
+        "mirror_spawn_layout": true,
         "movement_layer": null,
         "persistent_effect": null,
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "none",
+        "river_jump": {
+          "duration_us": 500000
+        },
         "spawn_layout_mtile": [
           [
             -450,
@@ -8894,6 +9149,7 @@
         "knockback_mtile": 0,
         "lifetime_decay": null,
         "lifetime_start": null,
+        "mirror_spawn_layout": true,
         "movement_layer": null,
         "persistent_effect": null,
         "piercing": false,
@@ -8928,6 +9184,7 @@
             450
           ]
         ],
+        "spawn_stagger_us": 100000,
         "spell_origin": null,
         "status": null,
         "suicide_on_attack": false,
@@ -8990,6 +9247,7 @@
         "knockback_mtile": 0,
         "lifetime_decay": null,
         "lifetime_start": null,
+        "mirror_spawn_layout": true,
         "movement_layer": null,
         "persistent_effect": null,
         "piercing": false,
@@ -9119,7 +9377,7 @@
           "damage": 145,
           "radius_mtile": 1500,
           "spawn_card_id": "skeletons",
-          "spawn_count": 3,
+          "spawn_count": 7,
           "targets": [
             "air",
             "ground",
@@ -9131,6 +9389,7 @@
         "knockback_mtile": 0,
         "lifetime_decay": null,
         "lifetime_start": null,
+        "mirror_spawn_layout": true,
         "movement_layer": "air",
         "persistent_effect": null,
         "piercing": false,
@@ -9145,7 +9404,8 @@
         "spell_origin": null,
         "status": null,
         "suicide_on_attack": false,
-        "targetable_during_deploy": false
+        "targetable_during_deploy": false,
+        "trigger_on_target": true
       },
       "move_speed_mtile_per_s": 1800,
       "name": "Skeleton Barrel",
@@ -9189,7 +9449,7 @@
       "attack_interval_us": 2000000,
       "collision_radius_mtile": 400,
       "crown_tower_damage": null,
-      "damage": 161,
+      "damage": 151,
       "deploy_time_us": 1000000,
       "elixir_milli": 4000,
       "first_hit_delay_us": 0,
@@ -9220,6 +9480,7 @@
             0
           ]
         ],
+        "spawn_stagger_us": 100000,
         "spell_origin": null,
         "status": null,
         "suicide_on_attack": false,
@@ -9479,6 +9740,7 @@
             0
           ]
         ],
+        "spawn_stagger_us": 100000,
         "spell_origin": null,
         "status": null,
         "suicide_on_attack": false,
@@ -9564,6 +9826,7 @@
             0
           ]
         ],
+        "spawn_stagger_us": 100000,
         "spell_origin": null,
         "status": null,
         "suicide_on_attack": false,
@@ -9637,6 +9900,16 @@
           "radius_mtile": 0,
           "spawn_card_id": "bush-goblin",
           "spawn_count": 2,
+          "spawn_offsets_mtile": [
+            [
+              -1600,
+              0
+            ],
+            [
+              1600,
+              0
+            ]
+          ],
           "targets": [
             "ground"
           ]
@@ -9688,7 +9961,7 @@
           "official-april-2026"
         ]
       },
-      "range_mtile": 0,
+      "range_mtile": 1600,
       "sight_range_mtile": 6000,
       "spawn_count": 1,
       "targets": [
@@ -9723,6 +9996,12 @@
       "mass": 0,
       "mechanics": {
         "building_only": false,
+        "concealment": {
+          "earthquake_hits": true,
+          "freeze_suppresses_reveal": true,
+          "reveal_range_mtile": 6000,
+          "starts_concealed": true
+        },
         "crown_tower_connection": "normal",
         "death": null,
         "impact_mode": "melee",
@@ -9790,18 +10069,28 @@
         "three_musketeers"
       ],
       "area_radius_mtile": null,
-      "attack_interval_us": 1000000,
+      "attack_interval_us": 1300000,
       "collision_radius_mtile": 400,
       "crown_tower_damage": null,
-      "damage": 218,
+      "damage": 204,
       "deploy_time_us": 1000000,
       "elixir_milli": 9000,
-      "first_hit_delay_us": 0,
-      "hitpoints": 722,
+      "first_hit_delay_us": 700000,
+      "hitpoints": 883,
       "kind": "troop",
       "lifetime_us": null,
       "mass": 1,
       "mechanics": {
+        "bayonet": {
+          "crown_tower_damage": 314,
+          "damage": 314,
+          "range_mtile": 1600,
+          "targets": [
+            "ground",
+            "building",
+            "crown_tower"
+          ]
+        },
         "building_only": false,
         "crown_tower_connection": "normal",
         "death": null,
@@ -9828,7 +10117,9 @@
             0
           ]
         ],
+        "spawn_stagger_us": 100000,
         "spell_origin": null,
+        "spread_targets": true,
         "status": null,
         "suicide_on_attack": false,
         "targetable_during_deploy": false
@@ -9892,7 +10183,15 @@
       "mechanics": {
         "building_only": false,
         "crown_tower_connection": "normal",
-        "death": null,
+        "death": {
+          "damage": 0,
+          "radius_mtile": 0,
+          "spawn_card_id": "skeletons",
+          "spawn_count": 4,
+          "targets": [
+            "ground"
+          ]
+        },
         "impact_mode": "melee",
         "knockback_mtile": 0,
         "lifetime_decay": "linear_hp",
@@ -9905,7 +10204,7 @@
         "spawn": {
           "card_id": "skeletons",
           "count": 2,
-          "interval_us": 3500000,
+          "interval_us": 4000000,
           "max_alive": 8,
           "start_delay_us": 1000000
         },
@@ -10130,7 +10429,7 @@
         "void"
       ],
       "area_radius_mtile": 2500,
-      "attack_interval_us": 1200000,
+      "attack_interval_us": 1000000,
       "collision_radius_mtile": null,
       "crown_tower_damage": 97,
       "damage": 696,
@@ -10182,7 +10481,7 @@
             "building",
             "crown_tower"
           ],
-          "tick_interval_us": 1200000
+          "tick_interval_us": 1000000
         },
         "piercing": false,
         "placement_class": "spell_anywhere",
@@ -10204,7 +10503,7 @@
       },
       "provenance": {
         "attack_interval_us": [
-          "official-august-2026"
+          "user-supplied-balance-update-2026-08-26"
         ],
         "catalog_values": [
           "local-card-metadata-2026-08-14"
@@ -10232,6 +10531,9 @@
         ],
         "mechanics.damage_by_target_count": [
           "official-august-2026"
+        ],
+        "mechanics.persistent_effect.tick_interval_us": [
+          "user-supplied-balance-update-2026-08-26"
         ]
       },
       "range_mtile": null,
@@ -10298,6 +10600,7 @@
             0
           ]
         ],
+        "spawn_stagger_us": 100000,
         "spell_origin": null,
         "status": null,
         "suicide_on_attack": true,
@@ -10714,11 +11017,13 @@
         "knockback_mtile": 0,
         "lifetime_decay": null,
         "lifetime_start": null,
+        "mirror_spawn_layout": true,
         "movement_layer": null,
         "persistent_effect": null,
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "none",
+        "reset_attack": true,
         "spawn_layout_mtile": [
           [
             -450,
@@ -10733,8 +11038,14 @@
             0
           ]
         ],
+        "spawn_stagger_us": 100000,
         "spell_origin": null,
-        "status": null,
+        "status": {
+          "duration_us": 500000,
+          "hit_speed_multiplier_milli": 0,
+          "kind": "stun",
+          "speed_multiplier_milli": 0
+        },
         "suicide_on_attack": false,
         "targetable_during_deploy": false
       },
@@ -10775,7 +11086,7 @@
       ]
     }
   },
-  "content_hash": "sha256:829065f99e5a2585f13315b276aeef1d766a96b8da4ac5db0fba8c7ff96a5fe5",
+  "content_hash": "sha256:bcf1856e1fe0e8052826cd2300ad4c8f50c42430dbc29ee180d23ea7f4708e96",
   "interaction_set": [
     "archers",
     "arrows",
@@ -11496,6 +11807,16 @@
       "note": "Executable defaults requiring controlled high-frame-rate calibration; never promoted as game truth.",
       "published_at": null,
       "retrieved_at": "2026-08-11",
+      "sha256": null,
+      "url": null
+    },
+    "user-supplied-balance-update-2026-08-26": {
+      "confidence_tier": "E",
+      "kind": "user-supplied-balance-update",
+      "lineage": "repository-owner balance update request",
+      "note": "Level-11 balance deltas supplied by the repository owner on 2026-08-26. Verify against the primary current-ruleset patch before promoting the affected special variants to fidelity-ready runtime behavior.",
+      "published_at": null,
+      "retrieved_at": "2026-08-26",
       "sha256": null,
       "url": null
     }

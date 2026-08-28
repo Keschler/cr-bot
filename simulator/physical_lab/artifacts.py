@@ -184,15 +184,49 @@ def register_retention_records(
             stored_path = Path(artifact.path).as_posix()
         else:
             _, stored_path = _workspace_relative(artifact.path, root)
+        artifact_id = f"physical-lab:{run_id}:{artifact.artifact_id}"
+        immutable = {
+            "artifact_id": artifact_id,
+            "path": stored_path,
+            "artifact_kind": artifact.kind,
+            "media_sha256": artifact.sha256,
+            "size_bytes": artifact.size_bytes,
+            "run_id": run_id,
+            "experiment_hash": experiment_hash,
+        }
+        existing = [
+            row
+            for row in manifest["artifacts"]
+            if isinstance(row, dict) and row.get("artifact_id") == artifact_id
+        ]
+        if len(existing) > 1:
+            raise PhysicalLabError(
+                f"retention manifest contains duplicate artifact ID: {artifact_id}"
+            )
+        if existing:
+            row = existing[0]
+            conflicts = {
+                key: (row.get(key), value)
+                for key, value in immutable.items()
+                if row.get(key) != value
+            }
+            if conflicts:
+                raise PhysicalLabError(
+                    f"retention artifact {artifact_id} was re-registered with conflicting metadata: "
+                    f"{sorted(conflicts)}"
+                )
+            # Registration is intentionally idempotent.  In particular, do
+            # not reset truth_extracted/deletion provenance if an artifact is
+            # registered again after a successful ingest or eviction.
+            row.setdefault("created_at", now)
+            row.setdefault(
+                "retention_reason",
+                "physical lab provenance; evidence remains sealed",
+            )
+            continue
         manifest["artifacts"].append(
             {
-                "artifact_id": f"physical-lab:{run_id}:{artifact.artifact_id}",
-                "path": stored_path,
-                "artifact_kind": artifact.kind,
-                "media_sha256": artifact.sha256,
-                "size_bytes": artifact.size_bytes,
-                "run_id": run_id,
-                "experiment_hash": experiment_hash,
+                **immutable,
                 "created_at": now,
                 "truth_extracted": False,
                 "eviction_eligible": bool(raw_media and artifact.kind == "raw_video"),
@@ -291,9 +325,25 @@ def finalize_retention_records(
         detector_hash = detector.get("manifest_sha256") or detector.get("detector_sha256")
         if not isinstance(detector_hash, str) or not _HASH_RE.fullmatch(detector_hash):
             raise PhysicalLabError(f"run lifecycle detector for {side} lacks a sealed hash")
+    run_synchronization = run.get("synchronization")
     synchronization = observation.get("synchronization")
+    if not isinstance(run_synchronization, Mapping) or run_synchronization.get("accepted") is not True:
+        raise PhysicalLabError("physical run synchronization is not accepted")
     if not isinstance(synchronization, Mapping) or synchronization.get("accepted") is not True:
         raise PhysicalLabError("physical observation synchronization is not accepted")
+    if canonical_json(dict(run_synchronization)) != canonical_json(dict(synchronization)):
+        raise PhysicalLabError(
+            "run and observation synchronization records do not match"
+        )
+    if observation.get("status") not in {
+        "calibrated_only",
+        "validation",
+        "heldout",
+        "regression",
+    }:
+        raise PhysicalLabError(
+            "physical observation status is not truth-bearing"
+        )
     capture_group_id = observation.get("capture_group_id")
     evidence_split = observation.get("evidence_split")
     replay_cache_hash = observation.get("replay_cache_hash")
@@ -341,8 +391,20 @@ def finalize_retention_records(
         }
 
     observed_media_hashes = observation.get("media_hashes")
-    if not isinstance(observed_media_hashes, Mapping):
-        raise PhysicalLabError("observation media_hashes must be an object")
+    if not isinstance(observed_media_hashes, Mapping) or set(observed_media_hashes) != {"A", "B"}:
+        raise PhysicalLabError(
+            "observation media_hashes must contain exactly side A and side B"
+        )
+    capture_ids = observation.get("capture_ids")
+    if (
+        not isinstance(capture_ids, list)
+        or len(capture_ids) != 2
+        or any(not isinstance(value, str) or not value for value in capture_ids)
+        or len(set(capture_ids)) != 2
+    ):
+        raise PhysicalLabError(
+            "observation capture_ids must contain two distinct capture IDs"
+        )
     capture_rows: dict[str, Mapping[str, Any]] = {}
     for side in ("A", "B"):
         capture = captures[side]
@@ -352,21 +414,35 @@ def finalize_retention_records(
             raise PhysicalLabError(f"capture {side} is not a verified complete stream")
         media_hash = capture.get("media_sha256")
         media_path = capture.get("media_path")
+        frame_count = capture.get("frame_count")
         if (
             not isinstance(media_hash, str)
+            or _HASH_RE.fullmatch(media_hash) is None
             or not isinstance(media_path, str)
-            or capture.get("frame_count", 0) <= 0
+            or not media_path.strip()
+            or type(frame_count) is not int
+            or frame_count <= 0
             or not isinstance(capture.get("capture_id"), str)
+            or not capture.get("capture_id").strip()
+            or capture.get("source_device") != side
         ):
-            raise PhysicalLabError(f"capture {side} lacks media path/hash provenance")
+            raise PhysicalLabError(
+                f"capture {side} lacks complete side-bound media provenance"
+            )
         capture_rows[side] = capture
-        capture_ids = observation.get("capture_ids")
-        if not isinstance(capture_ids, list) or capture["capture_id"] not in capture_ids:
-            raise PhysicalLabError(f"observation does not reference capture {side}")
-        if media_hash not in {str(value) for value in observed_media_hashes.values()}:
-            raise PhysicalLabError(f"observation does not reference capture {side} media hash")
+        if observed_media_hashes.get(side) != media_hash:
+            raise PhysicalLabError(
+                f"observation media hash for capture {side} does not match the run capture"
+            )
+
+    expected_capture_ids = {capture["capture_id"] for capture in capture_rows.values()}
+    if set(capture_ids) != expected_capture_ids:
+        raise PhysicalLabError(
+            "observation capture_ids do not exactly match the run captures"
+        )
 
     audit_paths_resolved: dict[str, str] = {}
+    replay_cache_candidates: list[tuple[Path, str]] = []
     requested_audits = [run_path, observation_path, *[Path(path) for path in audit_paths]]
     for raw_path in requested_audits:
         path, relative = _workspace_relative(raw_path, root)
@@ -377,8 +453,33 @@ def finalize_retention_records(
         if existing is not None and existing != actual_hash:
             raise PhysicalLabError(f"physical audit artifact hash changed: {relative}")
         audit_paths_resolved[relative] = actual_hash
-    if not any(value == replay_cache_hash for value in audit_paths_resolved.values()):
+        if actual_hash == replay_cache_hash:
+            replay_cache_candidates.append((path, relative))
+    if not replay_cache_candidates:
         raise PhysicalLabError("recognized replay-cache hash is not retained as an audit artifact")
+
+    # A matching digest proves only that an audit file has the declared bytes;
+    # it does not prove that those bytes are a replay cache.  Reuse the
+    # physical-lab cache boundary, which delegates schema and frame validation
+    # to the repository's existing ReplayCacheReader, before promoting media.
+    from .cache import ReplayCacheError, seal_replay_cache
+
+    recognized_replay_cache = False
+    for cache_path, cache_relative in replay_cache_candidates:
+        try:
+            sealed_cache = seal_replay_cache(cache_path)
+        except ReplayCacheError as error:
+            raise PhysicalLabError(
+                f"replay-cache audit artifact is not recognized: {cache_relative}: {error}"
+            ) from error
+        if not sealed_cache.recognized or sealed_cache.sha256 != replay_cache_hash:
+            raise PhysicalLabError(
+                f"replay-cache audit artifact failed sealed recognition: {cache_relative}"
+            )
+        recognized_replay_cache = True
+        break
+    if not recognized_replay_cache:
+        raise PhysicalLabError("replay-cache audit artifact was not recognized")
 
     updated = 0
     timestamp = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat()
@@ -407,10 +508,15 @@ def finalize_retention_records(
                 "evidence_group_id": capture_group_id,
                 "evidence_split": evidence_split,
                 "device_serial_hashes": dict(device_serial_hashes),
+                "capture_side": matching_side,
                 "capture_id": capture_rows[matching_side].get("capture_id"),
+                "capture_media_sha256": actual_hash,
+                "run_manifest_path": run_relative,
+                "run_manifest_sha256": audit_paths_resolved[run_relative],
                 "observation_manifest_path": observation_relative,
                 "observation_manifest_sha256": hash_file(observation_path),
                 "replay_cache_sha256": replay_cache_hash,
+                "synchronization_sha256": canonical_hash(dict(synchronization)),
                 "audit_artifact_hashes": dict(sorted(audit_paths_resolved.items())),
                 "generated_paths": sorted(audit_paths_resolved),
             }

@@ -11,8 +11,10 @@ see `GOAL.md` for the path-safe raw-video eviction contract.
 
 `simulator/` is a headless, versioned Clash Royale simulation package for
 training and evaluating policies against the repository's existing vision
-feature boundary. The reference `2026-08-04` ruleset currently declares the
-small, exact base interaction set:
+feature boundary. The default CLI ruleset is the fixed `v1` artifact, which
+declares the complete 109-card eligible opponent roster. The date-stamped
+`2026-08-04` ruleset remains an explicit compatibility artifact for older
+manifests and source audits. Its original small exact base interaction set is:
 
 ```text
 Hog Rider, Cannon, Musketeer, Skeletons,
@@ -47,7 +49,17 @@ scenario from JSON, and the report is sorted by scenario ID, so worker count
 cannot change state/event hashes or pass/fail outcomes. The default is one
 worker for fast commit CI; larger worker counts are intended for PR/nightly
 coverage and still run the final invariant check when `--no-tick-validation`
-is selected.
+is selected. Add `--require-complete` to require all 109 roster cards and the
+complete declared mechanic, fixed-deck interaction, or unordered-pair scope;
+focused manifests remain available without that release gate. Strict
+roster-mechanic validation also requires every case to carry at least one
+behavioral event predicate or final-state check; card-play acceptance alone
+cannot satisfy mechanic coverage. Action-boundary interaction and opponent-pair
+manifests keep their separate required-play contract.
+
+The current v1 matrix is intentionally red under that strict behavioral gate:
+1,076/1,076 cases execute deterministically, while 259 structural cases still
+need explicit event/state obligations.
 
 For exhaustive two-card opponent coexistence coverage, generate and validate
 the unordered 109-card pair matrix (5,886 cases) against the fixed player
@@ -60,7 +72,7 @@ PYTHONPATH=.:src outputs/venv/bin/python -m simulator --ruleset v1 \
 PYTHONPATH=.:src outputs/venv/bin/python -m simulator --ruleset v1 \
   validate-generated outputs/simulator/generated-opponent-pairs-v1.json \
   --json-out outputs/simulator/generated-opponent-pairs-validation-v1.json \
-  --workers 4 --repeats 2 --no-tick-validation
+  --workers 4 --repeats 2 --no-tick-validation --require-complete
 ```
 
 The pair report is a deterministic synthetic gate. It proves that every
@@ -111,6 +123,92 @@ continuous capture, replay-cache, observation, and readiness gates remain
 mandatory. Physical recordings and caches remain under the ignored `outputs/`
 tree.
 
+### One-phone preparation and fixed Testspiel order
+
+The versioned campaign manager creates the automated card-variant sweep. It
+starts with isolated troops and becomes progressively more complex; each case
+records its ordered decks and first-four opening hand:
+
+```bash
+outputs/venv/bin/python scripts/run_physical_fidelity_campaign.py plan
+```
+
+Phone B is the host. Set both explicitly mapped phones to stay awake while
+powered (the command is serial-scoped and does not discover unspecified
+devices):
+
+```bash
+PYTHONPATH=.:src outputs/venv/bin/python -m simulator lab keep-awake \
+  --serial-a PHONE_A --serial-b PHONE_B
+```
+
+While only one phone is available, prepare its deck and leave it in the lobby.
+The preparation manifest is bound to the phone's hashed ADB serial and can be
+validated later when the second phone is connected:
+
+```bash
+PYTHONPATH=.:src outputs/venv/bin/python -m simulator lab prepare \
+  --serial PHONE_A --side A \
+  --json-out outputs/simulator/fidelity_media/physical_lab/preparation-A.json
+```
+
+The default fixed Hog cycle is written in this order:
+`hog-rider, cannon, musketeer, skeletons, ice-golem, ice-spirit, fireball, log`.
+For a campaign case, the autonomous preparation changes the requested card(s)
+and records the resulting deck. When both phones are available, prepare both
+phones for the selected case. Phone B alone then long-presses the `1v1 Battle`
+button, enables the reviewed fixed-order toggle, and hosts the match; Phone A
+accepts. Therefore the first four cards in each ordered deck are the opening
+hand and the remaining four are the first replacements.
+The two pixel points must be reviewed for the installed game build before use:
+
+```bash
+outputs/venv/bin/python scripts/run_physical_lab_autonomous.py \
+  --serial-a PHONE_A --serial-b PHONE_B --no-prepare \
+  --campaign outputs/simulator/fidelity_media/physical_lab/campaigns/physical-fidelity-interaction-sweep-v1/campaign.json \
+  --case-id hog-cannon-pull \
+  --preparation-a outputs/simulator/fidelity_media/physical_lab/preparation-A.json \
+  --preparation-b outputs/simulator/fidelity_media/physical_lab/preparation-B.json \
+  --fixed-deck-order \
+  --fixed-deck-toggle-point TOGGLE_X,TOGGLE_Y \
+  --test-match-start-point START_X,START_Y \
+  --calibration-a path/to/A.json --calibration-b path/to/B.json \
+  --lifecycle-templates-a path/to/A-templates.json \
+  --lifecycle-templates-b path/to/B-templates.json
+```
+
+After each admitted case has produced a fidelity corpus, re-evaluate the
+whole stored campaign after a simulator change. Use a new output path for each
+evaluation snapshot because case evidence is write-once:
+
+```bash
+outputs/venv/bin/python scripts/run_physical_fidelity_campaign.py evaluate \
+  --campaign outputs/simulator/fidelity_media/physical_lab/campaigns/physical-fidelity-interaction-sweep-v1/campaign.json \
+  --results-root outputs/simulator/fidelity_media/physical_lab/campaigns/physical-fidelity-interaction-sweep-v1/results \
+  --json-out outputs/simulator/fidelity_media/physical_lab/campaign-evaluation-v2.json
+```
+
+The coordinator writes a sealed `run.json` and
+`observation-handoff.json` under the run output directory. After a reviewed
+detector has produced normalized observations and the handoff's recognized
+primary replay cache, compile the standard fidelity corpus/report with:
+
+```bash
+PYTHONPATH=.:src outputs/venv/bin/python -m simulator lab fidelity \
+  outputs/simulator/fidelity_media/physical_lab/<run-id>/observations.json \
+  --run outputs/simulator/fidelity_media/physical_lab/<run-id>/run.json \
+  --replay-cache outputs/simulator/fidelity_media/physical_lab/<run-id>/replay-cache-A.pkl.gz \
+  --corpus-out outputs/simulator/fidelity_media/physical_lab/<run-id>/fidelity-corpus.json \
+  --json-out outputs/simulator/fidelity_media/physical_lab/<run-id>/fidelity-report.json
+```
+
+This bridge remains fail-closed and does not turn a candidate-only run into
+training readiness.
+
+Do not use `--start-test-match` during the one-phone deck-only preparation:
+fixed order is a Testspiel option for the host challenge and is applied by the
+two-phone coordinator once both devices are ready.
+
 Run commands from the repository root with the project environment:
 
 ```bash
@@ -138,10 +236,10 @@ PYTHONPATH=.:src outputs/venv/bin/python -m simulator plan-action-windows \
   outputs/simulator/fidelity_media/source-manifest.json \
   data/audio_classifier/mined/candidates \
   --json-out outputs/simulator/fidelity_media/action-window-plan.json
-PYTHONPATH=.:src outputs/venv/bin/python -m simulator --ruleset 2026-08-04-roster \
+PYTHONPATH=.:src outputs/venv/bin/python -m simulator --ruleset v1 \
   validate-generated outputs/simulator/generated-roster-scenarios.json \
   --json-out outputs/simulator/generated-roster-validation.json \\
-  --workers 4
+  --workers 4 --require-complete
 PYTHONPATH=.:src outputs/venv/bin/python -m simulator reconcile-data \
   --json-out outputs/simulator/card-data-reconciliation.json
 PYTHONPATH=.:src outputs/venv/bin/python -m simulator mine-replay-tracks \
@@ -167,7 +265,7 @@ PYTHONPATH=.:src outputs/venv/bin/python -m simulator --ruleset v1 \
   outputs/simulator/fidelity_media/autonomous-interactions-alternative.json \
   --require-both-hud \
   --json-out outputs/simulator/fidelity_media/autonomous-interactions-dual-hud.json
-PYTHONPATH=.:src outputs/venv/bin/python -m simulator --ruleset 2026-08-04-roster \
+PYTHONPATH=.:src outputs/venv/bin/python -m simulator --ruleset v1 \
   compile-video-truth outputs/simulator/fidelity_media/truth.json \
   --json-out outputs/simulator/fidelity_media/corpus.json
 ```
@@ -291,7 +389,7 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=.:src \
   - integer HP and damage.
 - Stable entity/projectile UIDs, canonical JSON, SHA-256 state hashes, explicit
   SplitMix64 state, deterministic UID iteration, and a pinned engine algorithm
-  version (`reference-0.28.0`).
+  version (`reference-0.29.0`).
 - Full regulation, overtime, double/triple elixir, crowns, King activation,
   sudden death, and raw-HP tiebreak termination.
 - Eight-card hands/cycle, exact costs, legal placement checks, rejected-action
@@ -323,8 +421,8 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=.:src \
   carries two single Spear Goblins that attack while attached and releases
   those same bodies on death. Child forms are hidden, Level-11 definitions
   with their own targeting/attack/death components; split offsets, carried-body
-  timing, and Elixir Golem's enemy-elixir award remain explicit video/in-game
-  validation targets.
+  timing remain explicit video/in-game validation targets. Elixir Golem's
+  opponent award is applied at every death stage in milli-elixir units.
 - Obstacle-aware visibility-graph bridge routing, building pulls,
   target legality/persistence/retarget, sourced mass-weighted local separation, deployment
   delay, targetable deploying buildings, placement-started linear building
@@ -332,12 +430,18 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=.:src \
   splash, structure/terrain-clipped knockback, slow/freeze, and death effects.
 - A serialized, UID-ordered persistent-area component for temporal damage,
   status, displacement, and troop-spawn zones. The roster artifact currently
-  uses it for provisional Poison, Earthquake, Graveyard, Tornado, Rage, and
+  uses it for Arrows' three waves and provisional Poison, Earthquake,
+  Graveyard, Tornado, Rage, and
   Goblin Curse definitions; Goblin Curse also carries a death-transform
   status that emits a caster-owned one-body Goblin. Tornado uses a deterministic
   two-pulse damage schedule plus a pull-active tail, while Rage combines a one-shot damage schedule with a
   friendly speed/hit-speed aura. Each pulse re-evaluates entrants and expires
   deterministically rather than freezing the impact-time victim set.
+- Current base-card components also cover Goblin Hut's visible-enemy proximity
+  clock, Tesla underground concealment and spell exceptions, Electro Spirit's
+  delayed nine-target chain, Zappies stun, Bomb Tower/Tombstone/Hut death
+  payloads, river jumping with an airborne river layer, and Barbarian Barrel's
+  swept rolling collision plus endpoint Barbarian.
 - Clone is an explicit impact component: it snapshots eligible friendly troop
   bodies in its three-tile radius, excludes buildings/enemies/existing clones,
   and emits one-HP copied entities whose ordinary card mechanics continue to
@@ -407,8 +511,8 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=.:src \
   needed to exercise attacks, victims, projectiles, statuses, spawns,
   transformations, and lifetime expiry rather than accepting targetless
   deployments;
-  current fixed V1 109-card artifact covers 4,284 four-variant scenarios
-  across 61 mechanics, including passive-spawner lifecycle cases, Inferno
+  current fixed V1 109-card artifact covers 4,304 four-variant scenarios
+  across 66 mechanics, including passive-spawner lifecycle cases, Inferno
   ramp stages, Phoenix rebirth, Heal Spirit impact healing, Furnace
   movement/spawning, Cannon Cart transformation, and recursive split/death
   streams, with zero synthetic failures. This proves deterministic executable
@@ -555,7 +659,7 @@ legal_wait     bool
 The imported channel order, normalizers, action grid, ground mask, base card
 IDs/metadata, and tensor shapes are sealed as observation contract
 `vision-v1-exact-1` with SHA-256
-`1f6bba6a4c67894aed50e869e95a3d37a6025f6e1dfd0051610505ebabe97e1b`.
+`fa42f20ddce8a6d9d5ee2089e415d610834ba324d2fc8195dc618b556f206d79`.
 Import fails if those unversioned live feature dependencies drift without a
 reviewed contract bump. `exact_policy_inputs()` returns precisely the live
 stack's board/global/spatial-mask tensors; `legal_play` and `legal_wait` are
@@ -588,6 +692,23 @@ folded into base IDs or encoded as zero. The core action schema already has
 `UseAbilityAction`, but the base ruleset rejects it until a versioned form and
 policy-v2 vocabulary are pinned.
 
+### Additive public hybrid observation contract
+
+[`observation_v2.py`](observation_v2.py) adds `PolicyObservationV2` without
+changing the sealed V1 tensors. It snapshots the V1 raster/global inputs and
+adds up to 128 public entity rows with 32 normalized features plus an entity
+mask. Rows must come from the same public observation boundary; authoritative
+simulator state and private opponent hand/elixir values are not accepted. The
+schema and hash are validated at construction time, and all arrays are
+read-only snapshots. [`observation_v2_adapter.py`](observation_v2_adapter.py)
+now provides the trusted simulator-side public projection: hidden entities and
+private fields are dropped before rows are built, while the existing V1
+legality and memory boundary is reused. `SimulatorEnv.observe_v2()` exposes it
+as an explicit opt-in; legacy `observe()` and the smoke trainer remain V1.
+The current public DTO does not expose velocity, target, status, or temporal
+features, so those V2 slots are intentionally zero rather than reconstructed
+from authoritative state.
+
 ## Python training API
 
 ```python
@@ -606,6 +727,9 @@ next_observations = transition.observations
 rewards = transition.rewards
 done = transition.terminated
 legal_actions = next_observations[0].legal_play
+
+# Explicit opt-in to the additive public hybrid contract:
+hybrid_observations = env.observe_v2()
 ```
 
 Default `info` exposes only version identifiers, cadence, terminal outcome,
@@ -618,14 +742,762 @@ full-state schema walk after every physics tick. Reset/load boundaries are
 still validated, and strict `BattleEngine(validate_every_tick=True)` remains
 the default for tests, audits, and fidelity evaluation. A regression test
 requires strict and training modes to produce identical replay hashes.
-`VectorSimulatorEnv` keeps the same policy boundary in two modes. The default
-`backend="reference"` executes parent-owned lanes sequentially. The explicit
-`backend="process"` mode advances independent serialized lanes in isolated
-workers, reinstalls their canonical states in the parent, and rebuilds
-observations with the parent's temporal memories. Both modes must produce the
-same state/event hashes; `close()` or a context manager shuts down workers.
-The process mode is a deterministic parallel reference backend and a useful
-scaling baseline, not yet the final structure-of-arrays implementation.
+`VectorSimulatorEnv` keeps the same policy boundary in three modes. The
+default `backend="reference"` executes parent-owned lanes sequentially. The
+explicit `backend="process"` mode advances independent serialized lanes in
+isolated workers, while `backend="packed-process"` crosses the same boundary
+with the bounded, deterministic fixed-stride ABI in
+[`packed_batch.py`](packed_batch.py). Both worker modes reinstall canonical
+states in the parent and rebuild observations with the parent's temporal
+memories. All modes must produce the same state/event hashes;
+`close()` or a context manager shuts down workers. The packed mode is a
+transport milestone and deterministic scaling baseline, not yet the final
+structure-of-arrays physics implementation.
+
+### Bounded PPO smoke training
+
+The repository now includes a NumPy-only, masked PPO smoke trainer. It is
+intentionally a small factorised linear actor/critic, so it can run without
+PyTorch and is best used to catch simulator regressions before investing in a
+large neural policy. The learner sees only `PolicyObservationV1`, masks every
+illegal card/cell, and records the ruleset, engine, reward, and observation
+contract in an `.npz` checkpoint.
+
+The trainer's default reward is the sparse `terminal-outcome-v1` objective
+(`+1` win, `-1` loss, and `0` for non-terminal decisions). The environment
+still exposes the explicit `tower-damage-crowns-v1` shaping preset for smoke
+experiments and regression comparisons; its reward version is sealed in the
+checkpoint metadata.
+
+The bundled `v1` ruleset is still marked `training_ready: false`. A bounded run
+must opt into provisional smoke mode explicitly:
+
+```bash
+PYTHONPATH=.:src python3 -m simulator --ruleset v1 train \
+  --steps 10000 --envs 8 --rollout-steps 128 \
+  --opponent scripted --allow-provisional-smoke \
+  --checkpoint-out outputs/simulator/training/ppo-smoke.npz \
+  --json-out outputs/simulator/training/summary.json
+```
+
+The command can resume a compatible checkpoint with `--checkpoint`. Evaluate a
+saved policy on fixed seeds with:
+
+```bash
+PYTHONPATH=.:src python3 -m simulator --ruleset v1 evaluate \
+  --checkpoint outputs/simulator/training/ppo-smoke.npz \
+  --episodes 8 --seed 10000
+```
+
+`scripted` uses the deterministic cycle controller; `self-play` uses the same
+policy for both players. This is a simulator smoke test, not a live-device
+bot: connecting the visual extractor and physical card placer still requires
+an observation/action bridge and separate physical-fidelity validation.
+
+Evaluation caps are explicit censoring boundaries. Omitting
+`--eval-max-decisions` or `--max-decisions` evaluates through the ruleset's
+regulation-plus-overtime horizon; a smaller cap reports truncated episodes
+separately and excludes them from win/loss/draw rates. The Python
+`PPOConfig` defaults to an undiscounted match result (`gamma=1`); its
+`discount_time_constant_us` option can derive a real-time discount when a
+finite horizon is preferred.
+
+Serious runs can provide `--training-profile profile.json`. A
+`TrainingProfile` fixes the Hog player deck, opponent scope, ruleset identity,
+and required cards/mechanics. `smoke` profiles are explicitly provisional;
+`training` and `evaluation` profiles require a matching, ready evidence report.
+The global V1 roster remains fail-closed even when a narrower scoped report is
+ready.
+
+The optional [`rl/`](rl/) package contains the recurrent policy foundation: it combines
+the V2-compatible hybrid raster/entity encoder, a Transformer over entities, a
+GRU over time, and WAIT/PLAY → card → placement masked action heads. It stores
+recurrent trajectory tensors and reset masks, and includes training-only
+opponent-belief heads, a detached-feature privileged critic, and clipped PPO/
+behavior-cloning objective functions. `RecurrentPPOLearner` now provides
+sequence-preserving PPO updates, rollout hidden-state handling, and complete
+checkpoint continuation. `RecurrentRolloutCollector` bridges initialized
+`SimulatorEnv` lanes to those tensors while keeping actor inputs public; an
+optional callback supplies privileged critic features, and exact enemy
+elixir/hand/next-card targets can be recorded for belief losses. Serializable
+confidence-weighted BC curriculum and
+deck-conditioned historical/exploiter league sampling are also available in
+`rl.curriculum` and `rl.league`. Checkpoint match orchestration/Elo updates,
+full league artifact loading, evidence-backed physics-parameter variants, and
+tactical search remain later milestones. `rl.domain_randomization` already
+provides deterministic cadence/latency/V2-token-noise variants; it does not
+silently perturb uncertain collision, targeting, or attack-timer mechanics.
+PyTorch is an optional dependency.
+
+### Runnable recurrent PPO prototype
+
+The first end-to-end neural prototype is available as
+[`rl/prototype.py`](rl/prototype.py). It trains the public V2 actor with an
+entity Transformer, GRU, masked autoregressive action head, and recurrent PPO.
+The default critic may use exact simulator state only through a separate
+training-only privileged callback; the checkpoint records that asymmetry and
+fails closed unless the actor is explicitly marked public-only. The opponent
+is the deterministic cycle controller, and the reward is terminal
+win/draw/loss rather than a simulator-specific shaping signal.
+The collector uses `SimulatorEnv.reset_v2()`/`step_v2()` so legacy V1
+observations are not constructed on the actor-facing path.
+
+The pinned `v1` ruleset is executable but not fidelity-ready, so prototype
+training requires an explicit provisional flag:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 \
+PYTHONPATH=.:..:../src \
+../outputs/venv/bin/python \
+-m rl.prototype train --allow-provisional \
+  --updates 1 --envs 2 --horizon 128 \
+  --checkpoint-out outputs/simulator/training/recurrent-prototype.pt
+```
+
+For `rl.prototype`, one PPO update collects `envs × horizon` environment
+decisions (`2 × 128 = 256` in the smoke command).  When a checkpoint is
+resumed, `starting_update` is loaded from the checkpoint and the report's
+`final_update` advances by the number of `--updates` requested in that run;
+`--checkpoint-out` can preserve the input artifact.
+
+Resume with `--checkpoint` and evaluate deterministic actions with:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 \
+PYTHONPATH=.:..:../src \
+../outputs/venv/bin/python \
+-m rl.prototype evaluate \
+  --checkpoint outputs/simulator/training/recurrent-prototype.pt \
+  --episodes 1 --policy actor
+```
+
+For several full matches, evaluation runs independent episodes in concurrent
+CPU workers (the simulator physics is Python-side) and keeps short capped
+checks on the batched policy path. Use `--no-parallel-episodes` to force the
+in-process path. To inspect every decision, add `--trace-out path.json`; each
+`episodes[].trace[]` row records the proposed action, the hand and elixir
+before the decision, accepted/rejected action events, simulator time, and
+`troop_positions_after`.  Those positions are authoritative post-step
+snapshots of living troops, with stable entity IDs, HP, integer
+`x_mtile`/`y_mtile`, and `[column, row]` `world_cell` coordinates. Trace mode
+is intentionally slower and is disabled from the parallel path so snapshots
+cannot be lost.
+
+The same command is exposed through the repository CLI as
+`python -m simulator recurrent-prototype ...`. From the repository parent,
+the equivalent invocation is
+`PYTHONPATH=.:src outputs/venv/bin/python -m simulator recurrent-prototype ...`;
+from this `simulator/` directory, keep the `PYTHONPATH=.:..:../src` form above.
+A short evaluation cap is reported as censored/truncated, never as a draw.
+Interface-only cadence, latency, and public-token-noise randomization are
+opt-in; uncertain physics parameters are not silently changed.
+
+For a fixed deterministic-cycle regression, run the actor and both explicit
+baselines with the same checkpoint, seeds, and full-match cap:
+
+```bash
+for policy in actor public-counter strategic-counter; do
+  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=.:..:../src \
+  OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+  ../outputs/venv/bin/python -m rl.prototype evaluate \
+    --checkpoint outputs/simulator/training/generalized-coverage-ppo-v2.pt \
+    --episodes 8 --seed 10000 --max-decisions 1200 --device cpu \
+    --policy "$policy" --no-parallel-episodes \
+    --json-out "outputs/simulator/training/generalized-coverage-ppo-v2-${policy}-fixed-eval.json"
+done
+```
+
+The `public-counter` and `strategic-counter` runs take the same public
+observations and simulator opponent as the actor run, but their action source
+is explicit code. This is the quickest way to detect the common mistake of
+reporting a baseline's wins as if they belonged to the neural checkpoint.
+
+### Generalized opponent training and held-out evaluation
+
+[`rl/generalized.py`](rl/generalized.py) adds the next training loop. It
+restarts the simulator lanes at each rollout segment, samples reproducible
+deck archetypes and simulator-side controllers from [`rl/opponent_pool.py`](rl/opponent_pool.py),
+and resumes the same PPO checkpoint between segments. Lane zero can remain a
+deterministic Hog-cycle regression lane while the other lanes cover pressure,
+defense, beatdown, air, siege/bait, and random legal play. Unsupported cards
+in an opponent's private hand are masked only in the unused opponent-view
+projection; the opponent controller retains the authoritative hand and deck.
+
+The commands in this section assume the shell is in `simulator/`, the
+directory containing this README. The project environment is
+`../outputs/venv`; use that interpreter consistently. ROCm-enabled PyTorch
+uses the `torch.cuda` API, so verify both the wheel and device visibility
+before starting a long run:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=.:..:../src \
+../outputs/venv/bin/python -c '
+import sys, torch
+print("python:", sys.executable)
+print("torch:", torch.__version__)
+print("torch_file:", torch.__file__)
+print("hip:", torch.version.hip)
+print("cuda_available:", torch.cuda.is_available())
+print("device_count:", torch.cuda.device_count())
+if torch.cuda.is_available():
+    print("device:", torch.cuda.get_device_name(0))
+'
+```
+
+On the development machine this resolves to `torch 2.12.0+rocm7.14.0` with
+HIP `7.14.60850` inside `../outputs/venv`. `torch.version.hip` being non-empty
+proves that the ROCm build is installed; `torch.cuda.is_available()` and a
+positive `device_count` are additionally required to show that the process can
+see an AMD device. A sandbox, container, missing `/dev/kfd`, or missing
+`/dev/dri/renderD*` can make visibility `False` even when the ROCm wheel is
+installed. `--device cuda` is not a promise of GPU execution, so stop and
+diagnose a run when this check is false rather than interpreting CPU activity
+as GPU training.
+
+For the RX 6700/gfx1031 setup, add
+`HSA_OVERRIDE_GFX_VERSION=10.3.1` only when the installed ROCm stack requires
+that compatibility override. It is not a general acceleration switch and
+does not prove kernel correctness. The MIOpen
+`libMIOpenCKGroupedConv_gfx1031.so` message is a kernel-library fallback
+warning; record it with the run because it can affect performance, but do not
+use the warning alone to infer the execution device. Keep
+`/usr/lib/python3.14/site-packages` out of this verification command so a
+system PyTorch cannot shadow the ROCm wheel; the printed `torch_file` is the
+authoritative wheel check.
+
+For a fresh generalized training job, use the following. On the development
+RX 6700, retain the first environment assignment only if the visibility check
+above requires it; otherwise remove that line:
+
+```bash
+HSA_OVERRIDE_GFX_VERSION=10.3.1 \
+PYTHONDONTWRITEBYTECODE=1 \
+PYTHONPATH=.:..:../src \
+../outputs/venv/bin/python \
+-m rl.generalized train --allow-provisional \
+  --updates 20 --envs 4 --horizon 512 --seed 0 --device cuda \
+  --rollouts-per-scenario 3 \
+  --explicit-hand-features \
+  --archetypes aggressive-pressure,defensive-cycle,beatdown,air-beatdown,siege-bait,random-legal \
+  --strategies aggressive-pressure,defensive-cycle,beatdown,siege-bait,random-legal \
+  --checkpoint-out outputs/simulator/training/generalized-recurrent-prototype.pt \
+  --json-out outputs/simulator/training/generalized-recurrent-prototype.json
+```
+
+Each generalized segment samples one reproducible scenario per environment
+lane. It keeps that scenario for `--rollouts-per-scenario` consecutive
+rollouts, which is important for exposing opening, mid-match, and late-match
+states to a recurrent policy before changing the opponent. Here, generalized
+`--updates 20` means **20 scenario segments**, not 20 cumulative PPO updates.
+Each segment performs `rollouts_per_scenario` prototype updates, so the
+transition and update arithmetic is:
+
+```text
+transitions = segments × rollouts_per_scenario × envs × horizon
+final_update (fresh run) = segments × rollouts_per_scenario
+```
+
+The example therefore collects `20 × 3 × 4 × 512 = 122,880` transitions and
+advances the fresh learner to `final_update=60`. The same learner and
+optimizer state continue between segments. Use `--checkpoint` to continue
+from an earlier compatible checkpoint; select a new `--checkpoint-out` path to
+preserve the earlier artifact:
+
+```bash
+HSA_OVERRIDE_GFX_VERSION=10.3.1 \
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=.:..:../src \
+../outputs/venv/bin/python -m rl.generalized train --allow-provisional \
+  --updates 20 --envs 4 --horizon 512 --seed 0 --device cuda \
+  --rollouts-per-scenario 3 --explicit-hand-features \
+  --checkpoint outputs/simulator/training/generalized-recurrent-prototype.pt \
+  --segment-offset 20 \
+  --checkpoint-out outputs/simulator/training/generalized-recurrent-prototype-continuation.pt \
+  --json-out outputs/simulator/training/generalized-recurrent-prototype-continuation.json
+```
+
+If the first report was written beside the input checkpoint as
+`<checkpoint-stem>.json`, the generalized runner advances its scenario cursor
+from that sidecar automatically. In the continuation above, the sidecar makes
+the next run use `starting_segment=20` and `segment_indices=20..39`; with the
+same settings its run-local transition count is still `122,880`, while the
+loaded `starting_update=60` advances to `final_update=120`. The schedule cursor
+and learner update counter are different quantities when
+`rollouts_per_scenario > 1`. Set `--segment-offset 20` explicitly, as shown,
+when the sidecar was moved, is unavailable, or a deliberate branch is wanted;
+otherwise omit it and let the sidecar provide the cursor. Keep `--json-out`
+beside the checkpoint if future automatic resume inference is required.
+
+For a new actor that must identify the correct card slot, prefer
+`--explicit-hand-features`. It encodes the four public hand slots separately
+instead of compressing the whole hand into one global projection. This changes
+the model architecture, so use it for a fresh run or a checkpoint already
+created with the same option; older checkpoints remain loadable as evaluation
+or self-play opponents. `--direct-public-action-features` is a separate,
+architecture-changing opt-in that feeds public global elixir/hand features
+directly to the WAIT/PLAY gate. It does not expose privileged state, but it
+must likewise be used consistently when creating or resuming that checkpoint.
+
+#### 2.6 Hog Cycle as a sanity reference
+
+The [2.6 Hog Cycle reference](https://clashroyale.fandom.com/wiki/Deck%3A2.6_Hog)
+is used only as an external, high-level sanity reference for grave role,
+timing, and placement errors in the simulator and the learned policy. Its
+useful checks are that Hog Rider is the win condition, Cannon is a defensive
+building that pulls attackers, Musketeer is a key air/ground support unit, Ice
+Golem tanks and kites, and Skeletons/Ice Spirit provide cheap defensive cycle.
+It also describes tracking the opponent's rotation, avoiding unnecessary
+single-elixir overcommitment, and turning good defenses into Hog pressure as
+elixir income increases.
+
+These are audits and curriculum labels, not a scripted policy. The actor still
+receives only public observations and must learn when a Hog push, Cannon,
+Musketeer, spell, or cycle card is appropriate for the observed opponent and
+placement. In particular, a run that wins by repeatedly cycling Cannon or that
+never plays Hog Rider/Musketeer is not accepted as evidence of learning 2.6
+Hog; it is flagged for action-slot, hand-conditioning, placement, and
+defense-to-offense regression checks. The public counter is a reproducible
+teacher/baseline, while actor evaluation remains the quality gate. The page is
+mutable and is not an authoritative source for the pinned V1 ruleset, exact
+balance values, reward labels, or a guaranteed placement sequence; those must
+come from versioned simulator artifacts and evaluation traces.
+
+For a public-teacher warm start, enable balanced factor imitation so
+WAIT/PLAY, card-slot, and placement errors contribute separately.  The legacy
+`public-counter` teacher is useful for the deterministic regression.  The
+`strategic-counter` teacher is a stronger public-only demonstration source: it
+holds Fireball until a damaged tower or visible crossing, prioritizes Hog
+pressure, and defends visible threats.  Neither teacher receives hidden
+opponent state, and neither is evidence that the actor has learned the rule:
+
+```bash
+PYTHONPATH=.:..:../src ../outputs/venv/bin/python -m rl.generalized train \
+  --allow-provisional --updates 8 --rollouts-per-scenario 3 \
+  --envs 4 --horizon 512 --seed 314159 --device cuda \
+  --explicit-hand-features --expert-guidance --expert-teacher strategic-counter \
+  --imitation-only --expert-execution-probability 1.0 \
+  --bc-coef 1.0 --bc-factor-coef 1.0 --learning-rate 1e-4 \
+  --update-epochs 4 --sequence-minibatch-size 1 \
+  --entropy-coef 0 --belief-coef 0 --no-belief-targets \
+  --checkpoint-out outputs/simulator/training/generalized-public-hand.pt \
+  --json-out outputs/simulator/training/generalized-public-hand.json
+```
+
+After the teacher warm start, use a lower teacher-execution probability only
+with the authoritative-state `deterministic-counter` teacher, for example
+`--expert-teacher deterministic-counter --expert-execution-probability 0.25`.
+That DAgger-style phase exposes actor-induced states while keeping the
+teacher's cycle count aligned with actions that were actually accepted. The
+public teachers are suitable for pure imitation (`1.0`) and evaluation, but
+their fallback cadence should not be used as a hidden state signal.  Expert
+action weights are deliberately moderate: WAIT labels remain meaningful while
+rare Hog/Fireball labels are still visible to the card head.
+
+The current retained generalized lineage has two distinct stages. The
+`outputs/simulator/training/generalized-strategic-context-card-v7-factor-full.pt`
+sidecar records a narrow strategic-counter warm start: four segments, three
+rollouts per scenario, four lanes, 24,576 transitions, and
+`final_update=24`, all against the deterministic-cycle deck. The retained
+teacher-free continuation is
+`outputs/simulator/training/generalized-coverage-ppo-v2.pt`: eight segments,
+one rollout per scenario, four
+lanes, 16,384 transitions, and `final_update=32`. It samples the six
+non-regression archetypes and five non-regression strategies listed above;
+training-time segment boundaries are not full-match quality evaluations.
+
+The exact CPU continuation that produced the retained coverage artifact is:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 \
+PYTHONPATH=.:..:../src \
+OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+../outputs/venv/bin/python -m rl.generalized train --allow-provisional \
+  --updates 8 --rollouts-per-scenario 1 --envs 4 --horizon 512 \
+  --seed 0 --device cpu \
+  --player-deck hog-rider,cannon,musketeer,skeletons,ice-golem,ice-spirit,fireball,log \
+  --checkpoint outputs/simulator/training/generalized-strategic-context-card-v7-factor-full.pt \
+  --explicit-hand-features \
+  --direct-public-action-features \
+  --direct-public-card-features \
+  --contextual-public-card-features \
+  --direct-public-mask-features \
+  --direct-public-context-features \
+  --learning-rate 3e-4 --update-epochs 4 --sequence-minibatch-size 2 \
+  --entropy-coef 0 --belief-coef 0 --no-belief-targets \
+  --archetypes aggressive-pressure,defensive-cycle,beatdown,air-beatdown,siege-bait,random-legal \
+  --strategies aggressive-pressure,defensive-cycle,beatdown,siege-bait,random-legal \
+  --checkpoint-out outputs/simulator/training/generalized-coverage-ppo-v2.pt \
+  --json-out outputs/simulator/training/generalized-coverage-ppo-v2.json
+```
+
+Because the input checkpoint has its generalized JSON sidecar beside it, the
+runner infers `starting_segment=16` and uses segments `16..23`. If that
+sidecar is moved or unavailable, add `--segment-offset 16`; an explicit offset
+overrides sidecar inference. The command collects
+`8 × 1 × 4 × 512 = 16,384` transitions. The retained checkpoint metadata
+uses the architecture flags shown above; it does not enable
+`--direct-public-slot-card-features`. That option is available for fresh
+architectures, requires `--explicit-hand-features`, and must not be added when
+resuming an incompatible checkpoint.
+
+Reproduce the retained fixed-opponent actor audit with:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 \
+PYTHONPATH=.:..:../src \
+OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+../outputs/venv/bin/python -m rl.prototype evaluate \
+  --checkpoint outputs/simulator/training/generalized-coverage-ppo-v2.pt \
+  --episodes 8 --seed 10000 --max-decisions 1200 --device cpu --policy actor \
+  --no-parallel-episodes \
+  --json-out outputs/simulator/training/generalized-coverage-ppo-v2-fixed-8.json
+```
+
+Use `--trace-out path.json` for a slower per-decision audit. The fixed
+deterministic-cycle result and the generalized held-out matrix below are
+separate gates; success on the fixed deck does not establish generalization.
+
+The retained six-deck held-out smoke audit for the current actor is reproduced
+with:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 \
+PYTHONPATH=.:..:../src \
+OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+../outputs/venv/bin/python -m rl.generalized evaluate \
+  --checkpoint outputs/simulator/training/generalized-coverage-ppo-v2.pt \
+  --policy actor --device cpu --batch-size 6 --seed 0 --max-decisions 1200 \
+  --archetypes aggressive-pressure,defensive-cycle,beatdown,air-beatdown,siege-bait,random-legal \
+  --strategies deterministic-cycle --seeds 10000 \
+  --training-report outputs/simulator/training/generalized-coverage-ppo-v2.json \
+  --no-match-results \
+  --json-out outputs/simulator/training/generalized-coverage-ppo-v2-heldout-smoke.json
+```
+
+The six archetype decks are evaluation-only variants. The
+`deterministic-cycle` archetype is deliberately absent: its only template is
+the fixed learner deck, so it cannot be disjoint from a training report. Test
+that fixed deck separately with `rl.prototype evaluate` above. The smoke
+matrix has `6 × 1 × 1 = 6` matches. A broader run can use the same command with
+the five additional strategies and seeds `10000,10001,10002,10003`, giving
+`6 × 6 × 4 = 144` matches.
+
+To compare the two retained actors on exactly the same held-out deck set,
+use the coverage training report as the common exclusion source:
+
+```bash
+for checkpoint in \
+  outputs/simulator/training/generalized-coverage-ppo-v2.pt \
+  outputs/simulator/training/generalized-strategic-context-card-v7-factor-full.pt
+do
+  name=$(basename "$checkpoint" .pt)
+  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=.:..:../src \
+  OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+  ../outputs/venv/bin/python -m rl.generalized evaluate \
+    --checkpoint "$checkpoint" --policy actor --device cpu --batch-size 6 \
+    --seed 0 --max-decisions 1200 \
+    --archetypes aggressive-pressure,defensive-cycle,beatdown,air-beatdown,siege-bait,random-legal \
+    --strategies deterministic-cycle --seeds 10000 \
+    --training-report outputs/simulator/training/generalized-coverage-ppo-v2.json \
+    --no-match-results \
+    --json-out "outputs/simulator/training/${name}-on-coverage-heldout-smoke.json"
+done
+```
+
+`actor` is the checkpoint's neural policy. The generalized evaluator also
+accepts `public-counter`, `strategic-counter`, and
+`deterministic-counter`, but those are explicit diagnostics rather than
+measurements of checkpoint weights; only `policy_mode=actor` with
+`actor_controls_actions=true` is actor evidence.
+
+The matrix size is `number of archetypes × number of strategies × number of
+seeds`. It records the selected deck cards, strategy, seed, outcome, decision
+count, terminal reason, accepted target cards, proposed target cells, and
+aggregate summaries for every deck/strategy cell. A supplied
+`--training-report` provides the exclusion list, but the report is held-out
+evidence only when `held_out_audit.disjointness_verified=true` and its
+`source` is non-null. The current CLI permits an omitted training report; that
+leaves disjointness unverified and must not be labeled a held-out result.
+`--no-match-results` keeps only aggregates when the JSON would otherwise be
+large. `--no-shuffle` is available when exact ordered deck inputs are part of a
+comparison.
+
+The matrix report is schema version 2 with kind
+`recurrent_public_ppo_evaluation_matrix`. Its top-level `total` is the overall
+summary, `matchups` groups results by deck and strategy, and optional
+`matches` contains the individual seed rows. Per-match diagnostics such as
+`target_plays_by_card`, `target_play_trace`, `tower_hp_end`, and
+`troop_positions_end` are nested under `matches[].metrics`; they are not
+top-level counters. `target_play_trace` contains target `PLAY` attempts only;
+it is not the full per-decision state trace. The matrix runner keeps one
+terminal/cap-time `troop_positions_end` snapshot, whereas a prototype
+evaluation with `--trace-out` keeps `episodes[].trace[]` for every decision.
+
+To compare two recurrent checkpoints, run the exact same held-out command
+with the same `--seed`, archetypes, strategies, evaluation seeds, shuffle mode,
+device, and decision cap, changing only `--checkpoint` and `--json-out`:
+
+```bash
+for checkpoint in \
+  outputs/simulator/training/generalized-coverage-ppo-v2.pt \
+  outputs/simulator/training/generalized-strategic-context-card-v7-factor-full.pt
+do
+  name=$(basename "$checkpoint" .pt)
+  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=.:..:../src \
+  OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+  ../outputs/venv/bin/python -m rl.generalized evaluate \
+    --checkpoint "$checkpoint" --policy actor --device cpu --batch-size 6 \
+    --seed 0 --max-decisions 1200 \
+    --archetypes aggressive-pressure,defensive-cycle,beatdown,air-beatdown,siege-bait,random-legal \
+    --strategies deterministic-cycle --seeds 10000 \
+    --training-report outputs/simulator/training/generalized-coverage-ppo-v2.json \
+    --no-match-results \
+    --json-out "outputs/simulator/training/${name}-on-coverage-heldout-smoke.json"
+done
+```
+
+To evaluate the current actor against frozen earlier actors, use
+`--opponent-checkpoints`. Each opponent receives only its own public V2
+observation, so this is true checkpoint-versus-checkpoint play rather than a
+metadata comparison. The self-play matrix uses the fixed prototype player
+deck and reports `held_out=false`; diverse opponent decks remain in the
+held-out matrix above:
+
+```bash
+PYTHONPATH=.:..:../src ../outputs/venv/bin/python -m rl.generalized evaluate \
+  --checkpoint outputs/simulator/training/generalized-coverage-ppo-v2.pt \
+  --opponent-checkpoints outputs/simulator/training/generalized-strategic-context-card-v7-factor-full.pt \
+  --policy actor --device cpu --batch-size 1 --max-decisions 1200 \
+  --seeds 10000,10001 \
+  --json-out outputs/simulator/training/generalized-coverage-ppo-v2-v7-self-play.json
+```
+
+Training can also place frozen actors in non-regression lanes with the same
+public-only boundary:
+
+```bash
+PYTHONPATH=.:..:../src ../outputs/venv/bin/python -m rl.generalized train \
+  --allow-provisional --updates 8 --envs 4 --horizon 512 \
+  --device cpu --explicit-hand-features --opponent-checkpoints \
+  outputs/simulator/training/generalized-strategic-context-card-v7-factor-full.pt \
+  --checkpoint-out outputs/simulator/training/generalized-selfplay-ppo-v3.pt \
+  --json-out outputs/simulator/training/generalized-selfplay-ppo-v3.json
+```
+
+The `--json-out` sidecar is important here: without it the report is printed
+but cannot later supply the generalized schedule cursor automatically.
+
+The smaller NumPy smoke trainer also exposes same-policy self-play for smoke
+testing:
+
+```bash
+PYTHONPATH=.:..:../src ../outputs/venv/bin/python -m simulator --ruleset v1 train \
+  --steps 10000 --envs 8 --rollout-steps 128 \
+  --opponent self-play --allow-provisional-smoke \
+  --checkpoint-out outputs/simulator/training/ppo-self-play-smoke.npz \
+  --json-out outputs/simulator/training/ppo-self-play-smoke.json
+```
+
+#### Reading training and evaluation metrics
+
+The binary `.pt` checkpoint is the model/optimizer artifact and records
+`checkpoint_format=recurrent-public-ppo-prototype-v1`. A prototype
+training JSON report has `update_rows`; a generalized training JSON sidecar
+has `segment_reports` and `scenario_schedule`, and also includes `segments`,
+`envs`, `horizon`, and `transitions`. `transitions` is the number of
+environment decisions collected in that invocation, while `final_update` is
+the learner's cumulative update counter and can be larger than this run's
+segment count when resuming a checkpoint. The generalized sidecar is also the
+source for automatic `starting_segment` recovery on the next run.
+
+| Field | Meaning |
+| --- | --- |
+| `kind`, `schema_version` | Identify the report family and its schema; prototype training/evaluation/trace kinds are `recurrent_public_ppo_prototype`, `recurrent_public_ppo_prototype_evaluation`, and `recurrent_public_ppo_prototype_evaluation_trace`; generalized training is `recurrent_public_ppo_generalized_training` v1, and matrix evaluation is `recurrent_public_ppo_evaluation_matrix` v2. |
+| `segments`, `segment_indices`, `starting_segment`, `segment_offset_source` | Generalized schedule accounting. These are scenario-segment indices, not learner update numbers. |
+| `starting_update`, `final_update`, `updates` | Prototype learner-update accounting. On a fresh prototype run, `final_update` advances by `updates`; generalized segments multiply that count by `rollouts_per_scenario`. |
+| `aggregate_outcomes` / `outcomes` | Generalized-run or prototype-segment outcome totals; rollout-boundary truncation is kept separate from terminal results. |
+| `wins`, `losses`, `draws` | Terminal outcomes from the learner's perspective. |
+| `completed_matches` / `completed` | Matches that reached a terminal result; excludes truncated matches. |
+| `truncated` / `truncated_matches` | Matches stopped by the decision cap or rollout boundary; never count as draws. |
+| `win_rate` | `wins / completed`; it is not diluted by censored matches. |
+| `completion_rate` | `completed / matches` in a matrix report. |
+| `all_wins` | `true` only when every reported matrix match is a completed win; it is not a universal-deck claim. |
+| `policy_loss`, `value_loss` | PPO actor objective and critic regression terms; compare trends under the same configuration, not absolute values across different rewards. |
+| `belief_loss` | Optional training-only prediction loss for hidden opponent state; it does not give the actor privileged inputs. |
+| `entropy` | Policy action-distribution uncertainty; falling entropy can mean sharper choices, but not necessarily stronger play. |
+| `approx_kl`, `clip_fraction` | PPO update size and the fraction of ratios clipped by the trust-region objective. |
+| `gradient_norm` | Gradient magnitude before/around clipping; `Infinity` or `NaN` indicates an unstable update that must not be treated as a successful training result. |
+| `optimization_steps`, `minibatches`, `epochs` | The amount of learner optimization performed for that segment. |
+| `mean_decisions`, `max_decisions` | Match length and the censoring cap used by evaluation. |
+| `policy_mode`, `actor_controls_actions` | Whether actions came from the neural `actor` or an explicit `public-counter`, `strategic-counter`, or `deterministic-counter`; `actor_controls_actions` is `true` only for the neural actor. |
+| `target_plays_by_card` | In a matrix match's `metrics`, counts accepted `card_played` events for the target player by card ID; it is the reliable card-count audit. |
+| `target_play_trace` | Per-PLAY attempt/accepted-play diagnostics with decision, physics time, card ID, `accepted`, and viewer-local cell; inspect `accepted` before counting a proposal. |
+| `tower_hp_before`, `tower_hp_after`, `tower_hp_end` | `tower_hp_before`/`tower_hp_after` are per-decision snapshots in a full prototype trace; `tower_hp_end` is the final or cap-time king/princess snapshot in an episode or matrix result, keyed by `player_0`/`player_1` and `king`/`left`/`right`. None is a continuous damage timeline. |
+| `position_schema`, `troop_positions_after`, `troop_positions_end` | `position_schema` and `troop_positions_after` describe the full prototype trace's authoritative living-troop snapshots; `troop_positions_end` is only the final or cap-time snapshot in an episode or matrix result. These are not interpolated paths. |
+
+For a prototype trace, `episodes[].trace[]` contains one row per decision.
+When the actor proposes `PLAY`, `card_slot` indexes `hand_before`, so
+`card_id` is the selected card at proposal time; `played_card_id` is populated
+from an accepted simulator `card_played` event. Use `accepted` and
+`action_events` to distinguish a legal play from a rejected proposal. A
+`WAIT` row is accepted by definition. In a matrix report, use
+`matches[].metrics.target_plays_by_card` for accepted card counts and
+`target_play_trace[].accepted` for attempt-level diagnostics.
+
+`policy_cell` is the action cell in the acting player's perspective;
+`world_cell` is the canonical arena cell. For player 1 the latter is mirrored
+from the former. Cells use `[column, row]`; `x_mtile`/`y_mtile` use `[x, y]` in
+integer milli-tiles (`1,000` milli-tiles per tile), and the current schema
+declares an `18,000 × 32,000` milli-tile arena. `viewer_cell` in matrix
+`target_play_trace` is the viewer-local equivalent. `troop_positions_after`
+contains living troops after the step, not a separately interpolated path;
+track a troop across rows by its stable `uid`.
+
+Matrix `target_play_trace` rows retain the target's attempted `PLAY` actions,
+accepted simulator events, cards, timing, and cells, but omit the expensive
+per-decision troop-position snapshots. Use `troop_positions_end` when only an
+episode-end/cap snapshot is needed; use a prototype `--trace-out` artifact
+when reconstructing the position sequence.
+
+`tower_hp_end` is the post-terminal snapshot when a match finishes, or the
+state at the evaluation cap when it is truncated. Therefore a row with
+`outcome=truncated` and `winner=null` is censored evidence, not a draw or a
+loss; the matrix runner uses `terminal_reason=evaluation_cap`, while some
+prototype traces from a cap may leave that field null. At a tiebreak ending,
+the terminal reason and final tower HP explain why the winner was selected.
+
+The `rl.prototype` progress bar reports both PPO updates and collected
+transitions. The generalized wrapper's outer bar reports collected transitions
+during training and matrix cells during evaluation; all of these are
+throughput indicators, not quality metrics. `device: cuda` moves neural
+inference and optimization to the ROCm device when visible, but simulator
+physics and opponent controllers remain Python-side CPU work, so low average
+GPU utilization is expected for this small recurrent model.
+For small CPU evaluation runs, `OMP_NUM_THREADS=1 MKL_NUM_THREADS=1` often
+reduces thread-launch overhead; it changes throughput only, not the model or
+the match rules.
+
+#### Latest measured status and limitations
+
+The following are local development measurements from 2026-08-28 on the
+provisional `v1` simulator, not exhaustive evidence. The retained actor
+artifacts report engine `reference-0.31.0`, observation contract
+`public-hybrid-v2-1` with contract hash
+`sha256:3bd60d514eb919de1ace676e8a2faa14f6130cecfd217cb78a5d3c538e01689e`,
+and ruleset hash
+`sha256:84be7cc2c6476a6609fce80dbe0c834b648b4791919c4d492cb6bfb609c4234b`.
+
+| Evaluation | Scope | Result |
+| --- | --- | --- |
+| Current coverage actor ([checkpoint](outputs/simulator/training/generalized-coverage-ppo-v2.pt), [report](outputs/simulator/training/generalized-coverage-ppo-v2-fixed-8.json)) | 8 fixed deterministic-cycle matches, `--policy actor`, full 1,200-decision cap | 8 wins, 0 losses, 0 draws, 0 truncated; `actor_controls_actions=true`. This is a narrow fixed-deck regression, not diverse-deck evidence. |
+| Current coverage actor ([checkpoint](outputs/simulator/training/generalized-coverage-ppo-v2.pt), [report](outputs/simulator/training/generalized-coverage-ppo-v2-heldout-smoke.json)) | 6 held-out archetype variants × deterministic-cycle strategy × seed `10000`, full 1,200-decision cap | 1 win, 5 losses, 0 draws, 0 truncated; `actor_controls_actions=true`, `held_out_audit.disjointness_verified=true`. |
+| v7 actor on the same six held-out cells ([checkpoint](outputs/simulator/training/generalized-strategic-context-card-v7-factor-full.pt), [report](outputs/simulator/training/v7-on-coverage-heldout-smoke.json)) | Same deck set, strategy, seed, cap, and exclusion report as the preceding row | 0 wins, 6 losses, 0 draws, 0 truncated; `actor_controls_actions=true`. This paired result is a finite regression comparison, not proof of broad generalization. |
+| v7 actor broad matrix ([checkpoint](outputs/simulator/training/generalized-strategic-context-card-v7-factor-full.pt), [report](outputs/simulator/training/generalized-strategic-context-card-v7-factor-full-matrix-10000.json)) | 6 held-out archetypes × 6 simulator strategies × 1 seed, 36 completed matches | 1 win, 35 losses, 0 draws, 0 truncated; `actor_controls_actions=true`. |
+| v7 against itself ([checkpoint](outputs/simulator/training/generalized-strategic-context-card-v7-factor-full.pt), [report](outputs/simulator/training/generalized-strategic-context-card-v7-selfplay-2.json)) | 2 fixed player-deck self-play matches, `held_out=false` | 2 wins, 0 losses, 0 draws, 0 truncated. This identity-style self-play check does not measure diverse-deck strength or a distinct previous policy. |
+
+These measurements show that the current neural actor has not yet generalized.
+The declared `v1` roster has 109 eligible opponent cards, but this evaluation
+pool is only a small curated set of archetypes, variants, strategies, and
+seeds; it does not test every legal deck, card interaction, strategy, seed, or
+previous checkpoint. The simulator is marked `training_ready: false`, several
+mechanics are provisional, and the actor receives only public observations
+while the critic may use training-only privileged state. Consequently, no
+finite `all_wins=true` result here supports a claim of winning against any
+deck or of live-game performance. Treat a result as a regression gate only
+when the exact deck, strategy, seed set, ruleset/engine identity, decision cap,
+held-out audit, and `policy_mode` are recorded in the JSON report. The training
+sidecar's `aggregate_outcomes` can be zero completed matches when segment
+boundaries stop rollouts; that is not a win-rate measurement.
+
+Use prototype `--trace-out` for every decision, card proposal, accepted event,
+troop position, and per-decision tower snapshot. Matrix reports retain compact
+PLAY-attempt and terminal/cap-time diagnostics. Check `accepted` before
+counting a proposed card, and do not treat `troop_positions_end` or
+`tower_hp_end` as a continuous trajectory.
+
+### Observation-only testing on MP4 and real matches
+
+The `shadow` subcommand runs the checkpoint through the existing visual
+pipeline and records the actions it would choose. It does not advance the
+simulator, use privileged critic inputs, call ADB, or send taps. An MP4 and a
+live stream therefore produce an action trace and diagnostics, not a new
+win-rate measurement.
+
+Shadow inference defaults to CPU (`--device cpu`). On a compatible CUDA/ROCm
+installation, override this explicitly with `--device cuda` (and set any
+required ROCm environment override, such as `HSA_OVERRIDE_GFX_VERSION`). If a
+checkpoint predates the active ruleset artifact, pass
+`--allow-stale-ruleset` explicitly for read-only shadow inspection only;
+`train` and `evaluate` remain fail-closed, so retrain the checkpoint for normal
+evaluation.
+
+For an already extracted replay cache (the fastest path and one that does not
+rerun YOLO), run:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 \
+PYTHONPATH=.:..:../src \
+../outputs/venv/bin/python \
+-m rl.prototype shadow \
+  --checkpoint outputs/simulator/training/recurrent-prototype.pt \
+  --replay-cache outputs/simulator/fidelity_media/physical_lab/<run-id>/replay-cache-A.pkl.gz \
+  --device cpu \
+  --max-frames 300 \
+  --json-out outputs/simulator/training/shadow-replay.json
+```
+
+To process an MP4 directly, use the same command with `--video` instead:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 \
+PYTHONPATH=.:..:../src \
+../outputs/venv/bin/python \
+-m rl.prototype shadow \
+  --checkpoint outputs/simulator/training/recurrent-prototype.pt \
+  --video /absolute/path/to/match.mp4 \
+  --device cpu \
+  --sample-interval 0.1 \
+  --json-out outputs/simulator/training/shadow-mp4.json
+```
+
+`--video-start-time`, `--video-end-time`, `--frame-stride`, and
+`--max-frames` bound a recorded run. `--max-seconds` bounds duration from the
+selected start (or from zero when no start is supplied). The output contains
+`predictions`, `invalid_observations`, match-boundary counters, source hash,
+and `taps_sent: 0`. A `PLAY` prediction uses the viewer-local action cell
+`[column, row]`; it is a suggestion only.
+
+For a real match, mirror the phone display into a V4L2 loopback device with an
+explicit serial, then point shadow mode at that device. Keep this in one
+terminal:
+
+```bash
+sudo modprobe v4l2loopback video_nr=37 card_label=cr-bot-shadow exclusive_caps=1
+scrcpy --serial PHONE_SERIAL --video-source=display \
+  --no-control --no-window --no-audio \
+  --v4l2-sink=/dev/video37 --v4l2-buffer=0
+```
+
+In another terminal, run:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 \
+PYTHONPATH=.:..:../src \
+../outputs/venv/bin/python \
+-m rl.prototype shadow \
+  --checkpoint outputs/simulator/training/recurrent-prototype.pt \
+  --video-device /dev/video37 \
+  --device cpu \
+  --sample-interval 0.1 \
+  --max-seconds 30 \
+  --json-out outputs/simulator/training/shadow-live.json
+```
+
+The live runner is deliberately read-only; stopping it with `Ctrl-C` writes
+the partial trace. Run the command with the project's vision dependencies in
+the configured `../outputs/venv` environment (`opencv-python`, the detector
+runtime, and their dependencies) before using media input. The training
+checkpoint can still be loaded with the PyTorch environment alone, but actual
+MP4/V4L2 inference needs the visual stack as well.
 
 ## Deterministic tick order
 
@@ -661,7 +1533,7 @@ promoted to `regression` or used as expected truth by a failing simulator run.
 {
   "schema_version": 1,
   "scenario_id": "example",
-  "engine_version": "reference-0.28.0",
+  "engine_version": "reference-0.29.0",
   "ruleset_id": "2026-08-04",
   "ruleset_hash": "sha256:...",
   "seed": 1,
@@ -1076,7 +1948,7 @@ the selected policy cell anchors the leading Skeleton, with the rear pair at
 Golem, Musketeer, Hog, Skeleton, and Ice Spirit collision displacement
 mass-weighted rather than 50/50.
 
-The `reference-0.28.0` regression suite covers every walkable Hog policy-grid
+The `reference-0.29.0` regression suite covers every walkable Hog policy-grid
 deployment to both opposing Princess Towers (380 routes), requiring legal
 segments and exact full-arena mirror equivalence. A strict complete seeded
 match runs through tick 6,000 twice with identical state and replay hashes. A

@@ -82,6 +82,29 @@ BASE_POLICY_CARD_IDS: Final[dict[str, int]] = {
     "cannon": 114,
 }
 
+# The legacy policy vocabulary contains only the eight playable cards in the
+# fixed player deck.  The simulator nevertheless exposes every opponent card
+# and every internal child form through the same board/feature boundary.  A
+# child form is rendered with its nearest public-card feature profile; its
+# authoritative card_id, HP, targeting, and split/death behavior remain
+# unchanged in BattleState.
+_ENTITY_FEATURE_ALIASES: Final = {
+    "bush-goblin": "goblins",
+    "barbarian": "barbarians",
+    "cursed-hog": "hog-rider",
+    "goblin": "goblins",
+    "goblin-brawler": "goblins",
+    "phoenix-egg": "phoenix",
+    "golemite": "golem",
+    "elixir-golemite": "elixir-golem",
+    "elixir-blob": "elixir-golem",
+    "lava-pup": "lava-hound",
+    "rascal-boy": "barbarians",
+    "rascal-girl": "spear-goblins",
+    "spear-goblin": "spear-goblins",
+    "cannon-cart-building": "cannon-cart",
+}
+
 
 def observation_contract_manifest() -> dict[str, object]:
     """Describe every imported policy feature convention that affects bytes."""
@@ -103,6 +126,7 @@ def observation_contract_manifest() -> dict[str, object]:
         "global_scalar_features": list(GLOBAL_SCALAR_FEATURES),
         "base_policy_card_ids": dict(sorted(BASE_POLICY_CARD_IDS.items())),
         "base_card_features": card_features,
+        "entity_feature_aliases": dict(sorted(_ENTITY_FEATURE_ALIASES.items())),
         "normalizers": {
             "max_elixir": MAX_ELIXIR,
             "total_match_seconds": TOTAL_MATCH_SECONDS,
@@ -135,7 +159,7 @@ def calculate_observation_contract_hash() -> str:
 
 
 PINNED_OBSERVATION_CONTRACT_HASH: Final = (
-    "sha256:1f6bba6a4c67894aed50e869e95a3d37a6025f6e1dfd0051610505ebabe97e1b"
+    "sha256:fa42f20ddce8a6d9d5ee2089e415d610834ba324d2fc8195dc618b556f206d79"
 )
 
 
@@ -161,19 +185,6 @@ _POLICY_ALIASES: Final = {
 # remain unchanged in BattleState.  This avoids leaking privileged simulator
 # fields while preventing a Golemite/Lava Pup from crashing the legacy board
 # rasterizer (which obtains air/threat metadata from CARD_METADATA).
-_ENTITY_FEATURE_ALIASES: Final = {
-    "bush-goblin": "goblins",
-    "barbarian": "barbarians",
-    "goblin": "goblins",
-    "goblin-brawler": "goblins",
-    "phoenix-egg": "phoenix",
-    "golemite": "golem",
-    "elixir-golemite": "elixir-golem",
-    "elixir-blob": "elixir-golem",
-    "lava-pup": "lava-hound",
-    "spear-goblin": "spear-goblins",
-    "cannon-cart-building": "cannon-cart",
-}
 _PUBLIC_CARD_PLAY_EVENT: Final = "card_played"
 _FINISHED_PHASES: Final = frozenset(
     {"complete", "completed", "ended", "finished", "game-over", "match-over", "terminal"}
@@ -317,6 +328,8 @@ class ObservationMemory:
             self._advance_elixir(event_us, ruleset)
             if event.kind == _PUBLIC_CARD_PLAY_EVENT:
                 self._consume_card_play(event, ruleset)
+            elif event.kind in {"elixir_generated", "elixir_awarded"}:
+                self._consume_elixir_gain(event, ruleset)
             self.last_event_sequence = max(self.last_event_sequence, event.sequence)
 
         self._advance_elixir(state.elapsed_us, ruleset)
@@ -377,9 +390,40 @@ class ObservationMemory:
             observed_name = canonical
         if observed_name not in self.seen_opponent_cards:
             self.seen_opponent_cards.append(observed_name)
+        # ``card_played`` carries the effective cost.  This is different from
+        # the catalog cost for Mirror (and for future dynamic-cost cards), so
+        # charging the definition's base cost makes the public belief drift
+        # upward after every such play.
+        raw_cost = event.get("cost_milli")  # type: ignore[attr-defined]
+        cost_milli = (
+            int(raw_cost)
+            if isinstance(raw_cost, int) and not isinstance(raw_cost, bool) and raw_cost >= 0
+            else int(card.elixir_milli)
+        )
         self._opponent_elixir_milli = max(
             Fraction(0, 1),
-            self._opponent_elixir_milli - card.elixir_milli,
+            self._opponent_elixir_milli - cost_milli,
+        )
+
+    def _consume_elixir_gain(self, event: object, ruleset: Ruleset) -> None:
+        """Apply public bonus-elixir events to the opponent estimate.
+
+        Normal regeneration is reconstructed from elapsed time.  Building
+        generation and death rewards are additive public events, and their
+        payload already reports the amount that survived the ten-elixir cap.
+        """
+
+        player_raw = event.get("player", event.get("owner"))  # type: ignore[attr-defined]
+        if not isinstance(player_raw, int) or isinstance(player_raw, bool):
+            return
+        if player_raw != 1 - self.viewer:
+            return
+        raw_amount = event.get("amount_milli")  # type: ignore[attr-defined]
+        if not isinstance(raw_amount, int) or isinstance(raw_amount, bool) or raw_amount <= 0:
+            return
+        self._opponent_elixir_milli = min(
+            Fraction(ruleset.match.max_elixir_milli, 1),
+            self._opponent_elixir_milli + int(raw_amount),
         )
 
 
@@ -391,11 +435,23 @@ def build_policy_observation(
     memory: ObservationMemory | None = None,
     compatibility_mode: str = VISION_V1_EXACT,
     legality_callback: LegalityCallback | None = None,
+    allow_unrepresented_hand: bool = False,
 ) -> PolicyObservationV1:
-    """Project an authoritative state into the current policy boundary."""
+    """Project an authoritative state into the current policy boundary.
+
+    ``vision_v1_exact`` remains fail-closed by default.  The additive V2
+    adapter may opt into ``allow_unrepresented_hand`` for the non-learning
+    simulator side: opponent decks can contain cards outside the fixed
+    player's eight-card action vocabulary, and those cards are represented as
+    empty hand slots rather than crashing the actor-facing observation.  The
+    authoritative opponent controller still sees its real hand in
+    ``BattleState``.
+    """
 
     _validate_viewer(viewer)
     _validate_state_ruleset(state, ruleset)
+    if type(allow_unrepresented_hand) is not bool:
+        raise TypeError("allow_unrepresented_hand must be boolean")
     if compatibility_mode != VISION_V1_EXACT:
         raise ValueError(f"unsupported compatibility mode: {compatibility_mode!r}")
     if memory is None:
@@ -404,7 +460,13 @@ def build_policy_observation(
         raise ValueError(f"observation memory belongs to viewer {memory.viewer}, not {viewer}")
     memory.update(state, ruleset)
 
-    observed = battle_state_to_observed_game_state(state, ruleset, viewer=viewer, memory=memory)
+    observed = battle_state_to_observed_game_state(
+        state,
+        ruleset,
+        viewer=viewer,
+        memory=memory,
+        allow_unrepresented_hand=allow_unrepresented_hand,
+    )
     board = np.ascontiguousarray(build_board(observed, _ARENA_PX), dtype=np.float32)
     global_vector = np.ascontiguousarray(build_global_vector(observed), dtype=np.float32)
     spatial_masks = _build_spatial_masks(observed)
@@ -437,24 +499,42 @@ def battle_state_to_observed_game_state(
     *,
     viewer: int,
     memory: ObservationMemory,
+    allow_unrepresented_hand: bool = False,
 ) -> GameState:
-    """Build the lossy DTO used by the existing vision feature builders."""
+    """Build the lossy DTO used by the existing vision feature builders.
+
+    When ``allow_unrepresented_hand`` is enabled, unsupported hand/next-card
+    forms become empty public slots.  This is only appropriate for the V2
+    bridge, where the actor's action vocabulary is independently masked and
+    simulator-side opponents retain authoritative state.
+    """
 
     _validate_viewer(viewer)
     _validate_state_ruleset(state, ruleset)
+    if type(allow_unrepresented_hand) is not bool:
+        raise TypeError("allow_unrepresented_hand must be boolean")
     if memory.viewer != viewer:
         raise ValueError(f"observation memory belongs to viewer {memory.viewer}, not {viewer}")
     if len(state.players) != 2:
         raise ValueError("vision_v1_exact requires exactly two players")
 
     own = state.players[viewer]
-    own_hand = [_require_policy_feature_name(card, context="viewer hand") for card in own.hand[:4]]
+    if allow_unrepresented_hand:
+        own_hand = [policy_card_name(card) or "" for card in own.hand[:4]]
+    else:
+        own_hand = [
+            _require_policy_feature_name(card, context="viewer hand")
+            for card in own.hand[:4]
+        ]
     own_hand.extend([""] * (4 - len(own_hand)))
-    next_card = (
-        _require_policy_feature_name(own.draw_pile[0], context="viewer next card")
-        if own.draw_pile
-        else ""
-    )
+    if own.draw_pile:
+        next_card = (
+            policy_card_name(own.draw_pile[0]) or ""
+            if allow_unrepresented_hand
+            else _require_policy_feature_name(own.draw_pile[0], context="viewer next card")
+        )
+    else:
+        next_card = ""
 
     tower_hp, tower_alive = _viewer_tower_state(state, viewer)
     princess_towers = PrincessTowerState(
@@ -489,10 +569,13 @@ def battle_state_to_observed_game_state(
         if not entity.alive or entity.hp <= 0 or _is_tower(entity) or entity.kind == "spell":
             continue
         match = _entity_to_match(entity, viewer)
+        # A known entity can leave the finite vision arena before the
+        # authoritative engine removes it.  That is an out-of-view entity,
+        # not an unsupported policy form; the raster contract should omit it
+        # rather than make a long evaluation crash.  Unknown forms still raise
+        # from ``_entity_to_match`` below.
         if match is None:
-            raise UnsupportedPolicyFormError(
-                f"vision_v1_exact cannot represent visible entity form {entity.card_id!r}"
-            )
+            continue
         (own_units if entity.owner == viewer else enemy_units).append(match)
 
     return GameState(
@@ -665,7 +748,9 @@ def _entity_to_match(entity: EntityState, viewer: int) -> Match | None:
     normalized = normalize_identifier(entity.card_id)
     card_name = normalized if normalized in CARD_METADATA else _ENTITY_FEATURE_ALIASES.get(normalized)
     if card_name is None:
-        return None
+        raise UnsupportedPolicyFormError(
+            f"vision_v1_exact cannot represent visible entity form {entity.card_id!r}"
+        )
     x_mtile, y_mtile = _viewer_position(entity, viewer)
     cell = position_to_cell(x_mtile, y_mtile)
     if cell is None:

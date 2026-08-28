@@ -416,6 +416,8 @@ class ExperimentSpec:
             parsed_devices[side] = device
         if set(parsed_devices) != {"A", "B"}:
             raise PhysicalLabError("an experiment requires both device A and device B")
+        if len({device.serial_hash for device in parsed_devices.values()}) != 2:
+            raise PhysicalLabError("device A and device B must have distinct serial hashes")
         object.__setattr__(self, "devices", dict(sorted(parsed_devices.items())))
 
         parsed_actions = tuple(self.actions)
