@@ -38,6 +38,15 @@ def test_every_eligible_card_can_be_deployed_and_advanced_under_strict_validatio
             shuffle_decks=False,
         )
         state.players[1].elixir_milli = ruleset.match.max_elixir_milli
+        if card_id == "mirror":
+            # Mirror is excluded from the opening hand and is only playable
+            # after another card. Prime the dynamic target while retaining
+            # this roster-wide strict-validation smoke test.
+            displaced = state.players[1].hand[0]
+            state.players[1].hand[0] = "mirror"
+            mirror_pile_index = state.players[1].draw_pile.index("mirror")
+            state.players[1].draw_pile[mirror_pile_index] = displaced
+            state.players[1].last_played_card_id = "cannon"
         legal = engine.legal_cells(state, 1, card_id)
         assert legal, card_id
         action = PlayCardAction(1, 0, legal[0])
@@ -60,9 +69,8 @@ def test_roster_spawner_and_spell_spawn_components_emit_deterministic_events() -
         state.players[1].elixir_milli = ruleset.match.max_elixir_milli
         cell = engine.legal_cells(state, 1, card_id)[0]
         engine.step(state, (PlayCardAction(1, 0, cell),))
-        # Collector generation is pinned to the current 12-second Level-11
-        # cycle (older fixtures used an 8-second placeholder).
-        for _ in range(260):
+        # Collector generation is pinned to the current 13-second cycle.
+        for _ in range(300):
             engine.step(state)
         kinds = {event.kind for event in state.events}
         if card_id == "elixir-collector":
@@ -107,7 +115,7 @@ def test_goblin_drill_is_a_passive_spawner_not_a_repeating_turret() -> None:
     assert drill.mechanics["tower_spawn_damage"] == 0
     assert drill.mechanics["spawn"] == {
         "card_id": "goblins",
-        "interval_us": 3_500_000,
+        "interval_us": 3_000_000,
         "start_delay_us": 1_000_000,
         "max_alive": 6,
         "count": 1,
@@ -281,7 +289,8 @@ def test_mirror_replays_the_previous_card_without_becoming_an_inert_projectile()
     state = engine.new_battle(decks=(deck, PLAYER_DECK), seed=2, shuffle_decks=False)
     state.players[0].elixir_milli = ruleset.match.max_elixir_milli
     engine.step(state, (PlayCardAction(0, 0, (3, 19)),))
-    engine.step(state, (PlayCardAction(0, 0, (3, 19)),))
+    mirror_slot = state.players[0].hand.index("mirror")
+    engine.step(state, (PlayCardAction(0, mirror_slot, (3, 19)),))
     assert any(event.kind == "card_mirrored" for event in state.events)
     assert not any(
         event.kind == "projectile_spawned" and event.get("card_id") == "mirror"
@@ -295,6 +304,10 @@ def test_mirror_cannot_chain_after_a_mirror() -> None:
     deck = ("mirror", "fireball", "ice-spirit", "log", "hog-rider", "cannon", "musketeer", "skeletons")
     state = engine.new_battle(decks=(deck, PLAYER_DECK), seed=4, shuffle_decks=False)
     state.players[0].elixir_milli = ruleset.match.max_elixir_milli
+    displaced = state.players[0].hand[0]
+    state.players[0].hand[0] = "mirror"
+    mirror_pile_index = state.players[0].draw_pile.index("mirror")
+    state.players[0].draw_pile[mirror_pile_index] = displaced
     state.players[0].last_played_card_id = "mirror"
 
     result = engine.apply_actions(state, (PlayCardAction(0, 0, (3, 19)),))[0]

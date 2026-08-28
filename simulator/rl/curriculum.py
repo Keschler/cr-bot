@@ -1,9 +1,10 @@
-"""Serializable behavior-cloning curriculum configuration.
+"""Serializable behavior-cloning and strategic curriculum configuration.
 
-This module describes *what a future learner should consume*; it does not
-load demonstrations, train a model, or claim that any teacher is expert.  A
-curriculum makes the confidence policy and phase boundaries explicit so a
-rollout/training service can apply the same decisions after a restart.
+The behavior-cloning objects describe *what a future learner should consume*;
+the strategic objects describe which opponent distribution a current learner
+should face. This module does not load demonstrations, train a model, or claim
+that any teacher is expert. A curriculum makes confidence/phase boundaries
+explicit so a rollout/training service can reproduce them after a restart.
 """
 
 from __future__ import annotations
@@ -340,6 +341,215 @@ class CurriculumSchedule:
         return cls.from_mapping(raw)
 
 
+STRATEGIC_CURRICULUM_SCHEMA_VERSION = 1
+
+
+def _name_tuple(value: object, name: str) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)) or isinstance(value, (str, bytes)):
+        raise CurriculumConfigurationError(f"{name} must be a list of names")
+    names = tuple(_string(item, f"{name}[{index}]") for index, item in enumerate(value))
+    if not names:
+        raise CurriculumConfigurationError(f"{name} must not be empty")
+    if len(set(names)) != len(names):
+        raise CurriculumConfigurationError(f"{name} must not contain duplicates")
+    return names
+
+
+@dataclass(frozen=True, slots=True)
+class StrategicCurriculumStage:
+    """One rollout-segment stage in the teacher-free strategic curriculum.
+
+    These fields choose the opponent distribution only.  They do not prescribe
+    the learner's card, timing, lane, or placement.  The stage vocabulary is
+    intentionally kept as names so the simulator-specific generalized runner
+    can validate it against the active opponent pool.
+    """
+
+    stage_id: str
+    start_segment: int
+    end_segment: int | None
+    archetypes: tuple[str, ...]
+    strategies: tuple[str, ...]
+    description: str = ""
+
+    def __post_init__(self) -> None:
+        _string(self.stage_id, "stage_id")
+        _integer(self.start_segment, "start_segment", minimum=0)
+        if self.end_segment is not None:
+            _integer(self.end_segment, "end_segment", minimum=1)
+            if self.end_segment <= self.start_segment:
+                raise CurriculumConfigurationError(
+                    "end_segment must be greater than start_segment"
+                )
+        _name_tuple(self.archetypes, "archetypes")
+        _name_tuple(self.strategies, "strategies")
+        if not isinstance(self.description, str):
+            raise CurriculumConfigurationError("description must be a string")
+
+    def contains(self, segment: int) -> bool:
+        _integer(segment, "segment", minimum=0)
+        return self.start_segment <= segment and (
+            self.end_segment is None or segment < self.end_segment
+        )
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "stage_id": self.stage_id,
+            "start_segment": self.start_segment,
+            "end_segment": self.end_segment,
+            "archetypes": list(self.archetypes),
+            "strategies": list(self.strategies),
+            "description": self.description,
+        }
+
+    @classmethod
+    def from_mapping(cls, raw: Mapping[str, Any]) -> "StrategicCurriculumStage":
+        if not isinstance(raw, Mapping):
+            raise CurriculumConfigurationError(
+                "strategic curriculum stage must be an object"
+            )
+        return cls(
+            stage_id=raw.get("stage_id", ""),
+            start_segment=raw.get("start_segment", 0),
+            end_segment=raw.get("end_segment"),
+            archetypes=_name_tuple(raw.get("archetypes", []), "archetypes"),
+            strategies=_name_tuple(raw.get("strategies", []), "strategies"),
+            description=raw.get("description", ""),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class StrategicCurriculum:
+    """Restartable, non-prescriptive opponent curriculum for generalized PPO."""
+
+    schedule_id: str
+    stages: tuple[StrategicCurriculumStage, ...]
+    seed: int = 0
+
+    def __post_init__(self) -> None:
+        _string(self.schedule_id, "schedule_id")
+        _integer(self.seed, "seed")
+        if not self.stages:
+            raise CurriculumConfigurationError(
+                "strategic curriculum must contain at least one stage"
+            )
+        previous_end: int | None = None
+        for index, stage in enumerate(self.stages):
+            if not isinstance(stage, StrategicCurriculumStage):
+                raise CurriculumConfigurationError(
+                    f"stages[{index}] must be a StrategicCurriculumStage"
+                )
+            if index == 0 and stage.start_segment != 0:
+                raise CurriculumConfigurationError(
+                    "the first strategic curriculum stage must start at segment 0"
+                )
+            if previous_end is not None and stage.start_segment != previous_end:
+                raise CurriculumConfigurationError(
+                    "strategic curriculum stages must be contiguous"
+                )
+            if previous_end is None and index > 0:
+                raise CurriculumConfigurationError(
+                    "an open-ended strategic stage must be final"
+                )
+            previous_end = stage.end_segment
+
+    def stage_at(self, segment: int) -> StrategicCurriculumStage:
+        _integer(segment, "segment", minimum=0)
+        for stage in self.stages:
+            if stage.contains(segment):
+                return stage
+        raise CurriculumConfigurationError(
+            f"strategic curriculum {self.schedule_id!r} has no stage at segment {segment}"
+        )
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "schema_version": STRATEGIC_CURRICULUM_SCHEMA_VERSION,
+            "schedule_id": self.schedule_id,
+            "seed": self.seed,
+            "stages": [stage.as_dict() for stage in self.stages],
+        }
+
+    @classmethod
+    def from_mapping(cls, raw: Mapping[str, Any]) -> "StrategicCurriculum":
+        if not isinstance(raw, Mapping):
+            raise CurriculumConfigurationError("strategic curriculum must be an object")
+        schema_version = raw.get(
+            "schema_version", STRATEGIC_CURRICULUM_SCHEMA_VERSION
+        )
+        if schema_version != STRATEGIC_CURRICULUM_SCHEMA_VERSION:
+            raise CurriculumConfigurationError(
+                f"unsupported strategic curriculum schema: {schema_version!r}"
+            )
+        raw_stages = raw.get("stages")
+        if not isinstance(raw_stages, (list, tuple)):
+            raise CurriculumConfigurationError("stages must be a list of objects")
+        return cls(
+            schedule_id=raw.get("schedule_id", ""),
+            seed=raw.get("seed", 0),
+            stages=tuple(
+                StrategicCurriculumStage.from_mapping(item) for item in raw_stages
+            ),
+        )
+
+
+def default_strategic_curriculum() -> StrategicCurriculum:
+    """Return the documented local-first curriculum schedule."""
+
+    all_archetypes = (
+        "aggressive-pressure",
+        "defensive-cycle",
+        "beatdown",
+        "air-beatdown",
+        "siege-bait",
+        "random-legal",
+    )
+    all_strategies = (
+        "aggressive-pressure",
+        "defensive-cycle",
+        "beatdown",
+        "siege-bait",
+        "random-legal",
+    )
+    return StrategicCurriculum(
+        schedule_id="strategic-hog-v1",
+        stages=(
+            StrategicCurriculumStage(
+                "mechanics-foundation",
+                0,
+                4,
+                ("aggressive-pressure", "defensive-cycle"),
+                ("defensive-cycle", "random-legal"),
+                "Short, varied scripted matches for action/placement and basic defense.",
+            ),
+            StrategicCurriculumStage(
+                "scripted-threat-expansion",
+                4,
+                12,
+                all_archetypes,
+                all_strategies,
+                "Mix pressure, air, beatdown, siege/bait, and random legal controllers.",
+            ),
+            StrategicCurriculumStage(
+                "meta-deck-diversity",
+                12,
+                32,
+                all_archetypes,
+                all_strategies,
+                "Expand validated archetypes and held-out deck variants with rehearsal.",
+            ),
+            StrategicCurriculumStage(
+                "historical-league",
+                32,
+                None,
+                all_archetypes,
+                all_strategies,
+                "Use frozen checkpoints/PFSP and later league opponents without forgetting anchors.",
+            ),
+        ),
+    )
+
+
 __all__ = [
     "BCDecision",
     "BCTeacherConfidencePolicy",
@@ -347,4 +557,8 @@ __all__ = [
     "CurriculumConfigurationError",
     "CurriculumPhase",
     "CurriculumSchedule",
+    "STRATEGIC_CURRICULUM_SCHEMA_VERSION",
+    "StrategicCurriculum",
+    "StrategicCurriculumStage",
+    "default_strategic_curriculum",
 ]

@@ -30,13 +30,19 @@ from cr_bot.annotation_pipeline import (
 )
 from cr_bot.own_localization import validate_own_localization_decisions
 from cr_bot.own_localization_cascade import (
+    best_v4_cluster,
     best_v2_cluster,
     route_after_primary,
     route_after_tiebreak,
     route_v2_after_terra_verify,
     route_v2_initial,
+    route_v3_after_luna_specialized,
+    route_v3_after_terra_verify,
+    route_v3_initial,
+    route_v4_initial,
     select_medoid,
     select_v2_consensus,
+    select_v4_consensus,
 )
 from cr_bot.annotation_stages import _validate_candidate_frame
 from scripts.codex_annotation.run_model_worker import (
@@ -73,6 +79,12 @@ from scripts.codex_annotation.prepare_own_localization_packages import (
     _grid_frame_groups,
     _own_events,
     _rule_options,
+)
+from scripts.codex_annotation.prepare_own_localization_packages_v3 import (
+    compact_frame_indices,
+)
+from scripts.codex_annotation.run_label_independent_own_localization_v3 import (
+    ROLE_PROMPTS as LOCALIZATION_V3_ROLE_PROMPTS,
 )
 from scripts.codex_annotation.evaluate_own_localization import evaluate_locations
 
@@ -277,6 +289,87 @@ def test_v2_localization_prompt_routing_is_global_and_templates_format():
         )
         assert "package.json" in rendered
         assert "worker-output.json" in rendered
+
+
+def test_v3_compact_localization_window_is_fixed_and_boundary_safe():
+    assert compact_frame_indices(50, 0, 100) == [
+        42, 45, 47, 48, 49, 50, 51, 52, 53, 55, 59, 65, 68
+    ]
+    assert compact_frame_indices(3, 0, 10) == [0, 1, 2, 3, 4, 5, 6, 8]
+
+
+def test_v3_batched_routing_uses_cheap_specialization_before_terra_verify():
+    def row(cell, confidence="direct"):
+        return {"cell": cell, "confidence": confidence}
+
+    agreeing = [
+        ("luna_marker", row([8, 20])),
+        ("luna_temporal", row([8, 21])),
+        ("terra_residual", row([9, 20])),
+    ]
+    assert route_v3_initial(agreeing, "cannon") == "accept"
+
+    residual = [
+        ("luna_marker", row([8, 20])),
+        ("luna_temporal", row([8, 20])),
+        ("terra_residual", row([13, 25])),
+    ]
+    assert route_v3_initial(residual, "cannon") == "luna_specialized"
+    residual.append(("luna_specialized", row([8, 21])))
+    assert route_v3_after_luna_specialized(residual, "cannon") == "terra_verify"
+    residual.append(("terra_verify", row([9, 20])))
+    assert route_v3_after_terra_verify(residual, "cannon") == "accept"
+
+
+def test_v4_exact_cross_family_consensus_accepts_inferred_confidence():
+    def row(cell, confidence="direct"):
+        return {"cell": cell, "confidence": confidence}
+
+    exact = [
+        ("luna_marker", row([2, 16])),
+        ("luna_temporal", row([2, 16])),
+        ("terra_residual", row([2, 16], "inferred")),
+    ]
+    assert route_v4_initial(exact, "ice-spirit") == "accept"
+    assert best_v4_cluster(exact, "ice-spirit") == [0, 1, 2]
+    selection = select_v4_consensus(exact, "ice-spirit")
+    assert selection is not None
+    assert selection[0][0] == "luna_marker"
+
+
+def test_v4_inferred_consensus_requires_exact_cell_and_two_direct_votes():
+    def row(cell, confidence="direct"):
+        return {"cell": cell, "confidence": confidence}
+
+    non_exact = [
+        ("luna_marker", row([2, 16])),
+        ("luna_temporal", row([2, 16])),
+        ("terra_residual", row([3, 16], "inferred")),
+    ]
+    assert route_v4_initial(non_exact, "ice-spirit") == "luna_specialized"
+
+    one_direct = [
+        ("luna_marker", row([2, 16])),
+        ("luna_temporal", row([2, 16], "inferred")),
+        ("terra_residual", row([2, 16], "inferred")),
+    ]
+    assert route_v4_initial(one_direct, "ice-spirit") == "luna_specialized"
+
+
+def test_v3_batched_prompts_have_no_numeric_example_to_copy():
+    assert len(LOCALIZATION_V3_ROLE_PROMPTS) == 6
+    for path in LOCALIZATION_V3_ROLE_PROMPTS.values():
+        rendered = path.read_text(encoding="utf-8").format(
+            RUN_DIR="/blind/run",
+            PACKAGE_FILE="package.json",
+            OUTPUT_FILE="worker-output.json",
+            SESSION_ID="blind-session",
+            MODEL="gpt-5.6-luna",
+            REASONING_EFFORT="low",
+        )
+        assert "package.json" in rendered
+        assert "worker-output.json" in rendered
+        assert "location_frame_index\": 0" not in rendered
 
 
 def test_default_profile_is_terra_only_and_current_model_weights_are_normalized():

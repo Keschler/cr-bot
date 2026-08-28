@@ -28,18 +28,22 @@ contract.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 import hashlib
 import inspect
 import json
 import math
+import platform
 from pathlib import Path
 import random
+from time import perf_counter
 from types import SimpleNamespace
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 
 EVALUATION_MATRIX_SCHEMA_VERSION = 2
 EVALUATION_MATRIX_KIND = "recurrent_public_ppo_evaluation_matrix"
+EVALUATION_PROVENANCE_SCHEMA_VERSION = 1
 REPORT_COMPARISON_SCHEMA_VERSION = 1
 REPORT_COMPARISON_KIND = "recurrent_public_ppo_evaluation_comparison"
 DEFAULT_REPORT_COMPARISON_MAX_CELLS = 4096
@@ -196,6 +200,38 @@ def _json_safe(value: Any, *, path: str = "$", allow_path: bool = True) -> Any:
     raise EvaluationMatrixError(
         f"value at {path} is not JSON-safe: {type(value).__name__}"
     )
+
+
+def _json_fingerprint(value: Any) -> str:
+    """Return a stable digest for a JSON-shaped evaluation input."""
+
+    safe = _json_safe(value)
+    encoded = json.dumps(
+        safe,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+
+def _utc_timestamp() -> str:
+    """Return an unambiguous UTC timestamp for report provenance."""
+
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace(
+        "+00:00", "Z"
+    )
+
+
+def _runtime_provenance() -> dict[str, str]:
+    """Describe the host runtime without affecting simulator behavior."""
+
+    return {
+        "python_version": platform.python_version(),
+        "python_implementation": platform.python_implementation(),
+        "platform": platform.platform(),
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -557,6 +593,8 @@ class MatchSpec:
             "seed": self.seed,
             "policy_mode": self.policy_mode,
             "target_player": self.target_player,
+            "actor_player": self.target_player,
+            "opponent_player": 1 - self.target_player,
             "max_decisions": self.max_decisions,
             "device": self.device,
             "shuffle_decks": self.shuffle_decks,
@@ -685,6 +723,30 @@ def _summary(results: Sequence[MatchResult]) -> dict[str, object]:
         raw_trace = metrics.get("target_play_trace", ())
         if isinstance(raw_trace, (list, tuple)):
             traced_steps += len(raw_trace)
+
+    win_rate_interval: dict[str, float] | None
+    if completed:
+        # Wilson's interval behaves sensibly for small samples and at 0/1,
+        # unlike a normal approximation.  Evaluation reports intentionally do
+        # not depend on scipy so they remain usable in the simulator runtime.
+        z = 1.959963984540054
+        denominator = 1.0 + (z * z / completed)
+        center = (wins / completed + (z * z / (2.0 * completed))) / denominator
+        radius = (
+            z
+            * math.sqrt(
+                (wins / completed) * (1.0 - wins / completed) / completed
+                + (z * z / (4.0 * completed * completed))
+            )
+            / denominator
+        )
+        win_rate_interval = {
+            "confidence": 0.95,
+            "low": max(0.0, center - radius),
+            "high": min(1.0, center + radius),
+        }
+    else:
+        win_rate_interval = None
     return {
         "matches": matches,
         "completed": completed,
@@ -693,6 +755,7 @@ def _summary(results: Sequence[MatchResult]) -> dict[str, object]:
         "draws": draws,
         "truncated": truncated,
         "win_rate": wins / completed if completed else 0.0,
+        "win_rate_ci95": win_rate_interval,
         "completion_rate": completed / matches if matches else 0.0,
         "truncation_rate": truncated / matches if matches else 0.0,
         "all_wins": matches > 0 and wins == matches,
@@ -2257,6 +2320,9 @@ def run_evaluation_matrix(
     if progress_callback is not None and not callable(progress_callback):
         raise TypeError("progress_callback must be callable when provided")
 
+    started = perf_counter()
+    started_at_utc = _utc_timestamp()
+    runner_setup_started = perf_counter()
     runner: MatchRunner
     runner_metadata: dict[str, object]
     default_runner: _CheckpointMatchRunner | None = None
@@ -2267,6 +2333,7 @@ def run_evaluation_matrix(
     else:
         runner = match_runner
         runner_metadata = {"runner": "injected"}
+    runner_setup_seconds = perf_counter() - runner_setup_started
 
     rows: list[dict[str, object]] = []
     result_groups: dict[tuple[str, str], list[MatchResult]] = {
@@ -2325,6 +2392,13 @@ def run_evaluation_matrix(
         and config.target_player == 0
         and config.batch_size > 1
     )
+    execution_mode = "batched_actor" if can_batch else "sequential"
+    batch_count = (
+        math.ceil(config.match_count / config.batch_size)
+        if can_batch
+        else config.match_count
+    )
+    execution_started = perf_counter()
     if can_batch:
         for start in range(0, len(specs), config.batch_size):
             batch = specs[start : start + config.batch_size]
@@ -2336,6 +2410,7 @@ def run_evaluation_matrix(
     else:
         for spec in specs:
             record_result(spec, runner(spec))
+    execution_seconds = perf_counter() - execution_started
 
     matchup_rows: list[dict[str, object]] = []
     for deck in config.opponent_decks:
@@ -2373,6 +2448,10 @@ def run_evaluation_matrix(
 
     total_results = [result for results in result_groups.values() for result in results]
     total_summary = _summary(total_results)
+    wall_seconds = perf_counter() - started
+    finished_at_utc = _utc_timestamp()
+    checkpoint_fingerprint = _file_fingerprint(config.checkpoint)
+    config_fingerprint = _json_fingerprint(config.as_dict())
     selected_compositions = {
         _deck_composition_key(deck.cards) for deck in config.opponent_decks
     }
@@ -2397,12 +2476,14 @@ def run_evaluation_matrix(
         "kind": EVALUATION_MATRIX_KIND,
         "schema_version": EVALUATION_MATRIX_SCHEMA_VERSION,
         "checkpoint": str(config.checkpoint),
-        "checkpoint_fingerprint": _file_fingerprint(config.checkpoint),
+        "checkpoint_fingerprint": checkpoint_fingerprint,
         "config": config.as_dict(),
         "policy_mode": config.policy_mode,
         "actor_controls_actions": config.policy_mode == "actor",
         "held_out": config.held_out,
         "target_player": config.target_player,
+        "actor_player": config.target_player,
+        "opponent_player": 1 - config.target_player,
         "player_deck": list(config.player_deck),
         "opponent_decks": [deck.as_dict() for deck in config.opponent_decks],
         "strategies": [strategy.as_dict() for strategy in config.strategies],
@@ -2413,6 +2494,35 @@ def run_evaluation_matrix(
         "cell_ids": [spec.cell_id for spec in specs],
         "held_out_audit": held_out_audit,
         "runner": runner_metadata,
+        "provenance": {
+            "schema_version": EVALUATION_PROVENANCE_SCHEMA_VERSION,
+            "config_fingerprint": config_fingerprint,
+            "checkpoint_fingerprint": checkpoint_fingerprint,
+            "matrix_order": "opponent_decks,strategies,seeds",
+            "cell_identity": "deck_id::strategy_id::seed-{seed}",
+            "actor_player": config.target_player,
+            "opponent_player": 1 - config.target_player,
+            "runtime": _runtime_provenance(),
+            "runner": runner_metadata,
+        },
+        "timing": {
+            "started_at_utc": started_at_utc,
+            "finished_at_utc": finished_at_utc,
+            "wall_seconds": wall_seconds,
+            "runner_setup_seconds": runner_setup_seconds,
+            "match_execution_seconds": execution_seconds,
+            "execution_mode": execution_mode,
+            "batch_count": batch_count,
+            "matches_per_second": (
+                config.match_count / execution_seconds if execution_seconds else 0.0
+            ),
+            "decisions_per_second": (
+                total_summary["decisions_total"] / execution_seconds
+                if execution_seconds
+                else 0.0
+            ),
+            "includes_progress_callback": progress_callback is not None,
+        },
         "total": total_summary,
         "matchups": matchup_rows,
         "warning": (
@@ -2499,6 +2609,7 @@ __all__ = [
     "DEFAULT_OPPONENT_STRATEGIES",
     "EVALUATION_MATRIX_KIND",
     "EVALUATION_MATRIX_SCHEMA_VERSION",
+    "EVALUATION_PROVENANCE_SCHEMA_VERSION",
     "DEFAULT_REPORT_COMPARISON_MAX_CELLS",
     "REPORT_COMPARISON_KIND",
     "REPORT_COMPARISON_SCHEMA_VERSION",

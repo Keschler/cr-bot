@@ -75,7 +75,9 @@ class CollectorConfig:
     lane_decks: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] | None = None
     collect_belief_targets: bool = False
     deterministic: bool = False
-    expert_execution_probability: float = 1.0
+    # A teacher may provide labels when explicitly configured, but regular
+    # PPO must execute the actor's sampled action by default.
+    expert_execution_probability: float = 0.0
     stop_on_episode_end: bool = False
     freeze_completed_lanes: bool = False
 
@@ -139,12 +141,38 @@ class RolloutStats:
     draws: int = 0
     losses: int = 0
     truncated_matches: int = 0
+    # Optional lane-indexed terminal outcomes let a generalized league update
+    # PFSP without pretending that aggregate wins belong to one opponent.
+    match_outcomes: tuple[tuple[int, str], ...] = ()
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("completed_matches", self.completed_matches),
+            ("wins", self.wins),
+            ("draws", self.draws),
+            ("losses", self.losses),
+            ("truncated_matches", self.truncated_matches),
+        ):
+            if type(value) is not int or value < 0:
+                raise ValueError(f"{name} must be a non-negative integer")
+        if not isinstance(self.match_outcomes, tuple):
+            raise ValueError("match_outcomes must be a tuple")
+        for index, item in enumerate(self.match_outcomes):
+            if not isinstance(item, tuple) or len(item) != 2:
+                raise ValueError(f"match_outcomes[{index}] must be a (lane, outcome) tuple")
+            lane, outcome = item
+            if type(lane) is not int or lane < 0:
+                raise ValueError(f"match_outcomes[{index}] lane must be non-negative")
+            if outcome not in {"win", "draw", "loss"}:
+                raise ValueError(
+                    f"match_outcomes[{index}] outcome must be win, draw, or loss"
+                )
 
     @property
     def episode_boundaries(self) -> int:
         return self.completed_matches + self.truncated_matches
 
-    def as_dict(self) -> dict[str, int]:
+    def as_dict(self) -> dict[str, object]:
         return {
             "completed_matches": self.completed_matches,
             "wins": self.wins,
@@ -152,6 +180,10 @@ class RolloutStats:
             "losses": self.losses,
             "truncated_matches": self.truncated_matches,
             "episode_boundaries": self.episode_boundaries,
+            "match_outcomes": [
+                {"lane": lane, "outcome": outcome}
+                for lane, outcome in self.match_outcomes
+            ],
         }
 
 
@@ -388,6 +420,7 @@ if TORCH_AVAILABLE:
                     raise ValueError("episode_counts must contain one non-negative integer per environment")
                 episode_counts = list(episode_counts)
             completed_matches = wins = draws = losses = truncated_matches = 0
+            match_outcomes: list[tuple[int, str]] = []
             frozen_lanes = [False] * batch_size
             frozen_infos: list[Mapping[str, object]] = [{} for _ in range(batch_size)]
 
@@ -635,10 +668,13 @@ if TORCH_AVAILABLE:
                         winner = result.info.get("winner")
                         if winner == target_player:
                             wins += 1
+                            match_outcomes.append((lane, "win"))
                         elif winner == 1 - target_player:
                             losses += 1
+                            match_outcomes.append((lane, "loss"))
                         else:
                             draws += 1
+                            match_outcomes.append((lane, "draw"))
                     elif result.truncated:
                         truncated_matches += 1
 
@@ -802,6 +838,7 @@ if TORCH_AVAILABLE:
                     draws=draws,
                     losses=losses,
                     truncated_matches=truncated_matches,
+                    match_outcomes=tuple(match_outcomes),
                 ),
                 next_reset_mask=reset_before_step.detach().clone(),
                 episode_counts=tuple(episode_counts),

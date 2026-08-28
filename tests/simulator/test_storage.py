@@ -5,7 +5,9 @@ import hashlib
 import json
 from pathlib import Path
 
-from simulator.storage import enforce_workspace_budget, workspace_size_bytes
+import pytest
+
+from simulator.storage import StorageBudgetError, enforce_workspace_budget, workspace_size_bytes
 
 
 def _write_manifest(root: Path, artifacts: list[dict[str, object]]) -> Path:
@@ -157,3 +159,17 @@ def test_budget_rejects_a_registered_path_when_hash_changed(tmp_path: Path) -> N
     assert report["invalid_records"][0]["reason"] == (
         "media_sha256 does not match the registered raw video"
     )
+
+
+def test_budget_rejects_a_configured_cap_above_the_repository_hard_limit(tmp_path: Path) -> None:
+    raw = tmp_path / "outputs/simulator/fidelity_media/raw"
+    raw.mkdir(parents=True)
+    manifest = _write_manifest(tmp_path, [])
+
+    with pytest.raises(StorageBudgetError, match="hard workspace cap"):
+        enforce_workspace_budget(
+            tmp_path,
+            manifest_path=manifest,
+            raw_media_root=raw,
+            max_bytes=200_000_000_001,
+        )

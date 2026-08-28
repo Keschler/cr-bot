@@ -1086,8 +1086,14 @@ def test_unassisted_august_ice_spirit_does_not_connect_to_crown_tower() -> None:
 
     engine.step(state, (PlayCardAction(0, 0, (3, 17)),))
     spirit = _unit(state, "ice-spirit", owner=0)
-    _advance_until(engine, state, lambda: not spirit.alive, limit=150)
+    # The August ruleset removes the bare Crown Tower from Spirit target
+    # acquisition.  With no other enemy body present the Spirit therefore
+    # remains idle instead of self-destructing on an unassisted tower hit.
+    for _ in range(150):
+        engine.step(state)
 
+    assert spirit.alive
+    assert engine._choose_target(state, spirit) is None
     assert spirit.attack_count == 0
     assert target.hp == target.max_hp
 

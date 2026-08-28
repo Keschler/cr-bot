@@ -1,9 +1,17 @@
+from pathlib import Path
+
+import numpy as np
+from scipy.io import wavfile
+
 from cr_bot.audio.dataset import (
+    MixedSFXCardDataset,
     allowed_sample_ranges,
     collect_sfx_files,
     is_deploy_like,
+    is_deploy_voice_like,
     split_sfx_samples,
 )
+from cr_bot.audio.features import AudioFeatureConfig
 from cr_bot.audio.labels import audio_card_classes, normalize_card_key, sfx_path_to_card_keys
 
 
@@ -74,6 +82,13 @@ def test_deploy_filter_accepts_placement_sounds_but_not_spawn_cast_or_land():
     assert not is_deploy_like("card_epic_witch/witch_summon_02.wav")
 
 
+def test_deploy_voice_filter_detects_followup_voice_lines():
+    assert is_deploy_voice_like("card_legendary_princess/princess_archer_dep_vo_01.wav")
+    assert is_deploy_voice_like("card_rare_wizard/wiz_deploy_vo_02.wav")
+    assert not is_deploy_voice_like("card_legendary_princess/princess_archer_atk_vo_01.wav")
+    assert not is_deploy_voice_like("card_legendary_princess/p_archer_dep_01.wav")
+
+
 def test_evolution_folder_uses_a_separate_audio_class(tmp_path):
     raw_sfx_dir = tmp_path / "raw_sfx"
     folder = raw_sfx_dir / "card_evolution_mega_knight"
@@ -116,3 +131,55 @@ def test_generated_sample_split_keeps_every_source_wav_in_training():
     assert set(samples) <= set(train)
     assert len(train) == 13
     assert len(val) == 3
+
+
+class _ZeroBackground:
+    available = True
+
+    def __init__(self, config: AudioFeatureConfig) -> None:
+        self.config = config
+
+    def sample_window(self, rng) -> np.ndarray:  # noqa: ARG002
+        return np.zeros(self.config.num_samples, dtype=np.float32)
+
+
+def test_positive_mixture_can_append_matching_deploy_voice(tmp_path):
+    config = AudioFeatureConfig(sample_rate=1000, window_s=1.0, n_fft=128, win_length=64, hop_length=16, n_mels=16)
+    deploy_path = tmp_path / "p_archer_dep_01.wav"
+    voice_path = tmp_path / "princess_archer_dep_vo_01.wav"
+    _write_test_wav(deploy_path, np.ones(80, dtype=np.float32))
+    _write_test_wav(voice_path, np.full(60, 0.5, dtype=np.float32))
+
+    dataset = MixedSFXCardDataset(
+        [("princess", deploy_path), ("princess", voice_path)],
+        classes=["no_event", "princess"],
+        config=config,
+        background=_ZeroBackground(config),
+        samples_per_sfx=1,
+        positive_samples=[("princess", deploy_path)],
+        no_event_count=0,
+        seed=0,
+    )
+
+    waveform = dataset._compose_positive_waveform("princess", Path(deploy_path), np.random.default_rng(0))
+    assert len(_nonzero_runs(waveform, threshold=1e-3)) == 2
+
+
+def _write_test_wav(path: Path, waveform: np.ndarray, sample_rate: int = 1000) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    wavfile.write(path, sample_rate, np.int16(np.clip(waveform, -1.0, 1.0) * 32767))
+
+
+def _nonzero_runs(waveform: np.ndarray, threshold: float) -> list[tuple[int, int]]:
+    mask = np.abs(waveform) > threshold
+    runs: list[tuple[int, int]] = []
+    start = None
+    for idx, active in enumerate(mask):
+        if active and start is None:
+            start = idx
+        elif not active and start is not None:
+            runs.append((start, idx))
+            start = None
+    if start is not None:
+        runs.append((start, len(mask)))
+    return runs

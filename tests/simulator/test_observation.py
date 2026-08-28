@@ -352,6 +352,9 @@ def test_non_policy_opponent_cards_and_hidden_children_share_feature_boundary() 
             _entity(7, "baby-dragon", 1, "troop", 4_500, 12_500, 1_000, 1_000),
             _entity(8, "golemite", 1, "troop", 6_500, 12_500, 700, 1_039),
             _entity(9, "goblin-brawler", 1, "troop", 8_500, 12_500, 900, 1_080),
+            _entity(10, "rascal-boy", 1, "troop", 10_500, 12_500, 1_000, 1_940),
+            _entity(11, "rascal-girl", 1, "troop", 11_500, 12_500, 180, 202),
+            _entity(12, "cursed-hog", 1, "troop", 12_500, 12_500, 600, 1_696),
         ]
     )
     observation = build_policy_observation(state, RULESET)
@@ -363,6 +366,9 @@ def test_non_policy_opponent_cards_and_hidden_children_share_feature_boundary() 
         "baby-dragon",
         "golem",
         "goblins",
+        "barbarians",
+        "spear-goblins",
+        "hog-rider",
     ]
     enemy_ground = len(STATIC_CHANNELS) + DYNAMIC_CHANNEL_IDX["enemy_ground_presence"]
     enemy_air = len(STATIC_CHANNELS) + DYNAMIC_CHANNEL_IDX["enemy_air_presence"]

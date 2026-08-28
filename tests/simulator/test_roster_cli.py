@@ -10,7 +10,9 @@ def test_roster_cli_reports_fail_closed_coverage(tmp_path) -> None:
     assert main(["roster", "--json-out", str(output)]) == 0
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["passed"] is True
-    assert payload["coverage"]["all_cards_implemented"] is False
+    assert payload["ruleset_id"] == "v1"
+    assert payload["coverage"]["all_cards_implemented"] is True
+    assert payload["coverage"]["all_cards_fidelity_ready"] is False
 
 
 def test_roster_cli_can_require_exact_release_and_full_coverage(tmp_path) -> None:
@@ -27,7 +29,8 @@ def test_roster_cli_can_require_exact_release_and_full_coverage(tmp_path) -> Non
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["passed"] is False
     assert payload["catalog"]["release_date_unverified"]
-    assert payload["coverage"]["missing_card_count"] > 0
+    assert payload["coverage"]["missing_card_count"] == 0
+    assert payload["coverage"]["all_cards_fidelity_ready"] is False
 
 
 def test_roster_complete_ruleset_is_executable_but_not_training_ready(tmp_path) -> None:

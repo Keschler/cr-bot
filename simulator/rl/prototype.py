@@ -94,6 +94,10 @@ class PrototypeConfig:
     learning_rate: float = 3e-4
     update_epochs: int = 2
     sequence_minibatch_size: int = 2
+    # Optional temporal chunking for PPO. ``None`` keeps the complete rollout
+    # row as one recurrent sequence; production runs should use a chunk that
+    # divides ``horizon`` so many independent sequence rows reach the learner.
+    sequence_length: int | None = None
     gamma: float = 1.0
     gae_lambda: float = 0.98
     entropy_coef: float = 0.01
@@ -101,7 +105,10 @@ class PrototypeConfig:
     behavior_cloning_coef: float = 0.0
     behavior_cloning_factor_coef: float = 0.0
     imitation_only: bool = False
-    expert_execution_probability: float = 1.0
+    # PPO must collect the actions selected by the actor.  Teacher execution is
+    # an explicit, separately reported bootstrap mode and is never the safe
+    # default for a new run.
+    expert_execution_probability: float = 0.0
     deterministic_rollouts: bool = False
     max_grad_norm: float = 0.5
 
@@ -124,6 +131,11 @@ class PrototypeConfig:
     direct_public_mask_features: bool = False
     direct_public_context_features: bool = False
     direct_public_slot_card_features: bool = False
+    # Fresh strategic runs may preserve a board-aligned raster map for
+    # card-conditioned placement. Keep the legacy default disabled so older
+    # checkpoints and small smoke tests retain their exact model ABI.
+    spatial_placement_features: bool = False
+    spatial_placement_dim: int = 32
 
     # Interface-only robustness perturbations.  Physics parameters are not
     # randomized here because they need evidence-backed ruleset variants.
@@ -136,6 +148,10 @@ class PrototypeConfig:
     use_privileged_critic: bool = True
     collect_belief_targets: bool = True
     dense_reward: bool = False
+    # A bounded potential difference is optional credit assignment. It does
+    # not encode a preferred card or tactical response; terminal outcome
+    # remains the primary objective when this is non-zero.
+    potential_reward_weight: float = 0.0
 
     def __post_init__(self) -> None:
         if not isinstance(self.ruleset_id, str) or not self.ruleset_id.strip():
@@ -158,6 +174,7 @@ class PrototypeConfig:
             "direct_public_mask_features",
             "direct_public_context_features",
             "direct_public_slot_card_features",
+            "spatial_placement_features",
             "imitation_only",
             "deterministic_rollouts",
         ):
@@ -179,6 +196,12 @@ class PrototypeConfig:
             raise PrototypeConfigurationError("learning_rate must be positive")
         for name in ("update_epochs", "sequence_minibatch_size"):
             _positive_int(name, getattr(self, name))
+        if self.sequence_length is not None:
+            _positive_int("sequence_length", self.sequence_length)
+            if self.horizon % self.sequence_length:
+                raise PrototypeConfigurationError(
+                    "sequence_length must divide horizon"
+                )
         if not 0.0 < float(self.gamma) <= 1.0:
             raise PrototypeConfigurationError("gamma must be in (0, 1]")
         _probability("gae_lambda", self.gae_lambda)
@@ -187,6 +210,7 @@ class PrototypeConfig:
             "belief_coef",
             "behavior_cloning_coef",
             "behavior_cloning_factor_coef",
+            "potential_reward_weight",
         ):
             value = float(getattr(self, name))
             if not isfinite(value) or value < 0.0:
@@ -212,6 +236,7 @@ class PrototypeConfig:
             "transformer_ff_dim",
             "gru_hidden_dim",
             "gru_layers",
+            "spatial_placement_dim",
         ):
             _positive_int(name, getattr(self, name))
         if self.model_dim % self.transformer_heads:
@@ -324,6 +349,8 @@ def _model_and_learner(config: PrototypeConfig) -> Any:
         direct_public_mask_features=config.direct_public_mask_features,
         direct_public_context_features=config.direct_public_context_features,
         direct_public_slot_card_features=config.direct_public_slot_card_features,
+        spatial_placement_features=config.spatial_placement_features,
+        spatial_placement_dim=config.spatial_placement_dim,
     )
     learner_config = LearnerConfig(
         learning_rate=config.learning_rate,
@@ -369,6 +396,17 @@ def _mix_seed(seed: int, *parts: int) -> int:
     return value
 
 
+def _reward_config_for(config: PrototypeConfig) -> Any:
+    """Resolve the exact environment reward object for a runtime config."""
+
+    RewardConfig = _simulator_modules()[3]
+    if config.dense_reward:
+        return RewardConfig()
+    if config.potential_reward_weight > 0.0:
+        return RewardConfig.terminal_with_potential(config.potential_reward_weight)
+    return RewardConfig.terminal_outcome()
+
+
 def _make_environment(
     config: PrototypeConfig,
     ruleset: Any,
@@ -382,7 +420,7 @@ def _make_environment(
         BattleEngine,
         _controller,
         _engine_version,
-        RewardConfig,
+        _RewardConfig,
         SimulatorEnv,
         _contract_hash,
         _schema_version,
@@ -392,7 +430,7 @@ def _make_environment(
     environment = SimulatorEnv(
         engine=BattleEngine(ruleset, validate_every_tick=False),
         decision_interval_us=config.decision_interval_us,
-        reward=RewardConfig() if config.dense_reward else RewardConfig.terminal_outcome(),
+        reward=_reward_config_for(config),
         # The public actor path must remain independent of info diagnostics.
         expose_privileged_info=expose_privileged_info,
         include_authoritative_state=not expose_privileged_info,
@@ -580,6 +618,7 @@ def _checkpoint_metadata(config: PrototypeConfig, learner: Any, ruleset: Any) ->
             "privileged_inputs": bool(learner.uses_privileged_critic),
             "training_only": True,
         },
+        "reward_config": _reward_config_for(config).as_dict(),
         "config": config.as_dict(),
         "learner_update_count": int(learner.update_count),
         "evaluation_warning": (
@@ -648,6 +687,8 @@ def _architecture_config(config: PrototypeConfig) -> tuple[object, ...]:
         config.direct_public_mask_features,
         config.direct_public_context_features,
         config.direct_public_slot_card_features,
+        config.spatial_placement_features,
+        config.spatial_placement_dim,
     )
 
 
@@ -1275,7 +1316,10 @@ def train_prototype(
             rollout_state = result.next_rollout_state
             rollout_reset_mask = result.next_reset_mask
             episode_counts = result.episode_counts
-            metrics = learner.update(result.learner_batch)
+            metrics = learner.update(
+                result.learner_batch,
+                sequence_length=effective_config.sequence_length,
+            )
             if metrics.skipped_steps:
                 raise PrototypeConfigurationError(
                     "refusing to save a checkpoint after non-finite optimizer "
@@ -1325,10 +1369,12 @@ def train_prototype(
                 learner,
                 ruleset,
             )["actor_observation"],
+            "reward_config": _reward_config_for(effective_config).as_dict(),
             "updates": len(update_rows),
             "starting_update": starting_update,
             "final_update": int(learner.update_count),
             "transitions": effective_config.envs * effective_config.horizon * effective_config.updates,
+            "sequence_length": effective_config.sequence_length,
             "outcomes": {
                 **aggregate,
                 "episode_boundaries": (
@@ -1342,6 +1388,10 @@ def train_prototype(
             "imitation_only": bool(effective_config.imitation_only),
             "expert_execution_probability": float(
                 effective_config.expert_execution_probability
+            ),
+            "actor_controls_actions": not (
+                expert_guidance
+                and effective_config.expert_execution_probability > 0.0
             ),
             "player_deck": list(resolved_player_deck),
             "opponent_decks": [list(deck) for deck in resolved_opponent_decks],
@@ -2152,15 +2202,15 @@ def evaluate_prototype(
     batch_size: int | None = None,
     parallel_episodes: bool = False,
     episode_offset: int = 0,
-    policy_mode: str = "public-counter",
+    policy_mode: str = "actor",
 ) -> dict[str, object]:
     """Evaluate a checkpoint with deterministic actions and public observations.
 
-    ``policy_mode='actor'`` measures the checkpoint's neural actor.  The
-    default ``'public-counter'`` mode uses the public-observation counter
-    policy as the action source and provides a reliable deterministic-opponent
-    baseline while the actor is still improving.  When ``trace_out`` is
-    supplied, also write a JSON diagnostic trace.  The trace is evaluation-only
+    ``policy_mode='actor'`` measures the checkpoint's neural actor and is the
+    default. The explicit ``public-counter`` mode uses the public-observation
+    counter policy as the action source and provides a deterministic-opponent
+    baseline while the actor is still improving. When ``trace_out`` is
+    supplied, also write a JSON diagnostic trace. The trace is evaluation-only
     and does not change the actor inputs.
     """
 
@@ -2532,9 +2582,18 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         help="override the Adam learning rate after loading a checkpoint",
     )
-    train.add_argument("--update-epochs", type=int, default=2)
-    train.add_argument("--sequence-minibatch-size", type=int, default=2)
-    train.add_argument("--gamma", type=float, default=1.0)
+    train.add_argument("--update-epochs", type=int, default=3)
+    train.add_argument("--sequence-minibatch-size", type=int, default=8)
+    train.add_argument(
+        "--sequence-length",
+        type=int,
+        default=None,
+        help=(
+            "temporal recurrent-PPO chunk length; must divide horizon; "
+            "omit to train each rollout lane as one sequence"
+        ),
+    )
+    train.add_argument("--gamma", type=float, default=0.9995)
     train.add_argument("--gae-lambda", type=float, default=0.98)
     train.add_argument("--entropy-coef", type=float, default=0.01)
     train.add_argument("--belief-coef", type=float, default=0.05)
@@ -2561,7 +2620,19 @@ def _parser() -> argparse.ArgumentParser:
     train.add_argument(
         "--dense-reward",
         action="store_true",
-        help="include per-step tower-damage/crown shaping in addition to win reward",
+        help=(
+            "legacy unbounded tower-damage/crown shaping; prefer the bounded "
+            "potential-reward-weight option"
+        ),
+    )
+    train.add_argument(
+        "--potential-reward-weight",
+        type=float,
+        default=0.1,
+        help=(
+            "temporary normalized tower/crown potential coefficient added to "
+            "the terminal win objective (0 disables it)"
+        ),
     )
     train.add_argument("--checkpoint", type=Path, help="resume a prototype checkpoint")
     train.add_argument(
@@ -2649,6 +2720,22 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     train.add_argument(
+        "--spatial-placement-features",
+        action="store_true",
+        help=(
+            "retain board-aligned raster features for card-conditioned placement; "
+            "use for fresh strategic checkpoints"
+        ),
+    )
+    train.add_argument(
+        "--strategic-model",
+        action="store_true",
+        help=(
+            "use the larger public recurrent actor with explicit hand-slot and "
+            "spatial placement features; required for a fresh mainline run"
+        ),
+    )
+    train.add_argument(
         "--imitation-only",
         action="store_true",
         help=(
@@ -2659,10 +2746,10 @@ def _parser() -> argparse.ArgumentParser:
     train.add_argument(
         "--expert-execution-probability",
         type=float,
-        default=1.0,
+        default=0.0,
         help=(
-            "probability of executing the teacher action during expert-guided "
-            "collection; lower values enable DAgger recovery states"
+            "probability of executing the teacher action during explicit "
+            "expert-guided collection (default: 0; PPO remains actor-controlled)"
         ),
     )
     train.add_argument(
@@ -2692,11 +2779,11 @@ def _parser() -> argparse.ArgumentParser:
         "--policy",
         dest="policy_mode",
         choices=tuple(sorted(_EVALUATION_POLICIES)),
-        default="public-counter",
+        default="actor",
         help=(
             "action source: actor evaluates the neural checkpoint; public-counter "
             "is the legacy public-only guard; strategic-counter is a stronger "
-            "public-only warm-start audit (default: public-counter)"
+            "public-only warm-start audit (default: actor)"
         ),
     )
     evaluate.add_argument(
@@ -2790,6 +2877,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 learning_rate=learning_rate,
                 update_epochs=args.update_epochs,
                 sequence_minibatch_size=args.sequence_minibatch_size,
+                sequence_length=args.sequence_length,
                 gamma=args.gamma,
                 gae_lambda=args.gae_lambda,
                 entropy_coef=args.entropy_coef,
@@ -2806,16 +2894,28 @@ def main(argv: Sequence[str] | None = None) -> int:
                 use_privileged_critic=not args.no_privileged_critic,
                 collect_belief_targets=not args.no_belief_targets,
                 dense_reward=args.dense_reward,
+                potential_reward_weight=args.potential_reward_weight,
                 decision_interval_jitter_ticks=args.decision_interval_jitter_ticks,
                 action_latency_max_steps=args.action_latency_max_steps,
                 entity_observation_noise_std=args.entity_observation_noise_std,
-                explicit_hand_features=args.explicit_hand_features,
                 direct_public_action_features=args.direct_public_action_features,
                 direct_public_card_features=args.direct_public_card_features,
                 contextual_public_card_features=args.contextual_public_card_features,
                 direct_public_mask_features=args.direct_public_mask_features,
                 direct_public_context_features=args.direct_public_context_features,
                 direct_public_slot_card_features=args.direct_public_slot_card_features,
+                model_dim=128 if args.strategic_model else 32,
+                encoder_dim=128 if args.strategic_model else 32,
+                transformer_heads=4,
+                transformer_layers=2 if args.strategic_model else 1,
+                transformer_ff_dim=256 if args.strategic_model else 64,
+                gru_hidden_dim=256 if args.strategic_model else 32,
+                explicit_hand_features=(
+                    True if args.strategic_model else args.explicit_hand_features
+                ),
+                spatial_placement_features=(
+                    True if args.strategic_model else args.spatial_placement_features
+                ),
                 allow_provisional=args.allow_provisional,
             )
             progress = _TrainingProgress(

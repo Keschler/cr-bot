@@ -32,7 +32,50 @@ def test_collector_config_rejects_invalid_rollout_shape() -> None:
         CollectorConfig(expert_execution_probability=1.1)
 
 
+def test_collector_defaults_to_actor_controlled_rollouts() -> None:
+    from rl.collector import CollectorConfig
+
+    config = CollectorConfig()
+
+    assert config.expert_execution_probability == 0.0
+
+
+def test_rollout_stats_can_attribute_terminal_results_to_lanes() -> None:
+    from rl.collector import RolloutStats
+
+    stats = RolloutStats(
+        completed_matches=2,
+        wins=1,
+        draws=1,
+        match_outcomes=((0, "win"), (1, "draw")),
+    )
+
+    assert stats.as_dict()["match_outcomes"] == [
+        {"lane": 0, "outcome": "win"},
+        {"lane": 1, "outcome": "draw"},
+    ]
+
+
 requires_torch = pytest.mark.skipif(torch is None, reason="PyTorch is not installed")
+
+
+@requires_torch
+@pytest.mark.parametrize(
+    ("expert_execution_probability", "expected"),
+    ((0.0, False), (1.0, True)),
+)
+def test_teacher_execution_is_disabled_by_default_and_explicitly_opt_in(
+    expert_execution_probability: float,
+    expected: bool,
+) -> None:
+    from rl.collector import CollectorConfig, _expert_should_execute
+
+    config = CollectorConfig(
+        seed=17,
+        expert_execution_probability=expert_execution_probability,
+    )
+
+    assert _expert_should_execute(config, lane=2, timestep=5) is expected
 
 
 @requires_torch

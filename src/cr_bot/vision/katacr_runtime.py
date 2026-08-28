@@ -39,6 +39,7 @@ def bootstrap_katacr_runtime() -> None:
     if not hasattr(np, "trapz") and hasattr(np, "trapezoid"):
         np.trapz = np.trapezoid
 
+    _patch_ultralytics_results_compat()
     _patch_ultralytics_track_compat()
     _patch_ultralytics_plotting_compat()
     _BOOTSTRAPPED = True
@@ -70,6 +71,25 @@ def _patch_ultralytics_track_compat() -> None:
 
     track.YAML = YAML
     track.yaml_load = YAML.load
+
+
+def _patch_ultralytics_results_compat() -> None:
+    """Keep the vendored KataCR result class importable across Ultralytics releases.
+
+    KataCR imports ``LetterBox`` from ``ultralytics.engine.results``.  Newer
+    Ultralytics releases expose the same class from ``ultralytics.data.augment``
+    instead, while older releases still provide the original location.  Add a
+    compatibility alias only when the old location is missing so both layouts
+    remain supported.
+    """
+    import ultralytics.engine.results as results
+
+    if hasattr(results, "LetterBox"):
+        return
+
+    from ultralytics.data.augment import LetterBox
+
+    results.LetterBox = LetterBox
 
 
 def _patch_ultralytics_plotting_compat() -> None:

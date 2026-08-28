@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 from copy import deepcopy
+import inspect
 from types import SimpleNamespace
 
 import pytest
@@ -315,6 +316,27 @@ def test_imitation_only_requires_expert_loss_and_guidance() -> None:
         behavior_cloning_coef=1.0,
     )
     assert config.imitation_only is True
+
+
+def test_prototype_defaults_to_teacher_free_ppo() -> None:
+    from rl.prototype import PrototypeConfig, evaluate_prototype
+
+    config = PrototypeConfig()
+
+    assert config.expert_execution_probability == 0.0
+    assert config.imitation_only is False
+    assert config.behavior_cloning_coef == 0.0
+    assert config.behavior_cloning_factor_coef == 0.0
+    assert config.entropy_coef > 0.0
+    assert inspect.signature(evaluate_prototype).parameters["policy_mode"].default == "actor"
+
+
+def test_sequence_length_is_optional_but_must_tile_the_horizon() -> None:
+    from rl.prototype import PrototypeConfig, PrototypeConfigurationError
+
+    assert PrototypeConfig(horizon=8, sequence_length=4).sequence_length == 4
+    with pytest.raises(PrototypeConfigurationError, match="divide horizon"):
+        PrototypeConfig(horizon=8, sequence_length=3)
 
 
 @requires_torch

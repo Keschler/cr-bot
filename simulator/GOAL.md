@@ -278,6 +278,146 @@ prototype `--trace-out` contains every decision and per-decision troop/tower
 snapshot; `troop_positions_end` and `tower_hp_end` are only terminal/cap-time
 snapshots.
 
+### Strategic learning architecture decision (2026-08-28)
+
+The long-term policy must learn strategy from outcomes. The deterministic
+counter trees are not the target policy and must not permanently choose the
+learner's cards, timing, lanes, or cells. They remain versioned public
+baselines, curriculum opponents, regression fixtures, and optional
+high-confidence bootstrap teachers.
+
+The boundary is:
+
+```text
+authoritative simulator mechanics
+        |
+        +-- public observation --------------------+
+        |                                           |
+        |                                    recurrent actor
+        |                                           |
+        +-- legal action masks ---------------------+
+                                                    |
+                                  mode/timing -> card -> cell
+                                                    |
+                                              simulator step
+
+full simulator state ----------------------> training-only critic
+```
+
+Only actions that the game would reject may be masked: unavailable cards,
+insufficient elixir, illegal cells, invalid targets, terminal states, and
+other authoritative action constraints. Card mechanics remain deterministic
+inside the simulator and may be represented as factual card metadata. A
+strategic conclusion such as “use Musketeer against air”, “Cannon first”,
+“save Fireball”, “send Hog now”, or “take a tower trade” must remain a policy
+choice.
+
+The mainline learner is recurrent, factorized PPO with a public actor and an
+isolated privileged critic. The actor controls every training action
+(`expert_execution_probability=0`); optional behavior cloning is a short-lived,
+factor-specific auxiliary loss and is annealed to zero. Dense reward is
+restricted to terminal win/draw/loss plus a normalized potential difference
+for temporary credit assignment, then annealed. Elixir efficiency, card
+frequency, and defensive labels are evaluation metrics or auxiliary targets,
+not permanent objectives.
+
+The implementation progression is:
+
+1. **Phase 0 — simulator validation.** Close the current fail-closed
+   training-readiness gate for the 2.6 deck and the first validated opponent
+   card pool. Verify mechanics, public-information boundaries, legal masks,
+   deterministic save/restore, both sides, reference/optimized parity, and
+   replay or controlled physical evidence for version-sensitive behavior.
+2. **Phase 1 — mechanics scenarios (1–5M decisions).** Train on randomized,
+   valid short scenarios for offense, ground defense, air defense, spells,
+   kiting, cycling, and elixir timing. Vary hands, lanes, positions, HP,
+   seeds, and start states. Do not prescribe which card solves a scenario.
+3. **Phase 2 — scripted curriculum (+10–30M).** Mix passive, random-legal,
+   single-win-condition, reactive, beatdown, siege/bait, air, and tempo-varied
+   scripted opponents. Keep earlier scenarios for rehearsal and use held-out
+   seeds for progression gates.
+4. **Phase 3 — meta decks (+30–100M).** Add validated opponent decks by
+   archetype, expanding from roughly 5 to 20, 50, and then the full in-scope
+   pool. Sample uniformly, weakness-prioritized, and with rehearsal so one
+   archetype cannot dominate the learner.
+5. **Phase 4 — historical self-play (+100–300M).** Use a frozen pool rather
+   than only the latest mirror: 30% scripted/meta anchors, 30% PFSP-selected
+   historical checkpoints, 20% latest frozen policy, 10% uniform old
+   checkpoints, and 10% exploiters/randomized adversaries. Train both sides.
+6. **Phase 5 — small league (300M–1B+ cumulative).** Maintain one main
+   learner, main and league exploiters, and 16–32 frozen policies. Add PSRO
+   only if the payoff matrix demonstrates non-transitive cycles that PFSP
+   cannot handle. PBT and distributed actor/learner training are later
+   scaling options.
+7. **Phase 6 — frozen evaluation.** Require paired seeds, both sides,
+   per-deck/archetype results, confidence intervals, tower/crown outcomes,
+   action traces, rejected/fallback counts, historical regression checks, and
+   simulator-perturbation tests. A finite 100% result against one deterministic
+   script is a regression result, not an any-deck claim.
+
+The target actor structure is a public entity/global/spatial encoder feeding a
+GRU with approximately 256 hidden units. Its autoregressive action heads are
+`mode/timing -> card-in-hand -> card-conditioned placement`; the placement
+head retains a spatial feature map instead of relying only on global average
+pooling. The critic may receive exact current simulator state, but never future
+state, and private critic features must not enter actor inference. Belief heads
+for opponent elixir, cycle, or next card are optional low-weight training
+auxiliaries and must use public actor inputs.
+
+Initial PPO targets after simulator optimization are 64 environments,
+256-decision rollouts (16,384 transitions), 64–128 decision recurrent chunks,
+16–32 decision burn-in, 2–3 epochs, learning rate `2.5e-4`–`3e-4`,
+`gamma=0.9995`, `gae_lambda=0.98`, PPO/value clipping `0.2`, gradient clipping
+`0.5`, target KL `0.01`–`0.02`, and nonzero conditional entropy. The current
+32-dimensional smoke model, zero-entropy imitation runs, and short segments
+without terminal outcomes are not production training settings.
+
+The current measured simulator boundary is approximately 40–65 policy
+decisions/second, with the reference benchmark near 44 decisions/second.
+The local minimum for serious experiments is 1,000 decisions/second; 5,000–
+10,000 is the preferred target for large self-play. Optimization should focus
+on the Python simulation/observation/serialization path and larger batched
+rollouts before expecting the RX 6700 to materially change wall time.
+
+The current implementation status is deliberately explicit: generalized
+training now defaults to the larger spatial recurrent actor, actor-controlled
+PPO, sequence-preserving chunks, temporary potential shaping that can be
+annealed to zero, staged opponent sampling, held-out provenance, and optional
+payoff-updated PFSP over frozen checkpoints. It still resets sampled lanes at
+segment boundaries and uses the provisional `v1` simulator until Phase 0 is
+passed. A persistent-lane actor/learner service and a faster simulator backend
+remain required before large self-play claims are meaningful.
+
+#### Deterministic-rule classification
+
+| Current rule or component | Classification | Boundary |
+| --- | --- | --- |
+| Engine action validation, available-card/elixir checks, legal target/cell masks, terminal-state checks | **KEEP** | Authoritative mechanics; an illegal action is never presented as a valid policy choice. |
+| Card metadata, deterministic damage/movement/timing, deck-cycle bookkeeping, observation sanitization | **KEEP** | Facts the game exposes or the simulator must enforce; never a tactical preference. |
+| `rl.opponent_pool` scripted decks/controllers and the deterministic-cycle lane | **TEMPORARY** | Opponent curriculum and regression fixtures; they should remain in the opponent population, not execute learner actions. |
+| `rl.public_counter` / `rl.expert` counter policies | **SOFTEN** | Optional short-lived factor-BC/DAgger teachers and explicit baselines; default training executes the actor and reports teacher provenance. |
+| Teacher-forced transitions in ordinary PPO | **DELETE** | Off-policy labels corrupt PPO unless the run is explicitly imitation-only or a separately reported DAgger/bootstrap experiment. |
+| “Musketeer for air”, “Cannon first”, “save Fireball”, “Hog now”, fixed defensive trees, fixed lane/cell preferences for the learner | **DELETE** | These are strategic hypotheses. Keep them only as evaluation scenarios or teacher labels, never as permanent action masks or hard overrides. |
+| Potential tower/crown delta reward | **SOFTEN** | Use only as bounded, documented, annealed credit assignment; terminal win/draw/loss remains the objective. |
+| Card-frequency, elixir-efficiency, defense labels, or replay-derived spell placements | **SOFTEN** | Metrics or confidence-weighted auxiliary objectives; omit uncertain labels rather than forcing them into policy behavior. |
+
+In short: deterministic logic may answer “is this action physically/legal
+right now?” It must not answer “which legal action is strategically best?”
+That distinction is enforced in code by the default zero teacher-execution
+probability, public-only actor contract, factorized masked action head, and
+reports that identify actor versus baseline action sources.
+
+This decision does not claim that the current agent is strong. It defines the
+architecture and evidence required to make future strength claims meaningful.
+
+The research basis for this decision includes [PPO](https://arxiv.org/abs/1707.06347),
+[invalid-action masking](https://arxiv.org/abs/2006.14171),
+[asymmetric actor-critic](https://arxiv.org/abs/1710.06542),
+[recurrent PPO implementation requirements](https://arxiv.org/abs/2205.11104),
+[DAgger](https://proceedings.mlr.press/v15/ross11a.html),
+[potential-based reward shaping](https://ai.stanford.edu/~ang/papers/shaping-icml99.pdf),
+and [league training in AlphaStar](https://storage.googleapis.com/deepmind-media/research/alphastar/AlphaStar_unformatted.pdf).
+
 ### Player
 
 The only player deck is the base-form classic Hog-cycle deck:

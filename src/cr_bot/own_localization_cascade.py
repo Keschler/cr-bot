@@ -199,6 +199,196 @@ def route_v2_after_terra_verify(
     return "accept" if cluster else "sol_specialized"
 
 
+def _validate_role_subset(
+    attempts: list[tuple[str, dict[str, Any]]], allowed: set[str], stage: str
+) -> None:
+    tiers = [tier for tier, _ in attempts]
+    if len(tiers) != len(set(tiers)) or any(tier not in allowed for tier in tiers):
+        raise ValueError(f"{stage} routing contains an unknown or duplicate role")
+
+
+def _v3_has_cross_family_clique(
+    attempts: list[tuple[str, dict[str, Any]]], card: str
+) -> bool:
+    return bool(
+        best_v2_cluster(
+            attempts,
+            card,
+            minimum_size=3,
+            minimum_families=2,
+            required_families=frozenset({"terra"}),
+        )
+    )
+
+
+def best_v4_cluster(
+    attempts: list[tuple[str, dict[str, Any]]],
+    card: str,
+    *,
+    required_families: frozenset[str] = frozenset({"terra"}),
+) -> list[int]:
+    """Return a confidence-aware cross-family localization clique.
+
+    Direct decisions may agree within one cell. An inferred decision may
+    participate only when at least two other decisions are direct and every
+    coordinate in the clique is identical. This prevents a subjective
+    confidence word from forcing an escalation when independent model
+    families report the exact same legal cell, without weakening the normal
+    tolerance for fully direct evidence.
+    """
+
+    eligible = [
+        index
+        for index, (_, decision) in enumerate(attempts)
+        if is_legal_own_cell(decision, card)
+    ]
+    ranked: list[tuple[tuple[Any, ...], list[int]]] = []
+    for size in range(3, len(eligible) + 1):
+        for candidate_tuple in combinations(eligible, size):
+            candidate = list(candidate_tuple)
+            distances = [
+                cell_distance(attempts[left][1], attempts[right][1])
+                for left, right in combinations(candidate, 2)
+            ]
+            direct_count = sum(
+                attempts[index][1].get("confidence") == "direct"
+                for index in candidate
+            )
+            all_direct = direct_count == len(candidate)
+            if all_direct:
+                if any(distance > 1 for distance in distances):
+                    continue
+            elif direct_count < 2 or any(distance != 0 for distance in distances):
+                continue
+            families = {tier_family(attempts[index][0]) for index in candidate}
+            if len(families) < 2 or not required_families <= families:
+                continue
+            weight = sum(V2_TIER_WEIGHTS[attempts[index][0]] for index in candidate)
+            key = (
+                len(families),
+                direct_count,
+                len(candidate),
+                weight,
+                -sum(distances),
+                tuple(-index for index in candidate),
+            )
+            ranked.append((key, candidate))
+    if not ranked:
+        return []
+    return max(ranked, key=lambda row: row[0])[1]
+
+
+def _v4_has_cross_family_clique(
+    attempts: list[tuple[str, dict[str, Any]]], card: str
+) -> bool:
+    return bool(best_v4_cluster(attempts, card))
+
+
+def route_v4_initial(
+    attempts: list[tuple[str, dict[str, Any]]], card: str
+) -> str:
+    """Route after three initial perspectives using exact inferred consensus."""
+
+    _validate_role_subset(
+        attempts,
+        {"luna_marker", "luna_temporal", "terra_residual"},
+        "v4 initial",
+    )
+    return "accept" if _v4_has_cross_family_clique(attempts, card) else "luna_specialized"
+
+
+def route_v4_after_luna_specialized(
+    attempts: list[tuple[str, dict[str, Any]]], card: str
+) -> str:
+    _validate_role_subset(
+        attempts,
+        {"luna_marker", "luna_temporal", "terra_residual", "luna_specialized"},
+        "v4 Luna-specialized",
+    )
+    return "accept" if _v4_has_cross_family_clique(attempts, card) else "terra_verify"
+
+
+def route_v4_after_terra_verify(
+    attempts: list[tuple[str, dict[str, Any]]], card: str
+) -> str:
+    _validate_role_subset(
+        attempts,
+        {
+            "luna_marker",
+            "luna_temporal",
+            "terra_residual",
+            "luna_specialized",
+            "terra_verify",
+        },
+        "v4 Terra",
+    )
+    return "accept" if _v4_has_cross_family_clique(attempts, card) else "sol_specialized"
+
+
+def select_v4_consensus(
+    attempts: list[tuple[str, dict[str, Any]]], card: str
+) -> tuple[tuple[str, dict[str, Any]], list[int]] | None:
+    """Select a medoid only from a qualified v4 cross-family clique."""
+
+    cluster = best_v4_cluster(attempts, card, required_families=frozenset())
+    if not cluster:
+        return None
+    representatives = []
+    for index in cluster:
+        total_distance = sum(
+            cell_distance(attempts[index][1], attempts[other][1])
+            for other in cluster
+        )
+        tier, decision = attempts[index]
+        inferred_penalty = decision.get("confidence") != "direct"
+        representatives.append(
+            (total_distance, inferred_penalty, -V2_TIER_WEIGHTS[tier], index)
+        )
+    selected_index = min(representatives)[3]
+    return attempts[selected_index], cluster
+
+
+def route_v3_initial(
+    attempts: list[tuple[str, dict[str, Any]]], card: str
+) -> str:
+    """Route the batched v3 cascade after its three initial perspectives."""
+
+    _validate_role_subset(
+        attempts,
+        {"luna_marker", "luna_temporal", "terra_residual"},
+        "v3 initial",
+    )
+    return "accept" if _v3_has_cross_family_clique(attempts, card) else "luna_specialized"
+
+
+def route_v3_after_luna_specialized(
+    attempts: list[tuple[str, dict[str, Any]]], card: str
+) -> str:
+    _validate_role_subset(
+        attempts,
+        {"luna_marker", "luna_temporal", "terra_residual", "luna_specialized"},
+        "v3 Luna-specialized",
+    )
+    return "accept" if _v3_has_cross_family_clique(attempts, card) else "terra_verify"
+
+
+def route_v3_after_terra_verify(
+    attempts: list[tuple[str, dict[str, Any]]], card: str
+) -> str:
+    _validate_role_subset(
+        attempts,
+        {
+            "luna_marker",
+            "luna_temporal",
+            "terra_residual",
+            "luna_specialized",
+            "terra_verify",
+        },
+        "v3 Terra",
+    )
+    return "accept" if _v3_has_cross_family_clique(attempts, card) else "sol_specialized"
+
+
 def select_v2_consensus(
     attempts: list[tuple[str, dict[str, Any]]], card: str
 ) -> tuple[tuple[str, dict[str, Any]], list[int]] | None:

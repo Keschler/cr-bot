@@ -158,7 +158,7 @@ def test_opponent_pair_matrix_keeps_pairs_unordered_and_plays_both_cards() -> No
     assert len({row.scenario.scenario_id for row in rows}) == len(rows)
     for row in rows:
         assert row.scenario.decks[0] == tuple(
-            ("hog-rider", "musketeer", "ice-golem", "ice-spirit", "cannon", "skeletons", "fireball", "log")
+            ("hog-rider", "cannon", "musketeer", "skeletons", "ice-golem", "ice-spirit", "fireball", "log")
         )
         assert row.scenario.oracle["mechanic"] == "opponent_pair_interaction"
         required = row.scenario.oracle["required_card_plays"]

@@ -13,6 +13,10 @@ evaluation matrix into an executable workflow:
 * evaluation uses a different, held-out deck sample and reports every
   deck/strategy/seed cell separately.
 
+The mainline path is actor-controlled PPO.  Heuristic controllers and frozen
+checkpoints are opponent sources or explicitly opted-in teacher labels; they
+do not choose the learner's strategic actions.
+
 The learner still receives only the public V2 observation.  The opponent
 callback is simulator-side and may inspect authoritative state only to choose
 the opponent's own action.
@@ -49,6 +53,12 @@ from .evaluation_matrix import (
     compare_evaluation_reports,
     run_evaluation_matrix,
 )
+from .curriculum import (
+    StrategicCurriculum,
+    StrategicCurriculumStage,
+    default_strategic_curriculum,
+)
+from .league import LeaguePayoffBook, PFSPOpponentSampler
 from .opponent_pool import (
     ARCHETYPE_NAMES,
     OpponentPool,
@@ -150,7 +160,23 @@ def _default_prototype_config() -> PrototypeConfig:
         envs=4,
         horizon=512,
         updates=1,
-        dense_reward=True,
+        learning_rate=3e-4,
+        update_epochs=3,
+        sequence_minibatch_size=8,
+        sequence_length=128,
+        gamma=0.9995,
+        gae_lambda=0.98,
+        entropy_coef=0.01,
+        dense_reward=False,
+        potential_reward_weight=0.1,
+        model_dim=128,
+        encoder_dim=128,
+        transformer_heads=4,
+        transformer_layers=2,
+        transformer_ff_dim=256,
+        gru_hidden_dim=256,
+        explicit_hand_features=True,
+        spatial_placement_features=True,
     )
 
 
@@ -161,10 +187,11 @@ class GeneralizedTrainingConfig:
     ``prototype_config`` carries the model and optimizer settings.  Its
     ``updates`` field is overridden by ``rollouts_per_scenario`` for each
     sampled scenario; ``segments`` is the generalized scenario budget.
-    Recreating the environments at scenario boundaries is deliberate, while
-    keeping several rollouts on one scenario exposes the recurrent actor to
-    opening, mid-match, and late-match states before the deck/controller is
-    changed.
+    Recreating the environments at scenario boundaries is deliberate for this
+    local-first runner, while keeping several rollouts on one scenario exposes
+    the recurrent actor to opening, mid-match, and late-match states before
+    the deck/controller is changed. A future persistent-lane runner can use
+    the same schedule and report contract without changing the actor boundary.
     """
 
     prototype_config: PrototypeConfig = field(default_factory=_default_prototype_config)
@@ -178,6 +205,15 @@ class GeneralizedTrainingConfig:
     checkpoint_out: str | Path = "outputs/simulator/training/generalized-recurrent-prototype.pt"
     include_regression: bool = True
     threat_stratified: bool = False
+    # The stage changes only the opponent distribution. It never supplies a
+    # learner action or a strategic action mask.
+    curriculum: StrategicCurriculum = field(default_factory=default_strategic_curriculum)
+    use_curriculum: bool = True
+    # Potential shaping is a temporary credit-assignment aid.  It reaches
+    # zero at this global segment, after which the terminal objective is the
+    # only reward. Zero disables annealing and preserves the configured
+    # potential coefficient for the complete run.
+    potential_reward_anneal_segments: int = 32
     expert_guidance: bool = False
     expert_teacher: str = "public-counter"
     train_archetypes: tuple[str, ...] = (
@@ -196,6 +232,13 @@ class GeneralizedTrainingConfig:
         "random-legal",
     )
     opponent_checkpoints: tuple[str | Path, ...] = ()
+    # PFSP is deliberately opt-in. It selects among already frozen public
+    # checkpoints; it does not turn simulator-side heuristics into learner
+    # labels or silently change the actor's observation contract.
+    pfsp: bool = False
+    pfsp_payoff_book: str | Path | None = None
+    pfsp_payoff_book_out: str | Path | None = None
+    league_agent_id: str = "main"
     player_deck: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
@@ -216,8 +259,36 @@ class GeneralizedTrainingConfig:
             raise GeneralizedTrainingError("include_regression must be boolean")
         if type(self.threat_stratified) is not bool:
             raise GeneralizedTrainingError("threat_stratified must be boolean")
+        if not isinstance(self.curriculum, StrategicCurriculum):
+            raise GeneralizedTrainingError(
+                "curriculum must be a StrategicCurriculum"
+            )
+        if type(self.use_curriculum) is not bool:
+            raise GeneralizedTrainingError("use_curriculum must be boolean")
+        _nonnegative_int(
+            "potential_reward_anneal_segments",
+            self.potential_reward_anneal_segments,
+        )
         if type(self.expert_guidance) is not bool:
             raise GeneralizedTrainingError("expert_guidance must be boolean")
+        if type(self.pfsp) is not bool:
+            raise GeneralizedTrainingError("pfsp must be boolean")
+        if self.pfsp_payoff_book is not None and (
+            not isinstance(self.pfsp_payoff_book, (str, Path))
+            or not str(self.pfsp_payoff_book).strip()
+        ):
+            raise GeneralizedTrainingError(
+                "pfsp_payoff_book must be a non-empty path or None"
+            )
+        if self.pfsp_payoff_book_out is not None and (
+            not isinstance(self.pfsp_payoff_book_out, (str, Path))
+            or not str(self.pfsp_payoff_book_out).strip()
+        ):
+            raise GeneralizedTrainingError(
+                "pfsp_payoff_book_out must be a non-empty path or None"
+            )
+        if not isinstance(self.league_agent_id, str) or not self.league_agent_id.strip():
+            raise GeneralizedTrainingError("league_agent_id must be a non-empty string")
         if self.expert_teacher not in {
             "public-counter",
             "strategic-counter",
@@ -245,11 +316,29 @@ class GeneralizedTrainingConfig:
                 raise GeneralizedTrainingError(
                     f"opponent_checkpoints[{index}] must be a non-empty path"
                 )
+        if self.pfsp and not self.opponent_checkpoints:
+            raise GeneralizedTrainingError(
+                "pfsp requires at least one frozen opponent checkpoint"
+            )
+        if self.pfsp and len({str(path) for path in self.opponent_checkpoints}) != len(
+            self.opponent_checkpoints
+        ):
+            raise GeneralizedTrainingError(
+                "pfsp opponent checkpoints must have unique paths"
+            )
+        if not self.pfsp and (
+            self.pfsp_payoff_book is not None or self.pfsp_payoff_book_out is not None
+        ):
+            raise GeneralizedTrainingError(
+                "PFSP payoff-book paths require pfsp=True"
+            )
         unknown_archetypes = set(self.train_archetypes) - set(ARCHETYPE_NAMES)
         if unknown_archetypes:
             raise GeneralizedTrainingError(
                 f"unknown training archetypes: {sorted(unknown_archetypes)}"
             )
+
+
         unknown_strategies = set(self.train_strategies) - _SUPPORTED_STRATEGIES
         if unknown_strategies:
             raise GeneralizedTrainingError(
@@ -262,6 +351,33 @@ class GeneralizedTrainingConfig:
                 "generalized training currently requires target_player=0 because "
                 "the configurable player deck is assigned to player 0"
             )
+
+
+def _curriculum_axes(
+    config: GeneralizedTrainingConfig,
+    segment_index: int,
+) -> tuple[tuple[str, ...], tuple[str, ...], StrategicCurriculumStage | None]:
+    """Resolve the stage's opponent axes without constraining learner actions."""
+
+    if not config.use_curriculum:
+        return tuple(config.train_archetypes), tuple(config.train_strategies), None
+    stage = config.curriculum.stage_at(segment_index)
+    # Explicit caller lists remain an upper bound. This keeps a small local
+    # smoke run reproducible while the default schedule broadens over time.
+    archetypes = tuple(
+        name for name in config.train_archetypes if name in stage.archetypes
+    )
+    strategies = tuple(
+        name for name in config.train_strategies if name in stage.strategies
+    )
+    # A custom narrow list may intentionally contain only a late-stage item.
+    # In that case do not make the run empty merely because it is in an early
+    # stage; the caller's explicit distribution wins.
+    return (
+        archetypes or tuple(config.train_archetypes),
+        strategies or tuple(config.train_strategies),
+        stage,
+    )
 
 
 def sample_training_scenarios(
@@ -377,12 +493,26 @@ def sample_training_scenarios(
 def _scenario_checkpoint_assignments(
     scenarios: Sequence[OpponentScenario],
     checkpoint_opponents: Sequence[str | Path],
+    *,
+    pfsp_sampler: PFSPOpponentSampler | None = None,
+    learner_agent_id: str = "main",
+    match_index_base: int = 0,
 ) -> tuple[str | Path | None, ...]:
-    """Assign frozen opponents exactly as the runtime callback does."""
+    """Assign frozen opponents exactly as the runtime callback does.
+
+    The default is the historical round-robin assignment.  When a PFSP
+    sampler is supplied, the candidate IDs are the checkpoint path strings and
+    the selected path is still recorded verbatim in the report.  PFSP only
+    changes which frozen actor supplies the opponent action; it never changes
+    the learner's legal action set.
+    """
 
     paths = tuple(checkpoint_opponents)
     assignments: list[str | Path | None] = []
     checkpoint_index = 0
+    if type(match_index_base) is not int or match_index_base < 0:
+        raise GeneralizedTrainingError("match_index_base must be non-negative")
+    path_by_id = {str(path): path for path in paths}
     for index, scenario in enumerate(scenarios):
         is_regression = (
             index == 0
@@ -390,7 +520,16 @@ def _scenario_checkpoint_assignments(
             and scenario.strategy == "deterministic-cycle"
         )
         if paths and not is_regression:
-            assignments.append(paths[checkpoint_index % len(paths)])
+            if pfsp_sampler is None:
+                selected = paths[checkpoint_index % len(paths)]
+            else:
+                selected_id = pfsp_sampler.sample(
+                    learner_agent_id,
+                    match_index_base + index,
+                    tuple(path_by_id),
+                )
+                selected = path_by_id[selected_id]
+            assignments.append(selected)
             checkpoint_index += 1
         else:
             assignments.append(None)
@@ -400,10 +539,29 @@ def _scenario_checkpoint_assignments(
 def _scenario_assignment_rows(
     scenarios: Sequence[OpponentScenario],
     checkpoint_opponents: Sequence[str | Path],
+    *,
+    checkpoint_assignments: Sequence[str | Path | None] | None = None,
+    pfsp_sampler: PFSPOpponentSampler | None = None,
+    learner_agent_id: str = "main",
+    match_index_base: int = 0,
 ) -> list[dict[str, object]]:
     """Serialize lane-to-opponent provenance for a generalized report."""
 
-    assignments = _scenario_checkpoint_assignments(scenarios, checkpoint_opponents)
+    assignments = (
+        tuple(checkpoint_assignments)
+        if checkpoint_assignments is not None
+        else _scenario_checkpoint_assignments(
+            scenarios,
+            checkpoint_opponents,
+            pfsp_sampler=pfsp_sampler,
+            learner_agent_id=learner_agent_id,
+            match_index_base=match_index_base,
+        )
+    )
+    if len(assignments) != len(scenarios):
+        raise GeneralizedTrainingError(
+            "checkpoint_assignments must contain one entry per scenario"
+        )
     rows: list[dict[str, object]] = []
     for lane, (scenario, checkpoint) in enumerate(zip(scenarios, assignments, strict=True)):
         row: dict[str, object] = {
@@ -430,6 +588,7 @@ def make_scenario_opponent_action(
     scenarios: Sequence[OpponentScenario],
     *,
     checkpoint_opponents: Sequence[str | Path] = (),
+    checkpoint_assignments: Sequence[str | Path | None] | None = None,
     device: str | None = "cpu",
 ) -> Callable[[Any, Any, int], Any]:
     """Build a callback for heuristic and optional frozen self-play lanes.
@@ -449,10 +608,21 @@ def make_scenario_opponent_action(
     assigned_scenarios: dict[int, OpponentScenario] = {}
     deck_assignment_counts: dict[tuple[str, ...], int] = {}
     checkpoint_paths = tuple(checkpoint_opponents)
+    if checkpoint_assignments is None:
+        checkpoint_assignments = _scenario_checkpoint_assignments(
+            scenarios,
+            checkpoint_paths,
+        )
+    else:
+        checkpoint_assignments = tuple(checkpoint_assignments)
+        if len(checkpoint_assignments) != len(scenarios):
+            raise GeneralizedTrainingError(
+                "checkpoint_assignments must contain one entry per scenario"
+            )
     checkpoint_by_scenario: dict[int, str | Path] = {}
     for scenario, checkpoint in zip(
         scenarios,
-        _scenario_checkpoint_assignments(scenarios, checkpoint_paths),
+        checkpoint_assignments,
         strict=True,
     ):
         if checkpoint is not None:
@@ -505,13 +675,86 @@ def _segment_config(
     *,
     segment_index: int,
     rollouts_per_scenario: int,
+    potential_reward_anneal_segments: int = 0,
 ) -> PrototypeConfig:
     _positive_int("rollouts_per_scenario", rollouts_per_scenario)
+    _nonnegative_int(
+        "potential_reward_anneal_segments",
+        potential_reward_anneal_segments,
+    )
+    potential_weight = float(base.potential_reward_weight)
+    if potential_reward_anneal_segments > 0:
+        remaining = max(
+            0.0,
+            1.0 - float(segment_index) / float(potential_reward_anneal_segments),
+        )
+        potential_weight *= remaining
     return replace(
         base,
         updates=rollouts_per_scenario,
         seed=_mix_seed(base.seed, segment_index, 0x47524F57),
+        potential_reward_weight=potential_weight,
     )
+
+
+def _update_payoff_book_from_segment(
+    payoff_book: LeaguePayoffBook,
+    report: Mapping[str, object],
+    checkpoint_assignments: Sequence[str | Path | None],
+    *,
+    learner_agent_id: str,
+) -> tuple[LeaguePayoffBook, int]:
+    """Record completed frozen-opponent matches emitted by a PPO segment.
+
+    Rollout segments can contain several completed matches per lane.  The
+    collector therefore emits lane-indexed terminal outcomes rather than
+    guessing a single result from aggregate counters.  Older/fake reports may
+    omit this optional field and simply produce zero updates.
+    """
+
+    updated = payoff_book
+    recorded = 0
+    raw_updates = report.get("update_rows", ())
+    if raw_updates is None:
+        return updated, recorded
+    if isinstance(raw_updates, (str, bytes)) or not isinstance(raw_updates, Sequence):
+        raise GeneralizedTrainingError("segment report update_rows must be a sequence")
+    for update in raw_updates:
+        if not isinstance(update, Mapping):
+            raise GeneralizedTrainingError("segment report update row must be an object")
+        raw_rollout = update.get("rollout", {})
+        if not isinstance(raw_rollout, Mapping):
+            raise GeneralizedTrainingError("segment report rollout must be an object")
+        raw_outcomes = raw_rollout.get("match_outcomes", ())
+        if raw_outcomes is None:
+            continue
+        if isinstance(raw_outcomes, (str, bytes)) or not isinstance(raw_outcomes, Sequence):
+            raise GeneralizedTrainingError("match_outcomes must be a sequence")
+        for raw_outcome in raw_outcomes:
+            if not isinstance(raw_outcome, Mapping):
+                raise GeneralizedTrainingError("match outcome must be an object")
+            lane = raw_outcome.get("lane")
+            outcome = raw_outcome.get("outcome")
+            if type(lane) is not int or not 0 <= lane < len(checkpoint_assignments):
+                raise GeneralizedTrainingError("match outcome lane is outside the segment")
+            if outcome not in {"win", "draw", "loss"}:
+                raise GeneralizedTrainingError("match outcome must be win, draw, or loss")
+            opponent = checkpoint_assignments[lane]
+            if opponent is None:
+                # Simulator-controller regression lanes are not league agents.
+                continue
+            try:
+                updated = updated.after_match(
+                    learner_agent_id,
+                    str(opponent),
+                    outcome,
+                )
+            except ValueError as error:
+                raise GeneralizedTrainingError(
+                    f"cannot record PFSP outcome against {opponent!r}: {error}"
+                ) from error
+            recorded += 1
+    return updated, recorded
 
 
 def _resolve_segment_offset(config: GeneralizedTrainingConfig) -> tuple[int, str]:
@@ -587,18 +830,51 @@ def train_generalized(
         raise GeneralizedTrainingError(
             "player_deck must not contain duplicate canonical cards"
         )
-    pool = OpponentPool(ruleset, seed=config.prototype_config.seed)
+    pool = OpponentPool(
+        ruleset,
+        seed=_mix_seed(
+            config.prototype_config.seed,
+            config.curriculum.seed,
+            0x43555252,
+        ),
+    )
     current_checkpoint = config.checkpoint
     starting_segment, segment_offset_source = _resolve_segment_offset(config)
     stage_reports: list[Mapping[str, object]] = []
     stage_scenarios: list[list[dict[str, object]]] = []
     stage_opponent_assignments: list[list[dict[str, object]]] = []
+    stage_metadata: list[dict[str, object]] = []
     transitions_per_segment = (
         config.prototype_config.envs
         * config.prototype_config.horizon
         * config.rollouts_per_scenario
     )
     total_transitions = config.segments * transitions_per_segment
+
+    pfsp_sampler: PFSPOpponentSampler | None = None
+    payoff_book: LeaguePayoffBook | None = None
+    payoff_book_source: str | None = None
+    pfsp_matches_recorded = 0
+    if config.pfsp:
+        if config.pfsp_payoff_book is None:
+            payoff_book = LeaguePayoffBook()
+            payoff_book_source = "empty"
+        else:
+            try:
+                payoff_book = LeaguePayoffBook.from_json(config.pfsp_payoff_book)
+            except Exception as error:
+                raise GeneralizedTrainingError(
+                    f"cannot load PFSP payoff book {config.pfsp_payoff_book}: {error}"
+                ) from error
+            payoff_book_source = str(config.pfsp_payoff_book)
+        pfsp_sampler = PFSPOpponentSampler(
+            payoff_book=payoff_book,
+            seed=_mix_seed(
+                config.prototype_config.seed,
+                config.curriculum.seed,
+                0x50465350,
+            ),
+        )
 
     expert_action = None
     if config.expert_guidance:
@@ -619,19 +895,38 @@ def train_generalized(
     for local_segment_index in range(config.segments):
         segment_index = starting_segment + local_segment_index
         segment_indices.append(segment_index)
+        archetypes, strategies, stage = _curriculum_axes(config, segment_index)
         scenarios = sample_training_scenarios(
             pool,
             envs=config.prototype_config.envs,
             segment_index=segment_index,
-            archetypes=config.train_archetypes,
-            strategies=config.train_strategies,
+            archetypes=archetypes,
+            strategies=strategies,
             include_regression=config.include_regression,
             threat_stratified=config.threat_stratified,
         )
+        checkpoint_assignments = _scenario_checkpoint_assignments(
+            scenarios,
+            config.opponent_checkpoints,
+            pfsp_sampler=pfsp_sampler,
+            learner_agent_id=config.league_agent_id,
+            match_index_base=segment_index * config.prototype_config.envs,
+        )
+        pfsp_weights = None
+        if pfsp_sampler is not None:
+            pfsp_weights = dict(
+                pfsp_sampler.weights(
+                    config.league_agent_id,
+                    tuple(str(path) for path in config.opponent_checkpoints),
+                )
+            )
         segment_config = _segment_config(
             config.prototype_config,
             segment_index=segment_index,
             rollouts_per_scenario=config.rollouts_per_scenario,
+            potential_reward_anneal_segments=(
+                config.potential_reward_anneal_segments
+            ),
         )
         transition_offset = local_segment_index * transitions_per_segment
 
@@ -653,6 +948,7 @@ def train_generalized(
             opponent_action=make_scenario_opponent_action(
                 scenarios,
                 checkpoint_opponents=config.opponent_checkpoints,
+                checkpoint_assignments=checkpoint_assignments,
                 device=config.prototype_config.device,
             ),
             expert_guidance=config.expert_guidance,
@@ -660,12 +956,58 @@ def train_generalized(
         )
         current_checkpoint = config.checkpoint_out
         stage_reports.append(report)
+        if pfsp_sampler is not None and payoff_book is not None:
+            payoff_book, recorded = _update_payoff_book_from_segment(
+                payoff_book,
+                report,
+                checkpoint_assignments,
+                learner_agent_id=config.league_agent_id,
+            )
+            pfsp_matches_recorded += recorded
+            if recorded:
+                # The sampler is immutable so that a report can always record
+                # the exact weights used for a segment. Replacing it here
+                # makes the next segment use the newly observed payoffs.
+                pfsp_sampler = replace(pfsp_sampler, payoff_book=payoff_book)
         stage_scenarios.append([scenario.as_dict() for scenario in scenarios])
         stage_opponent_assignments.append(
-            _scenario_assignment_rows(scenarios, config.opponent_checkpoints)
+            _scenario_assignment_rows(
+                scenarios,
+                config.opponent_checkpoints,
+                checkpoint_assignments=checkpoint_assignments,
+            )
+        )
+        stage_metadata.append(
+            {
+                "segment": segment_index,
+                "stage_id": None if stage is None else stage.stage_id,
+                "archetypes": list(archetypes),
+                "strategies": list(strategies),
+                "learner_actions": (
+                    "actor-sampled"
+                    if not (
+                        config.expert_guidance
+                        and config.prototype_config.expert_execution_probability > 0.0
+                    )
+                    else "mixed-teacher-and-actor"
+                ),
+                "actor_controls_actions": not (
+                    config.expert_guidance
+                    and config.prototype_config.expert_execution_probability > 0.0
+                ),
+                "potential_reward_weight": segment_config.potential_reward_weight,
+                "pfsp_weights": pfsp_weights,
+            }
         )
         if progress_callback is not None:
             progress_callback(local_segment_index + 1, config.segments, scenarios, report)
+
+    if config.pfsp and config.pfsp_payoff_book_out is not None:
+        if payoff_book is None:  # pragma: no cover - config invariant
+            raise GeneralizedTrainingError("PFSP payoff book was not initialized")
+        payoff_path = Path(config.pfsp_payoff_book_out)
+        payoff_path.parent.mkdir(parents=True, exist_ok=True)
+        payoff_path.write_text(payoff_book.to_json() + "\n", encoding="utf-8")
 
     final_report = stage_reports[-1] if stage_reports else {}
     aggregate = {
@@ -691,6 +1033,9 @@ def train_generalized(
         "segment_indices": segment_indices,
         "envs": config.prototype_config.envs,
         "horizon": config.prototype_config.horizon,
+        "sequence_length": config.prototype_config.sequence_length,
+        "potential_reward_weight": config.prototype_config.potential_reward_weight,
+        "potential_reward_anneal_segments": config.potential_reward_anneal_segments,
         "player_deck": list(player_deck),
         "transitions": total_transitions,
         "aggregate_outcomes": aggregate,
@@ -699,11 +1044,35 @@ def train_generalized(
         "ruleset_hash": ruleset.content_hash,
         "actor_privileged_inputs": False,
         "critic_privileged_inputs": bool(config.prototype_config.use_privileged_critic),
+        "actor_controls_actions": not (
+            config.expert_guidance
+            and config.prototype_config.expert_execution_probability > 0.0
+        ),
         "include_regression": config.include_regression,
         "threat_stratified": config.threat_stratified,
+        "curriculum_enabled": config.use_curriculum,
+        "curriculum": config.curriculum.as_dict(),
+        "stage_metadata": stage_metadata,
         "expert_guidance": config.expert_guidance,
         "expert_teacher": config.expert_teacher,
         "opponent_checkpoints": [str(path) for path in config.opponent_checkpoints],
+        "pfsp": config.pfsp,
+        "pfsp_payoff_book": (
+            None if config.pfsp_payoff_book is None else str(config.pfsp_payoff_book)
+        ),
+        "pfsp_payoff_book_source": (
+            None if not config.pfsp else payoff_book_source
+        ),
+        "pfsp_payoff_book_output": (
+            None
+            if config.pfsp_payoff_book_out is None
+            else str(config.pfsp_payoff_book_out)
+        ),
+        "pfsp_matches_recorded": pfsp_matches_recorded,
+        "pfsp_updates_payoff_book": pfsp_matches_recorded > 0,
+        "pfsp_payoff_book_state": (
+            None if payoff_book is None else payoff_book.as_dict()
+        ),
         "train_archetypes": list(config.train_archetypes),
         "train_strategies": list(config.train_strategies),
         "scenario_schedule": stage_scenarios,
@@ -1349,6 +1718,20 @@ def _parser() -> argparse.ArgumentParser:
     )
     train.add_argument("--envs", type=int, default=4)
     train.add_argument("--horizon", type=int, default=512)
+    train.add_argument(
+        "--env-backend",
+        choices=("reference", "process", "packed-process"),
+        default="reference",
+        help=(
+            "simulator lane backend; process variants can improve CPU throughput "
+            "when their serialization overhead is amortized"
+        ),
+    )
+    train.add_argument(
+        "--env-workers",
+        type=int,
+        help="worker count for process or packed-process lane backends",
+    )
     train.add_argument("--seed", type=int, default=0)
     defaults = GeneralizedTrainingConfig()
     train.add_argument(
@@ -1361,6 +1744,11 @@ def _parser() -> argparse.ArgumentParser:
     train.add_argument("--checkpoint-out", type=Path, default=Path("outputs/simulator/training/generalized-recurrent-prototype.pt"))
     train.add_argument("--allow-provisional", action="store_true")
     train.add_argument("--no-regression", action="store_true")
+    train.add_argument(
+        "--flat-curriculum",
+        action="store_true",
+        help="disable the staged opponent distribution and use --archetypes/--strategies as-is",
+    )
     train.add_argument(
         "--threat-stratified",
         action="store_true",
@@ -1384,8 +1772,16 @@ def _parser() -> argparse.ArgumentParser:
         help="balanced mode/card/placement imitation loss for expert guidance",
     )
     train.add_argument("--learning-rate", type=float, default=3e-4)
-    train.add_argument("--update-epochs", type=int, default=8)
-    train.add_argument("--sequence-minibatch-size", type=int, default=1)
+    train.add_argument("--update-epochs", type=int, default=3)
+    train.add_argument("--sequence-minibatch-size", type=int, default=8)
+    train.add_argument(
+        "--sequence-length",
+        type=int,
+        default=128,
+        help="recurrent PPO chunk length; must divide horizon (default: 128)",
+    )
+    train.add_argument("--gamma", type=float, default=0.9995)
+    train.add_argument("--gae-lambda", type=float, default=0.98)
     train.add_argument(
         "--explicit-hand-features",
         action="store_true",
@@ -1428,6 +1824,28 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     train.add_argument(
+        "--spatial-placement-features",
+        action="store_true",
+        help="retain board-aligned raster features for card-conditioned placement",
+    )
+    model_group = train.add_mutually_exclusive_group()
+    model_group.add_argument(
+        "--strategic-model",
+        dest="strategic_model",
+        action="store_true",
+        help=(
+            "use the larger public recurrent actor with explicit hand-slot and "
+            "spatial placement features (default)"
+        ),
+    )
+    model_group.add_argument(
+        "--small-model",
+        dest="strategic_model",
+        action="store_false",
+        help="use the legacy small model for fast smoke tests",
+    )
+    train.set_defaults(strategic_model=True)
+    train.add_argument(
         "--imitation-only",
         action="store_true",
         help="use only supervised teacher-action loss during expert warm-start",
@@ -1435,7 +1853,7 @@ def _parser() -> argparse.ArgumentParser:
     train.add_argument(
         "--expert-execution-probability",
         type=float,
-        default=1.0,
+        default=0.0,
         help="teacher-action execution probability; lower values enable DAgger states",
     )
     train.add_argument(
@@ -1446,9 +1864,14 @@ def _parser() -> argparse.ArgumentParser:
             "DAgger recovery-state training"
         ),
     )
-    train.add_argument("--entropy-coef", type=float, default=0.001)
+    train.add_argument("--entropy-coef", type=float, default=0.01)
     train.add_argument("--belief-coef", type=float, default=0.05)
     train.add_argument("--no-belief-targets", action="store_true")
+    train.add_argument(
+        "--no-privileged-critic",
+        action="store_true",
+        help="use an actor-observation value head for a minimal smoke run",
+    )
     train.add_argument(
         "--opponent-checkpoints",
         default="",
@@ -1457,9 +1880,63 @@ def _parser() -> argparse.ArgumentParser:
             "training lanes use them as self-play opponents"
         ),
     )
+    train.add_argument(
+        "--pfsp",
+        action="store_true",
+        help=(
+            "sample frozen opponent checkpoints with payoff-aware PFSP; requires "
+            "--opponent-checkpoints"
+        ),
+    )
+    train.add_argument(
+        "--pfsp-payoff-book",
+        type=Path,
+        help="optional JSON payoff history used by --pfsp (unseen opponents stay eligible)",
+    )
+    train.add_argument(
+        "--pfsp-payoff-book-out",
+        type=Path,
+        help=(
+            "optional JSON path receiving completed frozen-opponent outcomes; "
+            "use with --pfsp to continue PFSP across runs"
+        ),
+    )
+    train.add_argument(
+        "--league-agent-id",
+        default="main",
+        help="learner ID used for directional PFSP payoff lookup",
+    )
     train.add_argument("--archetypes", default=",".join(defaults.train_archetypes))
     train.add_argument("--strategies", default=",".join(defaults.train_strategies))
-    train.add_argument("--no-dense-reward", action="store_true")
+    reward_group = train.add_mutually_exclusive_group()
+    reward_group.add_argument(
+        "--dense-reward",
+        dest="dense_reward",
+        action="store_true",
+        help="legacy per-step tower/crown shaping; prefer potential-reward-weight",
+    )
+    reward_group.add_argument(
+        "--no-dense-reward",
+        dest="dense_reward",
+        action="store_false",
+        help="disable legacy dense reward shaping",
+    )
+    train.set_defaults(dense_reward=False)
+    train.add_argument(
+        "--potential-reward-weight",
+        type=float,
+        default=0.1,
+        help="temporary normalized tower/crown potential coefficient (0 disables it)",
+    )
+    train.add_argument(
+        "--potential-reward-anneal-segments",
+        type=int,
+        default=32,
+        help=(
+            "global segment at which temporary potential shaping reaches zero; "
+            "0 keeps the configured coefficient fixed"
+        ),
+    )
     train.add_argument("--json-out", type=Path)
 
     evaluate = subparsers.add_parser("evaluate", help="evaluate a checkpoint on a held-out matrix")
@@ -1553,15 +2030,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                 updates=1,
                 seed=args.seed,
                 device=args.device,
+                env_backend=args.env_backend,
+                env_workers=args.env_workers,
                 learning_rate=args.learning_rate,
                 update_epochs=args.update_epochs,
                 sequence_minibatch_size=args.sequence_minibatch_size,
-                explicit_hand_features=args.explicit_hand_features,
+                sequence_length=args.sequence_length,
+                gamma=args.gamma,
+                gae_lambda=args.gae_lambda,
                 imitation_only=args.imitation_only,
                 expert_execution_probability=args.expert_execution_probability,
                 deterministic_rollouts=args.deterministic_rollouts,
                 entropy_coef=args.entropy_coef,
-                dense_reward=not args.no_dense_reward,
+                dense_reward=args.dense_reward,
+                potential_reward_weight=args.potential_reward_weight,
                 behavior_cloning_coef=args.bc_coef,
                 behavior_cloning_factor_coef=args.bc_factor_coef,
                 direct_public_action_features=args.direct_public_action_features,
@@ -1570,7 +2052,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                 direct_public_mask_features=args.direct_public_mask_features,
                 direct_public_context_features=args.direct_public_context_features,
                 direct_public_slot_card_features=args.direct_public_slot_card_features,
+                model_dim=128 if args.strategic_model else 32,
+                encoder_dim=128 if args.strategic_model else 32,
+                transformer_heads=4,
+                transformer_layers=2 if args.strategic_model else 1,
+                transformer_ff_dim=256 if args.strategic_model else 64,
+                gru_hidden_dim=256 if args.strategic_model else 32,
+                explicit_hand_features=(
+                    True if args.strategic_model else args.explicit_hand_features
+                ),
+                spatial_placement_features=(
+                    True if args.strategic_model else args.spatial_placement_features
+                ),
                 belief_coef=args.belief_coef,
+                use_privileged_critic=not args.no_privileged_critic,
                 collect_belief_targets=not args.no_belief_targets,
                 allow_provisional=args.allow_provisional,
             )
@@ -1584,6 +2079,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 checkpoint_out=args.checkpoint_out,
                 include_regression=not args.no_regression,
                 threat_stratified=args.threat_stratified,
+                use_curriculum=not args.flat_curriculum,
+                potential_reward_anneal_segments=args.potential_reward_anneal_segments,
                 expert_guidance=args.expert_guidance,
                 expert_teacher=args.expert_teacher,
                 opponent_checkpoints=(
@@ -1591,6 +2088,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                     if args.opponent_checkpoints.strip()
                     else ()
                 ),
+                pfsp=args.pfsp,
+                pfsp_payoff_book=args.pfsp_payoff_book,
+                pfsp_payoff_book_out=args.pfsp_payoff_book_out,
+                league_agent_id=args.league_agent_id,
                 train_archetypes=_csv_names(args.archetypes),
                 train_strategies=_csv_names(args.strategies),
             )

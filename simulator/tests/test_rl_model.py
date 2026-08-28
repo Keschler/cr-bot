@@ -169,6 +169,48 @@ def test_explicit_hand_features_condition_card_and_placement_heads() -> None:
 
 
 @requires_torch
+def test_spatial_placement_variant_retains_board_aligned_features() -> None:
+    from rl import ModelConfig, RecurrentHybridPolicy
+
+    values = {
+        field: getattr(_config(), field)
+        for field in _config().__dataclass_fields__
+    }
+    values.update(
+        spatial_placement_features=True,
+        spatial_placement_dim=6,
+    )
+    config = ModelConfig(**values)
+    policy = RecurrentHybridPolicy(config)
+    raster, global_features, entities, entity_mask, reset_mask = _inputs(config)
+    output = policy(
+        raster,
+        global_features,
+        entities,
+        entity_mask,
+        reset_mask=reset_mask,
+    )
+
+    assert output.spatial_features is not None
+    assert output.spatial_features.shape == (
+        2,
+        3,
+        config.model_dim,
+        config.raster_height,
+        config.raster_width,
+    )
+    assert policy.action_head.spatial_placement_key is not None
+    assert policy.action_head.spatial_placement_query is not None
+    assert output.placement_logits.shape == (
+        2,
+        3,
+        config.card_slots,
+        config.placement_rows,
+        config.placement_cols,
+    )
+
+
+@requires_torch
 def test_contextual_public_card_head_keeps_entity_context_in_card_selection() -> None:
     from rl import ModelConfig, RecurrentHybridPolicy
 

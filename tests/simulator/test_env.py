@@ -220,6 +220,48 @@ def test_process_vector_backend_matches_reference_hashes_observations_and_reward
         parallel.close()
 
 
+def test_packed_process_vector_backend_matches_reference_hashes_observations_and_rewards() -> None:
+    reference = VectorSimulatorEnv.create(2, expose_privileged_info=True)
+    packed = VectorSimulatorEnv.create(
+        2,
+        backend="packed-process",
+        workers=2,
+        expose_privileged_info=True,
+    )
+    try:
+        reference.reset((51, 52))
+        packed.reset((51, 52))
+        action_rows = (
+            ((PolicyAction(kind="Play", card_idx=0, cell=(3, 17)), None)),
+            ((None, None)),
+        )
+        for rows in (action_rows, ((None, None), (None, None))):
+            expected = reference.step(rows)
+            actual = packed.step(rows)
+            assert len(actual) == len(expected) == 2
+            for expected_step, actual_step in zip(expected, actual, strict=True):
+                assert actual_step.rewards == expected_step.rewards
+                assert actual_step.terminated == expected_step.terminated
+                assert actual_step.truncated == expected_step.truncated
+                assert actual_step.info == expected_step.info
+                for expected_observation, actual_observation in zip(
+                    expected_step.observations,
+                    actual_step.observations,
+                    strict=True,
+                ):
+                    _assert_observations_equal(expected_observation, actual_observation)
+            for expected_env, actual_env in zip(
+                reference.environments,
+                packed.environments,
+                strict=True,
+            ):
+                assert expected_env.state is not None and actual_env.state is not None
+                assert expected_env.state.state_hash() == actual_env.state.state_hash()
+                assert expected_env.state.event_log_hash() == actual_env.state.event_log_hash()
+    finally:
+        packed.close()
+
+
 def test_vector_backend_rejects_unknown_backend_and_invalid_worker_count() -> None:
     with pytest.raises(ValueError, match="backend"):
         VectorSimulatorEnv.create(1, backend="cuda")

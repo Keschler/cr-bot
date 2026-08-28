@@ -140,6 +140,17 @@ def test_matrix_aggregates_each_deck_strategy_seed_and_is_json_safe() -> None:
     assert report["schema_version"] == 2
     assert len(report["cell_ids"]) == 8
     assert len(set(report["cell_ids"])) == 8
+    assert report["actor_player"] == 0
+    assert report["opponent_player"] == 1
+    assert report["provenance"]["schema_version"] == 1
+    assert report["provenance"]["config_fingerprint"].startswith("sha256:")
+    assert report["provenance"]["matrix_order"] == "opponent_decks,strategies,seeds"
+    assert report["timing"]["execution_mode"] == "sequential"
+    assert report["timing"]["batch_count"] == 8
+    assert report["timing"]["wall_seconds"] >= 0.0
+    assert report["timing"]["match_execution_seconds"] >= 0.0
+    assert report["timing"]["started_at_utc"].endswith("Z")
+    assert report["timing"]["finished_at_utc"].endswith("Z")
     assert report["held_out_audit"]["disjointness_verified"] is False
     assert len(report["matchups"]) == 4
     assert report["matchups"][0]["summary"]["wins"] == 1
@@ -152,6 +163,76 @@ def test_matrix_aggregates_each_deck_strategy_seed_and_is_json_safe() -> None:
     assert report["matches"][0]["opponent_deck"]["cards"] == list(decks[0].cards)
     assert report["matches"][0]["opponent_strategy"]["strategy_id"] == "wait"
     json.dumps(report, allow_nan=False)
+
+
+def test_matrix_report_keeps_actor_side_and_opponent_identity_for_player_one(
+    tmp_path,
+) -> None:
+    from simulator.rl.evaluation_matrix import (
+        EvaluationMatrixConfig,
+        run_evaluation_matrix,
+    )
+
+    deck = _deck("left-side-opponent", first="giant")
+    config = EvaluationMatrixConfig(
+        checkpoint=tmp_path / "player-one.pt",
+        opponent_decks=(deck,),
+        strategies=("wait",),
+        seeds=(73,),
+        target_player=1,
+        held_out=False,
+    )
+
+    report = run_evaluation_matrix(
+        config,
+        match_runner=lambda spec: {
+            "winner": spec.target_player,
+            "decisions": 2,
+        },
+    )
+
+    assert report["target_player"] == 1
+    assert report["actor_player"] == 1
+    assert report["opponent_player"] == 0
+    row = report["matches"][0]
+    assert row["target_player"] == 1
+    assert row["actor_player"] == 1
+    assert row["opponent_player"] == 0
+    assert row["opponent_deck"]["deck_id"] == deck.deck_id
+    assert row["opponent_deck"]["cards"] == list(deck.cards)
+    assert row["opponent_strategy"]["strategy_id"] == "wait"
+    assert row["seed"] == 73
+    assert report["total"]["wins"] == 1
+
+
+def test_matrix_config_fingerprint_is_stable_for_identical_inputs(tmp_path) -> None:
+    from simulator.rl.evaluation_matrix import (
+        EvaluationMatrixConfig,
+        run_evaluation_matrix,
+    )
+
+    def make_report():
+        config = EvaluationMatrixConfig(
+            checkpoint=tmp_path / "same.pt",
+            opponent_decks=(_deck("stable"),),
+            strategies=("wait",),
+            seeds=(9,),
+            held_out=False,
+        )
+        return run_evaluation_matrix(
+            config,
+            match_runner=lambda _spec: {"outcome": "draw", "decisions": 1},
+        )
+
+    first = make_report()
+    second = make_report()
+
+    assert first["provenance"]["config_fingerprint"] == second["provenance"][
+        "config_fingerprint"
+    ]
+    assert first["provenance"]["checkpoint_fingerprint"] == second["provenance"][
+        "checkpoint_fingerprint"
+    ]
 
 
 def test_matrix_rows_preserve_checkpoint_provenance_and_heldout_exclusions(tmp_path) -> None:

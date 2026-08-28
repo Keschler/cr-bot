@@ -786,6 +786,336 @@ class LeagueRatingBook:
 
 
 @dataclass(frozen=True, slots=True)
+class LeaguePayoffStats:
+    """Directional match outcomes for one learner/opponent pair."""
+
+    wins: int = 0
+    draws: int = 0
+    losses: int = 0
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("wins", self.wins),
+            ("draws", self.draws),
+            ("losses", self.losses),
+        ):
+            _integer(value, name, minimum=0)
+
+    @property
+    def games(self) -> int:
+        return self.wins + self.draws + self.losses
+
+    @property
+    def score(self) -> float | None:
+        """Return the learner's scored win probability, or ``None`` if new."""
+
+        if self.games == 0:
+            return None
+        return (self.wins + 0.5 * self.draws) / self.games
+
+    @property
+    def win_rate(self) -> float | None:
+        """Alias for :attr:`score` using standard league terminology."""
+
+        return self.score
+
+    def after_match(self, outcome: LeagueOutcome) -> "LeaguePayoffStats":
+        if outcome not in {"win", "draw", "loss"}:
+            raise LeagueConfigurationError(f"unsupported league outcome: {outcome!r}")
+        increments = {
+            "win": (1, 0, 0),
+            "draw": (0, 1, 0),
+            "loss": (0, 0, 1),
+        }[outcome]
+        return LeaguePayoffStats(
+            wins=self.wins + increments[0],
+            draws=self.draws + increments[1],
+            losses=self.losses + increments[2],
+        )
+
+    def as_dict(self) -> dict[str, int]:
+        return {
+            "wins": self.wins,
+            "draws": self.draws,
+            "losses": self.losses,
+        }
+
+    @classmethod
+    def from_mapping(cls, raw: Mapping[str, Any]) -> "LeaguePayoffStats":
+        if not isinstance(raw, Mapping):
+            raise LeagueConfigurationError("payoff statistics must be an object")
+        return cls(
+            wins=raw.get("wins", 0),
+            draws=raw.get("draws", 0),
+            losses=raw.get("losses", 0),
+        )
+
+
+PAYOFF_SCHEMA_VERSION = 1
+
+
+@dataclass(frozen=True, slots=True)
+class LeaguePayoffBook:
+    """Immutable, serializable directional payoff history."""
+
+    records: tuple[tuple[str, str, LeaguePayoffStats], ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.records, tuple):
+            raise LeagueConfigurationError("payoff records must be a tuple")
+        previous_key: tuple[str, str] | None = None
+        for index, record in enumerate(self.records):
+            if not isinstance(record, tuple) or len(record) != 3:
+                raise LeagueConfigurationError(
+                    f"payoff records[{index}] must be a three-item tuple"
+                )
+            learner_id = _string(record[0], f"payoff records[{index}].learner_agent_id")
+            opponent_id = _string(record[1], f"payoff records[{index}].opponent_agent_id")
+            if learner_id == opponent_id:
+                raise LeagueConfigurationError("payoff records require distinct agents")
+            stats = record[2]
+            if not isinstance(stats, LeaguePayoffStats):
+                raise LeagueConfigurationError(
+                    f"payoff records[{index}].stats must be LeaguePayoffStats"
+                )
+            key = (learner_id, opponent_id)
+            if previous_key is not None and key <= previous_key:
+                raise LeagueConfigurationError(
+                    "payoff records must be sorted by learner and opponent ID"
+                )
+            previous_key = key
+
+    def stats(self, learner_agent_id: str, opponent_agent_id: str) -> LeaguePayoffStats:
+        """Return directional stats, using zero games for an unseen pair."""
+
+        learner_id = _string(learner_agent_id, "learner_agent_id")
+        opponent_id = _string(opponent_agent_id, "opponent_agent_id")
+        if learner_id == opponent_id:
+            raise LeagueConfigurationError("payoff queries require distinct agents")
+        for current_learner, current_opponent, stats in self.records:
+            if current_learner == learner_id and current_opponent == opponent_id:
+                return stats
+        return LeaguePayoffStats()
+
+    def after_match(
+        self,
+        learner_agent_id: str,
+        opponent_agent_id: str,
+        outcome: LeagueOutcome,
+    ) -> "LeaguePayoffBook":
+        """Return a new book with one learner-perspective outcome recorded."""
+
+        learner_id = _string(learner_agent_id, "learner_agent_id")
+        opponent_id = _string(opponent_agent_id, "opponent_agent_id")
+        if learner_id == opponent_id:
+            raise LeagueConfigurationError("a payoff match requires two distinct agents")
+        if outcome not in {"win", "draw", "loss"}:
+            raise LeagueConfigurationError(f"unsupported league outcome: {outcome!r}")
+
+        key = (learner_id, opponent_id)
+        values = {
+            (current_learner, current_opponent): stats
+            for current_learner, current_opponent, stats in self.records
+        }
+        values[key] = values.get(key, LeaguePayoffStats()).after_match(outcome)
+        return LeaguePayoffBook(
+            records=tuple(
+                (current_learner, current_opponent, stats)
+                for (current_learner, current_opponent), stats in sorted(values.items())
+            )
+        )
+
+    def record(
+        self,
+        learner_agent_id: str,
+        opponent_agent_id: str,
+        outcome: LeagueOutcome,
+    ) -> "LeaguePayoffBook":
+        """Readable alias for :meth:`after_match`."""
+
+        return self.after_match(learner_agent_id, opponent_agent_id, outcome)
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "schema_version": PAYOFF_SCHEMA_VERSION,
+            "records": [
+                {
+                    "learner_agent_id": learner_id,
+                    "opponent_agent_id": opponent_id,
+                    **stats.as_dict(),
+                }
+                for learner_id, opponent_id, stats in self.records
+            ],
+        }
+
+    def to_json(self) -> str:
+        return json.dumps(self.as_dict(), sort_keys=True, separators=(",", ":"))
+
+    @classmethod
+    def from_mapping(cls, raw: Mapping[str, Any]) -> "LeaguePayoffBook":
+        if not isinstance(raw, Mapping):
+            raise LeagueConfigurationError("payoff book must be an object")
+        schema_version = raw.get("schema_version", PAYOFF_SCHEMA_VERSION)
+        if schema_version != PAYOFF_SCHEMA_VERSION:
+            raise LeagueConfigurationError(
+                f"unsupported payoff book schema: {schema_version!r}"
+            )
+        raw_records = raw.get("records", [])
+        if not isinstance(raw_records, (list, tuple)):
+            raise LeagueConfigurationError("payoff records must be a list of objects")
+        records: list[tuple[str, str, LeaguePayoffStats]] = []
+        for index, item in enumerate(raw_records):
+            if not isinstance(item, Mapping):
+                raise LeagueConfigurationError(
+                    f"payoff records[{index}] must be an object"
+                )
+            records.append(
+                (
+                    _string(item.get("learner_agent_id", ""), "learner_agent_id"),
+                    _string(item.get("opponent_agent_id", ""), "opponent_agent_id"),
+                    LeaguePayoffStats.from_mapping(item),
+                )
+            )
+        return cls(records=tuple(sorted(records, key=lambda value: (value[0], value[1]))))
+
+    @classmethod
+    def from_json(cls, source: str | Path) -> "LeaguePayoffBook":
+        path = Path(source)
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise LeagueConfigurationError(
+                f"cannot load payoff book {path}: {error}"
+            ) from error
+        return cls.from_mapping(raw)
+
+
+def _positive_number(value: object, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise LeagueConfigurationError(f"{name} must be a finite positive number")
+    converted = float(value)
+    if not math.isfinite(converted) or converted <= 0.0:
+        raise LeagueConfigurationError(f"{name} must be a finite positive number")
+    return converted
+
+
+@dataclass(frozen=True, slots=True)
+class PFSPOpponentSampler:
+    """Deterministically sample candidates using payoff-aware PFSP weights.
+
+    For a tested matchup, the base weight is ``p * (1 - p)`` where ``p`` is
+    the learner's scored win rate.  This emphasizes opponents near the
+    learner's current level and down-weights solved matchups.  Unseen
+    opponents receive the maximum base weight so discovery is preserved;
+    ``minimum_weight`` and ``exploration_probability`` keep extreme records
+    from disappearing completely.  Candidate IDs should distinguish frozen
+    checkpoints when needed (for example ``main@step-100``).
+
+    This class is intentionally independent of :class:`LeagueSampler`: the
+    caller supplies the already-valid candidate IDs and can use the selected
+    ID to resolve a full :class:`OpponentSelection`.  Existing deterministic
+    league schedules therefore remain unchanged until a caller opts in.
+    """
+
+    payoff_book: LeaguePayoffBook = LeaguePayoffBook()
+    seed: int = 0
+    minimum_weight: float = 0.01
+    unknown_opponent_weight: float = 0.25
+    exploration_probability: float = 0.05
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.payoff_book, LeaguePayoffBook):
+            raise LeagueConfigurationError("payoff_book must be a LeaguePayoffBook")
+        _integer(self.seed, "seed")
+        _positive_number(self.minimum_weight, "minimum_weight")
+        _positive_number(self.unknown_opponent_weight, "unknown_opponent_weight")
+        _probability(self.exploration_probability, "exploration_probability")
+
+    def seed_for(
+        self,
+        learner_agent_id: str,
+        match_index: int,
+        opponent_ids: tuple[str, ...],
+    ) -> int:
+        learner_id = _string(learner_agent_id, "learner_agent_id")
+        _integer(match_index, "match_index", minimum=0)
+        return deterministic_seed(
+            self.seed,
+            "pfsp",
+            learner_id,
+            match_index,
+            opponent_ids,
+        )
+
+    @staticmethod
+    def _candidate_tuple(opponent_ids: object) -> tuple[str, ...]:
+        if not isinstance(opponent_ids, (list, tuple)):
+            raise LeagueSamplingError("opponent_ids must be a non-empty list of strings")
+        candidates = tuple(
+            _string(value, f"opponent_ids[{index}]")
+            for index, value in enumerate(opponent_ids)
+        )
+        if not candidates:
+            raise LeagueSamplingError("opponent_ids must contain at least one candidate")
+        if len(set(candidates)) != len(candidates):
+            raise LeagueSamplingError("opponent_ids must not contain duplicates")
+        return tuple(sorted(candidates))
+
+    def base_weights(
+        self,
+        learner_agent_id: str,
+        opponent_ids: list[str] | tuple[str, ...],
+    ) -> tuple[tuple[str, float], ...]:
+        """Return unnormalized PFSP weights for inspection and diagnostics."""
+
+        learner_id = _string(learner_agent_id, "learner_agent_id")
+        candidates = self._candidate_tuple(opponent_ids)
+        if learner_id in candidates:
+            raise LeagueSamplingError("opponent_ids must not contain the learner")
+        weights: list[tuple[str, float]] = []
+        for opponent_id in candidates:
+            stats = self.payoff_book.stats(learner_id, opponent_id)
+            if stats.score is None:
+                weight = self.unknown_opponent_weight
+            else:
+                weight = max(self.minimum_weight, stats.score * (1.0 - stats.score))
+            weights.append((opponent_id, weight))
+        return tuple(weights)
+
+    def weights(
+        self,
+        learner_agent_id: str,
+        opponent_ids: list[str] | tuple[str, ...],
+    ) -> tuple[tuple[str, float], ...]:
+        """Return normalized sampling weights after uniform exploration mix."""
+
+        base = self.base_weights(learner_agent_id, opponent_ids)
+        total = sum(weight for _, weight in base)
+        count = len(base)
+        epsilon = self.exploration_probability
+        return tuple(
+            (
+                opponent_id,
+                (1.0 - epsilon) * (weight / total) + epsilon / count,
+            )
+            for opponent_id, weight in base
+        )
+
+    def sample(
+        self,
+        learner_agent_id: str,
+        match_index: int,
+        opponent_ids: list[str] | tuple[str, ...],
+    ) -> str:
+        """Return one reproducible opponent ID from the supplied candidates."""
+
+        candidates = self._candidate_tuple(opponent_ids)
+        weights = self.weights(learner_agent_id, candidates)
+        selection_seed = self.seed_for(learner_agent_id, match_index, candidates)
+        return _weighted_choice(selection_seed, "pfsp-opponent", weights)
+
+
+@dataclass(frozen=True, slots=True)
 class LeagueMatchRecord:
     """Serializable outcome and rating transition for one planned match."""
 
@@ -936,8 +1266,12 @@ __all__ = [
     "LeagueMatchRecord",
     "LeagueOrchestrator",
     "LeagueOutcome",
+    "LeaguePayoffBook",
+    "LeaguePayoffStats",
     "LeagueRatingBook",
     "OpponentSelection",
     "OpponentSource",
+    "PAYOFF_SCHEMA_VERSION",
+    "PFSPOpponentSampler",
     "deterministic_seed",
 ]

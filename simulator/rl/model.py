@@ -18,6 +18,7 @@ distribution before log probabilities are evaluated.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
 from ._compat import TorchUnavailableError
 
@@ -97,6 +98,11 @@ class ModelConfig:
     # fresh checkpoints that must distinguish a defensive card from Hog when
     # the same slot changes across the deck cycle.
     direct_public_slot_card_features: bool = False
+    # Preserve a board-aligned feature map for placement. The legacy path
+    # uses only a globally pooled raster representation; fresh strategic
+    # actors can opt into this path without changing the old checkpoint ABI.
+    spatial_placement_features: bool = False
+    spatial_placement_dim: int = 32
 
     def __post_init__(self) -> None:
         positive_fields = (
@@ -117,6 +123,7 @@ class ModelConfig:
             "belief_card_count",
             "placement_rows",
             "placement_cols",
+            "spatial_placement_dim",
         )
         for field_name in positive_fields:
             value = getattr(self, field_name)
@@ -153,6 +160,8 @@ class ModelConfig:
             raise ValueError("direct_public_context_features must be boolean")
         if type(self.direct_public_slot_card_features) is not bool:
             raise ValueError("direct_public_slot_card_features must be boolean")
+        if type(self.spatial_placement_features) is not bool:
+            raise ValueError("spatial_placement_features must be boolean")
         if self.direct_public_slot_card_features and self.hand_feature_offset < 0:
             raise ValueError(
                 "direct_public_slot_card_features require explicit hand features"
@@ -200,6 +209,8 @@ class RecurrentPolicyOutput:
     belief_logits: OpponentBeliefLogits | None = None
     # Optional explicit public hand-slot embeddings used by new actor heads.
     hand_features: torch.Tensor | None = None
+    # Optional board-aligned features used by the spatial placement head.
+    spatial_features: torch.Tensor | None = None
 
     @property
     def mode_logits(self) -> torch.Tensor:
@@ -394,6 +405,23 @@ class HybridEncoder(nn.Module):
         entities: torch.Tensor,
         entity_mask: torch.Tensor,
     ) -> torch.Tensor:
+        """Encode observations while preserving the legacy return contract."""
+
+        encoded, _spatial = self.forward_with_spatial(
+            raster,
+            global_features,
+            entities,
+            entity_mask,
+        )
+        return encoded
+
+    def forward_with_spatial(
+        self,
+        raster: torch.Tensor,
+        global_features: torch.Tensor,
+        entities: torch.Tensor,
+        entity_mask: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         _require_floating("raster", raster, ndim=5)
         _require_floating("global_features", global_features, ndim=3)
         _require_floating("entities", entities, ndim=4)
@@ -421,7 +449,28 @@ class HybridEncoder(nn.Module):
             raise ValueError(f"entity_count must be in [1, {config.max_entities}]")
 
         flat_batch_time = batch * time
-        raster_features = self.raster_encoder(raster.reshape(flat_batch_time, channels, height, width))
+        raster_input = raster.reshape(flat_batch_time, channels, height, width)
+        spatial_features: torch.Tensor | None = None
+        if config.spatial_placement_features:
+            # Reuse the legacy convolution weights and expose the feature map
+            # before global pooling. This adds no duplicated convolution
+            # parameters and keeps the old model path unchanged when the
+            # feature is disabled.
+            raster_hidden_features = self.raster_encoder[0](raster_input)
+            raster_hidden_features = self.raster_encoder[1](raster_hidden_features)
+            raster_hidden_features = self.raster_encoder[2](raster_hidden_features)
+            raster_hidden_features = self.raster_encoder[3](raster_hidden_features)
+            raster_features = self.raster_encoder[4](raster_hidden_features)
+            raster_features = self.raster_encoder[5](raster_features)
+            spatial_features = raster_hidden_features.reshape(
+                batch,
+                time,
+                config.model_dim,
+                height,
+                width,
+            )
+        else:
+            raster_features = self.raster_encoder(raster_input)
         global_features_flat = global_features.reshape(flat_batch_time, config.global_dim)
         global_features_encoded = self.global_projection(global_features_flat)
 
@@ -458,7 +507,7 @@ class HybridEncoder(nn.Module):
                 config.card_slots * config.model_dim,
             ))
         fused = self.fusion(torch.cat(fusion_features, dim=-1))
-        return fused.reshape(batch, time, config.encoder_dim)
+        return fused.reshape(batch, time, config.encoder_dim), spatial_features
 
 
 def _require_floating(name: str, value: torch.Tensor, *, ndim: int) -> None:
@@ -646,6 +695,18 @@ class MaskedAutoregressivePolicy(nn.Module):
             nn.GELU(),
             nn.Linear(hidden_dim, config.placement_rows * config.placement_cols),
         )
+        self.spatial_placement_key: nn.Module | None = None
+        self.spatial_placement_query: nn.Module | None = None
+        if config.spatial_placement_features:
+            self.spatial_placement_key = nn.Conv2d(
+                config.model_dim,
+                config.spatial_placement_dim,
+                kernel_size=1,
+            )
+            self.spatial_placement_query = nn.Linear(
+                hidden_dim,
+                config.spatial_placement_dim,
+            )
 
     def forward(
         self,
@@ -653,6 +714,7 @@ class MaskedAutoregressivePolicy(nn.Module):
         hand_features: torch.Tensor | None = None,
         public_features: torch.Tensor | None = None,
         public_action_masks: ActionMasks | None = None,
+        spatial_features: torch.Tensor | None = None,
     ) -> AutoregressiveLogits:
         _require_floating("recurrent features", recurrent_features, ndim=3)
         if recurrent_features.shape[-1] != self.hidden_dim:
@@ -667,6 +729,20 @@ class MaskedAutoregressivePolicy(nn.Module):
             ):
                 raise ValueError(
                     "hand_features must have shape [batch, time, card_slots, hidden_dim]"
+                )
+        if self.spatial_placement_key is not None:
+            if spatial_features is None:
+                raise ValueError(
+                    "spatial placement features are required by this model variant"
+                )
+            _require_floating("spatial placement features", spatial_features, ndim=5)
+            if spatial_features.shape[:2] != recurrent_features.shape[:2]:
+                raise ValueError(
+                    "spatial placement features must share recurrent batch/time dimensions"
+                )
+            if spatial_features.shape[2] != self.config.model_dim:
+                raise ValueError(
+                    "spatial placement feature channels must match ModelConfig.model_dim"
                 )
         mode_logits = self.mode_head(recurrent_features)
         if self.public_mode_head is not None:
@@ -783,6 +859,36 @@ class MaskedAutoregressivePolicy(nn.Module):
             self.placement_rows,
             self.placement_cols,
         )
+        if self.spatial_placement_key is not None:
+            if self.spatial_placement_query is None:  # pragma: no cover - invariant
+                raise RuntimeError("spatial placement query is not initialized")
+            batch, time = recurrent_features.shape[:2]
+            spatial = spatial_features.reshape(
+                batch * time,
+                self.config.model_dim,
+                spatial_features.shape[-2],
+                spatial_features.shape[-1],
+            )
+            if spatial.shape[-2:] != (self.placement_rows, self.placement_cols):
+                spatial = F.interpolate(
+                    spatial,
+                    size=(self.placement_rows, self.placement_cols),
+                    mode="bilinear",
+                    align_corners=False,
+                )
+            keys = self.spatial_placement_key(spatial).reshape(
+                batch,
+                time,
+                self.config.spatial_placement_dim,
+                self.placement_rows,
+                self.placement_cols,
+            )
+            queries = self.spatial_placement_query(card_context)
+            placement_logits = placement_logits + torch.einsum(
+                "btsd,btdrc->btsrc",
+                queries,
+                keys,
+            ) / math.sqrt(float(self.config.spatial_placement_dim))
         return AutoregressiveLogits(mode_logits, card_logits, placement_logits)
 
     def sample(
@@ -993,7 +1099,7 @@ class RecurrentHybridPolicy(nn.Module):
         hidden: torch.Tensor | None = None,
         action_masks: ActionMasks | None = None,
     ) -> RecurrentPolicyOutput:
-        encoded_features = self.encoder(
+        encoded_features, spatial_features = self.encoder.forward_with_spatial(
             raster,
             global_features,
             entities,
@@ -1014,6 +1120,7 @@ class RecurrentHybridPolicy(nn.Module):
             hand_features=hand_features,
             public_features=global_features,
             public_action_masks=action_masks,
+            spatial_features=spatial_features,
         )
         belief_logits = self.belief_heads(recurrent_features)
         return RecurrentPolicyOutput(
@@ -1023,6 +1130,7 @@ class RecurrentHybridPolicy(nn.Module):
             final_hidden=final_hidden,
             belief_logits=belief_logits,
             hand_features=hand_features,
+            spatial_features=spatial_features,
         )
 
     def log_prob(

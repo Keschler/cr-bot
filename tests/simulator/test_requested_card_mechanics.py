@@ -287,11 +287,16 @@ def test_ram_rider_applies_a_movement_snare_on_hit() -> None:
     engine, state = _state()
     rider = _entity(state, "ram-rider", 0, 7_000, 15_000)
     target = _entity(state, "giant", 1, 8_500, 15_000)
-    rider.pending_target_uid = target.uid
-    engine._resolve_attack(state, rider)
+    # The Ram's primary channel is building-only.  The rider's bola is an
+    # independent troop-targeting weapon with its own wind-up/projectile.
+    rider.secondary_pending_target_uid = target.uid
+    engine._resolve_secondary_attack(state, rider)
+    projectile = next(iter(state.projectiles.values()))
+    engine._impact_projectile(state, projectile)
     snare = next(status for status in target.statuses if status.kind == "slow")
     assert snare.remaining_us == 1_500_000
-    assert snare.magnitude_permille == 550
+    assert snare.magnitude_permille == 300
+    assert snare.hit_speed_magnitude_permille == 1_000
     engine.validate_state(state)
 
 

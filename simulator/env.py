@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from concurrent.futures import ProcessPoolExecutor
+import math
 import multiprocessing
 from typing import TYPE_CHECKING, Iterable, Sequence
 
@@ -40,6 +41,24 @@ class RewardConfig:
     crown_weight: float = 1.0
     win_weight: float = 1.0
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.version, str) or not self.version.strip():
+            raise ValueError("reward version must be a non-empty string")
+        for name in ("tower_damage_weight", "crown_weight", "win_weight"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not math.isfinite(float(value)) or float(value) < 0.0:
+                raise ValueError(f"{name} must be a finite non-negative number")
+
+    def as_dict(self) -> dict[str, object]:
+        """Return the exact reward semantics for run provenance."""
+
+        return {
+            "version": self.version,
+            "tower_damage_weight": float(self.tower_damage_weight),
+            "crown_weight": float(self.crown_weight),
+            "win_weight": float(self.win_weight),
+        }
+
     @classmethod
     def terminal_outcome(cls) -> "RewardConfig":
         """Return the sparse match objective used by serious policy training."""
@@ -48,6 +67,26 @@ class RewardConfig:
             version="terminal-outcome-v1",
             tower_damage_weight=0.0,
             crown_weight=0.0,
+            win_weight=1.0,
+        )
+
+    @classmethod
+    def terminal_with_potential(cls, weight: float = 0.1) -> "RewardConfig":
+        """Add a bounded potential difference to the terminal objective.
+
+        The shaped component is the difference in normalized tower/crown
+        potential between consecutive simulator decisions. It supplies local
+        credit assignment without making a human card-choice heuristic part of
+        the objective. A zero weight is rejected here so callers do not
+        accidentally label a sparse run as shaped.
+        """
+
+        if isinstance(weight, bool) or not math.isfinite(float(weight)) or float(weight) <= 0.0:
+            raise ValueError("potential shaping weight must be finite and positive")
+        return cls(
+            version="terminal-potential-v1",
+            tower_damage_weight=float(weight),
+            crown_weight=float(weight),
             win_weight=1.0,
         )
 

@@ -815,18 +815,21 @@ GRU over time, and WAIT/PLAY → card → placement masked action heads. It stor
 recurrent trajectory tensors and reset masks, and includes training-only
 opponent-belief heads, a detached-feature privileged critic, and clipped PPO/
 behavior-cloning objective functions. `RecurrentPPOLearner` now provides
-sequence-preserving PPO updates, rollout hidden-state handling, and complete
-checkpoint continuation. `RecurrentRolloutCollector` bridges initialized
-`SimulatorEnv` lanes to those tensors while keeping actor inputs public; an
-optional callback supplies privileged critic features, and exact enemy
-elixir/hand/next-card targets can be recorded for belief losses. Serializable
-confidence-weighted BC curriculum and
-deck-conditioned historical/exploiter league sampling are also available in
-`rl.curriculum` and `rl.league`. Checkpoint match orchestration/Elo updates,
-full league artifact loading, evidence-backed physics-parameter variants, and
-tactical search remain later milestones. `rl.domain_randomization` already
-provides deterministic cadence/latency/V2-token-noise variants; it does not
-silently perturb uncertain collision, targeting, or attack-timer mechanics.
+sequence-preserving PPO updates, optional temporal chunks with hidden-state
+snapshots, rollout continuation, and complete checkpoint continuation.
+`RecurrentRolloutCollector` bridges initialized `SimulatorEnv` lanes to those
+tensors while keeping actor inputs public; an optional callback supplies
+privileged critic features, and exact enemy elixir/hand/next-card targets can
+be recorded for belief losses. The generalized runner uses the larger
+strategic actor by default, stages opponent sampling, and can update a
+frozen-checkpoint PFSP payoff book from completed lane outcomes. Serializable
+confidence-weighted BC curriculum and deck-conditioned historical/exploiter
+league sampling are also available in `rl.curriculum` and `rl.league`.
+Persistent actor/learner services, full league artifact loading,
+evidence-backed physics-parameter variants, and tactical search remain later
+milestones. `rl.domain_randomization` already provides deterministic
+cadence/latency/V2-token-noise variants; it does not silently perturb
+uncertain collision, targeting, or attack-timer mechanics.
 PyTorch is an optional dependency.
 
 ### Runnable recurrent PPO prototype
@@ -912,6 +915,67 @@ observations and simulator opponent as the actor run, but their action source
 is explicit code. This is the quickest way to detect the common mistake of
 reporting a baseline's wins as if they belonged to the neural checkpoint.
 
+### Strategic learning redesign (2026-08-28)
+
+The generalized RL harness now defaults to an actor-controlled strategic
+learner rather than a rule-teacher-centered experiment. The old teacher
+warm-start commands later in this section remain reproducibility fixtures for
+historical checkpoints; they are not evidence of learned strategy and must
+not be used as the mainline training recipe.
+
+The policy may receive only public game information. The simulator remains the
+authority for card mechanics and legal action masks. The actor must sample its
+own legal action from the factorized policy:
+
+```text
+mode/timing -> card slot -> card-conditioned placement cell
+```
+
+`WAIT` is a legal strategic action whenever the match is active. A card may be
+masked only when it is not in hand, unaffordable, or has no legal placement or
+target according to the authoritative simulator. A human preference for
+Musketeer, Cannon, Fireball, Hog, a lane, or a timing window is not a mask.
+
+The mainline settings are:
+
+```text
+expert_execution_probability = 0
+imitation_only = false
+entropy_coef > 0
+terminal outcome = +1 / 0 / -1
+temporary shaping = normalized potential difference only
+actor = public recurrent policy
+critic = optional isolated privileged current-state value function
+```
+
+Use `--expert-guidance` and imitation only for a separately named bootstrap
+experiment. If replay-derived spell locations or timings are uncertain, omit
+that factor's loss rather than teaching a false one-hot action. Do not feed
+teacher-executed transitions into ordinary on-policy PPO.
+
+The staged plan is documented in the [strategic architecture decision in
+GOAL.md](GOAL.md#strategic-learning-architecture-decision-2026-08-28): validate
+the simulator, learn short mechanics scenarios, progress through randomized
+scripted opponents, expand across validated meta archetypes, then train
+against a historical/PFSP pool and a small league. The executable harness now
+includes the non-prescriptive curriculum, recurrent PPO sequence chunks,
+temporary potential-reward annealing, a public spatial placement path, and
+optional payoff-updated PFSP over frozen actors. The 2.6 Hog Cycle reference is
+a sanity source for scenario coverage and grave-error checks, not a policy
+label source.
+
+The implementation intentionally keeps segment resets in this local runner:
+each segment samples a reproducible lane set and resumes the same policy and
+optimizer checkpoint. This bounds memory and makes curriculum provenance easy
+to audit. Persistent episode lanes are the next throughput-oriented runner
+upgrade; they are not silently claimed by the current reports.
+
+New training reports must retain the ruleset/engine hash, observation-contract
+hash, exact opponent deck and strategy, seeds, action source, terminal versus
+truncated outcome, and whether the actor controlled every action. Promotion
+requires paired frozen evaluation across decks and seeds; success against one
+deterministic enemy is only a regression gate.
+
 ### Generalized opponent training and held-out evaluation
 
 [`rl/generalized.py`](rl/generalized.py) adds the next training loop. It
@@ -922,6 +986,12 @@ deterministic Hog-cycle regression lane while the other lanes cover pressure,
 defense, beatdown, air, siege/bait, and random legal play. Unsupported cards
 in an opponent's private hand are masked only in the unused opponent-view
 projection; the opponent controller retains the authoritative hand and deck.
+
+The segment-reset behavior and deterministic lane are retained here only for
+historical reproducibility. The redesign will replace them in the mainline
+curriculum with persistent episode lanes, actor-controlled actions on every
+learner step, and explicitly mixed scripted/frozen opponents. Do not interpret
+this legacy command as the recommended route to strategic competence.
 
 The commands in this section assume the shell is in `simulator/`, the
 directory containing this README. The project environment is
@@ -977,7 +1047,10 @@ PYTHONPATH=.:..:../src \
 -m rl.generalized train --allow-provisional \
   --updates 20 --envs 4 --horizon 512 --seed 0 --device cuda \
   --rollouts-per-scenario 3 \
-  --explicit-hand-features \
+  --sequence-length 128 \
+  --potential-reward-weight 0.1 \
+  --potential-reward-anneal-segments 32 \
+  --threat-stratified \
   --archetypes aggressive-pressure,defensive-cycle,beatdown,air-beatdown,siege-bait,random-legal \
   --strategies aggressive-pressure,defensive-cycle,beatdown,siege-bait,random-legal \
   --checkpoint-out outputs/simulator/training/generalized-recurrent-prototype.pt \
@@ -1027,15 +1100,39 @@ when the sidecar was moved, is unavailable, or a deliberate branch is wanted;
 otherwise omit it and let the sidecar provide the cursor. Keep `--json-out`
 beside the checkpoint if future automatic resume inference is required.
 
-For a new actor that must identify the correct card slot, prefer
-`--explicit-hand-features`. It encodes the four public hand slots separately
-instead of compressing the whole hand into one global projection. This changes
-the model architecture, so use it for a fresh run or a checkpoint already
-created with the same option; older checkpoints remain loadable as evaluation
-or self-play opponents. `--direct-public-action-features` is a separate,
-architecture-changing opt-in that feeds public global elixir/hand features
-directly to the WAIT/PLAY gate. It does not expose privileged state, but it
-must likewise be used consistently when creating or resuming that checkpoint.
+Generalized training defaults to the larger strategic model: explicit public
+hand-slot features, board-aligned spatial placement features, a 256-unit GRU,
+and a 128-step recurrent PPO chunk. Use `--small-model` only for quick smoke
+tests or when resuming a legacy small checkpoint. These architecture choices
+are serialized and must match when resuming; an old checkpoint remains useful
+as an evaluation or self-play opponent, but cannot be resumed into the new
+model without a compatible conversion. The lower-level `rl.prototype train`
+command keeps its small legacy default for compatibility; pass
+`--strategic-model` there for a fresh strategic artifact.
+
+`--env-backend process` or `--env-backend packed-process` exposes the existing
+CPU lane-parallel backends; set `--env-workers` to bound worker count. Benchmark
+them against `reference` on the target machine because process serialization
+can outweigh the benefit for short horizons. These are throughput options,
+not changes to the policy's observation or legality contract.
+
+The staged curriculum changes only the sampled opponent distribution. It does
+not force a learner card or placement. Temporary potential shaping is reduced
+linearly by global segment and reaches zero at
+`--potential-reward-anneal-segments`; set that option to `0` to keep the
+coefficient fixed. Frozen-checkpoint lanes can be made payoff-aware after
+enough completed matches with, for example,
+`--opponent-checkpoints old-a.pt,old-b.pt --pfsp
+--pfsp-payoff-book payoffs.json --pfsp-payoff-book-out payoffs-next.json`.
+Unseen opponents retain exploration weight, and simulator-controller lanes are
+not entered into the checkpoint payoff book.
+
+#### Legacy teacher-only reproduction
+
+The following command reproduces the earlier rule-teacher/imitation
+experiments. It is intentionally not the mainline training recipe: it executes
+the teacher on every step, sets imitation to full weight, and disables entropy.
+Use it only to reproduce historical artifacts or compare the teacher itself.
 
 #### 2.6 Hog Cycle as a sanity reference
 
@@ -1315,6 +1412,7 @@ source for automatic `starting_segment` recovery on the next run.
 | `segments`, `segment_indices`, `starting_segment`, `segment_offset_source` | Generalized schedule accounting. These are scenario-segment indices, not learner update numbers. |
 | `starting_update`, `final_update`, `updates` | Prototype learner-update accounting. On a fresh prototype run, `final_update` advances by `updates`; generalized segments multiply that count by `rollouts_per_scenario`. |
 | `aggregate_outcomes` / `outcomes` | Generalized-run or prototype-segment outcome totals; rollout-boundary truncation is kept separate from terminal results. |
+| `match_outcomes` | Optional lane-indexed terminal outcomes emitted by a rollout; generalized PFSP uses these to attribute a result to the exact frozen checkpoint assigned to that lane. |
 | `wins`, `losses`, `draws` | Terminal outcomes from the learner's perspective. |
 | `completed_matches` / `completed` | Matches that reached a terminal result; excludes truncated matches. |
 | `truncated` / `truncated_matches` | Matches stopped by the decision cap or rollout boundary; never count as draws. |
@@ -1329,6 +1427,8 @@ source for automatic `starting_segment` recovery on the next run.
 | `optimization_steps`, `minibatches`, `epochs` | The amount of learner optimization performed for that segment. |
 | `mean_decisions`, `max_decisions` | Match length and the censoring cap used by evaluation. |
 | `policy_mode`, `actor_controls_actions` | Whether actions came from the neural `actor` or an explicit `public-counter`, `strategic-counter`, or `deterministic-counter`; `actor_controls_actions` is `true` only for the neural actor. |
+| `potential_reward_weight`, `potential_reward_anneal_segments` | Temporary normalized tower/crown potential coefficient and its global-segment annealing schedule; a zero coefficient after annealing means terminal outcome is the only reward. |
+| `pfsp_matches_recorded`, `pfsp_payoff_book_state` | Number of completed frozen-checkpoint matches attributed to the learner and the resulting directional payoff history; simulator-controller lanes are excluded. |
 | `target_plays_by_card` | In a matrix match's `metrics`, counts accepted `card_played` events for the target player by card ID; it is the reliable card-count audit. |
 | `target_play_trace` | Per-PLAY attempt/accepted-play diagnostics with decision, physics time, card ID, `accepted`, and viewer-local cell; inspect `accepted` before counting a proposal. |
 | `tower_hp_before`, `tower_hp_after`, `tower_hp_end` | `tower_hp_before`/`tower_hp_after` are per-decision snapshots in a full prototype trace; `tower_hp_end` is the final or cap-time king/princess snapshot in an episode or matrix result, keyed by `player_0`/`player_1` and `king`/`left`/`right`. None is a continuous damage timeline. |

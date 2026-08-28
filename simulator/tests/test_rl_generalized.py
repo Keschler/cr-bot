@@ -10,10 +10,13 @@ from simulator.env import SimulatorEnv
 from simulator.rl.generalized import (
     GeneralizedTrainingConfig,
     GeneralizedTrainingError,
+    _segment_config,
+    _update_payoff_book_from_segment,
     build_heldout_matrix_config,
     make_scenario_opponent_action,
     sample_training_scenarios,
 )
+from simulator.rl.league import LeaguePayoffBook, LeaguePayoffStats
 from simulator.rl.opponent_pool import OpponentPool
 from simulator.rl.prototype import PrototypeConfig
 from simulator.ruleset import load_fixed_ruleset
@@ -85,6 +88,72 @@ def test_generalized_config_records_threat_stratification() -> None:
         threat_stratified=True,
     )
     assert config.threat_stratified is True
+
+
+def test_temporary_potential_reward_anneals_by_global_segment() -> None:
+    base = PrototypeConfig(
+        horizon=8,
+        potential_reward_weight=0.1,
+    )
+
+    assert _segment_config(
+        base,
+        segment_index=0,
+        rollouts_per_scenario=1,
+        potential_reward_anneal_segments=32,
+    ).potential_reward_weight == pytest.approx(0.1)
+    assert _segment_config(
+        base,
+        segment_index=16,
+        rollouts_per_scenario=1,
+        potential_reward_anneal_segments=32,
+    ).potential_reward_weight == pytest.approx(0.05)
+    assert _segment_config(
+        base,
+        segment_index=32,
+        rollouts_per_scenario=1,
+        potential_reward_anneal_segments=32,
+    ).potential_reward_weight == pytest.approx(0.0)
+
+
+def test_pfsp_updates_use_lane_indexed_terminal_outcomes() -> None:
+    assignments = (None, "old-a", "old-b")
+    report = {
+        "update_rows": [
+            {
+                "rollout": {
+                    "match_outcomes": [
+                        {"lane": 0, "outcome": "win"},
+                        {"lane": 1, "outcome": "loss"},
+                    ]
+                }
+            },
+            {
+                "rollout": {
+                    "match_outcomes": [
+                        {"lane": 1, "outcome": "win"},
+                        {"lane": 2, "outcome": "draw"},
+                    ]
+                }
+            },
+        ]
+    }
+
+    book, recorded = _update_payoff_book_from_segment(
+        LeaguePayoffBook(),
+        report,
+        assignments,
+        learner_agent_id="main",
+    )
+
+    assert recorded == 3
+    assert book.stats("main", "old-a") == LeaguePayoffStats(wins=1, losses=1)
+    assert book.stats("main", "old-b") == LeaguePayoffStats(draws=1)
+
+
+def test_pfsp_payoff_paths_require_pfsp_mode() -> None:
+    with pytest.raises(GeneralizedTrainingError, match="require pfsp"):
+        GeneralizedTrainingConfig(pfsp_payoff_book="payoffs.json")
 
 
 def test_scenario_callback_uses_authoritative_state_only_for_opponent_action() -> None:

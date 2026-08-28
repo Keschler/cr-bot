@@ -9,6 +9,9 @@ from rl.curriculum import (
     CurriculumConfigurationError,
     CurriculumPhase,
     CurriculumSchedule,
+    StrategicCurriculum,
+    StrategicCurriculumStage,
+    default_strategic_curriculum,
 )
 from rl.league import (
     DeckConditionedOpponentScope,
@@ -17,10 +20,13 @@ from rl.league import (
     LeagueConfig,
     LeagueConfigurationError,
     LeagueOrchestrator,
+    LeaguePayoffBook,
+    LeaguePayoffStats,
     LeagueRatingBook,
     LeagueRunState,
     LeagueSampler,
     LeagueSamplingError,
+    PFSPOpponentSampler,
     deterministic_seed,
 )
 
@@ -188,13 +194,40 @@ def test_curriculum_phases_must_be_contiguous() -> None:
                 CurriculumPhase("second", 11, None),
             ),
         )
-
     with pytest.raises(CurriculumConfigurationError, match="first"):
         CurriculumSchedule(
             schedule_id="late-start",
             phases=(CurriculumPhase("first", 1, None),),
         )
 
+
+def test_strategic_curriculum_is_staged_and_non_prescriptive() -> None:
+    curriculum = default_strategic_curriculum()
+
+    assert curriculum.stage_at(0).stage_id == "mechanics-foundation"
+    assert curriculum.stage_at(4).stage_id == "scripted-threat-expansion"
+    assert curriculum.stage_at(12).stage_id == "meta-deck-diversity"
+    assert curriculum.stage_at(32).stage_id == "historical-league"
+    assert "air-beatdown" in curriculum.stage_at(12).archetypes
+    assert curriculum.stage_at(0).strategies
+
+    restored = StrategicCurriculum.from_mapping(curriculum.as_dict())
+    assert restored == curriculum
+
+
+def test_strategic_curriculum_rejects_gaps() -> None:
+    with pytest.raises(CurriculumConfigurationError, match="contiguous"):
+        StrategicCurriculum(
+            schedule_id="bad",
+            stages=(
+                StrategicCurriculumStage(
+                    "first", 0, 2, ("a",), ("b",)
+                ),
+                StrategicCurriculumStage(
+                    "second", 3, None, ("a",), ("b",)
+                ),
+            ),
+        )
 
 def test_league_config_round_trip_preserves_deck_conditioned_scope() -> None:
     config = _league()
@@ -317,3 +350,77 @@ def test_orchestrator_records_outcomes_and_separates_frozen_checkpoint_rating() 
     assert orchestrator.ratings.rating("main") > 1500.0
     restored = LeagueRatingBook.from_mapping(orchestrator.ratings.as_dict())
     assert restored == orchestrator.ratings
+
+
+def test_payoff_book_is_directional_and_json_round_trips() -> None:
+    book = (
+        LeaguePayoffBook()
+        .after_match("main", "close", "win")
+        .after_match("main", "close", "draw")
+        .after_match("main", "solved", "loss")
+    )
+
+    close = book.stats("main", "close")
+    assert close == LeaguePayoffStats(wins=1, draws=1)
+    assert close.games == 2
+    assert close.score == pytest.approx(0.75)
+    assert book.stats("close", "main").games == 0
+
+    restored = LeaguePayoffBook.from_mapping(json.loads(book.to_json()))
+    assert restored == book
+
+
+def test_pfsp_weights_focus_on_close_matchups_but_keep_exploration() -> None:
+    book = LeaguePayoffBook(
+        records=(
+            ("main", "close", LeaguePayoffStats(wins=5, losses=5)),
+            ("main", "solved", LeaguePayoffStats(wins=10)),
+        )
+    )
+    sampler = PFSPOpponentSampler(
+        payoff_book=book,
+        seed=23,
+        minimum_weight=0.01,
+        unknown_opponent_weight=0.25,
+        exploration_probability=0.0,
+    )
+
+    base = dict(sampler.base_weights("main", ["solved", "close", "new"]))
+    assert base["close"] == pytest.approx(0.25)
+    assert base["new"] == pytest.approx(0.25)
+    assert base["solved"] == pytest.approx(0.01)
+
+    weights = dict(sampler.weights("main", ["solved", "close", "new"]))
+    assert sum(weights.values()) == pytest.approx(1.0)
+    assert weights["close"] == pytest.approx(weights["new"])
+    assert weights["close"] > weights["solved"]
+
+    mixed = PFSPOpponentSampler(
+        payoff_book=book,
+        seed=23,
+        exploration_probability=0.2,
+    ).weights("main", ["solved", "close", "new"])
+    assert sum(weight for _, weight in mixed) == pytest.approx(1.0)
+    assert all(weight > 0.0 for _, weight in mixed)
+
+
+def test_pfsp_sampling_is_replayable_and_does_not_change_candidate_order() -> None:
+    book = LeaguePayoffBook().after_match("main", "a", "win")
+    sampler_a = PFSPOpponentSampler(payoff_book=book, seed=91)
+    sampler_b = PFSPOpponentSampler(payoff_book=book, seed=91)
+
+    selections_a = [sampler_a.sample("main", index, ["b", "a", "c"]) for index in range(32)]
+    selections_b = [sampler_b.sample("main", index, ["c", "b", "a"]) for index in range(32)]
+    assert selections_a == selections_b
+    assert set(selections_a) <= {"a", "b", "c"}
+
+
+def test_pfsp_rejects_invalid_or_self_candidates() -> None:
+    sampler = PFSPOpponentSampler()
+
+    with pytest.raises(LeagueSamplingError, match="at least one"):
+        sampler.sample("main", 0, [])
+    with pytest.raises(LeagueSamplingError, match="duplicates"):
+        sampler.sample("main", 0, ["opponent", "opponent"])
+    with pytest.raises(LeagueSamplingError, match="learner"):
+        sampler.sample("main", 0, ["main"])

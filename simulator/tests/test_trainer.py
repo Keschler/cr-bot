@@ -174,6 +174,23 @@ def test_serious_trainer_defaults_to_sparse_terminal_outcome_reward() -> None:
     assert reward.win_weight == 1.0
 
 
+def test_terminal_potential_reward_is_bounded_and_auditable() -> None:
+    reward = RewardConfig.terminal_with_potential(0.1)
+
+    assert reward.version == "terminal-potential-v1"
+    assert reward.tower_damage_weight == pytest.approx(0.1)
+    assert reward.crown_weight == pytest.approx(0.1)
+    assert reward.win_weight == pytest.approx(1.0)
+    assert reward.as_dict() == {
+        "version": "terminal-potential-v1",
+        "tower_damage_weight": 0.1,
+        "crown_weight": 0.1,
+        "win_weight": 1.0,
+    }
+    with pytest.raises(ValueError, match="potential shaping weight"):
+        RewardConfig.terminal_with_potential(0.0)
+
+
 def test_train_cli_is_fail_closed_for_provisional_ruleset(tmp_path) -> None:
     checkpoint = tmp_path / "must-not-exist.npz"
 

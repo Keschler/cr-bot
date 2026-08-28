@@ -397,6 +397,12 @@ def test_balloon_death_bomb_damages_nearby_air_ground_and_building_targets() -> 
     balloon.hp = 0
     engine._resolve_deaths(state)
 
+    # Current Balloon death damage is delayed by three seconds.
+    assert ground.hp == 1_000
+    assert air.hp == 300
+    assert building.hp == 1_000
+    for _ in range(60):
+        engine._advance_area_effects(state)
     assert ground.hp == 760
     assert air.hp == 60
     assert building.hp == 760
@@ -567,8 +573,8 @@ def test_suspicious_bush_is_untargetable_and_releases_two_bush_goblins_on_contac
     assert engine._targetable_for_acquisition(bush) is False
     engine._move_entities(state)
     assert bush.hp == 0
-    assert tower.hp == tower.max_hp - int(ROSTER.card("suspicious-bush").damage or 0)
-    assert any(
+    assert tower.hp == tower.max_hp
+    assert not any(
         event.kind == "damage_applied"
         and event.get("source_card_id") == "suspicious-bush"
         and event.get("target_uid") == tower.uid
