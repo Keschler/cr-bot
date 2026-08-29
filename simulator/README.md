@@ -214,13 +214,17 @@ The mainline policy is a factorized recurrent PPO actor:
 public raster/global/entity features
         -> entity Transformer
         -> GRU (~256 hidden units)
-        -> mode/timing -> card slot -> card-conditioned placement
+        -> mode -> card slot -> card-conditioned placement
 ```
 
 Legality masks remove impossible actions only. A separate privileged critic
 may use full simulator state during training. The actor controls every
 ordinary PPO action; counter policies and teachers are explicit opponents,
 baselines, or short-lived auxiliary labels.
+
+The current action contract has no learned wait-duration head: `WAIT` advances
+the fixed simulator decision interval. Adding learned timing remains a future
+behavior-changing architecture step.
 
 The runnable neural prototype is in [rl/prototype.py](rl/prototype.py).
 The generalized runner adds curriculum sampling, held-out provenance,

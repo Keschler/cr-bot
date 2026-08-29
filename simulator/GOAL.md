@@ -19,8 +19,9 @@ a controlled probe when the action boundary or causal behavior matters.
 
 - `rulesets/v1.json` contains the 109-card opponent roster but remains
   `training_ready: false`.
-- Generated coverage is deterministic and executable, but 259 structural
-  cases still lack an explicit event or final-state obligation.
+- Generated coverage is deterministic and executable, but the latest 1,135-case
+  strict run still has 43 structural cases without an explicit event or
+  final-state obligation and 14 execution failures.
 - Phase-0 physical-lab software is implemented, but physical evidence is
   intentionally deferred for the current RL-first execution path. No
   connected run has yet satisfied the evidence/readiness gates.
@@ -38,6 +39,9 @@ a controlled probe when the action boundary or causal behavior matters.
   batches. In the current CPU-only training environment it reaches about
   383 decisions/s at batch 16, versus about 1.51k simulator steps/s; CPU
   fallback remains a diagnostic path, not the production throughput target.
+- The current action contract has `WAIT`/`PLAY`, card slot, and placement but
+  no learned wait-duration head; `WAIT` advances the fixed simulator decision
+  interval. The proposed timing head remains a future architecture change.
 
 These results establish plumbing and performance, not game strength or
 sim-to-real fidelity.
@@ -131,8 +135,9 @@ The active public actor is factorized and recurrent:
    Transformer entity tokens; `card_embedding` represents the four slot
    positions, not card identities.
 4. Feed the encoded public history to a GRU of approximately 256 units.
-5. Decode masked `WAIT`/`PLAY`, wait timing, card slot, and
-   card-conditioned placement.
+5. Decode masked `WAIT`/`PLAY`, card slot, and card-conditioned placement.
+   `WAIT` currently advances the fixed simulator decision interval; timing is
+   not yet a learned head.
 
 The critic has a separate encoder and may use exact hidden opponent state.
 Belief heads are optional low-weight auxiliaries and must use public actor
