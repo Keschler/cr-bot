@@ -357,12 +357,17 @@ def _name_tuple(value: object, name: str) -> tuple[str, ...]:
 
 @dataclass(frozen=True, slots=True)
 class StrategicCurriculumStage:
-    """One rollout-segment stage in the teacher-free strategic curriculum.
+    """One stage in the teacher-free strategic curriculum.
 
     These fields choose the opponent distribution only.  They do not prescribe
     the learner's card, timing, lane, or placement.  The stage vocabulary is
     intentionally kept as names so the simulator-specific generalized runner
     can validate it against the active opponent pool.
+
+    ``start_segment``/``end_segment`` remain the fallback cursor for custom
+    schedules.  The default schedule also declares cumulative decision
+    boundaries so production training does not advance phases merely because
+    a small local segment ended.
     """
 
     stage_id: str
@@ -376,6 +381,11 @@ class StrategicCurriculumStage:
     # action.  An empty tuple keeps compatibility with caller-defined stages
     # that only constrain archetypes and strategies.
     sampling_mix: tuple[tuple[str, float], ...] = ()
+    # Cumulative learner-decision boundaries. ``None`` on every stage keeps
+    # the segment-index fallback for custom schedules written before this
+    # decision-budget schedule was introduced.
+    start_decisions: int | None = None
+    end_decisions: int | None = None
 
     def __post_init__(self) -> None:
         _string(self.stage_id, "stage_id")
@@ -416,11 +426,33 @@ class StrategicCurriculumStage:
                 raise CurriculumConfigurationError(
                     "sampling_mix weights must sum to 1"
                 )
+        if self.start_decisions is None and self.end_decisions is not None:
+            raise CurriculumConfigurationError(
+                "end_decisions requires start_decisions"
+            )
+        if self.start_decisions is not None:
+            _integer(self.start_decisions, "start_decisions", minimum=0)
+            if self.end_decisions is not None:
+                _integer(self.end_decisions, "end_decisions", minimum=1)
+                if self.end_decisions <= self.start_decisions:
+                    raise CurriculumConfigurationError(
+                        "end_decisions must be greater than start_decisions"
+                    )
 
     def contains(self, segment: int) -> bool:
         _integer(segment, "segment", minimum=0)
         return self.start_segment <= segment and (
             self.end_segment is None or segment < self.end_segment
+        )
+
+    def contains_decisions(self, decisions: int) -> bool:
+        """Return whether a cumulative decision cursor belongs to this stage."""
+
+        _integer(decisions, "decisions", minimum=0)
+        if self.start_decisions is None:
+            return False
+        return self.start_decisions <= decisions and (
+            self.end_decisions is None or decisions < self.end_decisions
         )
 
     def as_dict(self) -> dict[str, object]:
@@ -435,6 +467,8 @@ class StrategicCurriculumStage:
                 {"source": source, "weight": weight}
                 for source, weight in self.sampling_mix
             ],
+            "start_decisions": self.start_decisions,
+            "end_decisions": self.end_decisions,
         }
 
     @classmethod
@@ -474,6 +508,8 @@ class StrategicCurriculumStage:
             strategies=_name_tuple(raw.get("strategies", []), "strategies"),
             description=raw.get("description", ""),
             sampling_mix=sampling_mix,
+            start_decisions=raw.get("start_decisions"),
+            end_decisions=raw.get("end_decisions"),
         )
 
 
@@ -498,6 +534,15 @@ class StrategicCurriculum:
                 raise CurriculumConfigurationError(
                     f"stages[{index}] must be a StrategicCurriculumStage"
                 )
+        decision_schedule = tuple(
+            stage.start_decisions is not None for stage in self.stages
+        )
+        if any(decision_schedule) and not all(decision_schedule):
+            raise CurriculumConfigurationError(
+                "strategic curriculum decision boundaries must be declared for every stage"
+            )
+        previous_decision_end: int | None = None
+        for index, stage in enumerate(self.stages):
             if index == 0 and stage.start_segment != 0:
                 raise CurriculumConfigurationError(
                     "the first strategic curriculum stage must start at segment 0"
@@ -511,6 +556,23 @@ class StrategicCurriculum:
                     "an open-ended strategic stage must be final"
                 )
             previous_end = stage.end_segment
+            if all(decision_schedule):
+                if index == 0 and stage.start_decisions != 0:
+                    raise CurriculumConfigurationError(
+                        "the first strategic curriculum stage must start at decision 0"
+                    )
+                if (
+                    previous_decision_end is not None
+                    and stage.start_decisions != previous_decision_end
+                ):
+                    raise CurriculumConfigurationError(
+                        "strategic curriculum decision boundaries must be contiguous"
+                    )
+                if previous_decision_end is None and index > 0:
+                    raise CurriculumConfigurationError(
+                        "an open-ended strategic decision stage must be final"
+                    )
+                previous_decision_end = stage.end_decisions
 
     def stage_at(self, segment: int) -> StrategicCurriculumStage:
         _integer(segment, "segment", minimum=0)
@@ -519,6 +581,27 @@ class StrategicCurriculum:
                 return stage
         raise CurriculumConfigurationError(
             f"strategic curriculum {self.schedule_id!r} has no stage at segment {segment}"
+        )
+
+    @property
+    def has_decision_schedule(self) -> bool:
+        """Whether every stage has an explicit cumulative decision range."""
+
+        return all(stage.start_decisions is not None for stage in self.stages)
+
+    def stage_at_decisions(self, decisions: int) -> StrategicCurriculumStage:
+        """Resolve a production stage from cumulative learner decisions."""
+
+        _integer(decisions, "decisions", minimum=0)
+        if not self.has_decision_schedule:
+            raise CurriculumConfigurationError(
+                f"strategic curriculum {self.schedule_id!r} has no decision schedule"
+            )
+        for stage in self.stages:
+            if stage.contains_decisions(decisions):
+                return stage
+        raise CurriculumConfigurationError(
+            f"strategic curriculum {self.schedule_id!r} has no stage at decision {decisions}"
         )
 
     def as_dict(self) -> dict[str, object]:
@@ -615,6 +698,8 @@ def default_strategic_curriculum() -> StrategicCurriculum:
                 all_strategies,
                 "Short generated scenarios for action/placement and basic defense.",
                 basic_mechanics_mix,
+                0,
+                5_000_000,
             ),
             StrategicCurriculumStage(
                 "scripted-threat-expansion",
@@ -624,6 +709,8 @@ def default_strategic_curriculum() -> StrategicCurriculum:
                 all_strategies,
                 "Mix pressure, air, beatdown, siege/bait, and random legal controllers.",
                 scripted_curriculum_mix,
+                5_000_000,
+                35_000_000,
             ),
             StrategicCurriculumStage(
                 "meta-deck-diversity",
@@ -633,6 +720,8 @@ def default_strategic_curriculum() -> StrategicCurriculum:
                 all_strategies,
                 "Expand validated archetypes and held-out deck variants with rehearsal.",
                 meta_deck_mix,
+                35_000_000,
+                135_000_000,
             ),
             StrategicCurriculumStage(
                 "historical-league",
@@ -642,6 +731,8 @@ def default_strategic_curriculum() -> StrategicCurriculum:
                 all_strategies,
                 "Use frozen checkpoints/PFSP and later league opponents without forgetting anchors.",
                 historical_mix,
+                135_000_000,
+                435_000_000,
             ),
             StrategicCurriculumStage(
                 "small-league",
@@ -651,6 +742,8 @@ def default_strategic_curriculum() -> StrategicCurriculum:
                 all_strategies,
                 "Train main and exploiter roles against frozen history and fixed anchors.",
                 league_mix,
+                435_000_000,
+                None,
             ),
         ),
     )

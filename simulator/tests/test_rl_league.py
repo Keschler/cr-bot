@@ -211,6 +211,14 @@ def test_strategic_curriculum_is_staged_and_non_prescriptive() -> None:
     assert curriculum.stage_at(64).stage_id == "small-league"
     assert "air-beatdown" in curriculum.stage_at(12).archetypes
     assert curriculum.stage_at(0).strategies
+    assert curriculum.has_decision_schedule is True
+    assert curriculum.stage_at_decisions(0).stage_id == "mechanics-foundation"
+    assert curriculum.stage_at_decisions(4_999_999).stage_id == "mechanics-foundation"
+    assert curriculum.stage_at_decisions(5_000_000).stage_id == "scripted-threat-expansion"
+    assert curriculum.stage_at_decisions(34_999_999).stage_id == "scripted-threat-expansion"
+    assert curriculum.stage_at_decisions(35_000_000).stage_id == "meta-deck-diversity"
+    assert curriculum.stage_at_decisions(135_000_000).stage_id == "historical-league"
+    assert curriculum.stage_at_decisions(435_000_000).stage_id == "small-league"
     assert curriculum.stage_at(0).sampling_mix == (
         ("isolated-offense", 0.25),
         ("ground-defense", 0.25),
@@ -224,6 +232,19 @@ def test_strategic_curriculum_is_staged_and_non_prescriptive() -> None:
 
     restored = StrategicCurriculum.from_mapping(curriculum.as_dict())
     assert restored == curriculum
+
+
+def test_strategic_curriculum_rejects_partial_decision_boundaries() -> None:
+    with pytest.raises(CurriculumConfigurationError, match="every stage"):
+        StrategicCurriculum(
+            schedule_id="partial-decision-schedule",
+            stages=(
+                StrategicCurriculumStage(
+                    "first", 0, 2, ("a",), ("b",), start_decisions=0, end_decisions=10
+                ),
+                StrategicCurriculumStage("second", 2, None, ("a",), ("b",)),
+            ),
+        )
 
 
 def test_strategic_curriculum_rejects_gaps() -> None:

@@ -484,12 +484,22 @@ class GeneralizedTrainingConfig:
 def _curriculum_axes(
     config: GeneralizedTrainingConfig,
     segment_index: int,
+    *,
+    decision_count: int | None = None,
 ) -> tuple[tuple[str, ...], tuple[str, ...], StrategicCurriculumStage | None]:
-    """Resolve the stage's opponent axes without constraining learner actions."""
+    """Resolve opponent axes without constraining learner actions.
+
+    Production schedules use cumulative learner decisions when the curriculum
+    declares them.  ``segment_index`` remains the fallback for custom
+    schedules that only define the older local cursor.
+    """
 
     if not config.use_curriculum:
         return tuple(config.train_archetypes), tuple(config.train_strategies), None
-    stage = config.curriculum.stage_at(segment_index)
+    if decision_count is not None and config.curriculum.has_decision_schedule:
+        stage = config.curriculum.stage_at_decisions(decision_count)
+    else:
+        stage = config.curriculum.stage_at(segment_index)
     # Explicit caller lists remain an upper bound. This keeps a small local
     # smoke run reproducible while the default schedule broadens over time.
     archetypes = tuple(
@@ -927,22 +937,33 @@ def _update_payoff_book_from_segment(
     return updated, recorded
 
 
-def _resolve_segment_offset(config: GeneralizedTrainingConfig) -> tuple[int, str]:
+def _resolve_segment_offset(
+    config: GeneralizedTrainingConfig,
+    *,
+    transitions_per_segment: int,
+) -> tuple[int, str, int]:
     """Resolve the global scenario cursor for a fresh or resumed run.
 
     Generalized reports are normally written beside their checkpoint.  When
     that sidecar is present, its last schedule index is the only safe source
-    of the next cursor.  An explicit ``segment_offset`` always wins and is
-    useful when the report was moved or intentionally branched.
+    of the next cursor.  The persisted decision cursor is preferred for the
+    curriculum because a resumed run may use a different lane or horizon.
+    An explicit ``segment_offset`` always wins and uses the current segment
+    size, which is useful when the report was moved or intentionally branched.
     """
 
+    _positive_int("transitions_per_segment", transitions_per_segment)
     if config.segment_offset is not None:
-        return config.segment_offset, "explicit"
+        return (
+            config.segment_offset,
+            "explicit",
+            config.segment_offset * transitions_per_segment,
+        )
     if config.checkpoint is None:
-        return 0, "fresh-run"
+        return 0, "fresh-run", 0
     sidecar = Path(config.checkpoint).with_suffix(".json")
     if not sidecar.exists():
-        return 0, "default-no-sidecar"
+        return 0, "default-no-sidecar", 0
     try:
         raw = json.loads(sidecar.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
@@ -950,19 +971,25 @@ def _resolve_segment_offset(config: GeneralizedTrainingConfig) -> tuple[int, str
             f"cannot read generalized checkpoint sidecar {sidecar}: {error}"
         ) from error
     if not isinstance(raw, Mapping) or raw.get("kind") != GENERALIZED_TRAINING_KIND:
-        return 0, "default-non-generalized-sidecar"
+        return 0, "default-non-generalized-sidecar", 0
     indices = raw.get("segment_indices")
     if isinstance(indices, list) and indices and all(type(value) is int for value in indices):
-        return max(indices) + 1, "generalized-sidecar"
-    segments = raw.get("segments")
-    if type(segments) is int and segments >= 0:
-        # Reports written before segment_indices was introduced still carry
-        # the number of schedule segments and can be resumed without replaying
-        # the same prefix.
-        return segments, "generalized-sidecar"
-    raise GeneralizedTrainingError(
-        f"generalized sidecar {sidecar} is missing a valid segment cursor"
-    )
+        starting_segment = max(indices) + 1
+    else:
+        segments = raw.get("segments")
+        if type(segments) is not int or segments < 0:
+            raise GeneralizedTrainingError(
+                f"generalized sidecar {sidecar} is missing a valid segment cursor"
+            )
+        starting_segment = segments
+    decision_cursor = raw.get("decision_cursor_end")
+    if decision_cursor is None:
+        decision_cursor = starting_segment * transitions_per_segment
+    elif type(decision_cursor) is not int or decision_cursor < 0:
+        raise GeneralizedTrainingError(
+            f"generalized sidecar {sidecar} has an invalid decision cursor"
+        )
+    return starting_segment, "generalized-sidecar", decision_cursor
 
 
 def train_generalized(
@@ -1009,7 +1036,6 @@ def train_generalized(
         ),
     )
     current_checkpoint = config.checkpoint
-    starting_segment, segment_offset_source = _resolve_segment_offset(config)
     stage_reports: list[Mapping[str, object]] = []
     stage_scenarios: list[list[dict[str, object]]] = []
     stage_opponent_assignments: list[list[dict[str, object]]] = []
@@ -1018,6 +1044,14 @@ def train_generalized(
         config.prototype_config.envs
         * config.prototype_config.horizon
         * config.rollouts_per_scenario
+    )
+    (
+        starting_segment,
+        segment_offset_source,
+        decision_cursor_start,
+    ) = _resolve_segment_offset(
+        config,
+        transitions_per_segment=transitions_per_segment,
     )
     total_transitions = config.segments * transitions_per_segment
 
@@ -1065,7 +1099,14 @@ def train_generalized(
     for local_segment_index in range(config.segments):
         segment_index = starting_segment + local_segment_index
         segment_indices.append(segment_index)
-        archetypes, strategies, stage = _curriculum_axes(config, segment_index)
+        decision_count = (
+            decision_cursor_start + local_segment_index * transitions_per_segment
+        )
+        archetypes, strategies, stage = _curriculum_axes(
+            config,
+            segment_index,
+            decision_count=decision_count,
+        )
         scenarios = sample_training_scenarios(
             pool,
             envs=config.prototype_config.envs,
@@ -1161,6 +1202,13 @@ def train_generalized(
         stage_metadata.append(
             {
                 "segment": segment_index,
+                "decision_cursor_start": decision_count,
+                "decision_cursor_end": decision_count + transitions_per_segment,
+                "decision_schedule": (
+                    "cumulative"
+                    if config.curriculum.has_decision_schedule
+                    else "segment-fallback"
+                ),
                 "stage_id": None if stage is None else stage.stage_id,
                 "archetypes": list(archetypes),
                 "strategies": list(strategies),
@@ -1221,6 +1269,14 @@ def train_generalized(
         "rollouts_per_scenario": config.rollouts_per_scenario,
         "starting_segment": starting_segment,
         "segment_offset_source": segment_offset_source,
+        "decision_cursor_start": decision_cursor_start,
+        "decision_cursor_end": decision_cursor_start + total_transitions,
+        "transitions_per_segment": transitions_per_segment,
+        "curriculum_stage_basis": (
+            "cumulative-decisions"
+            if config.use_curriculum and config.curriculum.has_decision_schedule
+            else "segment"
+        ),
         "segment_indices": segment_indices,
         "envs": config.prototype_config.envs,
         "horizon": config.prototype_config.horizon,

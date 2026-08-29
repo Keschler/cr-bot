@@ -22,8 +22,8 @@ a controlled probe when the action boundary or causal behavior matters.
 - Generated coverage is deterministic and executable: the latest 1,135-case
   strict run passes execution, repeated hashes, complete roster coverage, and
   behavioral obligations.
-- The RL suite is green (`159 passed`; `161` including vector-backend replay
-  parity); the default non-audio/non-mining suite is `413 passed, 11 failed`
+- The RL suite is green (`161 passed`; `163` including vector-backend replay
+  parity); the default non-audio/non-mining suite is `415 passed, 11 failed`
   in the sandbox, with failures limited to
   unavailable physical-lab assets, sandboxed forkserver sockets, and the
   absent KataCR submodule. The intended-context run is `414 passed, 9 failed`;
@@ -206,10 +206,14 @@ preflight, exploit audit, and declared quality gates pass.
    is discarded only from the temporary collector configuration; recurrent
    hidden state remains continuous per decision.
 
-The executable strategic curriculum stores each phase mix as deterministic
-`sampling_mix` slots and records observed source counts per segment. These
-labels select opponent/scenario provenance only; they never select the
-learner's card, timing, lane, or placement.
+The executable strategic curriculum switches the default phases on cumulative
+learner decisions at 5M, 35M, 135M, and 435M. It stores each phase mix as
+deterministic `sampling_mix` slots and records observed source counts and
+decision cursors per segment. Custom schedules without decision boundaries
+use the segment cursor. These labels select opponent/scenario provenance only;
+they never select the learner's card, timing, lane, or placement. Generalized
+reports persist the cumulative decision cursor so resume does not infer phase
+progress from a changed lane count or horizon.
 
 Side-balanced self-play is executable with matched generalized runs using
 `--target-player 0` and `--target-player 1`. The trainer swaps only world deck

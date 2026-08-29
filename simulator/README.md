@@ -387,10 +387,13 @@ opponent and never choose the learner's move.
    per-deck outcomes, confidence intervals, tower/crown outcomes, traces,
    rejected/fallback counts, and regressions.
 
-The default strategic curriculum serializes these phase percentages as
-deterministic `sampling_mix` slots and records source counts per segment. A
-source is opponent/scenario provenance only; it never chooses the learner's
-action.
+The default strategic curriculum switches on cumulative learner decisions at
+5M, 35M, 135M, and 435M, serializes the phase percentages as deterministic
+`sampling_mix` slots, and records source counts plus decision cursors per
+segment. Custom schedules without decision boundaries retain segment-cursor
+fallback. A source is opponent/scenario provenance only; it never chooses the
+learner's action. Generalized reports persist the cumulative decision cursor,
+so resume remains correct even if the next run changes lane count or horizon.
 
 `LeagueOrchestrator` retains directional payoff and rating state, exposes PFSP
 sampling at the current cursor, and fails closed when a configured periodic

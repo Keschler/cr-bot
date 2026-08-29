@@ -11,6 +11,7 @@ from simulator.env import SimulatorEnv
 from simulator.rl.generalized import (
     GeneralizedTrainingConfig,
     GeneralizedTrainingError,
+    _curriculum_axes,
     _segment_config,
     _update_payoff_book_from_segment,
     build_heldout_matrix_config,
@@ -53,6 +54,21 @@ def test_training_schedule_keeps_regression_and_varies_scenarios() -> None:
     assert [scenario.as_dict() for scenario in first] != [
         scenario.as_dict() for scenario in second
     ]
+
+
+def test_curriculum_axes_follow_cumulative_decision_budget() -> None:
+    config = GeneralizedTrainingConfig(
+        prototype_config=PrototypeConfig(envs=2, horizon=8, updates=1),
+        segments=1,
+    )
+
+    early = _curriculum_axes(config, 4, decision_count=0)
+    scripted = _curriculum_axes(config, 4, decision_count=5_000_000)
+
+    assert early[2] is not None
+    assert early[2].stage_id == "mechanics-foundation"
+    assert scripted[2] is not None
+    assert scripted[2].stage_id == "scripted-threat-expansion"
 
 
 def test_threat_stratified_schedule_reserves_air_and_ground_lanes() -> None:
@@ -333,6 +349,10 @@ def test_generalized_training_can_keep_a_scenario_across_rollouts(monkeypatch, t
     assert calls == [(3, 2, 8), (3, 2, 8)]
     assert report["rollouts_per_scenario"] == 3
     assert report["transitions"] == 2 * 3 * 2 * 8
+    assert report["decision_cursor_start"] == 0
+    assert report["decision_cursor_end"] == report["transitions"]
+    assert report["transitions_per_segment"] == 2 * 3 * 8
+    assert report["curriculum_stage_basis"] == "cumulative-decisions"
 
 
 def test_generalized_training_supports_player_one_side(monkeypatch, tmp_path) -> None:
@@ -385,6 +405,7 @@ def test_generalized_resume_advances_schedule_from_sidecar(monkeypatch, tmp_path
                 "kind": generalized.GENERALIZED_TRAINING_KIND,
                 "segments": 2,
                 "segment_indices": [0, 1],
+                "decision_cursor_end": 987,
             }
         ),
         encoding="utf-8",
@@ -416,6 +437,8 @@ def test_generalized_resume_advances_schedule_from_sidecar(monkeypatch, tmp_path
     assert report["starting_segment"] == 2
     assert report["segment_offset_source"] == "generalized-sidecar"
     assert report["segment_indices"] == [2, 3]
+    assert report["decision_cursor_start"] == 987
+    assert report["decision_cursor_end"] == 987 + (2 * 8 * 2)
     assert observed[0] != observed[1]
 
 
