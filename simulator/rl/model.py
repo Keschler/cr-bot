@@ -520,10 +520,19 @@ class HybridEncoder(nn.Module):
         # padding, but use the dense Transformer kernel when every token is
         # present; the attention computation is otherwise identical.
         if bool(key_padding_mask.any().item()):
-            transformed = self.entity_transformer(
-                transformer_input,
-                src_key_padding_mask=key_padding_mask,
-            )
+            if inference:
+                pooled_entities = _inference_compact_entity_pool(
+                    self.entity_transformer,
+                    entity_features,
+                    entity_mask_flat,
+                    null_entity,
+                )
+                transformed = None
+            else:
+                transformed = self.entity_transformer(
+                    transformer_input,
+                    src_key_padding_mask=key_padding_mask,
+                )
         elif inference:
             transformed = _inference_dense_entity_transformer(
                 self.entity_transformer,
@@ -531,17 +540,18 @@ class HybridEncoder(nn.Module):
             )
         else:
             transformed = self.entity_transformer(transformer_input)
-        transformed_entities = transformed[:, :entity_count]
-        transformed_null = transformed[:, entity_count]
-        present = entity_mask_flat.unsqueeze(-1)
-        present_count = present.sum(dim=1)
-        pooled_entities = (transformed_entities * present).sum(dim=1)
-        pooled_entities = pooled_entities / present_count.clamp_min(1)
-        pooled_entities = torch.where(
-            present_count > 0,
-            pooled_entities,
-            transformed_null,
-        )
+        if transformed is not None:
+            transformed_entities = transformed[:, :entity_count]
+            transformed_null = transformed[:, entity_count]
+            present = entity_mask_flat.unsqueeze(-1)
+            present_count = present.sum(dim=1)
+            pooled_entities = (transformed_entities * present).sum(dim=1)
+            pooled_entities = pooled_entities / present_count.clamp_min(1)
+            pooled_entities = torch.where(
+                present_count > 0,
+                pooled_entities,
+                transformed_null,
+            )
 
         fusion_features = [raster_features, pooled_entities, global_features_encoded]
         if hand_features is not None:
@@ -615,6 +625,116 @@ def _inference_dense_entity_transformer(
             strict=True,
         ):
             attention.batch_first = batch_first
+
+
+def _inference_compact_entity_pool(
+    transformer: nn.TransformerEncoder,
+    entity_features: torch.Tensor,
+    entity_mask: torch.Tensor,
+    null_entity: torch.Tensor,
+) -> torch.Tensor:
+    """Pool masked entity rows after compacting each inference lane.
+
+    V2 padding is lane-local, but a regular batched Transformer must use the
+    largest lane width.  Since the entity encoder has no positional encoding,
+    masked rows can be removed before attention without changing the public
+    entity set or its pooled representation.  Equal active counts are grouped
+    into one call to avoid a Transformer invocation per lane.
+    """
+
+    if entity_features.ndim != 3 or entity_mask.ndim != 2:
+        raise ValueError("compact entity inputs must be [batch, entities, features] and [batch, entities]")
+    if entity_features.shape[:2] != entity_mask.shape:
+        raise ValueError("compact entity features and mask must share batch/entity dimensions")
+    if null_entity.shape != (
+        entity_features.shape[0],
+        1,
+        entity_features.shape[-1],
+    ):
+        raise ValueError("null_entity must have shape [batch, 1, feature_dim]")
+
+    batch, _entity_count, feature_dim = entity_features.shape
+    active_counts = entity_mask.sum(dim=1)
+    if not bool(active_counts.any().item()):
+        if transformer.training:
+            # ``act_deterministic`` is an evaluation API, but preserve the
+            # reference semantics if a caller invokes it before ``eval()``.
+            inputs = torch.cat((entity_features, null_entity), dim=1)
+            padding = torch.cat(
+                (
+                    ~entity_mask,
+                    torch.zeros(
+                        (batch, 1),
+                        dtype=torch.bool,
+                        device=entity_mask.device,
+                    ),
+                ),
+                dim=1,
+            )
+            transformed = transformer(inputs, src_key_padding_mask=padding)
+            return transformed[:, -1]
+        return _inference_cached_null_pool(transformer, null_entity)
+
+    pooled = torch.empty(
+        (batch, feature_dim),
+        dtype=entity_features.dtype,
+        device=entity_features.device,
+    )
+    for count_tensor in torch.unique(active_counts, sorted=True):
+        count = int(count_tensor.item())
+        rows = torch.nonzero(active_counts == count_tensor, as_tuple=False).flatten()
+        selected_mask = entity_mask.index_select(0, rows)
+        selected_entities = entity_features.index_select(0, rows)
+        if count:
+            selected_entities = selected_entities[selected_mask].reshape(
+                rows.shape[0],
+                count,
+                feature_dim,
+            )
+        else:
+            selected_entities = selected_entities[:, :0]
+        selected_input = torch.cat(
+            (selected_entities, null_entity.index_select(0, rows)),
+            dim=1,
+        )
+        transformed = _inference_dense_entity_transformer(
+            transformer,
+            selected_input,
+        )
+        selected_pool = (
+            transformed[:, :count].mean(dim=1)
+            if count
+            else transformed[:, 0]
+        )
+        pooled.index_copy_(0, rows, selected_pool)
+    return pooled
+
+
+def _inference_cached_null_pool(
+    transformer: nn.TransformerEncoder,
+    null_entity: torch.Tensor,
+) -> torch.Tensor:
+    """Return the transformed null token, caching unchanged inference weights."""
+
+    parameters = tuple(transformer.parameters())
+    cache_key = (
+        str(null_entity.device),
+        str(null_entity.dtype),
+        int(null_entity._version),
+        tuple(int(parameter._version) for parameter in parameters),
+    )
+    cache = getattr(transformer, "_inference_null_pool_cache", None)
+    if cache is None or cache[0] != cache_key:
+        transformed = _inference_dense_entity_transformer(
+            transformer,
+            null_entity[:1],
+        )
+        cache = (cache_key, transformed[:, 0].detach())
+        # Keep this deployment-only tensor out of Module parameters, buffers,
+        # and checkpoint state. The version key above invalidates it after an
+        # optimizer update or checkpoint mutation.
+        transformer._inference_null_pool_cache = cache
+    return cache[1].expand(null_entity.shape[0], -1)
 
 
 def _inference_raster_layout(raster: torch.Tensor, config: ModelConfig) -> torch.Tensor:

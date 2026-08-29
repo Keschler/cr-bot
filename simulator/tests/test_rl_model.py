@@ -344,6 +344,7 @@ def test_inference_compacts_padded_entities_without_changing_actions() -> None:
     )
     entity_mask = torch.zeros(2, 1, 10, dtype=torch.bool)
     entity_mask[:, :, :3] = True
+    entity_mask[1, :, 2:] = False
     masks = ActionMasks(
         mode=torch.ones(2, 1, 2, dtype=torch.bool),
         card=torch.ones(2, 1, config.card_slots, dtype=torch.bool),

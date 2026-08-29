@@ -48,7 +48,8 @@ a controlled probe when the action boundary or causal behavior matters.
   observation deployment callers bypass one-element host stacking and prepare
   the raster layout at the observation boundary; dense CPU entity batches use
   a sequence-first Transformer layout while padded batches retain the existing
-  path.
+  path, and repeated empty-entity lanes reuse a version-checked null
+  encoding.
 - The current action contract has `WAIT`/`PLAY`, card slot, and placement but
   no learned wait-duration head; `WAIT` advances the fixed simulator decision
   interval. The proposed timing head remains a future architecture change.

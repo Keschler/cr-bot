@@ -529,7 +529,8 @@ masked entity tails, and caps CPU intra-op parallelism at four threads. The
 single-observation deployment callers also bypass one-element host stacking
 and prepare the raster layout at the observation boundary. Dense CPU entity
 batches use a sequence-first Transformer layout; padded batches retain the
-existing path. The
+existing path, and repeated empty-entity lanes reuse a version-checked null
+encoding. The
 PPO/reference forward path and selected-action parity are unchanged. The
 vector-backend regression checks state, event-log, and replay hashes for both
 process transports across consecutive steps with privileged info disabled.
