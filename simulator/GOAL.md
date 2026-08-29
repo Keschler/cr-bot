@@ -22,11 +22,11 @@ a controlled probe when the action boundary or causal behavior matters.
 - Generated coverage is deterministic and executable: the latest 1,135-case
   strict run passes execution, repeated hashes, complete roster coverage, and
   behavioral obligations.
-- The RL suite is green (`161 passed`; `163` including vector-backend replay
-  parity); the default non-audio/non-mining suite is `415 passed, 11 failed`
+- The RL suite is green (`162 passed`; `164` including vector-backend replay
+  parity); the default non-audio/non-mining suite is `416 passed, 11 failed`
   in the sandbox, with failures limited to
   unavailable physical-lab assets, sandboxed forkserver sockets, and the
-  absent KataCR submodule. The intended-context run is `414 passed, 9 failed`;
+  absent KataCR submodule. The intended-context run is `415 passed, 9 failed`;
   its remaining failures are only those unavailable assets and submodule.
 - Phase-0 physical-lab software is implemented, but physical evidence is
   intentionally deferred for the current RL-first execution path. No
@@ -259,7 +259,9 @@ the same loop with learning and parameter selection disabled.
    after a clean audit. Exploiters remain explicitly labeled opponents.
 8. **Evaluate without adaptation.** Use disjoint decks, controllers,
    checkpoints, paired seeds, and simulator perturbations. Do not tune on
-   held-out results.
+   held-out results. The matrix `quality_gate` must verify the held-out split,
+   complete matches, zero rejected actions, public-only actor inputs, and a
+   clean simulator-exploit audit; win rate is evidence, not a pass criterion.
 9. **Promote or loop back.** Promote only when quality, reproducibility,
    fidelity, and performance gates pass. A quality failure changes sampling;
    an exploit or parity failure returns to step 6.

@@ -196,6 +196,9 @@ def test_matrix_aggregates_each_deck_strategy_seed_and_is_json_safe() -> None:
     assert total["all_wins"] is False
     assert total["all_completed_wins"] is False
     assert total["terminal_reasons"] == {"<unspecified>": 6, "cap": 2}
+    assert total["opponent_rejected_actions"] == 0
+    assert report["quality_gate"]["passed"] is False
+    assert "truncated_matches" in report["quality_gate"]["failures"]
     assert total["decisions_total"] == 52
     assert total["decisions_min"] == 4
     assert total["decisions_max"] == 12
@@ -349,6 +352,42 @@ def test_matrix_rows_preserve_checkpoint_provenance_and_heldout_exclusions(tmp_p
     assert report["held_out_audit"]["overlap"] == []
     assert report["matchups"][0]["summary"]["target_plays_by_card"] == {"hog-rider": 1}
     assert report["matchups"][0]["summary"]["target_rejected_actions"] == 2
+    assert report["matchups"][0]["summary"]["opponent_rejected_actions"] == 0
+    assert report["quality_gate"]["checks"]["no_rejected_actions"] is False
+
+
+def test_matrix_quality_gate_separates_integrity_from_strength() -> None:
+    from simulator.rl.evaluation_matrix import _evaluation_quality_gate
+
+    report = {
+        "policy_mode": "actor",
+        "actor_controls_actions": True,
+        "actor_privileged_inputs": False,
+        "held_out": True,
+        "held_out_audit": {
+            "disjointness_verified": True,
+            "overlap": [],
+        },
+        "total": {
+            "matches": 2,
+            "completed": 2,
+            "wins": 0,
+            "win_rate": 0.0,
+            "truncated": 0,
+            "target_rejected_actions": 0,
+            "opponent_rejected_actions": 0,
+        },
+    }
+
+    gate = _evaluation_quality_gate(report, {"status": "clean"})
+
+    assert gate["passed"] is True
+    assert gate["strength_evidence"]["used_as_gate"] is False
+
+    report["total"]["opponent_rejected_actions"] = 1
+    failed = _evaluation_quality_gate(report, {"status": "clean"})
+    assert failed["passed"] is False
+    assert failed["failures"] == ["rejected_actions"]
 
 
 def test_matrix_rejects_duplicate_axes_and_nonfinite_results() -> None:

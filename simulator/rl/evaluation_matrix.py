@@ -752,6 +752,7 @@ def _summary(results: Sequence[MatchResult]) -> dict[str, object]:
     terminal_reasons: dict[str, int] = {}
     plays_by_card: dict[str, int] = {}
     rejected_actions = 0
+    opponent_rejected_actions = 0
     traced_steps = 0
     crown_totals = {"player_0": 0, "player_1": 0}
     crown_rows = 0
@@ -769,6 +770,9 @@ def _summary(results: Sequence[MatchResult]) -> dict[str, object]:
         raw_rejected = metrics.get("target_rejected_actions", 0)
         if type(raw_rejected) is int and raw_rejected >= 0:
             rejected_actions += raw_rejected
+        raw_opponent_rejected = metrics.get("opponent_rejected_actions", 0)
+        if type(raw_opponent_rejected) is int and raw_opponent_rejected >= 0:
+            opponent_rejected_actions += raw_opponent_rejected
         raw_trace = metrics.get("target_play_trace", ())
         if isinstance(raw_trace, (list, tuple)):
             traced_steps += len(raw_trace)
@@ -825,9 +829,91 @@ def _summary(results: Sequence[MatchResult]) -> dict[str, object]:
         "decisions_max": max((result.decisions for result in results), default=0),
         "target_plays_by_card": dict(sorted(plays_by_card.items())),
         "target_rejected_actions": rejected_actions,
+        "opponent_rejected_actions": opponent_rejected_actions,
         "target_play_trace_entries": traced_steps,
         "crowns_end": crown_totals if crown_rows else None,
         "crowns_end_matches": crown_rows,
+    }
+
+
+def _evaluation_quality_gate(
+    report: Mapping[str, Any],
+    audit: Mapping[str, Any],
+) -> dict[str, object]:
+    """Return the fail-closed integrity gate for a promotion candidate.
+
+    Win rate is deliberately reported as evidence only.  The gate checks that
+    the evaluation artifact itself is trustworthy: it must be a verified
+    held-out actor run with complete matches, no rejected actions, a public
+    actor boundary, and a clean simulator-exploit audit.
+    """
+
+    total = report.get("total")
+    if not isinstance(total, Mapping):
+        total = {}
+    held_out_audit = report.get("held_out_audit")
+    if not isinstance(held_out_audit, Mapping):
+        held_out_audit = {}
+
+    matches = total.get("matches")
+    truncated = total.get("truncated")
+    target_rejected = total.get("target_rejected_actions")
+    opponent_rejected = total.get("opponent_rejected_actions")
+    held_out = report.get("held_out") is True
+    held_out_split_verified = (
+        held_out
+        and held_out_audit.get("disjointness_verified") is True
+        and held_out_audit.get("overlap") == []
+    )
+    actor_mode = report.get("policy_mode") == "actor"
+    checks = {
+        "non_empty_matrix": type(matches) is int and matches > 0,
+        "held_out_evaluation": held_out,
+        "held_out_split_verified": held_out_split_verified,
+        "complete_matches": type(truncated) is int and truncated == 0,
+        "no_rejected_actions": (
+            type(target_rejected) is int
+            and type(opponent_rejected) is int
+            and target_rejected == 0
+            and opponent_rejected == 0
+        ),
+        "actor_controls_actions": (
+            not actor_mode or report.get("actor_controls_actions") is True
+        ),
+        "actor_public_inputs": (
+            not actor_mode or report.get("actor_privileged_inputs") is False
+        ),
+        "simulation_exploit_audit_clean": audit.get("status") == "clean",
+    }
+
+    failures: list[str] = []
+    if not checks["non_empty_matrix"]:
+        failures.append("empty_matrix")
+    if not checks["held_out_evaluation"]:
+        failures.append("not_held_out")
+    elif not checks["held_out_split_verified"]:
+        failures.append("held_out_split_not_verified")
+    if not checks["complete_matches"]:
+        failures.append("truncated_matches")
+    if not checks["no_rejected_actions"]:
+        failures.append("rejected_actions")
+    if not checks["actor_controls_actions"]:
+        failures.append("actor_does_not_control_actions")
+    if not checks["actor_public_inputs"]:
+        failures.append("actor_privileged_input")
+    if not checks["simulation_exploit_audit_clean"]:
+        failures.append("simulation_exploit_audit")
+
+    return {
+        "passed": not failures,
+        "failures": failures,
+        "checks": checks,
+        "strength_evidence": {
+            "win_rate": total.get("win_rate"),
+            "wins": total.get("wins"),
+            "completed": total.get("completed"),
+            "used_as_gate": False,
+        },
     }
 
 
@@ -2640,6 +2726,7 @@ def run_evaluation_matrix(
         "config": config.as_dict(),
         "policy_mode": config.policy_mode,
         "actor_controls_actions": config.policy_mode == "actor",
+        "actor_privileged_inputs": runner_metadata.get("actor_privileged_inputs"),
         "held_out": config.held_out,
         "target_player": config.target_player,
         "actor_player": config.target_player,
@@ -2700,6 +2787,10 @@ def run_evaluation_matrix(
     from .exploit_audit import audit_simulation_report
 
     report["simulation_exploit_audit"] = audit_simulation_report(report)
+    report["quality_gate"] = _evaluation_quality_gate(
+        report,
+        report["simulation_exploit_audit"],
+    )
     report = _json_safe(report)
     try:
         json.dumps(report, allow_nan=False)

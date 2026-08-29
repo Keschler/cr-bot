@@ -329,8 +329,11 @@ PYTHONPATH=.:..:../src \
   --trace outputs/simulator/training/evaluation-trace.json
 ```
 
-Exit status 2 means the artifact is flagged or invalid and must be quarantined
-before promotion.
+Matrix reports also include a fail-closed `quality_gate`: only verified
+held-out actor runs with complete matches, zero rejected actions, public-only
+inputs, and a clean exploit audit can pass it. Win rate remains evidence, not
+a gate. Exit status 2 means the artifact is flagged, invalid, or failed this
+gate and must be quarantined before promotion.
 
 `target_play_trace` contains target `PLAY` attempts only. Prototype
 `--trace-out` contains every decision. `tower_hp_before`, `tower_hp_after`, `tower_hp_end`

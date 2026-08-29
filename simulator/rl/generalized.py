@@ -2440,7 +2440,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit(str(error)) from error
     _write_json(args.json_out, report)
     audit = report.get("simulation_exploit_audit")
-    return 0 if not isinstance(audit, Mapping) or audit.get("status") == "clean" else 2
+    audit_clean = not isinstance(audit, Mapping) or audit.get("status") == "clean"
+    quality_gate = report.get("quality_gate")
+    quality_gate_passed = not isinstance(quality_gate, Mapping) or quality_gate.get(
+        "passed"
+    ) is True
+    return 0 if audit_clean and quality_gate_passed else 2
 
 
 if __name__ == "__main__":  # pragma: no cover - CLI entry point
