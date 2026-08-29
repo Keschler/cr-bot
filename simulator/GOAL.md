@@ -22,7 +22,7 @@ a controlled probe when the action boundary or causal behavior matters.
 - Generated coverage is deterministic and executable: the latest 1,135-case
   strict run passes execution, repeated hashes, complete roster coverage, and
   behavioral obligations.
-- The RL suite is green (`165 passed`; `167` including vector-backend replay
+- The RL suite is green (`168 passed`, including vector-backend replay
   parity); the default non-audio/non-mining suite is `419 passed, 11 failed`
   in the sandbox, with failures limited to
   unavailable physical-lab assets, sandboxed forkserver sockets, and the
