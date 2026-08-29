@@ -22,12 +22,12 @@ a controlled probe when the action boundary or causal behavior matters.
 - Generated coverage is deterministic and executable: the latest 1,135-case
   strict run passes execution, repeated hashes, complete roster coverage, and
   behavioral obligations.
-- The RL suite is green (`162 passed`; `164` including vector-backend replay
-  parity); the default non-audio/non-mining suite is `416 passed, 11 failed`
+- The RL suite is green (`163 passed`; `165` including vector-backend replay
+  parity); the default non-audio/non-mining suite is `417 passed, 11 failed`
   in the sandbox, with failures limited to
   unavailable physical-lab assets, sandboxed forkserver sockets, and the
-  absent KataCR submodule. The intended-context run is `415 passed, 9 failed`;
-  its remaining failures are only those unavailable assets and submodule.
+  absent KataCR submodule. The remaining failures are only those unavailable
+  assets and submodule.
 - Phase-0 physical-lab software is implemented, but physical evidence is
   intentionally deferred for the current RL-first execution path. No
   connected run has yet satisfied the evidence/readiness gates.
