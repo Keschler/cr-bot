@@ -40,6 +40,8 @@ from time import perf_counter
 from types import SimpleNamespace
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
+from .provenance import code_revision
+
 
 EVALUATION_MATRIX_SCHEMA_VERSION = 2
 EVALUATION_MATRIX_KIND = "recurrent_public_ppo_evaluation_matrix"
@@ -224,13 +226,14 @@ def _utc_timestamp() -> str:
     )
 
 
-def _runtime_provenance() -> dict[str, str]:
+def _runtime_provenance() -> dict[str, object]:
     """Describe the host runtime without affecting simulator behavior."""
 
     return {
         "python_version": platform.python_version(),
         "python_implementation": platform.python_implementation(),
         "platform": platform.platform(),
+        "code_revision": code_revision(),
     }
 
 

@@ -197,7 +197,8 @@ the same loop with learning and parameter selection disabled.
 
 1. **Seal the run.** Record code, ruleset/engine, observation/action contract,
    architecture, optimizer, device/backend, decks/opponents, seeds, budget,
-   and splits. Create the held-out split before collection.
+   and splits. Reports and checkpoints record the Git `code_revision` and
+   tracked-worktree state. Create the held-out split before collection.
 2. **Run preflight.** Check reset/save/restore, recurrent resets, public-only
    actor inputs, legality masks, reference/optimized parity, and fixed
    regression scenarios.

@@ -278,6 +278,9 @@ PYTHONPATH=.:..:../src \
   --json-out outputs/simulator/training/generalized-coverage-ppo-v2-heldout-smoke.json
 ```
 
+Training and evaluation artifacts include the Git `code_revision` used to
+produce them, plus whether tracked source was dirty.
+
 The retained six-deck held-out smoke audit is six archetype variants × one
 strategy × one seed. The `deterministic-cycle` archetype is deliberately absent
 because its template is the fixed learner deck; evaluate that fixed regression

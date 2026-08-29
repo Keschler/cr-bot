@@ -68,6 +68,7 @@ from .opponent_pool import (
     make_opponent_controller,
 )
 from .prototype import PrototypeConfig, train_prototype
+from .provenance import code_revision
 
 
 GENERALIZED_TRAINING_SCHEMA_VERSION = 1
@@ -1214,6 +1215,7 @@ def train_generalized(
     report = {
         "kind": GENERALIZED_TRAINING_KIND,
         "schema_version": GENERALIZED_TRAINING_SCHEMA_VERSION,
+        "code_revision": code_revision(),
         "checkpoint": str(current_checkpoint),
         # A fingerprint, when available, binds the generalized sidecar to the
         # exact output artifact.  It is optional so older sidecars remain

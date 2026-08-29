@@ -44,6 +44,7 @@ from types import SimpleNamespace
 from typing import Any, Callable, Mapping, Sequence, TextIO
 
 from ._compat import TORCH_AVAILABLE, TorchUnavailableError
+from .provenance import code_revision
 
 
 PROTOTYPE_SCHEMA_VERSION = 1
@@ -614,6 +615,7 @@ def _checkpoint_metadata(config: PrototypeConfig, learner: Any, ruleset: Any) ->
     return {
         "schema_version": PROTOTYPE_SCHEMA_VERSION,
         "checkpoint_format": PROTOTYPE_CHECKPOINT_FORMAT,
+        "code_revision": code_revision(),
         "ruleset_id": ruleset.ruleset_id,
         "ruleset_hash": ruleset.content_hash,
         "engine_version": engine_version,
@@ -1393,6 +1395,7 @@ def train_prototype(
                 "kind": "recurrent_public_ppo_prototype",
                 "prototype_schema_version": PROTOTYPE_SCHEMA_VERSION,
                 "checkpoint_format": PROTOTYPE_CHECKPOINT_FORMAT,
+                "code_revision": code_revision(),
                 "ruleset_id": ruleset.ruleset_id,
                 "ruleset_hash": ruleset.content_hash,
                 "actor_privileged_inputs": False,
@@ -2011,6 +2014,7 @@ def _evaluate_parallel_episodes(
     return {
         "kind": first["kind"],
         "checkpoint": str(checkpoint),
+        "code_revision": code_revision(),
         "policy_mode": policy_mode,
         "actor_controls_actions": policy_mode == "actor",
         "checkpoint_format": first["checkpoint_format"],
@@ -2534,6 +2538,7 @@ def evaluate_prototype(
     report: dict[str, object] = {
         "kind": "recurrent_public_ppo_prototype_evaluation",
         "checkpoint": str(checkpoint),
+        "code_revision": code_revision(),
         "policy_mode": policy_mode,
         "actor_controls_actions": policy_mode == "actor",
         "checkpoint_format": metadata["checkpoint_format"],
@@ -2569,6 +2574,7 @@ def evaluate_prototype(
                 "kind": "recurrent_public_ppo_prototype_evaluation_trace",
                 "trace_schema_version": 2,
                 "checkpoint": str(checkpoint),
+                "code_revision": code_revision(),
                 "checkpoint_format": metadata["checkpoint_format"],
                 "ruleset_id": ruleset.ruleset_id,
                 "ruleset_hash": ruleset.content_hash,
