@@ -353,6 +353,75 @@ def test_generalized_training_can_keep_a_scenario_across_rollouts(monkeypatch, t
     assert report["decision_cursor_end"] == report["transitions"]
     assert report["transitions_per_segment"] == 2 * 3 * 8
     assert report["curriculum_stage_basis"] == "cumulative-decisions"
+    assert report["revision_guard"]["status"] == "stable"
+
+
+def test_generalized_training_rejects_a_quarantined_segment(monkeypatch, tmp_path) -> None:
+    import simulator.rl.generalized as generalized
+
+    def fake_train(config, *, checkpoint, checkpoint_out, **kwargs):
+        return {
+            "final_update": 1,
+            "checkpoint_promotion": {
+                "status": "quarantined",
+                "reasons": ["code_revision_changed_during_run"],
+            },
+            "outcomes": {
+                "completed_matches": 0,
+                "wins": 0,
+                "draws": 0,
+                "losses": 0,
+                "truncated_matches": 0,
+            },
+        }
+
+    monkeypatch.setattr(generalized, "train_prototype", fake_train)
+    config = GeneralizedTrainingConfig(
+        prototype_config=PrototypeConfig(envs=1, horizon=2, updates=1),
+        segments=1,
+        checkpoint_out=tmp_path / "quarantined.pt",
+    )
+
+    with pytest.raises(GeneralizedTrainingError, match="did not promote"):
+        generalized.train_generalized(config)
+
+
+def test_generalized_training_rejects_commit_drift(monkeypatch, tmp_path) -> None:
+    import simulator.rl.generalized as generalized
+
+    snapshots = iter(
+        (
+            {"commit": "commit-a", "source": "test"},
+            {"commit": "commit-a", "source": "test"},
+            {"commit": "commit-b", "source": "test"},
+        )
+    )
+
+    def fake_revision():
+        return next(snapshots)
+
+    def fake_train(config, *, checkpoint, checkpoint_out, **kwargs):
+        return {
+            "final_update": 1,
+            "outcomes": {
+                "completed_matches": 0,
+                "wins": 0,
+                "draws": 0,
+                "losses": 0,
+                "truncated_matches": 0,
+            },
+        }
+
+    monkeypatch.setattr(generalized, "code_revision", fake_revision)
+    monkeypatch.setattr(generalized, "train_prototype", fake_train)
+    config = GeneralizedTrainingConfig(
+        prototype_config=PrototypeConfig(envs=1, horizon=2, updates=1),
+        segments=1,
+        checkpoint_out=tmp_path / "drifted.pt",
+    )
+
+    with pytest.raises(GeneralizedTrainingError, match="commit changed"):
+        generalized.train_generalized(config)
 
 
 def test_generalized_training_supports_player_one_side(monkeypatch, tmp_path) -> None:

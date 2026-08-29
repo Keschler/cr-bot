@@ -86,7 +86,7 @@ def resolve_policy_device(device: Any) -> Any:
     reproducibility or select a particular accelerator.  Keeping this choice
     at learner construction means every inference entry point uses the same
     policy device resolution and does not need to duplicate CUDA checks.  CPU
-    policy work is also capped at four intra-op threads; this avoids the
+    policy work is also capped at eight intra-op threads; this avoids the
     oversubscription penalty measured for the small batched actor workload.
     """
 
@@ -100,12 +100,12 @@ def resolve_policy_device(device: Any) -> Any:
     return resolved
 
 
-def configure_policy_cpu_threads(device: Any, *, cap: int = 4) -> int | None:
+def configure_policy_cpu_threads(device: Any, *, cap: int = 8) -> int | None:
     """Limit CPU intra-op parallelism for the small batched policy workload.
 
     The actor's convolution, recurrent step, and masked heads operate on
     relatively small tensors.  On the benchmark host, allowing the default
-    thread pool to use more than four workers makes each decision slower due
+    thread pool to use more than eight workers makes each decision slower due
     to launch and synchronization overhead.  Preserve a caller's lower
     setting and leave accelerator execution untouched.  This is a runtime
     scheduling choice only; it does not change model parameters or numerical
@@ -760,6 +760,7 @@ if TORCH_AVAILABLE:
             action_masks: ActionMasks,
             *,
             privileged_features: torch.Tensor | None = None,
+            include_beliefs: bool = True,
         ) -> PolicyEvaluation:
             """Re-run one sequence with explicit initial hidden/reset semantics."""
 
@@ -776,6 +777,7 @@ if TORCH_AVAILABLE:
                 reset_mask=sequence.reset_mask,
                 hidden=sequence.initial_hidden,
                 action_masks=action_masks,
+                include_beliefs=include_beliefs,
             )
             log_probs = self.policy.log_prob(output, actions, action_masks)
             entropy = _joint_entropy(self.policy, output, action_masks)
@@ -795,6 +797,8 @@ if TORCH_AVAILABLE:
             privileged_features: torch.Tensor | None = None,
             deterministic: bool = False,
             include_beliefs: bool = True,
+            inference: bool = False,
+            fast_sampling: bool = False,
         ) -> RolloutStep:
             """Run one recurrent policy step and return a detached next state.
 
@@ -804,6 +808,10 @@ if TORCH_AVAILABLE:
             """
 
             state = state.detach()
+            if type(inference) is not bool:
+                raise TypeError("inference must be boolean")
+            if type(fast_sampling) is not bool:
+                raise TypeError("fast_sampling must be boolean")
             raster = _add_step_time(raster, expected_ndim=4, name="raster")
             global_features = _add_step_time(global_features, expected_ndim=2, name="global_features")
             entities = _add_step_time(entities, expected_ndim=3, name="entities")
@@ -825,27 +833,41 @@ if TORCH_AVAILABLE:
                     name="privileged_features",
                 )
             model_masks = _move_masks(action_masks, self.device)
-            output = self.policy(
+            policy_inputs = (
                 raster.to(self.device),
                 global_features.to(self.device),
                 entities.to(self.device),
                 entity_mask.to(self.device, dtype=torch.bool),
-                reset_mask=reset_mask,
-                hidden=state.hidden.to(self.device),
-                action_masks=model_masks,
-                include_beliefs=include_beliefs,
             )
-            if deterministic:
-                actions, log_probs, entropy = _deterministic_action(
-                    self.policy,
-                    output,
+            if fast_sampling and not deterministic:
+                output, actions, log_probs, entropy = self.policy.rollout_sample(
+                    *policy_inputs,
                     model_masks,
+                    reset_mask=reset_mask,
+                    hidden=state.hidden.to(self.device),
+                    include_beliefs=include_beliefs,
+                    inference=inference,
                 )
             else:
-                actions, log_probs, entropy = self.policy.action_head.sample(
-                    output.logits,
-                    model_masks,
+                output = self.policy(
+                    *policy_inputs,
+                    reset_mask=reset_mask,
+                    hidden=state.hidden.to(self.device),
+                    action_masks=model_masks,
+                    include_beliefs=include_beliefs,
+                    inference=inference,
                 )
+                if deterministic:
+                    actions, log_probs, entropy = _deterministic_action(
+                        self.policy,
+                        output,
+                        model_masks,
+                    )
+                else:
+                    actions, log_probs, entropy = self.policy.action_head.sample(
+                        output.logits,
+                        model_masks,
+                    )
             values = self._critic_values(output, privileged_features)
             return RolloutStep(
                 actions=actions,
@@ -981,6 +1003,7 @@ if TORCH_AVAILABLE:
                 trajectory.actions,
                 trajectory.action_masks,
                 privileged_features=batch.privileged_features,
+                include_beliefs=batch.belief_targets is not None,
             )
             behavior_cloning_actions = batch.behavior_cloning_actions
             behavior_cloning_evaluation_log_probs = evaluation.log_probs

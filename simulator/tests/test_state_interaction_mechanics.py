@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from simulator.engine import BattleEngine
+from simulator.fixed import distance_mtile
 from simulator.roster import PLAYER_DECK
 from simulator.ruleset import load_ruleset
 from simulator.state import EntityState
@@ -96,6 +97,23 @@ def test_cloned_deploy_damage_is_suppressed() -> None:
     assert not any(event.kind == "landing_attack" for event in state.events)
 
 
+def test_goblin_giant_main_targets_buildings_while_spear_children_target_air() -> None:
+    engine, state = _state()
+    giant = _entity(state, "goblin-giant", 0, 9_000, 15_000)
+    giant.deploy_remaining_us = 0
+    air_target = _entity(state, "bats", 1, 9_000, 16_000)
+
+    # With no legal troop/building target the normal engine fallback is an
+    # enemy Crown Tower; importantly, it must not select the nearby air troop.
+    assert engine._choose_target(state, giant) != air_target.uid
+    assert set(RULESET.card("goblin-giant").targets) == {"building", "crown_tower"}
+    assert set(RULESET.card("spear-goblin").targets) == {"air", "ground"}
+
+    building = _entity(state, "cannon", 1, 9_000, 16_000)
+    assert engine._choose_target(state, giant) == building.uid
+    assert air_target.alive
+
+
 def test_mega_knight_can_start_a_jump_on_a_crown_tower() -> None:
     engine, state = _state()
     knight = _entity(state, "mega-knight", 0, 3_500, 10_500)
@@ -145,6 +163,82 @@ def test_cannon_cart_preserves_target_when_transforming_to_building() -> None:
     assert cart.attack_cooldown_us == 250_000
     engine._invalidate_and_acquire_targets(state)
     assert cart.target_uid == target.uid
+
+
+def test_king_tower_destruction_collapses_remaining_crown_towers() -> None:
+    engine, state = _state()
+    king = engine._tower(state, 1, "king")
+    king.hp = 0
+
+    destroyed = engine._resolve_deaths(state)
+    engine._resolve_tower_outcomes(state, destroyed)
+
+    assert state.terminal
+    assert state.winner == 0
+    assert state.players[0].crowns == 3
+    assert all(
+        not tower.alive and tower.hp == 0
+        for tower in engine._towers_for(state, 1)
+    )
+    assert sum(
+        event.kind == "tower_destroyed" and event.get("player") == 1
+        for event in state.events
+    ) == 3
+    engine.validate_state(state)
+
+
+def test_tiebreak_destroys_lowest_tower_and_clears_combatants() -> None:
+    engine, state = _state()
+    state.phase = "overtime"
+    low = engine._tower(state, 1, "left")
+    low.hp = 1_500
+    engine._tower(state, 0, "left").hp = 2_000
+    troop = _entity(state, "knight", 0, 9_000, 15_000)
+
+    engine._resolve_tiebreak(state)
+
+    assert state.terminal
+    assert state.winner == 0
+    assert state.terminal_reason == "tiebreak_lowest_hp"
+    assert not low.alive and low.hp == 0
+    assert engine._tower(state, 0, "left").hp == 500
+    assert not troop.alive and troop.hp == 0
+    assert any(
+        event.kind == "tower_destroyed" and event.get("uid") == low.uid
+        for event in state.events
+    )
+    assert any(
+        event.kind == "tiebreak_entity_removed" and event.get("uid") == troop.uid
+        for event in state.events
+    )
+    engine.validate_state(state)
+
+
+def test_tiebreak_with_equal_lowest_towers_is_a_draw_without_destruction() -> None:
+    engine, state = _state()
+    state.phase = "overtime"
+    engine._tower(state, 0, "left").hp = 1_500
+    engine._tower(state, 1, "left").hp = 1_500
+
+    engine._resolve_tiebreak(state)
+
+    assert state.terminal
+    assert state.winner is None
+    assert state.terminal_reason == "tiebreak_equal_lowest_hp"
+    assert engine._tower(state, 0, "left").alive
+    assert engine._tower(state, 1, "left").alive
+
+
+def test_diagonal_one_unit_overlap_makes_separation_progress() -> None:
+    engine, state = _state()
+    left = _entity(state, "knight", 0, 9_000, 18_000)
+    right = _entity(state, "knight", 0, 9_565, 18_565)
+    minimum = engine._collision_radius(left) + engine._collision_radius(right)
+
+    engine._separate_entities(state)
+
+    assert distance_mtile(left.x_mtile, left.y_mtile, right.x_mtile, right.y_mtile) >= minimum
+    engine.validate_state(state)
 
 
 def test_suspicious_bush_uses_authored_long_trigger_and_child_hp() -> None:

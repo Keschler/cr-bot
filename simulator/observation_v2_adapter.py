@@ -53,6 +53,7 @@ from .observation import (
 from .observation_v2 import (
     ENTITY_TOKEN_DIM,
     ENTITY_TOKEN_FEATURES,
+    ENTITY_TOKEN_MAX,
     PolicyObservationV2,
 )
 from .ruleset import Ruleset, normalize_identifier
@@ -135,7 +136,10 @@ def build_policy_observation_v2(
     if memory is None:
         memory = ObservationMemory(viewer=viewer)
     observation_v1 = build_policy_observation(
-        public_state,
+        # Keep the authoritative entity map for legality.  The V1 projection
+        # itself applies the public visibility filter, while deployment masks
+        # must still see concealed buildings because they occupy real cells.
+        state,
         ruleset,
         viewer=viewer,
         memory=memory,
@@ -245,11 +249,14 @@ def build_public_entity_rows_from_soa(
         row[_FEATURE_INDEX["confidence"]] = 1.0
         rows.append((uid, row))
 
-    if len(rows) > 128:
-        raise ValueError("public entity rows exceed the V2 NMAX=128 bound")
+    rows.sort(key=lambda item: item[0])
+    # Graveyard and swarm-heavy states can legitimately exceed the fixed V2
+    # token budget.  Keep the producer total and deterministic: UID order is
+    # stable, and the direct PolicyObservationV2 constructor remains strict
+    # for callers that supply an already-materialized tensor.
+    rows = rows[:ENTITY_TOKEN_MAX]
     if not rows:
         return np.zeros((0, ENTITY_TOKEN_DIM), dtype=np.float32)
-    rows.sort(key=lambda item: item[0])
     return np.ascontiguousarray(np.stack([row for _, row in rows], axis=0), dtype=np.float32)
 
 
@@ -305,8 +312,7 @@ def build_public_entity_rows(
         rows_with_order.append((sort_key, row))
 
     rows_with_order.sort(key=lambda item: item[0])
-    if len(rows_with_order) > 128:
-        raise ValueError("public entity rows exceed the V2 NMAX=128 bound")
+    rows_with_order = rows_with_order[:ENTITY_TOKEN_MAX]
     if not rows_with_order:
         return np.zeros((0, ENTITY_TOKEN_DIM), dtype=np.float32)
     return np.ascontiguousarray(

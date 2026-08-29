@@ -87,6 +87,15 @@ def test_electro_spirit_chain_is_delayed_and_stuns_each_target() -> None:
     engine.validate_state(restored)
 
 
+def test_state_round_trip_preserves_navigation_revision() -> None:
+    engine, state = _state()
+    state.navigation_revision = 17
+
+    restored = battle_state_from_primitive(state.to_primitive())
+
+    assert restored.navigation_revision == 17
+
+
 def test_tesla_concealment_has_earthquake_and_freeze_exceptions() -> None:
     engine, state = _state()
     tesla = engine._spawn_single_at(state, RULESET.card("tesla"), owner=0, x_mtile=9_000, y_mtile=15_000)

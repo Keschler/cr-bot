@@ -349,6 +349,7 @@ class BattleState:
             "projectiles": projectiles,
             "effects": effects,
             "next_uid": self.next_uid,
+            "navigation_revision": self.navigation_revision,
             "winner": self.winner,
             "terminal": self.terminal,
             "terminal_reason": self.terminal_reason,

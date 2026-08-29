@@ -19,15 +19,15 @@ a controlled probe when the action boundary or causal behavior matters.
 
 - `rulesets/v1.json` contains the 109-card opponent roster but remains
   `training_ready: false`.
-- Generated coverage is deterministic and executable: the latest 1,135-case
-  strict run passes execution, repeated hashes, complete roster coverage, and
-  behavioral obligations.
-- The RL suite is green (`168 passed`, including vector-backend replay
-  parity); the default non-audio/non-mining suite is `420 passed, 11 failed`
-  in the sandbox, with failures limited to
-  unavailable physical-lab assets, sandboxed forkserver sockets, and the
-  absent KataCR submodule. The remaining failures are only those unavailable
-  assets and submodule.
+- Generated coverage is deterministic and executable: a fresh strict run of
+  1,181 cases passed execution, repeated hashes, complete roster coverage, and
+  behavioral obligations (`1,181/1,181`, two repeats, 12 workers).
+- The focused RL/vector suite is green (`163 passed`, including backend replay
+  parity). The default non-audio/non-mining suite is `453 passed, 9 failed`;
+  all nine failures require unavailable card-image assets or the absent KataCR
+  submodule. Roster completeness is clean, but all 109 cards remain provisional
+  (`fidelity_ready: 0`), and strict source reconciliation still has 17
+  unresolved fields.
 - Phase-0 physical-lab software is implemented, but physical evidence is
   intentionally deferred for the current RL-first execution path. No
   connected run has yet satisfied the evidence/readiness gates.
@@ -43,13 +43,18 @@ a controlled probe when the action boundary or causal behavior matters.
   channels-last raster layout, and tail-padding removal for sparse entity
   batches. On the current CPU host it reaches about 1.44k decisions/s at
   batch 16 versus about 3.06k simulator steps/s; the CPU parity gate remains
-  open. The path also caps CPU intra-op parallelism at four threads. CPU
+  open. The path also caps CPU intra-op parallelism at eight threads. CPU
   fallback remains below the historical accelerated-host target. Single-
   observation deployment callers bypass one-element host stacking and prepare
   the raster layout at the observation boundary; dense CPU entity batches use
   a sequence-first Transformer layout while padded batches retain the existing
   path, repeated empty-entity lanes reuse a version-checked null encoding,
   and padded lanes compact raw entities before projection.
+- The actual end-to-end trainer baseline is 590 decisions/s on the RTX 2050,
+  measured over 12,288 decisions in 20.83 seconds with 48 lanes, eight
+  persistent rollout workers, four PPO updates, and overlapping collection.
+  This is the accepted working speed for now; it is an end-to-end trainer
+  measurement, not an actor-only benchmark.
 - The current action contract has `WAIT`/`PLAY`, card slot, and placement but
   no learned wait-duration head; `WAIT` advances the fixed simulator decision
   interval. The proposed timing head remains a future architecture change.
@@ -80,6 +85,13 @@ pytest --ignore=tests/test_audio_dataset.py --ignore=tests/test_mining_pipeline.
 
 Generated outputs, datasets, caches, media, and unrelated worktree changes
 are never part of an implementation commit.
+
+The simulator may receive independent bug-fix commits while RL work is in
+progress. Treat every new `HEAD` as a new experiment revision: record the
+commit and tracked-worktree state before collection, require the run to finish
+on that same revision, and rerun preflight, parity, and exploit checks after
+any intervening commit. Do not promote or compare an artifact produced across
+mixed simulator revisions.
 
 ## Scope
 
@@ -236,7 +248,9 @@ the same loop with learning and parameter selection disabled.
 1. **Seal the run.** Record code, ruleset/engine, observation/action contract,
    architecture, optimizer, device/backend, decks/opponents, seeds, budget,
    and splits. Reports and checkpoints record the Git `code_revision` and
-   tracked-worktree state. Create the held-out split before collection.
+   tracked-worktree state. Create the held-out split before collection. If an
+   independent simulator fix changes `HEAD`, stop the run, quarantine its
+   artifact, and reseal on the new revision.
 2. **Run preflight.** Check reset/save/restore, recurrent resets, public-only
    actor inputs, legality masks, reference/optimized parity, and fixed
    regression scenarios.

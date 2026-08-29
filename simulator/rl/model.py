@@ -1323,6 +1323,170 @@ class MaskedAutoregressivePolicy(nn.Module):
         placement_logits = self._placement_logits(card_context, spatial_features)
         return AutoregressiveLogits(mode_logits, card_logits, placement_logits)
 
+    def sample_fast(
+        self,
+        recurrent_features: torch.Tensor,
+        hand_features: torch.Tensor | None,
+        public_features: torch.Tensor | None,
+        public_action_masks: ActionMasks,
+        spatial_features: torch.Tensor | None,
+    ) -> tuple[ActionBatch, torch.Tensor, torch.Tensor, AutoregressiveLogits]:
+        """Sample a rollout action without decoding unused placements.
+
+        The hierarchical sampling order is deliberately identical to
+        :meth:`sample`: mode first, then card for PLAY rows, then placement for
+        the selected card.  The full PPO forward path remains the reference
+        implementation; this method only avoids evaluating the three unused
+        card-placement branches during actor-controlled collection.
+        """
+
+        _require_floating("recurrent features", recurrent_features, ndim=3)
+        if public_action_masks.prefix_shape != tuple(recurrent_features.shape[:2]):
+            raise ValueError("action masks must share recurrent batch/time dimensions")
+        if public_action_masks.card_slots != self.card_slots:
+            raise ValueError("action masks have the wrong card-slot count")
+
+        mode_logits = self._prepare_mode_logits(
+            recurrent_features,
+            public_features,
+            public_action_masks,
+        )
+        mode_log_probs = _masked_log_softmax(
+            mode_logits,
+            public_action_masks.mode,
+            "mode",
+        )
+        mode_distribution = torch.distributions.Categorical(logits=mode_log_probs)
+        mode = mode_distribution.sample()
+        card_slot = torch.zeros_like(mode, dtype=torch.long)
+        placement = torch.zeros(
+            (*mode.shape, 2),
+            dtype=torch.long,
+            device=mode.device,
+        )
+        joint_log_probs = mode_distribution.log_prob(mode)
+        entropy = mode_distribution.entropy()
+
+        card_logits = torch.zeros(
+            (*mode.shape, self.card_slots),
+            dtype=recurrent_features.dtype,
+            device=recurrent_features.device,
+        )
+        placement_logits = torch.zeros(
+            (
+                *mode.shape,
+                self.card_slots,
+                self.placement_rows,
+                self.placement_cols,
+            ),
+            dtype=recurrent_features.dtype,
+            device=recurrent_features.device,
+        )
+
+        play = mode == self.PLAY
+        if bool(play.any().item()):
+            # Card and placement heads cannot affect WAIT rows. Restrict both
+            # computations to PLAY rows, then restrict placement to the card
+            # sampled from each of those rows.
+            play_recurrent = recurrent_features[play].unsqueeze(1)
+            play_hand = (
+                None if hand_features is None else hand_features[play].unsqueeze(1)
+            )
+            play_public = (
+                None if public_features is None else public_features[play].unsqueeze(1)
+            )
+            play_card_logits, play_card_context = self._prepare_card_prefix(
+                play_recurrent,
+                play_hand,
+                play_public,
+            )
+            play_card_logits = play_card_logits[:, 0]
+            play_card_context = play_card_context[:, 0]
+            play_card_masks = public_action_masks.card[play]
+            play_card_log_probs = _masked_log_softmax(
+                play_card_logits,
+                play_card_masks,
+                "card",
+            )
+            card_distribution = torch.distributions.Categorical(
+                logits=play_card_log_probs,
+            )
+            selected_cards = card_distribution.sample()
+            card_slot[play] = selected_cards
+            joint_log_probs = joint_log_probs.clone()
+            joint_log_probs[play] += card_distribution.log_prob(selected_cards)
+            entropy = entropy.clone()
+            entropy[play] += card_distribution.entropy()
+            card_logits[play] = play_card_logits
+
+            selected_context = play_card_context.gather(
+                1,
+                selected_cards.reshape(-1, 1, 1).expand(
+                    -1,
+                    1,
+                    self.hidden_dim,
+                ),
+            ).unsqueeze(1)
+            play_spatial = (
+                None
+                if spatial_features is None
+                else spatial_features[play].unsqueeze(1)
+            )
+            if self.spatial_placement_key is not None:
+                self._validate_spatial_features(play_recurrent, play_spatial)
+            selected_placement_logits = self._placement_logits(
+                selected_context,
+                play_spatial,
+            ).squeeze(2).squeeze(1)
+            selected_masks = public_action_masks.placement[play].gather(
+                1,
+                selected_cards.reshape(-1, 1, 1, 1).expand(
+                    -1,
+                    1,
+                    self.placement_rows,
+                    self.placement_cols,
+                ),
+            ).squeeze(1)
+            placement_log_probs = _masked_log_softmax(
+                selected_placement_logits.reshape(selected_cards.shape[0], -1),
+                selected_masks.reshape(selected_cards.shape[0], -1),
+                "placement",
+            )
+            placement_distribution = torch.distributions.Categorical(
+                logits=placement_log_probs,
+            )
+            selected_cells = placement_distribution.sample()
+            selected_placements = placement[play]
+            selected_placements[:, 0] = torch.div(
+                selected_cells,
+                self.placement_cols,
+                rounding_mode="floor",
+            )
+            selected_placements[:, 1] = selected_cells.remainder(self.placement_cols)
+            placement[play] = selected_placements
+            joint_log_probs[play] += placement_distribution.log_prob(selected_cells)
+            entropy[play] += placement_distribution.entropy()
+
+            selected_rows = placement_logits[play]
+            selected_rows.scatter_(
+                1,
+                selected_cards.reshape(-1, 1, 1, 1).expand(
+                    -1,
+                    1,
+                    self.placement_rows,
+                    self.placement_cols,
+                ),
+                selected_placement_logits.unsqueeze(1),
+            )
+            placement_logits[play] = selected_rows
+
+        return (
+            ActionBatch(mode=mode, card_slot=card_slot, placement=placement),
+            joint_log_probs,
+            entropy,
+            AutoregressiveLogits(mode_logits, card_logits, placement_logits),
+        )
+
     def deterministic_action_fast(
         self,
         recurrent_features: torch.Tensor,
@@ -1630,6 +1794,49 @@ class RecurrentHybridPolicy(nn.Module):
     ) -> torch.Tensor:
         return self.core.initial_state(batch_size, device=device, dtype=dtype)
 
+    def _encode_recurrent_features(
+        self,
+        raster: torch.Tensor,
+        global_features: torch.Tensor,
+        entities: torch.Tensor,
+        entity_mask: torch.Tensor,
+        *,
+        reset_mask: torch.Tensor | None,
+        hidden: torch.Tensor | None,
+        inference: bool,
+    ) -> tuple[
+        torch.Tensor,
+        torch.Tensor | None,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor | None,
+    ]:
+        """Encode public inputs once for full or rollout-only action paths."""
+
+        encoded_features, spatial_features, hand_features = self.encoder.forward_with_aux(
+            raster,
+            global_features,
+            entities,
+            entity_mask,
+            inference=inference,
+        )
+        recurrent_features, final_hidden = self.core(
+            encoded_features,
+            hidden=hidden,
+            reset_mask=reset_mask,
+        )
+        if hand_features is not None:
+            if self.hand_action_projection is None:  # pragma: no cover - constructor invariant
+                raise RuntimeError("explicit hand features have no action projection")
+            hand_features = self.hand_action_projection(hand_features)
+        return (
+            encoded_features,
+            spatial_features,
+            recurrent_features,
+            final_hidden,
+            hand_features,
+        )
+
     def forward(
         self,
         raster: torch.Tensor,
@@ -1641,24 +1848,27 @@ class RecurrentHybridPolicy(nn.Module):
         hidden: torch.Tensor | None = None,
         action_masks: ActionMasks | None = None,
         include_beliefs: bool = True,
+        inference: bool = False,
     ) -> RecurrentPolicyOutput:
         if type(include_beliefs) is not bool:
             raise TypeError("include_beliefs must be boolean")
-        encoded_features, spatial_features, hand_features = self.encoder.forward_with_aux(
+        if type(inference) is not bool:
+            raise TypeError("inference must be boolean")
+        (
+            encoded_features,
+            spatial_features,
+            recurrent_features,
+            final_hidden,
+            hand_features,
+        ) = self._encode_recurrent_features(
             raster,
             global_features,
             entities,
             entity_mask,
-        )
-        recurrent_features, final_hidden = self.core(
-            encoded_features,
-            hidden=hidden,
             reset_mask=reset_mask,
+            hidden=hidden,
+            inference=inference,
         )
-        if hand_features is not None:
-            if self.hand_action_projection is None:  # pragma: no cover - constructor invariant
-                raise RuntimeError("explicit hand features have no action projection")
-            hand_features = self.hand_action_projection(hand_features)
         logits = self.action_head(
             recurrent_features,
             hand_features=hand_features,
@@ -1676,6 +1886,66 @@ class RecurrentHybridPolicy(nn.Module):
             hand_features=hand_features,
             spatial_features=spatial_features,
         )
+
+    def rollout_sample(
+        self,
+        raster: torch.Tensor,
+        global_features: torch.Tensor,
+        entities: torch.Tensor,
+        entity_mask: torch.Tensor,
+        action_masks: ActionMasks,
+        *,
+        reset_mask: torch.Tensor | None = None,
+        hidden: torch.Tensor | None = None,
+        include_beliefs: bool = False,
+        inference: bool = False,
+    ) -> tuple[RecurrentPolicyOutput, ActionBatch, torch.Tensor, torch.Tensor]:
+        """Run the actor-controlled stochastic rollout path.
+
+        This keeps the encoder, recurrent core, legality masks, and sampled
+        distributions identical to :meth:`forward`/``sample``. Only the
+        unselected card-placement branches are omitted. The returned logits
+        contain exact mode/card logits and the selected placement logits; the
+        method is intended for rollout collection, not PPO re-evaluation.
+        """
+
+        if type(include_beliefs) is not bool:
+            raise TypeError("include_beliefs must be boolean")
+        if type(inference) is not bool:
+            raise TypeError("inference must be boolean")
+        (
+            encoded_features,
+            spatial_features,
+            recurrent_features,
+            final_hidden,
+            hand_features,
+        ) = self._encode_recurrent_features(
+            raster,
+            global_features,
+            entities,
+            entity_mask,
+            reset_mask=reset_mask,
+            hidden=hidden,
+            inference=inference,
+        )
+        actions, log_probs, entropy, logits = self.action_head.sample_fast(
+            recurrent_features,
+            hand_features,
+            global_features,
+            action_masks,
+            spatial_features,
+        )
+        belief_logits = self.belief_heads(recurrent_features) if include_beliefs else None
+        output = RecurrentPolicyOutput(
+            logits=logits,
+            encoded_features=encoded_features,
+            recurrent_features=recurrent_features,
+            final_hidden=final_hidden,
+            belief_logits=belief_logits,
+            hand_features=hand_features,
+            spatial_features=spatial_features,
+        )
+        return output, actions, log_probs, entropy
 
     def act_deterministic(
         self,

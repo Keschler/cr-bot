@@ -634,9 +634,12 @@ def _parser() -> argparse.ArgumentParser:
     benchmark_vector.add_argument("--seed", type=int, default=0)
     benchmark_vector.add_argument(
         "--backend",
-        choices=("reference", "process", "packed-process"),
+        choices=("reference", "process", "packed-process", "persistent-process"),
         default="reference",
-        help="reference lanes, serialized process lanes, or packed-state process lanes",
+        help=(
+            "reference lanes, serialized process lanes, packed-state process lanes, "
+            "or persistent worker lanes"
+        ),
     )
     benchmark_vector.add_argument("--workers", type=int)
     benchmark_vector.add_argument("--json-out", type=Path)

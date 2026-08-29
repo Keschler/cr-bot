@@ -68,7 +68,7 @@ from .opponent_pool import (
     make_opponent_controller,
 )
 from .prototype import PrototypeConfig, train_prototype
-from .provenance import code_revision
+from .provenance import code_revision, revision_changed
 
 
 GENERALIZED_TRAINING_SCHEMA_VERSION = 1
@@ -1036,6 +1036,7 @@ def train_generalized(
         ),
     )
     current_checkpoint = config.checkpoint
+    run_start_revision = code_revision()
     stage_reports: list[Mapping[str, object]] = []
     stage_scenarios: list[list[dict[str, object]]] = []
     stage_opponent_assignments: list[list[dict[str, object]]] = []
@@ -1097,6 +1098,12 @@ def train_generalized(
 
     segment_indices: list[int] = []
     for local_segment_index in range(config.segments):
+        current_revision = code_revision()
+        if revision_changed(run_start_revision, current_revision):
+            raise GeneralizedTrainingError(
+                "simulator commit changed between generalized training segments; "
+                "quarantine the current artifact and restart on the new revision"
+            )
         segment_index = starting_segment + local_segment_index
         segment_indices.append(segment_index)
         decision_count = (
@@ -1150,6 +1157,26 @@ def train_generalized(
             if progress_step_callback is not None:
                 progress_step_callback(offset + completed, total_transitions)
 
+        rollout_opponent_specs = None
+        opponent_action = None
+        if segment_config.env_backend == "rollout-process":
+            if any(checkpoint is not None for checkpoint in checkpoint_assignments):
+                raise GeneralizedTrainingError(
+                    "rollout-process supports simulator-side scenario controllers; "
+                    "use a vector backend when frozen checkpoint opponents are assigned"
+                )
+            rollout_opponent_specs = tuple(
+                (scenario.strategy, int(scenario.controller_seed))
+                for scenario in scenarios
+            )
+        else:
+            opponent_action = make_scenario_opponent_action(
+                scenarios,
+                checkpoint_opponents=config.opponent_checkpoints,
+                checkpoint_assignments=checkpoint_assignments,
+                device=config.prototype_config.device,
+            )
+
         report = train_prototype(
             segment_config,
             checkpoint=current_checkpoint,
@@ -1157,15 +1184,26 @@ def train_generalized(
             progress_step_callback=segment_progress if progress_step_callback else None,
             player_deck=player_deck,
             opponent_decks=tuple(scenario.deck.cards for scenario in scenarios),
-            opponent_action=make_scenario_opponent_action(
-                scenarios,
-                checkpoint_opponents=config.opponent_checkpoints,
-                checkpoint_assignments=checkpoint_assignments,
-                device=config.prototype_config.device,
-            ),
+            opponent_action=opponent_action,
+            rollout_opponent_specs=rollout_opponent_specs,
             expert_guidance=config.expert_guidance,
             expert_action_callback=expert_action,
         )
+        segment_revision_guard = report.get("revision_guard")
+        if (
+            isinstance(segment_revision_guard, Mapping)
+            and segment_revision_guard.get("status") == "drifted"
+        ):
+            raise GeneralizedTrainingError(
+                "simulator commit changed during generalized training segment; "
+                "the prototype checkpoint was quarantined and the run must restart"
+            )
+        promotion = report.get("checkpoint_promotion")
+        if isinstance(promotion, Mapping) and promotion.get("status") != "promoted":
+            raise GeneralizedTrainingError(
+                "generalized training segment did not promote a clean checkpoint: "
+                f"{promotion!r}"
+            )
         audit = report.get("simulation_exploit_audit")
         if isinstance(audit, Mapping) and audit.get("status") != "clean":
             raise GeneralizedTrainingError(
@@ -1247,6 +1285,17 @@ def train_generalized(
         payoff_path.parent.mkdir(parents=True, exist_ok=True)
         payoff_path.write_text(payoff_book.to_json() + "\n", encoding="utf-8")
 
+    run_end_revision = code_revision()
+    if revision_changed(run_start_revision, run_end_revision):
+        raise GeneralizedTrainingError(
+            "simulator commit changed during generalized training; quarantine the "
+            "current artifact and restart on the new revision"
+        )
+    revision_guard = {
+        "status": "stable",
+        "start": run_start_revision,
+        "end": run_end_revision,
+    }
     final_report = stage_reports[-1] if stage_reports else {}
     aggregate = {
         "completed_matches": sum(int(report.get("outcomes", {}).get("completed_matches", 0)) for report in stage_reports),
@@ -1258,7 +1307,9 @@ def train_generalized(
     report = {
         "kind": GENERALIZED_TRAINING_KIND,
         "schema_version": GENERALIZED_TRAINING_SCHEMA_VERSION,
-        "code_revision": code_revision(),
+        "code_revision": run_end_revision,
+        "run_code_revision": run_start_revision,
+        "revision_guard": revision_guard,
         "checkpoint": str(current_checkpoint),
         # A fingerprint, when available, binds the generalized sidecar to the
         # exact output artifact.  It is optional so older sidecars remain
@@ -1974,17 +2025,40 @@ def _parser() -> argparse.ArgumentParser:
     train.add_argument("--horizon", type=int, default=512)
     train.add_argument(
         "--env-backend",
-        choices=("reference", "process", "packed-process"),
+        choices=(
+            "reference",
+            "process",
+            "packed-process",
+            "persistent-process",
+            "rollout-process",
+        ),
         default="reference",
         help=(
-            "simulator lane backend; process variants can improve CPU throughput "
-            "when their serialization overhead is amortized"
+            "simulator lane backend; persistent-process keeps worker engines alive "
+            "and rollout-process runs the public collector inside persistent "
+            "workers to remove per-decision state IPC"
         ),
     )
     train.add_argument(
         "--env-workers",
         type=int,
-        help="worker count for process or packed-process lane backends",
+        help="worker count for process, packed-process, or persistent-process backends",
+    )
+    train.add_argument(
+        "--overlap-rollouts",
+        action="store_true",
+        help=(
+            "overlap the next rollout with PPO optimization on rollout-process; "
+            "introduces an explicit one-update behavior-policy lag"
+        ),
+    )
+    train.add_argument(
+        "--compile-policy",
+        action="store_true",
+        help=(
+            "compile the parent policy forward graph with torch.compile; "
+            "startup is higher but long runs may optimize faster"
+        ),
     )
     train.add_argument("--seed", type=int, default=0)
     train.add_argument(
@@ -2305,6 +2379,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 device=args.device,
                 env_backend=args.env_backend,
                 env_workers=args.env_workers,
+                overlap_rollouts=args.overlap_rollouts,
+                compile_policy=args.compile_policy,
                 learning_rate=args.learning_rate,
                 update_epochs=args.update_epochs,
                 sequence_minibatch_size=args.sequence_minibatch_size,

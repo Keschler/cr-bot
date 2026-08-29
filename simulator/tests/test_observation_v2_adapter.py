@@ -6,7 +6,7 @@ import pytest
 from cr_bot.domain.card_metadata import CARD_METADATA
 from simulator.engine import BattleEngine
 from simulator.env import SimulatorEnv
-from simulator.geometry import mirror_position
+from simulator.geometry import cell_center_mtile, mirror_position
 from simulator.observation_v2 import ENTITY_TOKEN_FEATURES, PolicyObservationV2
 from simulator.observation_v2_adapter import (
     build_policy_observation_v2,
@@ -82,7 +82,11 @@ def test_hidden_entities_are_removed_before_v1_and_v2_projection() -> None:
     assert tesla.concealed_active
     assert own_hidden.stealth_active
 
-    observation = build_policy_observation_v2(state, RULESET)
+    observation = build_policy_observation_v2(
+        state,
+        RULESET,
+        legal_action_cells_callback=engine.legal_action_cells,
+    )
 
     assert int(observation.entity_mask.sum()) == 1
     visible_card_value = observation.entity_tokens[0, FEATURE["card_id"]]
@@ -199,3 +203,30 @@ def test_environment_exposes_v2_as_an_explicit_opt_in_boundary() -> None:
     assert len(observations) == 2
     assert all(isinstance(item, PolicyObservationV2) for item in observations)
     assert all(int(item.entity_mask.sum()) == 0 for item in observations)
+
+
+def test_adapter_truncates_swarm_rows_to_the_fixed_token_budget() -> None:
+    engine, state = _state()
+    for index in range(129):
+        _spawn(engine, state, "skeletons", 0, 4_000 + (index % 10) * 500, 20_000 + (index // 10) * 250)
+
+    observation = build_policy_observation_v2(state, RULESET)
+
+    assert int(observation.entity_mask.sum()) == 128
+    assert np.isfinite(observation.entity_tokens).all()
+
+
+def test_v2_legality_keeps_hidden_structure_collisions_authoritative() -> None:
+    engine, state = _state()
+    tesla = _spawn(engine, state, "tesla", 0, *cell_center_mtile((5, 20)))
+    assert tesla.concealed_active
+
+    expected = engine.legal_action_cells(state, 0)
+    observation = build_policy_observation_v2(
+        state,
+        RULESET,
+        legal_action_cells_callback=engine.legal_action_cells,
+    )
+
+    assert (5, 20) not in expected[1]
+    assert not observation.legal_play[1, 20, 5]

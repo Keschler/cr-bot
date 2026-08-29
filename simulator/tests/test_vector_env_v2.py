@@ -15,7 +15,66 @@ def _observation_arrays(observation):
     )
 
 
-@pytest.mark.parametrize("backend", ["process", "packed-process"])
+def test_batched_legal_cells_match_exhaustive_action_validation() -> None:
+    from simulator.engine import BattleEngine
+    from simulator.geometry import cell_center_mtile
+    from simulator.observation import ObservationMemory, build_policy_observation
+    from simulator.ruleset import load_ruleset
+
+    ruleset = load_ruleset("v1")
+    engine = BattleEngine(ruleset, validate_every_tick=False)
+    deck = (
+        "fireball",
+        "log",
+        "hog-rider",
+        "cannon",
+        "musketeer",
+        "skeletons",
+        "ice-golem",
+        "ice-spirit",
+    )
+    state = engine.new_battle((deck, deck), seed=7, shuffle_decks=False)
+    for player in state.players:
+        player.elixir_milli = ruleset.match.max_elixir_milli
+
+    obstacle_x, obstacle_y = cell_center_mtile((9, 20))
+    engine._spawn_single_at(
+        state,
+        ruleset.card("cannon"),
+        owner=1,
+        x_mtile=obstacle_x,
+        y_mtile=obstacle_y,
+        deploy_remaining_us=0,
+    )
+    for entity in state.entities.values():
+        if entity.kind == "tower" and entity.owner == 1 and entity.role == "left":
+            entity.alive = False
+            entity.hp = 0
+
+    for viewer in (0, 1):
+        expected = build_policy_observation(
+            state,
+            ruleset,
+            viewer=viewer,
+            memory=ObservationMemory(viewer),
+            legality_callback=lambda battle, action: (
+                engine.validate_action(battle, action) is None
+            ),
+        )
+        actual = build_policy_observation(
+            state,
+            ruleset,
+            viewer=viewer,
+            memory=ObservationMemory(viewer),
+            legal_action_cells_callback=engine.legal_action_cells,
+        )
+        np.testing.assert_array_equal(actual.legal_play, expected.legal_play)
+
+
+@pytest.mark.parametrize(
+    "backend",
+    ["process", "packed-process", "persistent-process"],
+)
 def test_process_backends_preserve_v2_step_results(backend: str) -> None:
     from simulator.env import SimulatorEnv, VectorSimulatorEnv
 

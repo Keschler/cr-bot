@@ -3524,7 +3524,7 @@
         "placement_class": "own_ground",
         "projectile_mode": "homing",
         "projectile_speed_code": 500,
-        "recoil_mtile": 1500,
+        "recoil_mtile": 1000,
         "spawn_layout_mtile": [
           [
             0,
@@ -3564,6 +3564,9 @@
         "mechanics.projectile_speed_code": [
           "local-high-severity-card-fixes-2026-08-29"
         ],
+        "mechanics.recoil_mtile": [
+          "official-august-2025"
+        ],
         "projectile.homing": [
           "local-high-severity-card-fixes-2026-08-29"
         ],
@@ -3571,10 +3574,13 @@
           "royaleapi-projectiles-2026-04-19",
           "simulator-baseline-assumptions",
           "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "sight_range_mtile": [
+          "official-august-2025"
         ]
       },
       "range_mtile": 6000,
-      "sight_range_mtile": 6000,
+      "sight_range_mtile": 8000,
       "spawn_count": 1,
       "targets": [
         "air",
@@ -3859,7 +3865,7 @@
       "attack_interval_us": 1700000,
       "collision_radius_mtile": 400,
       "crown_tower_damage": null,
-      "damage": 135,
+      "damage": 179,
       "deploy_time_us": 1000000,
       "elixir_milli": 4000,
       "first_hit_delay_us": 0,
@@ -3910,6 +3916,9 @@
       "provenance": {
         "catalog_values": [
           "local-card-metadata-2026-08-14"
+        ],
+        "damage": [
+          "statsroyale-furnace-2026-08-30"
         ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
@@ -4556,7 +4565,7 @@
       "area_radius_mtile": 3000,
       "attack_interval_us": null,
       "collision_radius_mtile": null,
-      "crown_tower_damage": 42,
+      "crown_tower_damage": 60,
       "damage": 210,
       "deploy_time_us": 0,
       "elixir_milli": 2000,
@@ -4576,7 +4585,7 @@
         "lifetime_start": null,
         "movement_layer": null,
         "persistent_effect": {
-          "crown_damage_per_tick": 7,
+          "crown_damage_per_tick": 10,
           "damage_per_tick": 35,
           "duration_anchor": "after_immediate",
           "duration_us": 6000000,
@@ -4618,6 +4627,9 @@
         "catalog_values": [
           "local-card-metadata-2026-08-14"
         ],
+        "crown_tower_damage": [
+          "official-september-2025"
+        ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
         ],
@@ -4630,6 +4642,9 @@
         ],
         "mechanics.enemy_slowdown_milli": [
           "official-august-2026"
+        ],
+        "mechanics.persistent_effect.crown_damage_per_tick": [
+          "official-september-2025"
         ]
       },
       "range_mtile": null,
@@ -5204,7 +5219,7 @@
       "first_hit_delay_us": null,
       "hitpoints": 1180,
       "kind": "building",
-      "lifetime_us": 29000000,
+      "lifetime_us": 30000000,
       "mass": 0,
       "mechanics": {
         "building_only": false,
@@ -5263,6 +5278,9 @@
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "lifetime_us": [
+          "statsroyale-goblin-hut-2026-08-30"
         ],
         "mechanics.spawn.interval_us": [
           "official-april-2026"
@@ -6013,7 +6031,7 @@
       "damage": 317,
       "deploy_time_us": 1000000,
       "elixir_milli": 4000,
-      "first_hit_delay_us": 1000000,
+      "first_hit_delay_us": 600000,
       "hitpoints": 1697,
       "kind": "troop",
       "lifetime_us": null,
@@ -6057,6 +6075,10 @@
         "elixir_milli": [
           "royaleapi-cards-2026-04-19",
           "deckmelon-hog-2026-08-11"
+        ],
+        "first_hit_delay_us": [
+          "reference-hog-rider-first-hit-2026-08-30",
+          "local-high-severity-card-fixes-2026-08-29"
         ],
         "identity": [
           "royaleapi-cards-2026-04-19"
@@ -6227,10 +6249,10 @@
           "damage": 84,
           "radius_mtile": 2000,
           "status": {
-            "duration_us": 1500000,
-            "hit_speed_multiplier_milli": 650,
+            "duration_us": 2000000,
+            "hit_speed_multiplier_milli": 700,
             "kind": "slow",
-            "speed_multiplier_milli": 650
+            "speed_multiplier_milli": 700
           },
           "targets": [
             "air",
@@ -6278,6 +6300,15 @@
         ],
         "mass": [
           "royaleapi-characters-2026-04-19"
+        ],
+        "mechanics.death.status.duration_us": [
+          "official-october-2025"
+        ],
+        "mechanics.death.status.hit_speed_multiplier_milli": [
+          "official-october-2025"
+        ],
+        "mechanics.death.status.speed_multiplier_milli": [
+          "official-october-2025"
         ],
         "speed_conversion": [
           "royaleapi-characters-2026-04-19",
@@ -6387,6 +6418,9 @@
         ],
         "mass": [
           "royaleapi-characters-2026-04-19"
+        ],
+        "mechanics.crown_tower_connection": [
+          "official-august-2026"
         ],
         "mechanics.projectile_speed_code": [
           "local-high-severity-card-fixes-2026-08-29"
@@ -12092,7 +12126,7 @@
       ]
     }
   },
-  "content_hash": "sha256:8994aea5406e7587c1caccd6ddb81c437a32b2312239f8fc8415336184d28823",
+  "content_hash": "sha256:eaca6c1129b751af7e1f88a493854c079b1e361fb64f1266843529eb80ce856c",
   "interaction_set": [
     "archers",
     "arrows",
@@ -12796,6 +12830,16 @@
       "sha256": null,
       "url": "https://supercell.com/en/games/clashroyale/blog/release-notes/october-balance-changes-2/"
     },
+    "official-september-2025": {
+      "confidence_tier": "A",
+      "kind": "official-patch-note",
+      "lineage": "Supercell",
+      "note": "September 2025 Goblin Curse rework: Crown Tower damage per second increased from 6 to 10, body damage per second set to 35, and damage amplification removed.",
+      "published_at": "2025-09-01",
+      "retrieved_at": "2026-08-30",
+      "sha256": null,
+      "url": "https://supercell.com/en/games/clashroyale/blog/release-notes/september-balance-changes/"
+    },
     "policy-grid-2026-08-11": {
       "confidence_tier": "E",
       "kind": "repository-calibration",
@@ -12815,6 +12859,16 @@
       "retrieved_at": "2026-08-29",
       "sha256": null,
       "url": "https://clashroyale.fandom.com/wiki/Goblin_Giant"
+    },
+    "reference-hog-rider-first-hit-2026-08-30": {
+      "confidence_tier": "B",
+      "kind": "hidden-mechanic-reference",
+      "lineage": "StatsRoyale card page cross-checked with community timing references",
+      "note": "StatsRoyale documents the current 1.6-second hit speed; hidden first-hit timing is approximately 0.6 seconds and is cross-checked against Liquipedia, Clasher, and AesDragon timing data.",
+      "published_at": null,
+      "retrieved_at": "2026-08-30",
+      "sha256": null,
+      "url": "https://statsroyale.com/card/Hog+Rider"
     },
     "royaleapi-buildings-2026-04-19": {
       "confidence_tier": "D",
@@ -12885,6 +12939,26 @@
       "retrieved_at": "2026-08-11",
       "sha256": null,
       "url": null
+    },
+    "statsroyale-furnace-2026-08-30": {
+      "confidence_tier": "B",
+      "kind": "level11-card-page",
+      "lineage": "StatsRoyale",
+      "note": "Current Level-11 Furnace damage is 179; this agrees with the August 2025 rework table on RoyaleAPI.",
+      "published_at": null,
+      "retrieved_at": "2026-08-30",
+      "sha256": null,
+      "url": "https://statsroyale.com/card/Furnace"
+    },
+    "statsroyale-goblin-hut-2026-08-30": {
+      "confidence_tier": "B",
+      "kind": "level11-card-page",
+      "lineage": "StatsRoyale",
+      "note": "Current Goblin Hut lifetime is 30 seconds; Liquipedia and CocMap independently report the same current lifetime.",
+      "published_at": null,
+      "retrieved_at": "2026-08-30",
+      "sha256": null,
+      "url": "https://statsroyale.com/card/Goblin+Hut"
     },
     "user-supplied-balance-update-2026-08-26": {
       "confidence_tier": "E",

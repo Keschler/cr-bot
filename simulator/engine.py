@@ -61,7 +61,7 @@ BASE_HOG_CYCLE_DECK = PLAYER_DECK
 # phase/fuse entities, and structure-safe navigation) are part of this engine
 # identity.  Replays and mined evidence must never be silently interpreted by
 # a newer algorithm.
-ENGINE_VERSION = "reference-0.31.0"
+ENGINE_VERSION = "reference-0.32.0"
 
 
 # The policy action grid is fixed by the observation contract.  Keeping its
@@ -2814,10 +2814,28 @@ class BattleEngine:
                             unit_x, unit_y, denominator = direction, 0, 1
                         else:
                             unit_x, unit_y, denominator = dx, dy, distance
-                        displacement_x[left_index] -= unit_x * left_push // denominator
-                        displacement_y[left_index] -= unit_y * left_push // denominator
-                        displacement_x[right_index] += unit_x * right_push // denominator
-                        displacement_y[right_index] += unit_y * right_push // denominator
+
+                        # A one-milli-tile diagonal overlap can otherwise
+                        # round both component displacements to zero (for
+                        # example, 565/799).  Once a positive share is
+                        # assigned, make every non-zero axis advance by at
+                        # least one lattice unit.  This preserves deterministic
+                        # mass ordering while guaranteeing that a colliding
+                        # pair makes progress on the next separation pass.
+                        def axis_push(component: int, amount: int) -> int:
+                            if component == 0 or amount == 0:
+                                return 0
+                            magnitude = abs(component) * amount // denominator
+                            return (1 if component > 0 else -1) * max(1, magnitude)
+
+                        left_dx = axis_push(unit_x, left_push)
+                        left_dy = axis_push(unit_y, left_push)
+                        right_dx = axis_push(unit_x, right_push)
+                        right_dy = axis_push(unit_y, right_push)
+                        displacement_x[left_index] -= left_dx
+                        displacement_y[left_index] -= left_dy
+                        displacement_x[right_index] += right_dx
+                        displacement_y[right_index] += right_dy
 
                 changed = False
                 for index, entity in enumerate(movable):
@@ -4753,7 +4771,20 @@ class BattleEngine:
         candidates: list[EntityState] = []
         if radius <= 0 and primary_target_uid is not None:
             target = state.entities.get(primary_target_uid)
-            if target is not None and target.alive and target.owner != owner:
+            # A projectile can outlive the target state used when it was
+            # launched. Re-apply the impact target contract at contact time;
+            # otherwise a ground-only projectile can damage a unit which has
+            # become airborne during a river jump.
+            if (
+                target is not None
+                and target.alive
+                and target.owner != owner
+                and self._spell_can_hit(
+                    source_card_id,
+                    target,
+                    allowed_targets=allowed_targets,
+                )
+            ):
                 candidates = [target]
         else:
             for target in self._alive_entities(state):
@@ -5750,13 +5781,28 @@ class BattleEngine:
                 opponent.crowns += 1
                 self._activate_king(state, tower.owner, "princess_tower_destroyed")
         if len(king_deaths) == 2:
+            self._collapse_remaining_crown_towers(state, king_deaths)
             self._end_match(state, None, "simultaneous_king_destruction")
         elif king_deaths:
+            self._collapse_remaining_crown_towers(state, king_deaths)
             self._end_match(state, 1 - next(iter(king_deaths)), "king_tower_destroyed")
         elif state.phase == "overtime":
             crowns = (state.players[0].crowns, state.players[1].crowns)
             if crowns[0] != crowns[1]:
                 self._end_match(state, 0 if crowns[0] > crowns[1] else 1, "overtime_sudden_death")
+
+    def _collapse_remaining_crown_towers(
+        self, state: BattleState, owners: set[int]
+    ) -> None:
+        """Destroy each king owner's surviving Princess Towers terminally."""
+
+        for owner in sorted(owners):
+            for tower in self._towers_for(state, owner):
+                if tower.role != "king" and tower.alive:
+                    tower.hp = 0
+        # Route the automatic collapse through the ordinary death resolver so
+        # navigation invalidation and tower-destroyed events remain canonical.
+        self._resolve_deaths(state)
 
     def _advance_match_clock(self, state: BattleState) -> None:
         if state.terminal:
@@ -5789,8 +5835,77 @@ class BattleEngine:
         owners = {tower.owner for tower in minimum}
         if len(owners) != 1:
             self._end_match(state, None, "tiebreak_equal_lowest_hp")
-        else:
-            self._end_match(state, 1 - next(iter(owners)), "tiebreak_lowest_hp")
+            return
+
+        # The live game clears troops before the tower-drain tiebreak.  Do not
+        # run ordinary death payloads here: tiebreak removal is a terminal
+        # cleanup, not combat damage.
+        self._remove_entities_for_tiebreak(state)
+        target = min(minimum, key=lambda tower: tower.uid)
+        # The tiebreak is an equal raw-HP drain on every tower.  Applying the
+        # full drain before resolving deaths keeps terminal tower snapshots and
+        # damage-based rewards consistent with the visible game transition.
+        for tower in alive_towers:
+            tower.hp = max(0, tower.hp - lowest_hp)
+        destroyed = self._resolve_deaths(state)
+        if any(tower.role == "king" for tower in destroyed):
+            # King destruction still has the normal automatic Princess Tower
+            # collapse and three-crown semantics.
+            self._resolve_tower_outcomes(state, destroyed)
+            return
+
+        for tower in destroyed:
+            opponent = state.players[1 - tower.owner]
+            opponent.crowns += 1
+            self._activate_king(state, tower.owner, "tiebreak_tower_destroyed")
+        self._end_match(state, 1 - target.owner, "tiebreak_lowest_hp")
+
+    def _remove_entities_for_tiebreak(self, state: BattleState) -> None:
+        """Clear active combatants and transient effects before tiebreak."""
+
+        for entity in sorted(state.entities.values(), key=lambda row: row.uid):
+            if not entity.alive or entity.kind != "troop":
+                continue
+            entity.alive = False
+            entity.hp = 0
+            entity.target_uid = None
+            entity.pending_target_uid = None
+            entity.secondary_pending_target_uid = None
+            entity.jump_target_uid = None
+            entity.carried_by_uid = None
+            entity.carried_offset_x_mtile = 0
+            entity.carried_offset_y_mtile = 0
+            entity.statuses.clear()
+            entity.navigation_waypoints.clear()
+            entity.navigation_cursor = 0
+            self._emit(
+                state,
+                "tiebreak_entity_removed",
+                uid=entity.uid,
+                player=entity.owner,
+                card_id=entity.card_id,
+            )
+
+        removed_projectiles = 0
+        for projectile in sorted(state.projectiles.values(), key=lambda row: row.uid):
+            if projectile.alive:
+                projectile.alive = False
+                removed_projectiles += 1
+        if removed_projectiles:
+            self._emit(
+                state,
+                "tiebreak_projectiles_removed",
+                count=removed_projectiles,
+            )
+
+        removed_effects = 0
+        for effect in sorted(state.effects.values(), key=lambda row: row.uid):
+            if effect.alive:
+                effect.alive = False
+                effect.remaining_us = 0
+                removed_effects += 1
+        if removed_effects:
+            self._emit(state, "tiebreak_effects_removed", count=removed_effects)
 
     def _activate_king(self, state: BattleState, player: int, reason: str) -> None:
         if state.players[player].king_active:

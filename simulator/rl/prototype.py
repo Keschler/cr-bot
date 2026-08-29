@@ -28,7 +28,7 @@ results.
 
 from __future__ import annotations
 
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, Future
 from copy import deepcopy
 from dataclasses import asdict, dataclass, fields
 import argparse
@@ -44,7 +44,7 @@ from types import SimpleNamespace
 from typing import Any, Callable, Mapping, Sequence, TextIO
 
 from ._compat import TORCH_AVAILABLE, TorchUnavailableError
-from .provenance import code_revision
+from .provenance import code_revision, revision_changed
 
 
 PROTOTYPE_SCHEMA_VERSION = 1
@@ -101,6 +101,15 @@ class PrototypeConfig:
     device: str = "auto"
     env_backend: str = "reference"
     env_workers: int | None = None
+    # Optional one-update pipeline for the trainer-only rollout farm.  The
+    # next batch is collected with the previous published weights while PPO
+    # updates the current batch; this is explicit because it introduces a
+    # bounded one-update behavior-policy lag.
+    overlap_rollouts: bool = False
+    # Compile the parent policy forward graph with torch.compile when the
+    # runtime supports it.  This is an opt-in kernel/scheduling optimization;
+    # it does not alter the model topology or actor observation contract.
+    compile_policy: bool = False
 
     # Optimizer and long-horizon objective.
     learning_rate: float = 3e-4
@@ -187,6 +196,8 @@ class PrototypeConfig:
             "spatial_placement_features",
             "imitation_only",
             "deterministic_rollouts",
+            "overlap_rollouts",
+            "compile_policy",
         ):
             if type(getattr(self, name)) is not bool:
                 raise PrototypeConfigurationError(f"{name} must be boolean")
@@ -196,9 +207,16 @@ class PrototypeConfig:
             )
         if not isinstance(self.device, str) or not self.device.strip():
             raise PrototypeConfigurationError("device must be a non-empty string")
-        if self.env_backend not in {"reference", "process", "packed-process"}:
+        if self.env_backend not in {
+            "reference",
+            "process",
+            "packed-process",
+            "persistent-process",
+            "rollout-process",
+        }:
             raise PrototypeConfigurationError(
-                "env_backend must be 'reference', 'process', or 'packed-process'"
+                "env_backend must be 'reference', 'process', 'packed-process', "
+                "'persistent-process', or 'rollout-process'"
             )
         if self.env_workers is not None:
             _positive_int("env_workers", self.env_workers)
@@ -394,6 +412,47 @@ def _model_and_learner(config: PrototypeConfig) -> Any:
         privileged_critic=False,
         device=config.device,
     )
+
+
+def _compile_policy_forward(learner: Any, config: PrototypeConfig) -> dict[str, object]:
+    """Optionally compile only the parent policy forward graph.
+
+    Rollout workers intentionally do not inherit this setting: compiling a
+    separate graph in every simulator process adds more startup cost than it
+    saves for the small worker batches.  The parent learner is where PPO
+    re-evaluates long recurrent sequences, so a warmed compiled forward is a
+    useful long-run optimization while leaving the module topology,
+    parameters, masks, and checkpoint format unchanged.
+    """
+
+    requested = bool(config.compile_policy)
+    result: dict[str, object] = {
+        "requested": requested,
+        "enabled": False,
+        "backend": None,
+        "note": None,
+    }
+    if not requested:
+        result["note"] = "disabled"
+        return result
+    torch = _require_torch()
+    compile_fn = getattr(torch, "compile", None)
+    if not callable(compile_fn):
+        result["note"] = "torch.compile is unavailable"
+        return result
+    try:
+        learner.policy.forward = compile_fn(
+            learner.policy.forward,
+            mode="reduce-overhead",
+            fullgraph=False,
+        )
+    except Exception as error:  # pragma: no cover - backend/version dependent
+        result["note"] = f"compile setup failed: {type(error).__name__}: {error}"
+        return result
+    result["enabled"] = True
+    result["backend"] = "torch.compile"
+    result["note"] = "first PPO evaluation includes graph compilation"
+    return result
 
 
 def _mix_seed(seed: int, *parts: int) -> int:
@@ -876,6 +935,8 @@ def _make_collector(
     expert_action: Callable[[Any, Any, int], Any] | None = None,
     expert_execution_probability: float | None = None,
     lane_decks: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] | None = None,
+    lane_offset: int = 0,
+    actor_only_observations: bool = False,
     opponent_action: Callable[[Any, Any, int], Any | None] | None = None,
     batch_step: Callable[[Sequence[Sequence[Any | None]]], Sequence[Any]] | None = None,
 ) -> Any:
@@ -888,10 +949,12 @@ def _make_collector(
             horizon=config.horizon,
             target_player=config.target_player,
             seed=config.seed,
+            lane_offset=lane_offset,
             shuffle_decks=config.shuffle_decks,
             decks=None if lane_decks is not None else (tuple(_deck), tuple(_deck)),
             lane_decks=lane_decks,
             collect_belief_targets=config.collect_belief_targets,
+            actor_only_observations=actor_only_observations,
             deterministic=deterministic,
             expert_execution_probability=(
                 config.expert_execution_probability
@@ -922,7 +985,7 @@ def _make_batch_stepper(
     canonical transport of its own.
     """
 
-    if config.env_backend == "reference":
+    if config.env_backend in {"reference", "rollout-process"}:
         return None, None
     if any(
         (
@@ -932,7 +995,7 @@ def _make_batch_stepper(
         )
     ):
         raise PrototypeConfigurationError(
-            "process environment backends cannot be combined with domain randomization"
+        "process environment backends cannot be combined with domain randomization"
         )
     try:
         from ..env import VectorSimulatorEnv
@@ -1166,6 +1229,7 @@ def train_prototype(
     player_deck: Sequence[str] | None = None,
     opponent_decks: Sequence[Sequence[str]] | None = None,
     opponent_action: Callable[[Any, Any, int], Any | None] | None = None,
+    rollout_opponent_specs: Sequence[tuple[str, int]] | None = None,
 ) -> dict[str, object]:
     """Run recurrent PPO updates and save one complete prototype artifact.
 
@@ -1268,6 +1332,31 @@ def train_prototype(
         resolved_opponent_decks = tuple(resolved_rows)
     if opponent_action is not None and not callable(opponent_action):
         raise TypeError("opponent_action must be callable when provided")
+    if rollout_opponent_specs is not None:
+        if len(rollout_opponent_specs) != effective_config.envs:
+            raise PrototypeConfigurationError(
+                "rollout_opponent_specs must contain one (strategy, seed) pair per environment"
+            )
+        for index, raw_spec in enumerate(rollout_opponent_specs):
+            if (
+                not isinstance(raw_spec, Sequence)
+                or isinstance(raw_spec, (str, bytes))
+                or len(raw_spec) != 2
+                or not isinstance(raw_spec[0], str)
+                or type(raw_spec[1]) is not int
+            ):
+                raise PrototypeConfigurationError(
+                    f"rollout_opponent_specs[{index}] must be a (strategy, integer seed) pair"
+                )
+    if effective_config.overlap_rollouts and effective_config.env_backend != "rollout-process":
+        raise PrototypeConfigurationError(
+            "overlap_rollouts requires the rollout-process backend"
+        )
+    # Pin the simulator revision for this complete rollout/update sequence.
+    # The checkout may remain dirty during development, but a new committed
+    # HEAD means the simulator changed underneath the experiment and its
+    # checkpoint must not be promoted as if it came from one revision.
+    run_start_revision = code_revision()
     started = perf_counter()
     if checkpoint is None:
         learner = _model_and_learner(effective_config)
@@ -1289,6 +1378,8 @@ def train_prototype(
         )
         resumed_from = str(checkpoint)
 
+    policy_compile = _compile_policy_forward(learner, effective_config)
+
     # ``player_deck`` names the learner's deck, while the simulator's deck
     # tuple is always ordered by world player.  Swap the lane pair when the
     # learner is assigned to player 1 so side-balanced training exercises the
@@ -1298,17 +1389,44 @@ def train_prototype(
         resolved_player_deck,
         resolved_opponent_decks,
     )
-    environments = [
-        _make_environment(
+    rollout_farm = None
+    if effective_config.env_backend == "rollout-process":
+        if opponent_action is not None:
+            raise PrototypeConfigurationError(
+                "rollout-process uses serialized simulator-side opponent specs; "
+                "use a vector backend for a Python opponent callback"
+            )
+        if expert_guidance:
+            raise PrototypeConfigurationError(
+                "rollout-process currently does not support expert guidance"
+            )
+        from .rollout_farm import RolloutFarm
+
+        rollout_farm = RolloutFarm(
             effective_config,
-            ruleset,
-            lane,
-            player_deck=lane_decks[lane][0],
-            opponent_deck=lane_decks[lane][1],
+            learner,
+            lane_decks,
+            opponent_specs=rollout_opponent_specs,
+            double_buffer=effective_config.overlap_rollouts,
         )
-        for lane in range(effective_config.envs)
-    ]
-    vector_environment, batch_step = _make_batch_stepper(effective_config, environments)
+        environments: Sequence[Any] = ()
+        vector_environment = None
+        batch_step = None
+    else:
+        environments = [
+            _make_environment(
+                effective_config,
+                ruleset,
+                lane,
+                player_deck=lane_decks[lane][0],
+                opponent_deck=lane_decks[lane][1],
+            )
+            for lane in range(effective_config.envs)
+        ]
+        vector_environment, batch_step = _make_batch_stepper(
+            effective_config,
+            environments,
+        )
     expert_action = None
     if expert_guidance:
         if expert_action_callback is None:
@@ -1317,35 +1435,54 @@ def train_prototype(
             expert_action = deterministic_counter_action
         else:
             expert_action = expert_action_callback
+    rollout_executor: ThreadPoolExecutor | None = None
+    pending_rollout: Future[Any] | None = None
     try:
         update_rows: list[dict[str, object]] = []
+        rollout_farm_timing: list[dict[str, object]] = []
         aggregate = {name: 0 for name in ("completed_matches", "wins", "draws", "losses", "truncated_matches")}
         starting_update = int(learner.update_count)
         rollout_state = None
         rollout_reset_mask = None
         episode_counts: tuple[int, ...] | None = None
-        for local_update in range(effective_config.updates):
-            # Keep episode reseeding deterministic across update boundaries while
-            # still producing a different lane schedule for each update.
-            collector_config = PrototypeConfig.from_mapping(
+        pending_buffer_index = 0
+        if rollout_farm is not None and effective_config.overlap_rollouts:
+            rollout_executor = ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix="rl-rollout-submit",
+            )
+
+        def collector_config_for(local_index: int) -> PrototypeConfig:
+            return PrototypeConfig.from_mapping(
                 {
                     **effective_config.as_dict(),
                     "seed": _mix_seed(
                         effective_config.seed,
-                        starting_update + local_update,
+                        starting_update + local_index,
                         0xC011,
                     ),
                 }
             )
-            collector = _make_collector(
-                learner,
-                collector_config,
-                deterministic=effective_config.deterministic_rollouts,
-                expert_action=expert_action,
-                lane_decks=lane_decks,
-                opponent_action=opponent_action,
-                batch_step=batch_step,
-            )
+
+        for local_update in range(effective_config.updates):
+            # Keep episode reseeding deterministic across update boundaries while
+            # still producing a different lane schedule for each update.
+            collector_config = collector_config_for(local_update)
+            # Rollout-farm workers own the collector.  Avoid constructing an
+            # unused parent collector on every PPO update; the reference and
+            # vector backends still build the collector exactly as before.
+            collector = None
+            if rollout_farm is None:
+                collector = _make_collector(
+                    learner,
+                    collector_config,
+                    deterministic=effective_config.deterministic_rollouts,
+                    expert_action=expert_action,
+                    lane_decks=lane_decks,
+                    opponent_action=opponent_action,
+                    batch_step=batch_step,
+                )
+            rollout_started = perf_counter()
             rollout_progress = None
             if progress_step_callback is not None:
                 transition_offset = local_update * effective_config.envs * effective_config.horizon
@@ -1357,20 +1494,87 @@ def train_prototype(
                 ) -> None:
                     progress_step_callback(offset + completed_transitions)
 
-            result = collector.collect(
-                environments,
-                rollout_state=rollout_state,
-                reset_mask=rollout_reset_mask,
-                episode_counts=episode_counts,
-                step_callback=rollout_progress,
-            )
+            if rollout_farm is not None:
+                from .collector import RolloutResult
+
+                if pending_rollout is not None:
+                    farm_batch = pending_rollout.result()
+                    pending_rollout = None
+                    # The pending batch was collected under the weights that
+                    # preceded the update just completed. Publish the new
+                    # weights only after that batch is safely detached from
+                    # the worker's output buffer.
+                    rollout_farm.sync_weights(
+                        learner,
+                        seed=_mix_seed(
+                            effective_config.seed,
+                            starting_update + local_update,
+                            0xFA57,
+                        ),
+                    )
+                else:
+                    if local_update:
+                        rollout_farm.sync_weights(
+                            learner,
+                            seed=_mix_seed(
+                                effective_config.seed,
+                                starting_update + local_update,
+                                0xFA57,
+                            ),
+                        )
+                    farm_batch = rollout_farm.collect(
+                        collector_config,
+                        buffer_index=pending_buffer_index,
+                    )
+                rollout_farm_timing.append(
+                    {
+                        "startup_seconds": farm_batch.startup_seconds,
+                        "collect_wall_seconds": farm_batch.collect_wall_seconds,
+                        "worker_collect_seconds": list(
+                            farm_batch.worker_collect_seconds
+                        ),
+                    }
+                )
+                result = RolloutResult(
+                    learner_batch=farm_batch.learner_batch,
+                    final_observations=(),
+                    next_rollout_state=None,
+                    bootstrap_values=farm_batch.learner_batch.bootstrap_values,
+                    stats=farm_batch.stats,
+                    next_reset_mask=None,
+                    episode_counts=farm_batch.episode_counts,
+                )
+                if (
+                    rollout_executor is not None
+                    and local_update + 1 < effective_config.updates
+                ):
+                    next_buffer_index = 1 - pending_buffer_index
+                    pending_rollout = rollout_executor.submit(
+                        rollout_farm.collect,
+                        collector_config_for(local_update + 1),
+                        buffer_index=next_buffer_index,
+                    )
+                    pending_buffer_index = next_buffer_index
+            else:
+                if collector is None:  # pragma: no cover - farm branch returns above
+                    raise RuntimeError("rollout collector was not initialized")
+                result = collector.collect(
+                    environments,
+                    rollout_state=rollout_state,
+                    reset_mask=rollout_reset_mask,
+                    episode_counts=episode_counts,
+                    step_callback=rollout_progress,
+                )
+            rollout_wall_seconds = perf_counter() - rollout_started
             rollout_state = result.next_rollout_state
             rollout_reset_mask = result.next_reset_mask
             episode_counts = result.episode_counts
+            update_started = perf_counter()
             metrics = learner.update(
                 result.learner_batch,
                 sequence_length=effective_config.sequence_length,
             )
+            update_wall_seconds = perf_counter() - update_started
             if metrics.skipped_steps:
                 raise PrototypeConfigurationError(
                     "refusing to save a checkpoint after non-finite optimizer "
@@ -1393,6 +1597,10 @@ def train_prototype(
                     "transitions": effective_config.envs * effective_config.horizon,
                     "metrics": metrics.as_dict(),
                     "rollout": stats,
+                    "timing": {
+                        "rollout_wall_seconds": rollout_wall_seconds,
+                        "learner_update_wall_seconds": update_wall_seconds,
+                    },
                 }
             )
             if progress_callback is not None:
@@ -1410,11 +1618,19 @@ def train_prototype(
                 effective_config,
                 ruleset,
             )
+            run_end_revision = code_revision()
+            revision_drift = revision_changed(run_start_revision, run_end_revision)
             report = {
                 "kind": "recurrent_public_ppo_prototype",
                 "prototype_schema_version": PROTOTYPE_SCHEMA_VERSION,
                 "checkpoint_format": PROTOTYPE_CHECKPOINT_FORMAT,
-                "code_revision": code_revision(),
+                "code_revision": run_end_revision,
+                "run_code_revision": run_start_revision,
+                "revision_guard": {
+                    "status": "drifted" if revision_drift else "stable",
+                    "start": run_start_revision,
+                    "end": run_end_revision,
+                },
                 "ruleset_id": ruleset.ruleset_id,
                 "ruleset_hash": ruleset.content_hash,
                 "actor_privileged_inputs": False,
@@ -1437,6 +1653,9 @@ def train_prototype(
                     ),
                 },
                 "update_rows": update_rows,
+                "rollout_farm_timing": rollout_farm_timing,
+                "policy_compile": policy_compile,
+                "overlap_rollouts": bool(effective_config.overlap_rollouts),
                 "checkpoint": str(destination),
                 "resumed_from": resumed_from,
                 "expert_guidance": bool(expert_guidance),
@@ -1454,6 +1673,14 @@ def train_prototype(
                 "player_deck": list(resolved_player_deck),
                 "opponent_decks": [list(deck) for deck in resolved_opponent_decks],
                 "custom_opponent_policy": opponent_action is not None,
+                "rollout_opponent_specs": (
+                    None
+                    if rollout_opponent_specs is None
+                    else [
+                        {"strategy": strategy, "seed": int(seed)}
+                        for strategy, seed in rollout_opponent_specs
+                    ]
+                ),
                 "resume_controls": {
                     "learning_rate": (
                         None
@@ -1464,6 +1691,14 @@ def train_prototype(
                     "optimizer_reset": bool(resume_reset_optimizer),
                 },
                 "wall_seconds": perf_counter() - started,
+                "decisions_per_second": (
+                    (
+                        effective_config.envs
+                        * effective_config.horizon
+                        * effective_config.updates
+                    )
+                    / max(perf_counter() - started, 1e-9)
+                ),
                 "warning": (
                     "Prototype training uses a provisional deterministic simulator unless "
                     "the selected ruleset reports training_ready=true."
@@ -1473,12 +1708,29 @@ def train_prototype(
 
             audit = audit_simulation_report(report)
             report["simulation_exploit_audit"] = audit
+            # Check again immediately before promotion so a commit made while
+            # the audit was running cannot slip through the revision gate.
+            promotion_revision = code_revision()
+            if revision_changed(run_start_revision, promotion_revision):
+                revision_drift = True
+                report["code_revision"] = promotion_revision
+                report["revision_guard"] = {
+                    "status": "drifted",
+                    "start": run_start_revision,
+                    "end": promotion_revision,
+                }
+            quarantine_reasons: list[str] = []
+            if revision_drift:
+                quarantine_reasons.append("code_revision_changed_during_run")
             if audit.get("status") != "clean":
+                quarantine_reasons.append("simulation_exploit_audit_not_clean")
+            if quarantine_reasons:
                 quarantine = _quarantine_checkpoint_path(candidate)
                 report["checkpoint_promotion"] = {
                     "status": "quarantined",
                     "destination": str(destination),
                     "quarantined_checkpoint": str(quarantine),
+                    "reasons": quarantine_reasons,
                 }
                 report["quarantined_checkpoint"] = str(quarantine)
             else:
@@ -1494,8 +1746,12 @@ def train_prototype(
             # clean.
             candidate.unlink(missing_ok=True)
     finally:
+        if rollout_executor is not None:
+            rollout_executor.shutdown(wait=True)
         if vector_environment is not None:
             vector_environment.close()
+        if rollout_farm is not None:
+            rollout_farm.close()
     return report
 
 
@@ -2354,6 +2610,7 @@ def evaluate_prototype(
                 policy_mode=policy_mode,
             )
         )
+    run_start_revision = code_revision()
     learner, stored_config, metadata = load_prototype_checkpoint(
         checkpoint,
         device=device,
@@ -2557,10 +2814,33 @@ def evaluate_prototype(
                     }
                 )
     completed = wins + draws + losses
+    run_end_revision = code_revision()
+    checkpoint_revision = metadata.get("code_revision")
+    checkpoint_revision_mismatch = (
+        isinstance(checkpoint_revision, Mapping)
+        and revision_changed(checkpoint_revision, run_start_revision)
+    )
+    run_revision_drift = revision_changed(run_start_revision, run_end_revision)
+    revision_guard = {
+        "status": (
+            "drifted"
+            if checkpoint_revision_mismatch or run_revision_drift
+            else "stable"
+        ),
+        "run_start": run_start_revision,
+        "run_end": run_end_revision,
+        "checkpoint": checkpoint_revision,
+        "checkpoint_matches_run": (
+            None if not isinstance(checkpoint_revision, Mapping)
+            else not checkpoint_revision_mismatch
+        ),
+    }
     report: dict[str, object] = {
         "kind": "recurrent_public_ppo_prototype_evaluation",
         "checkpoint": str(checkpoint),
-        "code_revision": code_revision(),
+        "code_revision": run_end_revision,
+        "run_code_revision": run_start_revision,
+        "revision_guard": revision_guard,
         "policy_mode": policy_mode,
         "actor_controls_actions": policy_mode == "actor",
         "checkpoint_format": metadata["checkpoint_format"],
@@ -2758,15 +3038,41 @@ def _parser() -> argparse.ArgumentParser:
     )
     train.add_argument(
         "--env-backend",
-        choices=("reference", "process", "packed-process"),
+        choices=(
+            "reference",
+            "process",
+            "packed-process",
+            "persistent-process",
+            "rollout-process",
+        ),
         default="reference",
-        help="simulator lane backend; process backends parallelize independent lanes",
+        help=(
+            "simulator lane backend; persistent-process keeps worker engines alive "
+            "and rollout-process runs the public collector inside persistent "
+            "workers to remove per-decision state IPC"
+        ),
     )
     train.add_argument(
         "--env-workers",
         type=int,
         default=None,
         help="worker processes for a process environment backend (default: one per lane)",
+    )
+    train.add_argument(
+        "--overlap-rollouts",
+        action="store_true",
+        help=(
+            "overlap the next rollout with PPO optimization on rollout-process; "
+            "introduces an explicit one-update behavior-policy lag"
+        ),
+    )
+    train.add_argument(
+        "--compile-policy",
+        action="store_true",
+        help=(
+            "compile the parent policy forward graph with torch.compile; "
+            "startup is higher but long runs may optimize faster"
+        ),
     )
     train.add_argument("--no-shuffle", action="store_true")
     train.add_argument("--no-privileged-critic", action="store_true")
@@ -3009,6 +3315,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 device=args.device,
                 env_backend=args.env_backend,
                 env_workers=args.env_workers,
+                overlap_rollouts=args.overlap_rollouts,
+                compile_policy=args.compile_policy,
                 shuffle_decks=not args.no_shuffle,
                 use_privileged_critic=not args.no_privileged_critic,
                 collect_belief_targets=not args.no_belief_targets,

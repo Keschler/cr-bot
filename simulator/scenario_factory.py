@@ -391,6 +391,7 @@ def _generated_support_plan(
     card_id: str,
     mechanic: str,
     *,
+    player_deck: tuple[str, ...] = PLAYER_DECK,
     variant: int = 0,
 ) -> tuple[tuple[ScheduledAction, ...], tuple[dict[str, Any], ...], tuple[int, int]]:
     """Build deterministic target/setup actions for one mechanic case.
@@ -518,36 +519,64 @@ def _generated_support_plan(
             or (card.kind == "spell" and mechanic == "knockback")
             or mechanic in {"secondary_attack", "threshold_charge", "recharge_windup", "projectile_speed"}
         ) and "musketeer" in ruleset.cards
-        if card_id == "sparky" and mechanic == "area_damage":
+        if card_id == "cannon" and mechanic == "projectile_speed":
+            # Cannon only attacks ground troops.  A second Cannon is therefore
+            # not a valid target fixture; keep the target a Musketeer.
+            support_card = "musketeer"
+            support_slot = player_deck.index(support_card)
+            support_cell = (3, 17)
+        elif card_id == "ice-spirit" and mechanic == "projectile_speed":
+            # Ice Spirit's projectile is the jump/contact attack.  It needs a
+            # troop to jump onto; a building-only fixture leaves the attack
+            # targetless and falsely reports a missing projectile.
+            support_card = "musketeer"
+            support_slot = player_deck.index(support_card)
+            support_cell = (3, 17)
+        elif card_id == "firecracker" and mechanic == "damage":
+            # Keep the primary burst inside its authored splash radius.  A
+            # moving Musketeer can leave the burst point before the projectile
+            # resolves, so use a durable Cannon at the calibrated row-18
+            # ground target instead.
+            support_card = "cannon"
+            support_slot = player_deck.index(support_card)
+            support_cell = (3, 18)
+        elif card_id == "princess" and mechanic == "death":
+            # The generic Musketeer counter prefers the Crown Tower and lets
+            # Princess survive the synthetic death window.  Cannon acquires
+            # the troop directly while remaining a legal fixed-deck action.
+            support_card = "cannon"
+            support_slot = player_deck.index(support_card)
+            support_cell = (3, 18)
+        elif card_id == "sparky" and mechanic == "area_damage":
             # Sparky needs a full four-second recharge.  A Musketeer plus
             # swarm fixture kills it before the first shot, so use the
             # durable Cannon as its single ground/building target here.
             support_card = "cannon"
-            support_slot = PLAYER_DECK.index(support_card)
+            support_slot = player_deck.index(support_card)
             support_cell = (3, 20)
         elif card_id == "mortar":
             # Mortar has a large blind spot.  A Cannon on the near bridge row
             # gives it a legal, durable target outside that minimum range while
             # keeping the projectile-origin/motion cases deterministic.
             support_card = "cannon"
-            support_slot = PLAYER_DECK.index(support_card)
+            support_slot = player_deck.index(support_card)
             support_cell = (3, 18)
         elif mechanic == "projectile_speed":
             support_card = "cannon"
-            support_slot = PLAYER_DECK.index(support_card)
+            support_slot = player_deck.index(support_card)
         elif mechanic in {"hook_pull", "hook_targeting"}:
             # Hook semantics are troop-only; use the slot-0 Hog body rather
             # than a ranged support unit that the normal attack scheduler may
             # kill before the hook reaches its target.
             support_card = "hog-rider"
-            support_slot = PLAYER_DECK.index(support_card)
+            support_slot = player_deck.index(support_card)
         elif use_cannon:
             support_card = "cannon"
-            support_slot = 0
+            support_slot = player_deck.index(support_card)
             support_cell = (3, 20)
         else:
             support_card = "musketeer" if use_musketeer else "hog-rider"
-            support_slot = PLAYER_DECK.index(support_card)
+            support_slot = player_deck.index(support_card)
         # Building-only troops need to reach a building before the defensive
         # Cannon is played.  If the Cannon is already live at tick 400 its
         # first three shots plus a Princess Tower shot can kill short-lived
@@ -570,7 +599,10 @@ def _generated_support_plan(
             # independent weapon must acquire and launch rather than passing
             # with only one primary victim.
             support_actions.append(
-                ScheduledAction(401, PlayCardAction(0, 0, (4, 17)))
+                ScheduledAction(
+                    401,
+                    PlayCardAction(0, player_deck.index("hog-rider"), (4, 17)),
+                )
             )
             required_support.append({"player": 0, "card_id": "hog-rider"})
         if card.kind == "spell":
@@ -624,7 +656,7 @@ def _generated_support_plan(
         support_actions.append(
             ScheduledAction(
                 400,
-                PlayCardAction(0, PLAYER_DECK.index("musketeer"), (3, 17)),
+                PlayCardAction(0, player_deck.index("musketeer"), (3, 17)),
             )
         )
         required_support.append({"player": 0, "card_id": "musketeer"})
@@ -644,11 +676,11 @@ def _generated_support_plan(
     ) and not (card_id == "sparky" and mechanic == "area_damage"):
         if support_card == "musketeer":
             extra_first = "cannon"
-            extra_first_slot = 1
+            extra_first_slot = player_deck.index(extra_first)
             extra_first_cell = (3, 18) if mechanic == "line_piercing" else (3, 20)
         else:
             extra_first = "musketeer"
-            extra_first_slot = 1
+            extra_first_slot = player_deck.index(extra_first)
             extra_first_cell = (2, 17)
         support_actions.append(
             ScheduledAction(401, PlayCardAction(0, extra_first_slot, extra_first_cell))
@@ -656,7 +688,13 @@ def _generated_support_plan(
         required_support.append({"player": 0, "card_id": extra_first})
         if mechanic != "line_piercing":
             support_actions.append(
-                ScheduledAction(402, PlayCardAction(0, 1, (4, 17)))
+                ScheduledAction(
+                    402,
+                    # Slot one is the next card after the earlier slot-one
+                    # support play advances the real hand.  This is a hand
+                    # position, not the card's original deck index.
+                    PlayCardAction(0, 1, (4, 17)),
+                )
             )
             required_support.append({"player": 0, "card_id": "skeletons"})
 
@@ -881,7 +919,14 @@ def _required_event_matches(card: Any, mechanic: str) -> tuple[dict[str, Any], .
 
         if not child_ids:
             return card_id
-        if kind in {"projectile_origin", "projectile_motion", "pellet_spread", "line_piercing", "returning_projectile"}:
+        if kind in {
+            "projectile_origin",
+            "projectile_motion",
+            "pellet_spread",
+            "line_piercing",
+            "projectile_speed",
+            "returning_projectile",
+        }:
             for child_id in child_ids:
                 if child_id in {"spear-goblin", "rascal-girl"}:
                     return child_id
@@ -1192,8 +1237,20 @@ def generate_card_scenarios(
     for mechanic_index, mechanic in enumerate(card_mechanics(ruleset, card_id)):
         for variant in range(per_mechanic):
             seed = _stable_seed(card_id, mechanic, variant)
+            player_deck = (
+                _rotated_fixed_player_deck("cannon")
+                if card.kind == "troop"
+                and bool(card.mechanics.get("building_only"))
+                and mechanic in _TROOP_VICTIM_MECHANICS
+                else PLAYER_DECK
+            )
             actions, required_support, main_cell = _generated_support_plan(
-                ruleset, card, card_id, mechanic, variant=variant
+                ruleset,
+                card,
+                card_id,
+                mechanic,
+                player_deck=player_deck,
+                variant=variant,
             )
             support_card = _support_card_for_opponent(ruleset, card_id)
             required_events = _required_event_kinds(card, mechanic)
@@ -1253,13 +1310,6 @@ def generate_card_scenarios(
                     "revive_egg",
                 }
                 else 0
-            )
-            player_deck = (
-                _rotated_fixed_player_deck("cannon")
-                if card.kind == "troop"
-                and bool(card.mechanics.get("building_only"))
-                and mechanic in _TROOP_VICTIM_MECHANICS
-                else PLAYER_DECK
             )
             opponent_candidates = [
                 support_card,

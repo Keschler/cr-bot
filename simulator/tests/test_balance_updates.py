@@ -60,3 +60,66 @@ def test_balance_update_source_is_retained_in_generated_provenance() -> None:
     assert raw["cards"]["void"]["provenance"]["mechanics.persistent_effect.tick_interval_us"] == [
         BALANCE_SOURCE
     ]
+
+
+def test_current_card_balance_values_are_applied_to_the_fixed_ruleset() -> None:
+    cards = build_fixed_ruleset_raw()["cards"]
+
+    assert cards["bats"]["attack_interval_us"] == 1_200_000
+    assert cards["barbarians"]["attack_interval_us"] == 1_400_000
+    assert cards["royal-giant"]["attack_interval_us"] == 1_800_000
+    assert cards["dart-goblin"]["sight_range_mtile"] == 7_000
+    assert cards["dart-goblin"]["range_mtile"] == 6_500
+    assert cards["electro-dragon"]["hitpoints"] == 1_049
+    assert cards["executioner"]["damage"] == 179
+    assert cards["goblin-giant"]["hitpoints"] == 3_110
+    assert cards["goblin-giant"]["targets"] == ["building", "crown_tower"]
+    assert cards["goblin-giant"]["mechanics"]["building_only"] is True
+    assert cards["rascals"]["hitpoints"] == 1_832
+    assert cards["rascals"]["damage"] == 125
+    assert cards["rascal-boy"]["hitpoints"] == 1_832
+    assert cards["rascal-girl"]["damage"] == 125
+    assert cards["royal-ghost"]["mechanics"]["stealth_recloak_us"] == 2_000_000
+    assert cards["ice-wizard"]["mechanics"]["status"]["speed_multiplier_milli"] == 700
+    assert cards["ice-wizard"]["mechanics"]["status"]["hit_speed_multiplier_milli"] == 700
+    assert cards["ice-golem"]["mechanics"]["death"]["status"] == {
+        "duration_us": 2_000_000,
+        "hit_speed_multiplier_milli": 700,
+        "kind": "slow",
+        "speed_multiplier_milli": 700,
+    }
+    assert cards["firecracker"]["sight_range_mtile"] == 8_000
+    assert cards["firecracker"]["mechanics"]["recoil_mtile"] == 1_000
+    assert cards["furnace"]["damage"] == 179
+    assert cards["goblin-hut"]["lifetime_us"] == 30_000_000
+    assert cards["goblin-curse"]["crown_tower_damage"] == 60
+    assert cards["goblin-curse"]["mechanics"]["persistent_effect"]["crown_damage_per_tick"] == 10
+    assert cards["hog-rider"]["first_hit_delay_us"] == 600_000
+    assert cards["lumberjack"]["mechanics"]["death_rage"] == {
+        "duration_us": 5_500_000,
+        "tick_interval_us": 100_000,
+        "radius_mtile": 3_000,
+        "speed_multiplier_milli": 1_300,
+        "hit_speed_multiplier_milli": 1_300,
+        "targets": ["air", "ground"],
+    }
+
+
+def test_spawn_source_specific_first_hit_values_are_kept_separate() -> None:
+    cards = build_fixed_ruleset_raw()["cards"]
+
+    assert cards["goblin-machine"]["first_hit_delay_us"] == 500_000
+    assert cards["goblin-machine"]["mechanics"]["secondary_attack"]["damage"] == 304
+    assert cards["goblin-machine"]["mechanics"]["secondary_attack"]["crown_tower_damage"] == 152
+    assert cards["guards"]["first_hit_delay_us"] == 500_000
+    assert cards["spear-goblins"]["first_hit_delay_us"] == 500_000
+    assert cards["spear-goblin"]["first_hit_delay_us"] == 500_000
+    assert cards["goblins"]["first_hit_delay_us"] == 600_000
+    assert cards["goblin-gang"]["first_hit_delay_us"] == 600_000
+    assert cards["goblin-gang"]["mechanics"]["spawn_children"] == [
+        {"card_id": "goblin-gang-goblin", "count": 3},
+        {"card_id": "spear-goblin", "count": 3},
+    ]
+    assert cards["goblin-gang-goblin"]["first_hit_delay_us"] == 600_000
+    assert cards["goblin"]["first_hit_delay_us"] == 400_000
+    assert cards["barbarian-barrel"]["damage"] == 232

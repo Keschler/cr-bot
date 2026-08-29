@@ -34,6 +34,12 @@ The two audio/mining tests are excluded unless the change concerns those
 systems. Generated outputs under `outputs/` are local artifacts and should not
 be committed.
 
+An independent bug-fix agent may commit simulator changes at any time. Treat
+each new `HEAD` as a new experiment revision: pin and record the commit before
+training or evaluation, require the run to finish on that revision, and rerun
+preflight, parity, and exploit checks after any intervening commit. Never
+promote an artifact produced across mixed revisions.
+
 ## Quick start
 
 Inspect the ruleset, run a deterministic match, and verify replay stability:
@@ -413,7 +419,9 @@ For every loop, record the code/ruleset/engine hashes, observation/action
 contract, architecture, optimizer, device/backend, decks/opponents, seeds,
 budget, split, terminal versus truncated outcomes, action sources, masks,
 rejected/fallback actions, and throughput. Create the held-out split before
-collection and keep ordinary PPO at `expert_execution_probability=0`.
+collection and keep ordinary PPO at `expert_execution_probability=0`. If a
+new simulator commit lands during collection or evaluation, quarantine the
+artifact and restart the loop from a sealed manifest on that commit.
 
 The simulator-exploit audit is mandatory. Check reward hacking, truncation
 stalling, reset/terminal errors, stale observations or masks, hidden
@@ -516,13 +524,17 @@ The current benchmark host measured approximately:
 | Actor-only deterministic fast path, batch 16, CPU | 1.44k decisions/s |
 | Actor-only deterministic fast path, batch 16, RTX 2050 | 3.61k decisions/s |
 | Full actor selection, batch 16, RTX 2050 | 2.69k decisions/s |
+| Actual trainer end-to-end, RTX 2050, 48 lanes, 8 rollout workers | 590 decisions/s |
 
 The historical accelerated-host actor result clears the historical simulator
 rate. On the current CPU host, the actor is about 1.44k decisions/s versus
 3.06k simulator steps/s, so CPU parity remains an open performance gate. The
+current end-to-end trainer baseline is 590 decisions/s, measured over 12,288
+decisions in 20.83 seconds with four PPO updates, persistent rollout workers,
+and overlapping collection. This is the accepted working speed for now. The
 deployment path avoids belief heads and distribution normalization, resolves
 `WAIT` before card/placement decoding, uses a channels-last raster, removes
-masked entity tails, and caps CPU intra-op parallelism at four threads. The
+masked entity tails, and caps CPU intra-op parallelism at eight threads. The
 single-observation deployment callers also bypass one-element host stacking
 and prepare the raster layout at the observation boundary. Dense CPU entity
 batches use a sequence-first Transformer layout; padded batches retain the

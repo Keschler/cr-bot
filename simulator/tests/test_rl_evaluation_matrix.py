@@ -207,6 +207,9 @@ def test_matrix_aggregates_each_deck_strategy_seed_and_is_json_safe() -> None:
     assert len(set(report["cell_ids"])) == 8
     assert report["actor_player"] == 0
     assert report["opponent_player"] == 1
+    assert report["code_revision"] == report["revision_guard"]["run_end"]
+    assert report["run_code_revision"] == report["revision_guard"]["run_start"]
+    assert report["revision_guard"]["status"] == "stable"
     assert report["provenance"]["schema_version"] == 1
     assert report["provenance"]["config_fingerprint"].startswith("sha256:")
     assert report["provenance"]["matrix_order"] == "opponent_decks,strategies,seeds"
@@ -388,6 +391,36 @@ def test_matrix_quality_gate_separates_integrity_from_strength() -> None:
     failed = _evaluation_quality_gate(report, {"status": "clean"})
     assert failed["passed"] is False
     assert failed["failures"] == ["rejected_actions"]
+
+
+def test_matrix_quality_gate_rejects_mixed_committed_revisions() -> None:
+    from simulator.rl.evaluation_matrix import _evaluation_quality_gate
+
+    report = {
+        "policy_mode": "actor",
+        "actor_controls_actions": True,
+        "actor_privileged_inputs": False,
+        "held_out": True,
+        "held_out_audit": {"disjointness_verified": True, "overlap": []},
+        "total": {
+            "matches": 1,
+            "completed": 1,
+            "wins": 0,
+            "truncated": 0,
+            "target_rejected_actions": 0,
+            "opponent_rejected_actions": 0,
+        },
+        "revision_guard": {
+            "status": "drifted",
+            "checkpoint_matches_run": False,
+        },
+    }
+
+    gate = _evaluation_quality_gate(report, {"status": "clean"})
+
+    assert gate["passed"] is False
+    assert gate["checks"]["code_revision_stable"] is False
+    assert gate["failures"] == ["code_revision_mismatch"]
 
 
 def test_matrix_rejects_duplicate_axes_and_nonfinite_results() -> None:

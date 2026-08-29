@@ -70,10 +70,12 @@ class CollectorConfig:
     horizon: int = 128
     target_player: int = 0
     seed: int = 0
+    lane_offset: int = 0
     shuffle_decks: bool = True
     decks: tuple[tuple[str, ...], tuple[str, ...]] | None = None
     lane_decks: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] | None = None
     collect_belief_targets: bool = False
+    actor_only_observations: bool = False
     deterministic: bool = False
     # A teacher may provide labels when explicitly configured, but regular
     # PPO must execute the actor's sampled action by default.
@@ -88,8 +90,12 @@ class CollectorConfig:
             raise ValueError("target_player must be 0 or 1")
         if type(self.seed) is not int:
             raise ValueError("seed must be an integer")
+        if type(self.lane_offset) is not int or self.lane_offset < 0:
+            raise ValueError("lane_offset must be a non-negative integer")
         if type(self.shuffle_decks) is not bool:
             raise TypeError("shuffle_decks must be boolean")
+        if type(self.actor_only_observations) is not bool:
+            raise TypeError("actor_only_observations must be boolean")
         if type(self.deterministic) is not bool:
             raise TypeError("deterministic must be boolean")
         if (
@@ -383,7 +389,14 @@ if TORCH_AVAILABLE:
                 raise ValueError(
                     "lane_decks must contain one deck pair per environment lane"
                 )
-            current_observations = [tuple(environment.observe_v2()) for environment in environments]
+            current_observations = [
+                _collector_observations(
+                    environment,
+                    target_player=target_player,
+                    actor_only=self.config.actor_only_observations,
+                )
+                for environment in environments
+            ]
             if rollout_state is None:
                 reset_before_step = torch.ones(
                     batch_size,
@@ -451,6 +464,7 @@ if TORCH_AVAILABLE:
                 raster, global_features, entities, entity_mask, masks = _batch_observations(
                     observations,
                     device=self.learner.device,
+                    inference=self.config.actor_only_observations,
                 )
                 hidden_steps.append(rollout_state.hidden.detach().permute(1, 0, 2))
                 reset_steps.append(reset_before_step.clone())
@@ -488,6 +502,8 @@ if TORCH_AVAILABLE:
                         privileged_features=privileged,
                         deterministic=self.config.deterministic,
                         include_beliefs=False,
+                        inference=self.config.actor_only_observations,
+                        fast_sampling=self.expert_action is None,
                     )
                 rollout_state = step.next_state
                 # Decode the sampled action before selecting the executed
@@ -622,7 +638,12 @@ if TORCH_AVAILABLE:
                             _FrozenStep(info=frozen_infos[lane])
                             if previously_frozen[lane]
                             else (
-                                environment.step_v2(actions)
+                                _step_v2_for_collector(
+                                    environment,
+                                    actions,
+                                    target_player=target_player,
+                                    actor_only=self.config.actor_only_observations,
+                                )
                                 if hasattr(environment, "step_v2")
                                 else environment.step(actions)
                             )
@@ -720,6 +741,7 @@ if TORCH_AVAILABLE:
                 ]
                 next_reset = terminated | truncated
                 for lane, (environment, result) in enumerate(zip(environments, results, strict=True)):
+                    reset_observations = None
                     if next_reset_values[lane] and not (
                         self.config.freeze_completed_lanes and previously_frozen[lane]
                     ):
@@ -728,7 +750,7 @@ if TORCH_AVAILABLE:
                             frozen_lanes[lane] = True
                             frozen_infos[lane] = result.info
                         else:
-                            _reset_environment(
+                            reset_observations = _reset_environment(
                                 environment,
                                 seed=self._episode_seed(lane, episode_counts[lane]),
                                 decks=(
@@ -738,10 +760,31 @@ if TORCH_AVAILABLE:
                                 ),
                                 shuffle_decks=self.config.shuffle_decks,
                             )
-                    observations = tuple(environment.observe_v2())
+                    if reset_observations is not None:
+                        observations = _collector_observations_from_result(
+                            reset_observations,
+                            environment,
+                            target_player=target_player,
+                            actor_only=self.config.actor_only_observations,
+                        )
+                    elif hasattr(result, "observations"):
+                        observations = _collector_observations_from_result(
+                            result.observations,
+                            environment,
+                            target_player=target_player,
+                            actor_only=self.config.actor_only_observations,
+                        )
+                    else:
+                        observations = _collector_observations(
+                            environment,
+                            target_player=target_player,
+                            actor_only=self.config.actor_only_observations,
+                        )
                     if self.config.freeze_completed_lanes and frozen_lanes[lane]:
                         observations = tuple(
-                            _frozen_observation(observation)
+                            None
+                            if observation is None
+                            else _frozen_observation(observation)
                             for observation in observations
                         )
                     next_observations.append(observations)
@@ -849,7 +892,9 @@ if TORCH_AVAILABLE:
             # Avoid process-randomized ``hash`` so a rollout schedule can be
             # reproduced after a checkpoint restart.
             value = self.config.seed & ((1 << 64) - 1)
-            value ^= (lane + 0x9E3779B97F4A7C15) & ((1 << 64) - 1)
+            value ^= (
+                lane + self.config.lane_offset + 0x9E3779B97F4A7C15
+            ) & ((1 << 64) - 1)
             value = (value * 6364136223846793005 + 1442695040888963407) & ((1 << 64) - 1)
             value ^= (episode + 0xD1B54A32D192ED03) & ((1 << 64) - 1)
             return value
@@ -1039,6 +1084,71 @@ def _reset_environment(environment: Any, **kwargs: Any) -> Any:
     if callable(reset_v2):
         return reset_v2(**kwargs)
     return environment.reset(**kwargs)
+
+
+def _collector_observations(
+    environment: Any,
+    *,
+    target_player: int,
+    actor_only: bool,
+) -> tuple[Any, Any]:
+    """Return the collector's pair, optionally avoiding the unused view."""
+
+    if actor_only:
+        viewer_observation = getattr(environment, "observe_v2_for_viewer", None)
+        if callable(viewer_observation):
+            actor_observation = viewer_observation(target_player)
+        else:
+            actor_observation = tuple(environment.observe_v2())[target_player]
+        pair: list[Any] = [None, None]
+        pair[target_player] = actor_observation
+        return tuple(pair)  # type: ignore[return-value]
+    return tuple(environment.observe_v2())
+
+
+def _collector_observations_from_result(
+    raw_observations: Any,
+    environment: Any,
+    *,
+    target_player: int,
+    actor_only: bool,
+) -> tuple[Any, Any]:
+    """Normalize reset/step observations without rebuilding an identical view."""
+
+    if isinstance(raw_observations, Sequence) and len(raw_observations) == 2:
+        if actor_only:
+            actor_observation = raw_observations[target_player]
+            if actor_observation is None:
+                return _collector_observations(
+                    environment,
+                    target_player=target_player,
+                    actor_only=True,
+                )
+            pair: list[Any] = [None, None]
+            pair[target_player] = actor_observation
+            return tuple(pair)  # type: ignore[return-value]
+        return tuple(raw_observations)
+    return _collector_observations(
+        environment,
+        target_player=target_player,
+        actor_only=actor_only,
+    )
+
+
+def _step_v2_for_collector(
+    environment: Any,
+    actions: Sequence[Any],
+    *,
+    target_player: int,
+    actor_only: bool,
+) -> Any:
+    """Use the single-view step only for the restricted farm collector."""
+
+    if actor_only:
+        step_for_viewer = getattr(environment, "step_v2_for_viewer", None)
+        if callable(step_for_viewer):
+            return step_for_viewer(actions, viewer=target_player)
+    return environment.step_v2(actions)
 
 
 def _frozen_observation(observation: Any) -> Any:

@@ -827,7 +827,7 @@ PERSISTENT_EFFECT_DEFINITIONS: Mapping[str, Mapping[str, Any]] = {
     },
     "goblin-curse": {
         # The current card page reports 210 total body damage over six
-        # one-second pulses (35 per pulse), 42 total Crown-Tower damage, and
+        # one-second pulses (35 per pulse), 60 total Crown-Tower damage, and
         # a three-tile field.  The official August 2026 patch additionally
         # pins a 15% enemy slowdown.  A cursed troop is converted into one
         # ordinary Goblin if it dies while this status is active.
@@ -837,7 +837,7 @@ PERSISTENT_EFFECT_DEFINITIONS: Mapping[str, Mapping[str, Any]] = {
         "radius_mtile": 3_000,
         "targets": ["air", "ground", "crown_tower"],
         "damage_per_tick": 35,
-        "crown_damage_per_tick": 7,
+        "crown_damage_per_tick": 10,
         "status": {
             "kind": "slow",
             "duration_us": 1_100_000,
@@ -980,6 +980,7 @@ FIRST_HIT_DELAY_FIXES_US: Mapping[str, int] = {
     "golem": 1_000_000,
     "golemite": 1_000_000,
     "heal-spirit": 200_000,
+    "hog-rider": 600_000,
     "ice-wizard": 500_000,
     "knight": 500_000,
     "lava-hound": 1_000_000,
@@ -2548,6 +2549,12 @@ def build_roster_ruleset_raw(base_raw: Mapping[str, Any] | None = None) -> dict[
             if GOBLIN_BRAWLER_SOURCE_ID not in generated:
                 generated.append(GOBLIN_BRAWLER_SOURCE_ID)
             cards[card_id]["provenance"] = provenance
+        # Official field overrides must also reach hand-curated base rows.
+        # The fixed base artifact contains player cards such as Ice Golem;
+        # applying overrides only inside ``_generated_card`` silently leaves
+        # those rows on stale values while generated opponent cards receive
+        # the correction.
+        cards[card_id], _ = apply_official_overrides(card_id, cards[card_id])
     # A few legacy hand-curated rows predate the generated mechanic overlay.
     # Apply cross-card terrain components here as well so authored and
     # generated cards share the same current base-card behavior.

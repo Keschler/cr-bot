@@ -71,6 +71,28 @@ def test_bowler_boulder_hits_ground_bodies_across_its_swept_path() -> None:
     engine.validate_state(state)
 
 
+def test_direct_projectile_rechecks_target_layer_at_impact() -> None:
+    engine, state = _state()
+    cannon = _entity(state, "cannon", 0, 7_000, 15_000)
+    hog = _entity(state, "hog-rider", 1, 8_500, 15_000)
+    hog.river_airborne_active = True
+    cannon.pending_target_uid = hog.uid
+
+    engine._resolve_attack(state, cannon)
+    projectile = next(iter(state.projectiles.values()))
+    projectile.x_mtile = projectile.target_x_mtile
+    projectile.y_mtile = projectile.target_y_mtile
+    before = hog.hp
+
+    assert engine._spell_can_hit(
+        "cannon", hog, allowed_targets=projectile.allowed_targets
+    ) is False
+    engine._impact_projectile(state, projectile)
+
+    assert hog.hp == before
+    assert projectile.alive is True
+
+
 def test_firecracker_emits_five_behind_target_shrapnel_projectiles() -> None:
     engine, state = _state()
     firecracker = _entity(state, "firecracker", 0, 7_000, 15_000)

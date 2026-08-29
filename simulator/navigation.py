@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import lru_cache
+import heapq
 from math import isqrt
 from typing import Iterable, Protocol
 
@@ -79,7 +80,7 @@ def _segment_intersects_circle(
     return cross * cross < radius_sq * length_sq
 
 
-def segment_is_walkable(
+def _segment_is_walkable_uncached(
     arena: ArenaGeometry,
     start: tuple[int, int],
     end: tuple[int, int],
@@ -148,6 +149,46 @@ def segment_is_walkable(
         if _segment_intersects_circle(start, end, obstacle, inflated):
             return False
     return True
+
+
+@lru_cache(maxsize=131_072)
+def _segment_is_walkable_cached(
+    arena: ArenaGeometry,
+    start: tuple[int, int],
+    end: tuple[int, int],
+    agent_radius_mtile: int,
+    obstacle_rows: tuple[NavigationObstacle, ...],
+    allow_river_crossing: bool,
+) -> bool:
+    return _segment_is_walkable_uncached(
+        arena,
+        start,
+        end,
+        agent_radius_mtile=agent_radius_mtile,
+        obstacles=obstacle_rows,
+        allow_river_crossing=allow_river_crossing,
+    )
+
+
+def segment_is_walkable(
+    arena: ArenaGeometry,
+    start: tuple[int, int],
+    end: tuple[int, int],
+    *,
+    agent_radius_mtile: int,
+    obstacles: Iterable[NavigationObstacle] = (),
+    allow_river_crossing: bool = False,
+) -> bool:
+    """Check terrain and dynamic obstacles, reusing exact immutable queries."""
+
+    return _segment_is_walkable_cached(
+        arena,
+        start,
+        end,
+        agent_radius_mtile,
+        tuple(obstacles),
+        allow_river_crossing,
+    )
 
 
 def _obstacle_waypoints(
@@ -227,7 +268,33 @@ def _fixed_visibility_edges(
     return nodes, edges
 
 
-def plan_route(
+@lru_cache(maxsize=256)
+def _fixed_visibility_adjacency(
+    arena: ArenaGeometry,
+    agent_radius_mtile: int,
+    obstacle_rows: tuple[NavigationObstacle, ...],
+) -> tuple[
+    tuple[tuple[int, int], ...],
+    tuple[tuple[tuple[int, int], int], ...],
+]:
+    """Cache the topology adjacency used by every route through one layout."""
+
+    nodes, edges = _fixed_visibility_edges(
+        arena,
+        agent_radius_mtile,
+        obstacle_rows,
+    )
+    indices = {node: index for index, node in enumerate(nodes)}
+    adjacency: list[list[tuple[int, int]]] = [[] for _ in nodes]
+    for (left, right), cost in edges.items():
+        adjacency[indices[left]].append((indices[right], cost))
+        adjacency[indices[right]].append((indices[left], cost))
+    for neighbors in adjacency:
+        neighbors.sort(key=lambda item: item[0])
+    return nodes, tuple(tuple(neighbors) for neighbors in adjacency)
+
+
+def _plan_route_uncached(
     arena: ArenaGeometry,
     start: tuple[int, int],
     goal: tuple[int, int],
@@ -251,79 +318,118 @@ def plan_route(
     ):
         return start, goal
 
-    fixed_nodes, fixed_edges = _fixed_visibility_edges(
+    fixed_nodes, fixed_adjacency = _fixed_visibility_adjacency(
         arena, agent_radius_mtile, obstacle_rows
     )
     raw_nodes = [start, goal]
     raw_nodes.extend(fixed_nodes)
     nodes = tuple(dict.fromkeys(raw_nodes))
-    start_index = nodes.index(start)
-    goal_index = nodes.index(goal)
+    node_indices = {node: index for index, node in enumerate(nodes)}
+    start_index = node_indices[start]
+    goal_index = node_indices[goal]
     route_dx = goal[0] - start[0]
     route_dy = goal[1] - start[1]
 
-    def tie_rank(index: int) -> tuple[int, int, int, int]:
-        node_dx = nodes[index][0] - start[0]
-        node_dy = nodes[index][1] - start[1]
+    tie_ranks: list[tuple[int, int, int, int]] = []
+    heuristics: list[int] = []
+    for index, node in enumerate(nodes):
+        node_dx = node[0] - start[0]
+        node_dy = node[1] - start[1]
         # Cross/dot/distance are invariant under a 180-degree arena mirror.
         # The final index only distinguishes geometrically equivalent nodes.
-        return (
-            route_dx * node_dy - route_dy * node_dx,
-            route_dx * node_dx + route_dy * node_dy,
-            node_dx * node_dx + node_dy * node_dy,
-            index,
+        tie_ranks.append(
+            (
+                route_dx * node_dy - route_dy * node_dx,
+                route_dx * node_dx + route_dy * node_dy,
+                node_dx * node_dx + node_dy * node_dy,
+                index,
+            )
         )
+        heuristics.append(distance_mtile(*node, *goal))
+
+    # The previous implementation scanned every node and re-tested every
+    # dynamic edge on every Dijkstra iteration.  The fixed visibility graph is
+    # already cached by obstacle topology, so construct its adjacency once and
+    # evaluate only the start/goal boundary edges for this route.  The sorted
+    # neighbor order preserves the old index-order relaxation/tie behavior.
+    fixed_node_indices = tuple(node_indices[node] for node in fixed_nodes)
+    fixed_indices = {node: index for index, node in enumerate(fixed_nodes)}
+    start_neighbors: list[tuple[int, int]] = []
+    goal_costs: dict[int, int] = {}
+
+    for node in fixed_nodes:
+        node_index = node_indices[node]
+        if node_index == goal_index:
+            continue
+        if segment_is_walkable(
+            arena,
+            start,
+            node,
+            agent_radius_mtile=agent_radius_mtile,
+            obstacles=obstacle_rows,
+        ):
+            start_neighbors.append((node_index, distance_mtile(*start, *node)))
+        if segment_is_walkable(
+            arena,
+            node,
+            goal,
+            agent_radius_mtile=agent_radius_mtile,
+            obstacles=obstacle_rows,
+        ):
+            goal_costs[node_index] = distance_mtile(*node, *goal)
+    start_neighbors.sort(key=lambda item: item[0])
 
     infinity = 1 << 62
     distances = [infinity] * len(nodes)
     previous: list[int | None] = [None] * len(nodes)
     visited = [False] * len(nodes)
     distances[start_index] = 0
-    for _ in nodes:
-        current = min(
-            (index for index in range(len(nodes)) if not visited[index]),
-            key=lambda index: (
-                distances[index] + distance_mtile(*nodes[index], *goal),
-                distances[index],
-                tie_rank(index),
-            ),
-            default=None,
-        )
-        if current is None or distances[current] == infinity:
-            break
+    queue: list[tuple[int, int, tuple[int, int, int, int], int]] = [
+        (heuristics[start_index], 0, tie_ranks[start_index], start_index)
+    ]
+    while queue:
+        _priority, current_distance, _rank, current = heapq.heappop(queue)
+        if visited[current] or current_distance != distances[current]:
+            continue
         if current == goal_index:
             break
         visited[current] = True
-        for neighbor in range(len(nodes)):
-            if neighbor == current or visited[neighbor]:
+        if current == start_index:
+            neighbors = start_neighbors
+        else:
+            fixed_index = fixed_indices.get(nodes[current])
+            if fixed_index is None:
                 continue
-            left = nodes[current]
-            right = nodes[neighbor]
-            fixed_key = (left, right) if left < right else (right, left)
-            if left not in {start, goal} and right not in {start, goal}:
-                cost = fixed_edges.get(fixed_key)
-                if cost is None:
-                    continue
-            else:
-                if not segment_is_walkable(
-                    arena,
-                    left,
-                    right,
-                    agent_radius_mtile=agent_radius_mtile,
-                    obstacles=obstacle_rows,
-                ):
-                    continue
-                cost = distance_mtile(*left, *right)
+            neighbors = [
+                (fixed_node_indices[neighbor], cost)
+                for neighbor, cost in fixed_adjacency[fixed_index]
+                if fixed_node_indices[neighbor] != current
+            ]
+            goal_cost = goal_costs.get(current)
+            if goal_cost is not None:
+                neighbors.append((goal_index, goal_cost))
+        for neighbor, cost in neighbors:
+            if visited[neighbor]:
+                continue
             candidate = distances[current] + cost
             if candidate < distances[neighbor] or (
                 candidate == distances[neighbor]
                 and (
                     previous[neighbor] is None
-                    or tie_rank(current) < tie_rank(previous[neighbor])
+                    or tie_ranks[current] < tie_ranks[previous[neighbor]]
                 )
             ):
                 distances[neighbor] = candidate
                 previous[neighbor] = current
+                heapq.heappush(
+                    queue,
+                    (
+                        candidate + heuristics[neighbor],
+                        candidate,
+                        tie_ranks[neighbor],
+                        neighbor,
+                    ),
+                )
 
     if distances[goal_index] == infinity:
         return ()
@@ -335,6 +441,45 @@ def plan_route(
         indices.append(parent)
     indices.reverse()
     return tuple(nodes[index] for index in indices)
+
+
+@lru_cache(maxsize=32_768)
+def _plan_route_cached(
+    arena: ArenaGeometry,
+    start: tuple[int, int],
+    goal: tuple[int, int],
+    agent_radius_mtile: int,
+    obstacle_rows: tuple[NavigationObstacle, ...],
+) -> tuple[tuple[int, int], ...]:
+    """Memoize pure route results across lanes with the same topology."""
+
+    return _plan_route_uncached(
+        arena,
+        start,
+        goal,
+        agent_radius_mtile=agent_radius_mtile,
+        obstacles=obstacle_rows,
+    )
+
+
+def plan_route(
+    arena: ArenaGeometry,
+    start: tuple[int, int],
+    goal: tuple[int, int],
+    *,
+    agent_radius_mtile: int,
+    obstacles: Iterable[NavigationObstacle] = (),
+) -> tuple[tuple[int, int], ...]:
+    """Return a stable route, reusing identical pure route queries."""
+
+    obstacle_rows = tuple(sorted(obstacles, key=lambda item: item.uid))
+    return _plan_route_cached(
+        arena,
+        start,
+        goal,
+        agent_radius_mtile,
+        obstacle_rows,
+    )
 
 
 def next_waypoint(

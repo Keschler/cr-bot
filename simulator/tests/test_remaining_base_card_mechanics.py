@@ -182,13 +182,13 @@ def test_goblin_drill_emergence_and_death_payloads_are_distinct() -> None:
     assert (victim.x_mtile, victim.y_mtile) != (9_000, 19_500)
 
     before = sum(
-        entity.alive and entity.card_id == "goblins"
+        entity.alive and entity.card_id == "goblin"
         for entity in state.entities.values()
     )
     drill.hp = 0
     engine._resolve_deaths(state)
     after = sum(
-        entity.alive and entity.card_id == "goblins"
+        entity.alive and entity.card_id == "goblin"
         for entity in state.entities.values()
     )
     assert after - before == 2
