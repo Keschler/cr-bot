@@ -62,7 +62,7 @@ def _same_checkpoint_artifact(left: str | Path, right: str | Path) -> bool:
 class PublicCheckpointController:
     """Run one frozen recurrent actor from public V2 observations only."""
 
-    def __init__(self, checkpoint: str | Path, *, device: str | None = "cpu") -> None:
+    def __init__(self, checkpoint: str | Path, *, device: str | None = "auto") -> None:
         if not isinstance(checkpoint, (str, Path)) or not str(checkpoint).strip():
             raise SelfPlayConfigurationError("checkpoint must be a non-empty path")
         self.checkpoint = Path(checkpoint)
@@ -136,7 +136,7 @@ class PublicCheckpointController:
             self.reset()
 
         from .collector import _batch_observations
-        from .learner import RecurrentRolloutState, _deterministic_action
+        from .learner import RecurrentRolloutState
         from cr_bot.domain.game_state import Action as PolicyAction
 
         import torch
@@ -150,21 +150,16 @@ class PublicCheckpointController:
             device=self.learner.device,
         )
         with torch.inference_mode():
-            output = self.learner.policy(
+            actions, final_hidden = self.learner.policy.act_deterministic(
                 raster,
                 global_features,
                 entities,
                 entity_mask,
+                masks,
                 reset_mask=reset_mask,
                 hidden=self._state.hidden,
-                action_masks=masks,
             )
-            actions, _log_probs, _entropy = _deterministic_action(
-                self.learner.policy,
-                output,
-                masks,
-            )
-        self._state = RecurrentRolloutState(output.final_hidden.detach())
+        self._state = RecurrentRolloutState(final_hidden.detach())
         self._reset_pending = False
         if int(actions.mode[0, 0].item()) == 0:
             return PolicyAction(kind="Wait")
@@ -181,7 +176,7 @@ def checkpoint_strategy(
     checkpoint: str | Path,
     *,
     strategy_id: str,
-    device: str | None = "cpu",
+    device: str | None = "auto",
 ) -> Any:
     """Build an evaluation-matrix strategy backed by a frozen actor."""
 
@@ -219,7 +214,7 @@ def build_self_play_matrix_config(
     *,
     player_deck: Sequence[str] | None = None,
     seeds: Sequence[int] = (10_000,),
-    device: str | None = "cpu",
+    device: str | None = "auto",
     max_decisions: int | None = None,
     batch_size: int = 1,
     include_match_results: bool = True,
@@ -290,7 +285,7 @@ def build_side_balanced_self_play_matrix_configs(
     *,
     player_deck: Sequence[str] | None = None,
     seeds: Sequence[int] = (10_000,),
-    device: str | None = "cpu",
+    device: str | None = "auto",
     max_decisions: int | None = None,
     batch_size: int = 1,
     include_match_results: bool = True,
@@ -346,7 +341,7 @@ def evaluate_against_checkpoints(
     opponent_checkpoints: Sequence[str | Path],
     *,
     seeds: Sequence[int] = (10_000,),
-    device: str | None = "cpu",
+    device: str | None = "auto",
     max_decisions: int | None = None,
     batch_size: int = 1,
     include_match_results: bool = True,

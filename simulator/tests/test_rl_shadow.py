@@ -657,7 +657,7 @@ def test_prototype_shadow_parser_requires_exactly_one_media_source() -> None:
         )
         assert args.command == "shadow"
         assert str(getattr(args, option.removeprefix("--").replace("-", "_"))) == value
-        assert args.device == "cpu"
+        assert args.device == "auto"
 
     stale_args = parser.parse_args(
         [
@@ -707,6 +707,6 @@ def test_prototype_shadow_cli_forwards_stale_ruleset_flag(
         ]
     ) == 0
     assert calls["checkpoint"] == Path("checkpoint.pt")
-    assert calls["device"] == "cpu"
+    assert calls["device"] == "auto"
     assert calls["allow_stale_ruleset"] is True
     assert json.loads(capsys.readouterr().out) == report

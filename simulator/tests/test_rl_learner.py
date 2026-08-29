@@ -39,6 +39,16 @@ def test_learner_config_validates_long_horizon_defaults() -> None:
 requires_torch = pytest.mark.skipif(torch is None, reason="PyTorch is not installed")
 
 
+@requires_torch
+def test_policy_device_auto_uses_visible_accelerator_or_cpu_fallback() -> None:
+    from rl.learner import resolve_policy_device
+
+    assert resolve_policy_device("cpu") == torch.device("cpu")
+    selected = resolve_policy_device("auto")
+    expected = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    assert selected == expected
+
+
 def _model_config():
     from rl.model import ModelConfig
 

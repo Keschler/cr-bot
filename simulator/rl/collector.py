@@ -487,6 +487,7 @@ if TORCH_AVAILABLE:
                         reset_mask=reset_before_step,
                         privileged_features=privileged,
                         deterministic=self.config.deterministic,
+                        include_beliefs=False,
                     )
                 rollout_state = step.next_state
                 # Decode the sampled action before selecting the executed
@@ -918,6 +919,7 @@ if TORCH_AVAILABLE:
                     reset_mask=reset_mask.reshape(-1, 1),
                     hidden=rollout_state.hidden,
                     action_masks=masks,
+                    include_beliefs=False,
                 )
                 values = self.learner._critic_values(output, privileged)
                 bootstrap = values[:, 0].detach()

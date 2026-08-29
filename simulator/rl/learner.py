@@ -78,6 +78,23 @@ def _raise_torch_unavailable() -> None:
     )
 
 
+def resolve_policy_device(device: Any) -> Any:
+    """Resolve a policy execution device, including the ``auto`` sentinel.
+
+    ``auto`` selects CUDA when it is visible and otherwise falls back to CPU.
+    An explicit device remains untouched, so callers can force CPU for
+    reproducibility or select a particular accelerator.  Keeping this choice
+    at learner construction means every inference entry point uses the same
+    policy device resolution and does not need to duplicate CUDA checks.
+    """
+
+    if not TORCH_AVAILABLE:  # pragma: no cover - guarded by learner use
+        _raise_torch_unavailable()
+    if isinstance(device, str) and device.strip().lower() == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    return torch.device(device)
+
+
 @dataclass(frozen=True, slots=True)
 class LearnerConfig:
     """Numerical and batching settings for :class:`RecurrentPPOLearner`.
@@ -661,7 +678,7 @@ if TORCH_AVAILABLE:
                     device = next(policy.parameters()).device
                 except StopIteration:
                     device = torch.device("cpu")
-            self.device = torch.device(device)
+            self.device = resolve_policy_device(device)
             self.policy = policy.to(self.device)
 
             inferred_privileged = isinstance(critic, PrivilegedCritic)
@@ -744,6 +761,7 @@ if TORCH_AVAILABLE:
             reset_mask: torch.Tensor | None = None,
             privileged_features: torch.Tensor | None = None,
             deterministic: bool = False,
+            include_beliefs: bool = True,
         ) -> RolloutStep:
             """Run one recurrent policy step and return a detached next state.
 
@@ -782,6 +800,7 @@ if TORCH_AVAILABLE:
                 reset_mask=reset_mask,
                 hidden=state.hidden.to(self.device),
                 action_masks=model_masks,
+                include_beliefs=include_beliefs,
             )
             if deterministic:
                 actions, log_probs, entropy = _deterministic_action(
@@ -1578,6 +1597,7 @@ __all__ = [
     "RecurrentRolloutState",
     "RecurrentValueHead",
     "RolloutStep",
+    "resolve_policy_device",
     "TORCH_AVAILABLE",
     "TorchUnavailableError",
     "UpdateMetrics",

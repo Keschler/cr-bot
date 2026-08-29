@@ -197,6 +197,7 @@ class ShadowPolicyRunner:
                 reset_mask=reset_mask,
                 hidden=self._state.hidden,
                 action_masks=masks,
+                include_beliefs=False,
             )
             actions, log_probs, entropy = _deterministic_action(
                 self.policy,
@@ -599,7 +600,7 @@ def run_shadow_media(
     yolo_detections: bool = False,
     max_frames: int | None = None,
     max_seconds: float | None = None,
-    device: str | None = None,
+    device: str | None = "auto",
     allow_stale_ruleset: bool = False,
     detector: Any | None = None,
     runner: Any | None = None,
