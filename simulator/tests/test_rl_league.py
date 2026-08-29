@@ -380,6 +380,8 @@ def test_orchestrator_requires_and_records_periodic_exploiter_resets() -> None:
     assert orchestrator.exploiter_reset_due() is True
     with pytest.raises(LeagueConfigurationError, match="reset"):
         orchestrator.run_one("main", runner)
+    with pytest.raises(LeagueConfigurationError, match="reset"):
+        orchestrator.sample_pfsp_opponent("main", ("frozen",))
 
     orchestrator.run_one(
         "main",

@@ -1340,6 +1340,10 @@ class LeagueOrchestrator:
     ) -> str:
         """Sample a payoff-aware opponent at the current league cursor."""
 
+        if self.exploiter_reset_due():
+            raise LeagueConfigurationError(
+                "periodic exploiter reset is due; call reset_exploiters before sampling"
+            )
         sampler = PFSPOpponentSampler(
             payoff_book=self.payoff_book,
             seed=self.config.seed if seed is None else seed,
