@@ -632,3 +632,13 @@ def test_train_cli_forwards_explicit_resume_retry_controls(
     assert received["resume_reset_optimizer"] is True
     assert received["checkpoint"] == tmp_path / "source.pt"
     assert json.loads(capsys.readouterr().out) == {"kind": "test"}
+
+
+def test_target_player_one_orders_learner_deck_on_world_player_one() -> None:
+    from rl.prototype import _lane_deck_pairs
+
+    learner = tuple(f"learner-{index}" for index in range(8))
+    opponent = tuple(f"opponent-{index}" for index in range(8))
+
+    assert _lane_deck_pairs(0, learner, (opponent,)) == ((learner, opponent),)
+    assert _lane_deck_pairs(1, learner, (opponent,)) == ((opponent, learner),)

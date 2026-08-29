@@ -251,6 +251,11 @@ The generalized runner supports explicit public-feature switches including
 `--direct-public-slot-card-features`. The last option is for compatible fresh
 architectures and must not be added when resuming an incompatible checkpoint.
 
+Historical/self-play training can be side-balanced by running matched
+generalized segments with `--target-player 0` and `--target-player 1`. The
+trainer changes only world deck ordering, keeps the public actor contract
+unchanged, and records `target_player`, `actor_player`, and `opponent_player`.
+
 ### Generalized opponent training and held-out evaluation
 
 The latest retained actor is
@@ -353,7 +358,8 @@ opponent and never choose the learner's move.
 4. **Historical self-play — additional 100–300M decisions.** Sample 30%
    scripted/meta anchors, 30% PFSP historical policies, 20% newest frozen
    main, 10% random historical checkpoints, and 10% exploiters/adversarial
-   policies. Train both sides; do not use only latest-policy mirror play.
+   policies. Train both world sides with matched `--target-player` runs; do
+   not use only latest-policy mirror play.
 5. **Small league — roughly 300M–1B+ cumulative decisions.** Use a main
    learner, main exploiter, league exploiter, 16–32 frozen historical
    policies, a payoff matrix, PFSP matchmaking, periodic exploiter resets, and

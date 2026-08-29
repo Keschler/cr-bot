@@ -335,6 +335,44 @@ def test_generalized_training_can_keep_a_scenario_across_rollouts(monkeypatch, t
     assert report["transitions"] == 2 * 3 * 2 * 8
 
 
+def test_generalized_training_supports_player_one_side(monkeypatch, tmp_path) -> None:
+    import simulator.rl.generalized as generalized
+
+    observed: list[int] = []
+
+    def fake_train(config, *, checkpoint, checkpoint_out, **kwargs):
+        observed.append(config.target_player)
+        return {
+            "final_update": 1,
+            "outcomes": {
+                "completed_matches": 0,
+                "wins": 0,
+                "draws": 0,
+                "losses": 0,
+                "truncated_matches": 0,
+            },
+        }
+
+    monkeypatch.setattr(generalized, "train_prototype", fake_train)
+    config = GeneralizedTrainingConfig(
+        prototype_config=PrototypeConfig(
+            envs=1,
+            horizon=8,
+            updates=1,
+            target_player=1,
+        ),
+        segments=1,
+        checkpoint_out=tmp_path / "player-one.pt",
+    )
+
+    report = generalized.train_generalized(config)
+
+    assert observed == [1]
+    assert report["target_player"] == 1
+    assert report["actor_player"] == 1
+    assert report["opponent_player"] == 0
+
+
 def test_generalized_resume_advances_schedule_from_sidecar(monkeypatch, tmp_path) -> None:
     import json
     import simulator.rl.generalized as generalized

@@ -190,6 +190,11 @@ The executable strategic curriculum stores each phase mix as deterministic
 labels select opponent/scenario provenance only; they never select the
 learner's card, timing, lane, or placement.
 
+Side-balanced self-play is executable with matched generalized runs using
+`--target-player 0` and `--target-player 1`. The trainer swaps only world deck
+ordering, keeps the learner's public observation contract unchanged, and
+records the actor/opponent side in each report.
+
 ## Implementation loop for RL scaling and frozen evaluation
 
 Run this loop for each curriculum or league segment. Frozen evaluation uses

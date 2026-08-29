@@ -417,6 +417,20 @@ def _reward_config_for(config: PrototypeConfig) -> Any:
     return RewardConfig.terminal_outcome()
 
 
+def _lane_deck_pairs(
+    target_player: int,
+    target_deck: tuple[str, ...],
+    opponent_decks: Sequence[tuple[str, ...]],
+) -> tuple[tuple[tuple[str, ...], tuple[str, ...]], ...]:
+    """Order target/opponent decks by world player for each rollout lane."""
+
+    if target_player not in (0, 1):
+        raise PrototypeConfigurationError("target_player must be 0 or 1")
+    if target_player == 0:
+        return tuple((target_deck, opponent_deck) for opponent_deck in opponent_decks)
+    return tuple((opponent_deck, target_deck) for opponent_deck in opponent_decks)
+
+
 def _make_environment(
     config: PrototypeConfig,
     ruleset: Any,
@@ -1275,20 +1289,25 @@ def train_prototype(
         )
         resumed_from = str(checkpoint)
 
+    # ``player_deck`` names the learner's deck, while the simulator's deck
+    # tuple is always ordered by world player.  Swap the lane pair when the
+    # learner is assigned to player 1 so side-balanced training exercises the
+    # same public actor contract from both sides of the arena.
+    lane_decks = _lane_deck_pairs(
+        effective_config.target_player,
+        resolved_player_deck,
+        resolved_opponent_decks,
+    )
     environments = [
         _make_environment(
             effective_config,
             ruleset,
             lane,
-            player_deck=resolved_player_deck,
-            opponent_deck=resolved_opponent_decks[lane],
+            player_deck=lane_decks[lane][0],
+            opponent_deck=lane_decks[lane][1],
         )
         for lane in range(effective_config.envs)
     ]
-    lane_decks = tuple(
-        (resolved_player_deck, resolved_opponent_decks[lane])
-        for lane in range(effective_config.envs)
-    )
     vector_environment, batch_step = _make_batch_stepper(effective_config, environments)
     expert_action = None
     if expert_guidance:
@@ -1429,6 +1448,9 @@ def train_prototype(
                     expert_guidance
                     and effective_config.expert_execution_probability > 0.0
                 ),
+                "target_player": effective_config.target_player,
+                "actor_player": effective_config.target_player,
+                "opponent_player": 1 - effective_config.target_player,
                 "player_deck": list(resolved_player_deck),
                 "opponent_decks": [list(deck) for deck in resolved_opponent_decks],
                 "custom_opponent_policy": opponent_action is not None,

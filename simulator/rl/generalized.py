@@ -479,11 +479,6 @@ class GeneralizedTrainingConfig:
             )
         if self.include_regression and self.prototype_config.envs < 1:
             raise GeneralizedTrainingError("at least one environment is required")
-        if self.prototype_config.target_player != 0:
-            raise GeneralizedTrainingError(
-                "generalized training currently requires target_player=0 because "
-                "the configurable player deck is assigned to player 0"
-            )
 
 
 def _curriculum_axes(
@@ -1233,6 +1228,9 @@ def train_generalized(
         "potential_reward_weight": config.prototype_config.potential_reward_weight,
         "potential_reward_anneal_segments": config.potential_reward_anneal_segments,
         "player_deck": list(player_deck),
+        "target_player": config.prototype_config.target_player,
+        "actor_player": config.prototype_config.target_player,
+        "opponent_player": 1 - config.prototype_config.target_player,
         "transitions": total_transitions,
         "aggregate_outcomes": aggregate,
         "final_update": final_report.get("final_update"),
@@ -1933,6 +1931,13 @@ def _parser() -> argparse.ArgumentParser:
         help="worker count for process or packed-process lane backends",
     )
     train.add_argument("--seed", type=int, default=0)
+    train.add_argument(
+        "--target-player",
+        type=int,
+        choices=(0, 1),
+        default=0,
+        help="world player assigned to the learner; use 0 and 1 for side-balanced runs",
+    )
     defaults = GeneralizedTrainingConfig()
     train.add_argument(
         "--player-deck",
@@ -2240,6 +2245,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 horizon=args.horizon,
                 updates=1,
                 seed=args.seed,
+                target_player=args.target_player,
                 device=args.device,
                 env_backend=args.env_backend,
                 env_workers=args.env_workers,
