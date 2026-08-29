@@ -233,6 +233,22 @@ def test_giant_snowball_pushes_targets_and_barbarian_barrel_remains_ground_only(
     assert air.hp == air.max_hp
 
 
+def test_freeze_spell_keeps_a_target_frozen_for_four_seconds() -> None:
+    engine, state = _state()
+    target = _entity(state, "giant", 1, 9_000, 15_000)
+    projectile = _instant_projectile(state, "freeze", 0, 9_000, 15_000)
+    engine._impact_projectile(state, projectile)
+
+    status = next(status for status in target.statuses if status.kind == "freeze")
+    assert status.remaining_us == 4_000_000
+    for _ in range(22):
+        engine._advance_statuses_and_lifetimes(state)
+    assert status.remaining_us == 2_900_000
+    for _ in range(58):
+        engine._advance_statuses_and_lifetimes(state)
+    assert all(status.kind != "freeze" for status in target.statuses)
+
+
 @pytest.mark.parametrize("card_id", ("balloon", "giant-skeleton"))
 def test_large_death_bombs_resolve_after_three_seconds(card_id: str) -> None:
     engine, state = _state()

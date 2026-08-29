@@ -183,6 +183,73 @@ def test_collector_builds_trajectory_from_v2_environment() -> None:
 
 
 @requires_torch
+def test_nonterminal_truncation_bootstraps_from_pre_reset_observation() -> None:
+    from dataclasses import replace
+    from types import MethodType
+
+    from simulator.env import SimulatorEnv
+    from rl.collector import CollectorConfig, RecurrentRolloutCollector
+    from rl.learner import LearnerConfig, RecurrentPPOLearner
+    from rl.model import ModelConfig, RecurrentHybridPolicy
+
+    model_config = ModelConfig(
+        raster_channels=21,
+        raster_height=32,
+        raster_width=18,
+        global_dim=768,
+        entity_dim=32,
+        max_entities=128,
+        model_dim=8,
+        encoder_dim=8,
+        transformer_heads=2,
+        transformer_layers=1,
+        transformer_ff_dim=16,
+        gru_hidden_dim=8,
+        card_slots=4,
+        belief_card_count=128,
+        placement_rows=32,
+        placement_cols=18,
+    )
+    learner = RecurrentPPOLearner(
+        RecurrentHybridPolicy(model_config),
+        config=LearnerConfig(update_epochs=1, sequence_minibatch_size=1),
+    )
+    environment = SimulatorEnv(decision_interval_us=1_000_000)
+    environment.reset(seed=37, shuffle_decks=False)
+
+    def batch_step(actions):
+        step = environment.step_v2(actions[0])
+        return [replace(step, terminated=False, truncated=True)]
+
+    collector = RecurrentRolloutCollector(
+        learner,
+        CollectorConfig(horizon=1, shuffle_decks=False),
+        batch_step=batch_step,
+    )
+
+    def deterministic_bootstrap(
+        self,
+        environments,
+        observations,
+        rollout_state,
+        reset_mask,
+        last_done,
+    ):
+        del observations, reset_mask, last_done
+        value = 7.0 if environments[0].state.elapsed_us > 0 else 0.0
+        return torch.tensor([value], dtype=torch.float32), rollout_state.detach()
+
+    collector._bootstrap = MethodType(deterministic_bootstrap, collector)
+    result = collector.collect([environment])
+
+    assert bool(result.trajectory.truncated[0, 0])
+    assert result.learner_batch.next_values is not None
+    assert result.learner_batch.bootstrap_values is None
+    assert float(result.learner_batch.next_values[0, 0]) == pytest.approx(7.0)
+    assert float(result.bootstrap_values[0]) == pytest.approx(7.0)
+
+
+@requires_torch
 def test_collector_reports_completed_rollout_steps() -> None:
     from simulator.env import SimulatorEnv
     from rl.collector import CollectorConfig, RecurrentRolloutCollector

@@ -18,10 +18,16 @@ try:
     import torch
 except ModuleNotFoundError as exc:
     if exc.name == "torch":
+        torch = None  # type: ignore[assignment]
+    else:
+        raise
+
+
+def _require_torch() -> None:
+    if torch is None:
         raise TorchUnavailableError(
             "rl.objectives requires PyTorch. Install torch to use PPO objectives."
-        ) from exc
-    raise
+        )
 
 
 def _require_float(name: str, value: torch.Tensor) -> None:
@@ -96,6 +102,7 @@ def compute_gae(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Compute advantages/returns with separate terminal and truncation flags."""
 
+    _require_torch()
     for name, value in (
         ("rewards", rewards),
         ("values", values),
@@ -136,6 +143,7 @@ def behavior_cloning_loss(
 ) -> torch.Tensor:
     """Return confidence-weighted negative log likelihood for teacher actions."""
 
+    _require_torch()
     _require_float("action_log_probs", action_log_probs)
     _require_finite("action_log_probs", action_log_probs)
     if weights is None:
@@ -168,6 +176,7 @@ def ppo_objective(
 ) -> PPOObjectiveResult:
     """Compute one clipped PPO objective over a recurrent minibatch."""
 
+    _require_torch()
     tensors = {
         "old_log_probs": old_log_probs,
         "new_log_probs": new_log_probs,

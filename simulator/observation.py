@@ -232,6 +232,23 @@ def _normalize_soa_tower_hp(values: np.ndarray) -> tuple[float, float, float]:
         _clip_unit(right / PRINCESS_TOWER_HP),
     )
 
+
+def _event_prefix_hash(state: BattleState, max_sequence: int) -> str:
+    """Hash the public event history already consumed by observation memory."""
+
+    encoded = json.dumps(
+        [
+            event.to_dict()
+            for event in state.events
+            if event.sequence <= max_sequence
+        ],
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode("ascii")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 LegalityCallback = Callable[[BattleState, PlayCardAction], bool]
 LegalActionCellsCallback = Callable[
     [BattleState, int], tuple[tuple[tuple[int, int], ...], ...]
@@ -310,6 +327,7 @@ class ObservationMemory:
     _opponent_elixir_milli: Fraction = field(default_factory=Fraction, repr=False)
     _initialized: bool = field(default=False, repr=False)
     _battle_seed: int | None = field(default=None, repr=False)
+    _processed_event_prefix_hash: str | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         _validate_viewer(self.viewer)
@@ -332,6 +350,7 @@ class ObservationMemory:
         self._opponent_elixir_milli = Fraction(ruleset.match.initial_elixir_milli, 1)
         self._initialized = True
         self._battle_seed = battle_seed
+        self._processed_event_prefix_hash = None
 
     def update(self, state: BattleState, ruleset: Ruleset) -> None:
         """Consume previously unseen public events through ``state.elapsed_us``."""
@@ -346,6 +365,17 @@ class ObservationMemory:
             or state.elapsed_us < self.last_elapsed_us
             or state.event_sequence < self.last_event_sequence
         ):
+            self.reset(ruleset, battle_seed=state.seed)
+        elif (
+            self._processed_event_prefix_hash is not None
+            and self._processed_event_prefix_hash
+            != _event_prefix_hash(state, self.last_event_sequence)
+        ):
+            # A restored or externally synchronized state may replace an
+            # already-consumed event at the same sequence number.  Sequence
+            # monotonicity alone cannot detect that rewrite; replay the
+            # authoritative public history so card memory and elixir belief do
+            # not silently describe a different episode.
             self.reset(ruleset, battle_seed=state.seed)
 
         new_events = sorted(
@@ -374,6 +404,10 @@ class ObservationMemory:
             self.last_event_sequence = max(self.last_event_sequence, event.sequence)
 
         self._advance_elixir(state.elapsed_us, ruleset)
+        self._processed_event_prefix_hash = _event_prefix_hash(
+            state,
+            self.last_event_sequence,
+        )
 
     def _advance_elixir(self, target_elapsed_us: int, ruleset: Ruleset) -> None:
         if target_elapsed_us <= self.last_elapsed_us:
@@ -788,7 +822,7 @@ def _build_soa_global_vector(
         0.0,
         (total_duration_us - state.elapsed_us) / 1_000_000.0,
     )
-    overtime = state.elapsed_us >= regulation_us or "overtime" in state.phase.casefold()
+    overtime = state.phase.casefold() == "overtime"
     phase_end_us = total_duration_us if overtime else regulation_us
     time_left_s = max(0.0, (phase_end_us - state.elapsed_us) / 1_000_000.0)
 
@@ -900,7 +934,7 @@ def battle_state_to_observed_game_state(
     regulation_us = ruleset.match.regulation_us
     total_duration_us = regulation_us + ruleset.match.overtime_us
     total_remaining_s = max(0.0, (total_duration_us - state.elapsed_us) / 1_000_000.0)
-    overtime = state.elapsed_us >= regulation_us or "overtime" in state.phase.casefold()
+    overtime = state.phase.casefold() == "overtime"
     phase_end_us = total_duration_us if overtime else regulation_us
     time_left_s = max(0.0, (phase_end_us - state.elapsed_us) / 1_000_000.0)
 

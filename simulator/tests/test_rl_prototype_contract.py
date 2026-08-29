@@ -145,6 +145,49 @@ def test_public_elixir_memory_uses_effective_cost_and_bonus_events() -> None:
     assert memory.opponent_elixir_milli_est == 3_000
 
 
+def test_public_memory_replays_when_a_processed_event_is_rewritten() -> None:
+    engine = BattleEngine(RULESET)
+    state = engine.new_battle(
+        (PLAYER_DECK, PLAYER_DECK),
+        seed=31415,
+        shuffle_decks=False,
+    )
+    state.elapsed_us = RULESET.tick_us
+    state.events = [
+        SimEvent.create(
+            0,
+            1,
+            "card_played",
+            player=1,
+            card_id="fireball",
+            cost_milli=4_000,
+        )
+    ]
+    state.event_sequence = 1
+    memory = ObservationMemory(viewer=0)
+    memory.update(state, RULESET)
+    first_estimate = memory.opponent_elixir_milli_est
+    assert memory.seen_opponent_cards == ["fireball"]
+
+    state.events = [
+        SimEvent.create(
+            0,
+            1,
+            "card_played",
+            player=1,
+            card_id="ice-spirit",
+            cost_milli=1_000,
+        )
+    ]
+    memory.update(state, RULESET)
+
+    expected = ObservationMemory(viewer=0)
+    expected.update(state, RULESET)
+    assert memory.seen_opponent_cards == ["ice-spirit"]
+    assert memory.opponent_elixir_milli_est == expected.opponent_elixir_milli_est
+    assert memory.opponent_elixir_milli_est != first_estimate
+
+
 def _model_config():
     from rl.model import ModelConfig
 

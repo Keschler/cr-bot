@@ -244,7 +244,7 @@ SPAWNER_DEFINITIONS: Mapping[str, Mapping[str, int | str | None]] = {
 STATUS_DEFINITIONS: Mapping[str, Mapping[str, int | str]] = {
     "freeze": {
         "kind": "freeze",
-        "duration_us": 1_100_000,
+        "duration_us": 4_000_000,
         "speed_multiplier_milli": 0,
         "hit_speed_multiplier_milli": 0,
     },

@@ -186,3 +186,33 @@ def test_elixir_collector_has_finite_zero_threat_observations(use_soa: bool) -> 
     assert np.isfinite(v2.entity_tokens).all()
     assert int(v2.entity_mask.sum()) == 1
     assert v2.entity_tokens[0, FEATURE["is_building"]] == 1.0
+
+
+@pytest.mark.parametrize("use_soa", [False, True])
+def test_finished_regulation_state_does_not_report_active_overtime(use_soa: bool) -> None:
+    engine, state = _state()
+    state.elapsed_us = RULESET.match.regulation_us
+    state.phase = "ended"
+    state.terminal = True
+    state.winner = 0
+    state.terminal_reason = "regulation_crowns"
+    state.players[0].crowns = 1
+
+    overtime_index = GLOBAL_SCALAR_FEATURES.index("overtime")
+    observation = build_policy_observation(
+        state,
+        RULESET,
+        viewer=0,
+        memory=ObservationMemory(viewer=0),
+        soa_state=ObservationSoA() if use_soa else None,
+    )
+    assert observation.global_vector[overtime_index] == pytest.approx(0.0)
+
+    v2 = build_policy_observation_v2(
+        state,
+        RULESET,
+        viewer=0,
+        memory=ObservationMemory(viewer=0),
+        soa_state=ObservationSoA() if use_soa else None,
+    )
+    assert v2.global_vector[overtime_index] == pytest.approx(0.0)

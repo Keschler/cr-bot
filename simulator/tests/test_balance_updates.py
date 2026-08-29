@@ -105,6 +105,13 @@ def test_current_card_balance_values_are_applied_to_the_fixed_ruleset() -> None:
     }
 
 
+def test_freeze_spell_does_not_inherit_ice_spirit_duration() -> None:
+    cards = build_fixed_ruleset_raw()["cards"]
+
+    assert cards["freeze"]["mechanics"]["status"]["duration_us"] == 4_000_000
+    assert cards["ice-spirit"]["mechanics"]["status"]["duration_us"] == 1_100_000
+
+
 def test_spawn_source_specific_first_hit_values_are_kept_separate() -> None:
     cards = build_fixed_ruleset_raw()["cards"]
 

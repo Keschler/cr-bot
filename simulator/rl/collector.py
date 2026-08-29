@@ -458,6 +458,11 @@ if TORCH_AVAILABLE:
             belief_next_steps: list[torch.Tensor] = []
             behavior_cloning_weight_steps: list[torch.Tensor] = []
             behavior_cloning_action_steps: list[ActionBatch] = []
+            # A nonterminal truncation resets the environment for collection,
+            # but its value target is still V(s) at the final pre-reset state.
+            # Keep those evaluations by rollout timestep so the learner can
+            # distinguish them from the reset episode's first observation.
+            boundary_bootstrap_values: dict[int, torch.Tensor] = {}
 
             for _time in range(self.config.horizon):
                 observations = [item[target_player] for item in current_observations]
@@ -727,6 +732,49 @@ if TORCH_AVAILABLE:
                             )
                         )
 
+                post_step_observations: list[tuple[Any, Any]] = []
+                for environment, result in zip(environments, results, strict=True):
+                    if hasattr(result, "observations"):
+                        post_step_observations.append(
+                            _collector_observations_from_result(
+                                result.observations,
+                                environment,
+                                target_player=target_player,
+                                actor_only=self.config.actor_only_observations,
+                            )
+                        )
+                    else:
+                        post_step_observations.append(
+                            _collector_observations(
+                                environment,
+                                target_player=target_player,
+                                actor_only=self.config.actor_only_observations,
+                            )
+                        )
+
+                nonterminal_truncation = [
+                    truncated_value and not terminated_value
+                    for terminated_value, truncated_value in zip(
+                        terminated_values,
+                        truncated_values,
+                        strict=True,
+                    )
+                ]
+                if any(nonterminal_truncation):
+                    no_reset = torch.zeros(
+                        batch_size,
+                        dtype=torch.bool,
+                        device=self.learner.device,
+                    )
+                    boundary_values, _ = self._bootstrap(
+                        environments,
+                        post_step_observations,
+                        rollout_state,
+                        no_reset,
+                        no_reset,
+                    )
+                    boundary_bootstrap_values[_time] = boundary_values
+
                 next_observations: list[tuple[Any, Any]] = []
                 # These values originate in the CPU-side simulator results.
                 # Keep the host copy for control flow instead of reading one
@@ -767,19 +815,8 @@ if TORCH_AVAILABLE:
                             target_player=target_player,
                             actor_only=self.config.actor_only_observations,
                         )
-                    elif hasattr(result, "observations"):
-                        observations = _collector_observations_from_result(
-                            result.observations,
-                            environment,
-                            target_player=target_player,
-                            actor_only=self.config.actor_only_observations,
-                        )
                     else:
-                        observations = _collector_observations(
-                            environment,
-                            target_player=target_player,
-                            actor_only=self.config.actor_only_observations,
-                        )
+                        observations = post_step_observations[lane]
                     if self.config.freeze_completed_lanes and frozen_lanes[lane]:
                         observations = tuple(
                             None
@@ -806,6 +843,39 @@ if TORCH_AVAILABLE:
                 reset_before_step,
                 terminated_steps[-1] | truncated_steps[-1],
             )
+            final_boundary_values = boundary_bootstrap_values.get(len(value_steps) - 1)
+            if final_boundary_values is not None:
+                final_nonterminal_truncation = (
+                    truncated_steps[-1] & ~terminated_steps[-1]
+                )
+                bootstrap_values = torch.where(
+                    final_nonterminal_truncation,
+                    final_boundary_values,
+                    bootstrap_values,
+                )
+
+            next_values = None
+            learner_bootstrap_values = bootstrap_values
+            if boundary_bootstrap_values:
+                value_tensor = torch.stack(value_steps, dim=1)
+                next_values = torch.zeros_like(value_tensor)
+                if value_tensor.shape[1] > 1:
+                    next_values[:, :-1] = value_tensor[:, 1:]
+                next_values[:, -1] = bootstrap_values
+                for timestep, boundary_values in boundary_bootstrap_values.items():
+                    nonterminal_truncation = (
+                        truncated_steps[timestep] & ~terminated_steps[timestep]
+                    )
+                    next_values[:, timestep] = torch.where(
+                        nonterminal_truncation,
+                        boundary_values,
+                        next_values[:, timestep],
+                    )
+                # Explicit per-transition targets are required because a
+                # reset observation is not the successor of a truncated
+                # transition.  The public RolloutResult still exposes the
+                # final vector for callers that only need the boundary value.
+                learner_bootstrap_values = None
             trajectory = TrajectoryBatch(
                 sequence=RecurrentSequence(
                     raster=torch.stack(raster_steps, dim=1),
@@ -846,7 +916,8 @@ if TORCH_AVAILABLE:
                 trajectory=trajectory,
                 privileged_features=privileged_features,
                 belief_targets=belief_targets,
-                bootstrap_values=bootstrap_values,
+                next_values=next_values,
+                bootstrap_values=learner_bootstrap_values,
                 behavior_cloning_weights=(
                     torch.stack(behavior_cloning_weight_steps, dim=1)
                     if behavior_cloning_weight_steps

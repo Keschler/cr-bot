@@ -3804,7 +3804,7 @@
         "spawn_layout_mtile": [],
         "spell_origin": "own-king-tower",
         "status": {
-          "duration_us": 1100000,
+          "duration_us": 4000000,
           "hit_speed_multiplier_milli": 0,
           "kind": "freeze",
           "speed_multiplier_milli": 0
@@ -12126,7 +12126,7 @@
       ]
     }
   },
-  "content_hash": "sha256:c387559a0ca155c709f5e62680ed136c7437347a9384741f287bb3d0a67c2389",
+  "content_hash": "sha256:0ac958abe2f8e90e7eaf882f23c1dec5b8ebd968cf630cd1d657961e0f2e169b",
   "interaction_set": [
     "archers",
     "arrows",
