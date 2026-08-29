@@ -93,6 +93,53 @@ def test_direct_projectile_rechecks_target_layer_at_impact() -> None:
     assert projectile.alive is True
 
 
+def test_zero_radius_direct_impact_misses_target_outside_endpoint() -> None:
+    engine, state = _state()
+    cannon = _entity(state, "cannon", 0, 7_000, 15_000)
+    target = _entity(state, "giant", 1, 12_000, 15_000)
+    before = target.hp
+
+    engine._impact_area(
+        state,
+        owner=cannon.owner,
+        source_uid=cannon.uid,
+        source_card_id="cannon",
+        x=9_000,
+        y=15_000,
+        damage=100,
+        crown_damage=100,
+        radius=0,
+        status=None,
+        knockback=0,
+        primary_target_uid=target.uid,
+    )
+
+    assert target.hp == before
+
+
+def test_non_homing_projectile_misses_primary_target_after_it_moves_away() -> None:
+    engine, state = _state()
+    firecracker = _entity(state, "firecracker", 0, 7_000, 15_000)
+    primary = _entity(state, "giant", 1, 9_000, 15_000)
+    firecracker.pending_target_uid = primary.uid
+
+    engine._resolve_attack(state, firecracker)
+    projectile = next(iter(state.projectiles.values()))
+    assert projectile.homing is False
+    assert (projectile.target_x_mtile, projectile.target_y_mtile) == (
+        primary.x_mtile,
+        primary.y_mtile,
+    )
+    impact_point = (projectile.target_x_mtile, projectile.target_y_mtile)
+    primary.x_mtile += 3_000
+    before = primary.hp
+
+    engine._impact_projectile(state, projectile)
+
+    assert impact_point != (primary.x_mtile, primary.y_mtile)
+    assert primary.hp == before
+
+
 def test_firecracker_emits_five_behind_target_shrapnel_projectiles() -> None:
     engine, state = _state()
     firecracker = _entity(state, "firecracker", 0, 7_000, 15_000)

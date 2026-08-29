@@ -3462,7 +3462,12 @@ class BattleEngine:
                 # a fixed line.  The line endpoint is deliberately capped by
                 # the authored component rather than by target distance.
                 line_component = mechanics.get("line_piercing")
-                if hasattr(line_component, "get"):
+                # Firecracker's line-piercing component describes the five
+                # fragments released behind the burst.  Its primary firework
+                # still lands on the acquired target tile; applying this
+                # component here incorrectly moves the primary impact point
+                # past the target.
+                if hasattr(line_component, "get") and source.card_id != "firecracker":
                     line_length = int(line_component.get("length_mtile") or base_distance)
                     end_x = source.x_mtile + base_dx * line_length // base_distance
                     end_y = source.y_mtile + base_dy * line_length // base_distance
@@ -4784,6 +4789,8 @@ class BattleEngine:
                     target,
                     allowed_targets=allowed_targets,
                 )
+                and distance_mtile(x, y, target.x_mtile, target.y_mtile)
+                <= radius + self._collision_radius(target)
             ):
                 candidates = [target]
         else:
