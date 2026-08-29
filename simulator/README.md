@@ -262,13 +262,10 @@ unchanged, and records `target_player`, `actor_player`, and `opponent_player`.
 
 ### Generalized opponent training and held-out evaluation
 
-The latest retained actor is
-`outputs/simulator/training/generalized-coverage-ppo-v2.pt`. Its training
-report is
-`outputs/simulator/training/generalized-coverage-ppo-v2.json`, and its
-held-out report is
-`outputs/simulator/training/generalized-coverage-ppo-v2-heldout-smoke.json`.
-The checkpoint uses engine `reference-0.31.0`.
+The generalized runner and evaluation commands below reproduce the recorded
+RL audit. The generated checkpoint and reports are local artifacts and are not
+included in this checkout; rerun training before using those paths. The
+recorded run used engine `reference-0.31.0`.
 
 Evaluate the six-deck held-out smoke audit with the same checkpoint, seed,
 strategy, cap, and exclusion report every time:
@@ -342,7 +339,7 @@ snapshots; `crowns_end` reports final world-player crown totals; and
 `troop_positions_end` is likewise terminal/cap-time data, not a continuous
 trajectory.
 
-Current retained results:
+Recorded RL results:
 
 | Evaluation | Result |
 | --- | --- |
@@ -518,21 +515,20 @@ The current benchmark host measured approximately:
 
 | Path | Throughput |
 | --- | ---: |
-| Simulator, 16 lanes, CPU reference | 1.23k environment steps/s |
-| Actor-only deterministic fast path, batch 16, CPU | 255 decisions/s |
+| Simulator, 16 lanes, CPU reference | 3.06k environment steps/s |
+| Actor-only deterministic fast path, batch 16, CPU | 1.44k decisions/s |
 | Actor-only deterministic fast path, batch 16, RTX 2050 | 3.61k decisions/s |
 | Full actor selection, batch 16, RTX 2050 | 2.69k decisions/s |
 
-Thus the actor-only and full actor paths are currently faster than the
-simulator on the accelerated host. The actor-only deployment path avoids
-unused belief heads and distribution normalization, resolves `WAIT` before
-building card/placement logits, uses a channels-last CPU raster, and removes
-only masked tail entity rows; the PPO/reference forward path is unchanged.
-CPU fallback is still slower, so the next target is
-5k–10k simulator environment steps/s through batched, behavior-preserving
-optimization; every optimization must retain reference parity. The vector
-backend regression checks state, event-log, and replay hashes for both process
-transports across consecutive steps with privileged info disabled.
+The historical accelerated-host actor result clears the historical simulator
+rate. On the current CPU host, the actor is about 1.44k decisions/s versus
+3.06k simulator steps/s, so CPU parity remains an open performance gate. The
+deployment path avoids belief heads and distribution normalization, resolves
+`WAIT` before card/placement decoding, uses a channels-last raster, removes
+masked entity tails, and caps CPU intra-op parallelism at four threads. The
+PPO/reference forward path and selected-action parity are unchanged. The
+vector-backend regression checks state, event-log, and replay hashes for both
+process transports across consecutive steps with privileged info disabled.
 
 ## Automation and current limits
 

@@ -32,20 +32,19 @@ a controlled probe when the action boundary or causal behavior matters.
   intentionally deferred for the current RL-first execution path. No
   connected run has yet satisfied the evidence/readiness gates.
 - The policy is a provisional research harness, not an any-deck player. The
-  latest retained generalized actor is
-  `outputs/simulator/training/generalized-coverage-ppo-v2.pt`, with reports
-  `outputs/simulator/training/generalized-coverage-ppo-v2.json` and
-  `outputs/simulator/training/generalized-coverage-ppo-v2-heldout-smoke.json`.
-  It uses engine `reference-0.31.0`.
+  previously recorded generalized checkpoint and reports are generated local
+  artifacts and are not present in this checkout; rerun training before using
+  those paths. The recorded run used engine `reference-0.31.0`.
 - On the benchmark host, batch-16 actor-only deterministic inference reaches
   about 3.61k decisions/s on the RTX 2050 versus about 1.54k simulator
   environment steps/s. The full actor-selection path reaches about 2.69k/s.
   The actor-only path now uses direct masked argmax decoding, mode-first
   decoding that skips card/placement heads for `WAIT` rows, a CPU
   channels-last raster layout, and tail-padding removal for sparse entity
-  batches. In the current CPU-only training environment it reaches about
-  255 decisions/s at batch 16, versus about 1.23k simulator steps/s; CPU
-  fallback remains a diagnostic path, not the production throughput target.
+  batches. On the current CPU host it reaches about 1.44k decisions/s at
+  batch 16 versus about 3.06k simulator steps/s; the CPU parity gate remains
+  open. The path also caps CPU intra-op parallelism at four threads. CPU
+  fallback remains below the historical accelerated-host target.
 - The current action contract has `WAIT`/`PLAY`, card slot, and placement but
   no learned wait-duration head; `WAIT` advances the fixed simulator decision
   interval. The proposed timing head remains a future architecture change.
@@ -287,12 +286,9 @@ exploit.
 
 ## Current retained RL audit
 
-The latest retained generalized actor is
-`outputs/simulator/training/generalized-coverage-ppo-v2.pt`; its training
-report is `outputs/simulator/training/generalized-coverage-ppo-v2.json`, and
-its six-deck held-out smoke report is
-`outputs/simulator/training/generalized-coverage-ppo-v2-heldout-smoke.json`.
-The actor uses public observations, while the critic is training-only.
+The previously recorded generalized actor and reports are generated local
+artifacts and are not present in this checkout. The actor used public
+observations, while the critic was training-only.
 
 The fixed deterministic-cycle regression is 8 wins, 0 losses, 0 draws,
 0 truncated. The six held-out archetype smoke is 1 win, 5 losses, 0 draws,
@@ -349,13 +345,15 @@ backend must support batched reset/step, legal masks, terminal/truncation,
 deterministic seeding, and asynchronous reset while producing identical
 canonical state and public-event hashes on the parity corpus.
 
-The neural fast path is already above the simulator on the benchmark host:
-about 3.61k actor-only decisions/s and 2.69k full actor-selection decisions/s
-versus about 1.54k simulator environment steps/s at batch 16. Continue
-profiling full matches, dense swarms, projectile-heavy states, and observation
-construction. The deployment-only decoding/layout changes preserve the PPO
-forward path and exact selected-action parity on the regression workload. The
-preferred large-self-play target is 5k–10k simulator environment steps/s.
+The neural fast path is above the historical simulator benchmark on an RTX
+2050 (about 3.61k actor-only and 2.69k full actor-selection decisions/s versus
+about 1.54k simulator steps/s at batch 16). On the current CPU host it reaches
+about 1.44k actor-only decisions/s versus about 3.06k simulator steps/s, so
+CPU parity is not yet met. Continue profiling dense swarms, projectile-heavy
+states, and observation construction. The deployment-only decoding/layout
+changes preserve the PPO forward path and exact selected-action parity on the
+regression workload. The preferred large-self-play target is 5k–10k simulator
+environment steps/s.
 The vector backend regression also checks state, event-log, and replay hashes
 across consecutive card-play steps with privileged info disabled; both process
 transports pass that parity check.

@@ -49,6 +49,20 @@ def test_policy_device_auto_uses_visible_accelerator_or_cpu_fallback() -> None:
     assert selected == expected
 
 
+@requires_torch
+def test_policy_cpu_thread_cap_preserves_lower_setting_and_skips_accelerator() -> None:
+    from rl.learner import configure_policy_cpu_threads
+
+    original_threads = torch.get_num_threads()
+    try:
+        torch.set_num_threads(2)
+        assert configure_policy_cpu_threads(torch.device("cpu")) == 2
+        assert torch.get_num_threads() == 2
+        assert configure_policy_cpu_threads(torch.device("cuda")) is None
+    finally:
+        torch.set_num_threads(original_threads)
+
+
 def _model_config():
     from rl.model import ModelConfig
 

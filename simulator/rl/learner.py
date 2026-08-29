@@ -85,14 +85,47 @@ def resolve_policy_device(device: Any) -> Any:
     An explicit device remains untouched, so callers can force CPU for
     reproducibility or select a particular accelerator.  Keeping this choice
     at learner construction means every inference entry point uses the same
-    policy device resolution and does not need to duplicate CUDA checks.
+    policy device resolution and does not need to duplicate CUDA checks.  CPU
+    policy work is also capped at four intra-op threads; this avoids the
+    oversubscription penalty measured for the small batched actor workload.
     """
 
     if not TORCH_AVAILABLE:  # pragma: no cover - guarded by learner use
         _raise_torch_unavailable()
     if isinstance(device, str) and device.strip().lower() == "auto":
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    return torch.device(device)
+        resolved = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    else:
+        resolved = torch.device(device)
+    configure_policy_cpu_threads(resolved)
+    return resolved
+
+
+def configure_policy_cpu_threads(device: Any, *, cap: int = 4) -> int | None:
+    """Limit CPU intra-op parallelism for the small batched policy workload.
+
+    The actor's convolution, recurrent step, and masked heads operate on
+    relatively small tensors.  On the benchmark host, allowing the default
+    thread pool to use more than four workers makes each decision slower due
+    to launch and synchronization overhead.  Preserve a caller's lower
+    setting and leave accelerator execution untouched.  This is a runtime
+    scheduling choice only; it does not change model parameters or numerical
+    operations.
+
+    Returns the active CPU thread count, or ``None`` for non-CPU devices.
+    """
+
+    if not TORCH_AVAILABLE:  # pragma: no cover - guarded by learner use
+        _raise_torch_unavailable()
+    resolved = torch.device(device)
+    if resolved.type != "cpu":
+        return None
+    if type(cap) is not int or cap <= 0:
+        raise ValueError("cap must be a positive integer")
+    active = int(torch.get_num_threads())
+    target = min(active, cap)
+    if target != active:
+        torch.set_num_threads(target)
+    return target
 
 
 @dataclass(frozen=True, slots=True)
@@ -1597,6 +1630,7 @@ __all__ = [
     "RecurrentRolloutState",
     "RecurrentValueHead",
     "RolloutStep",
+    "configure_policy_cpu_threads",
     "resolve_policy_device",
     "TORCH_AVAILABLE",
     "TorchUnavailableError",

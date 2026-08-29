@@ -41,25 +41,18 @@ def test_rl_documentation_matches_matrix_schema_and_evidence_axes() -> None:
     assert "`troop_positions_end` and `tower_hp_end` are only terminal/cap-time" in goal
 
 
-def test_rl_documentation_points_at_the_latest_retained_actor_audit() -> None:
+def test_rl_documentation_labels_generated_actor_audit_artifacts() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     goal = (ROOT / "GOAL.md").read_text(encoding="utf-8")
 
     from simulator.engine import ENGINE_VERSION
 
-    current_checkpoint = "outputs/simulator/training/generalized-coverage-ppo-v2.pt"
-    current_training_report = "outputs/simulator/training/generalized-coverage-ppo-v2.json"
-    current_heldout_report = (
-        "outputs/simulator/training/generalized-coverage-ppo-v2-heldout-smoke.json"
-    )
-
     for document in (readme, goal):
-        assert current_checkpoint in document
-        assert current_training_report in document
-        assert current_heldout_report in document
         assert f"engine `{ENGINE_VERSION}`" in document
 
-    assert "The latest retained generalized actor is" in goal
+    assert "generated checkpoint and reports are local artifacts" in readme
+    assert "previously recorded generalized actor and reports are generated local" in goal
+    assert "The latest retained generalized actor is" not in goal
     assert "generalized-strategic-context-v1.pt" not in readme
     assert "generalized-strategic-context-v1.pt" not in goal
     assert "generalized-strategic-direct-v1.pt" not in readme
