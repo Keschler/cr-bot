@@ -56,8 +56,10 @@ def _inputs(config, *, batch: int = 2, time: int = 3, entities: int = 6):
     global_features = torch.randn(batch, time, config.global_dim)
     entity_features = torch.randn(batch, time, entities, config.entity_dim)
     entity_mask = torch.ones(batch, time, entities, dtype=torch.bool)
-    entity_mask[0, 1, 2:] = False
-    entity_mask[1, 2, :] = False
+    if time > 1:
+        entity_mask[0, 1, 2:] = False
+    if time > 2:
+        entity_mask[1, 2, :] = False
     reset_mask = torch.zeros(batch, time, dtype=torch.bool)
     reset_mask[:, 0] = True
     return raster, global_features, entity_features, entity_mask, reset_mask
@@ -169,7 +171,7 @@ def test_explicit_hand_features_condition_card_and_placement_heads() -> None:
 
 
 @requires_torch
-def test_card_identity_tokens_are_added_to_the_shared_transformer() -> None:
+def test_hand_table_features_stay_outside_the_entity_transformer() -> None:
     from rl import ModelConfig, RecurrentHybridPolicy
 
     values = {
@@ -180,20 +182,15 @@ def test_card_identity_tokens_are_added_to_the_shared_transformer() -> None:
         global_dim=10,
         hand_feature_offset=1,
         hand_card_count=3,
-        card_token_features=True,
-        card_embedding_dim=5,
     )
     config = ModelConfig(**values)
     policy = RecurrentHybridPolicy(config).eval()
-    assert policy.encoder.card_identity_embedding is not None
-    assert policy.encoder.card_token_projection is not None
-    assert policy.encoder.hand_slot_embedding is not None
-    assert policy.encoder.hand_projection is None
+    assert policy.encoder.hand_projection is not None
 
     raster = torch.randn(1, 1, config.raster_channels, config.raster_height, config.raster_width)
     global_features = torch.zeros(1, 1, config.global_dim)
     # Slot zero contains table row 1, slot one contains table row 2, and slot
-    # two is empty. The model shifts real IDs by one to reserve row zero.
+    # two is empty. These remain one-hot table features for the hand heads.
     global_features[0, 0, 1 + 1] = 1.0
     global_features[0, 0, 1 + config.hand_card_count + 2] = 1.0
     entities = torch.randn(1, 1, 2, config.entity_dim)
@@ -202,9 +199,8 @@ def test_card_identity_tokens_are_added_to_the_shared_transformer() -> None:
     captured: dict[str, torch.Tensor] = {}
 
     def capture_transformer_input(module, args, kwargs):
-        del module
+        del module, kwargs
         captured["tokens"] = args[0].detach()
-        captured["padding_mask"] = kwargs["src_key_padding_mask"].detach()
 
     handle = policy.encoder.entity_transformer.register_forward_pre_hook(
         capture_transformer_input,
@@ -216,16 +212,134 @@ def test_card_identity_tokens_are_added_to_the_shared_transformer() -> None:
     finally:
         handle.remove()
 
-    assert policy.encoder.public_hand_card_ids(global_features).tolist() == [[[2, 3, 0]]]
-    assert captured["tokens"].shape == (1, 2 + config.card_slots + 1, config.model_dim)
+    assert captured["tokens"].shape == (1, 2 + 1, config.model_dim)
     expected_hand = policy.encoder.public_hand_features(global_features)
     assert expected_hand is not None
-    expected_cards = expected_hand.reshape(1, config.card_slots, config.model_dim)
-    expected_cards = expected_cards + policy.encoder.hand_slot_embedding(
-        torch.arange(config.card_slots)
-    ).unsqueeze(0)
-    torch.testing.assert_close(captured["tokens"][:, 2:5], expected_cards)
-    assert captured["padding_mask"].tolist() == [[False, False, False, False, True, False]]
+    assert expected_hand.shape == (1, 1, config.card_slots, config.model_dim)
+
+
+@requires_torch
+def test_deterministic_fast_action_matches_full_reference_path() -> None:
+    from rl import ActionMasks, ModelConfig, RecurrentHybridPolicy
+    from rl.learner import _deterministic_action
+
+    values = {
+        field: getattr(_config(), field)
+        for field in _config().__dataclass_fields__
+    }
+    values.update(
+        global_dim=16,
+        hand_feature_offset=1,
+        hand_card_count=3,
+        spatial_placement_features=True,
+        placement_rows=5,
+        placement_cols=4,
+    )
+    config = ModelConfig(**values)
+    policy = RecurrentHybridPolicy(config).eval()
+    raster, global_features, entities, entity_mask, reset_mask = _inputs(
+        config,
+        batch=2,
+        time=1,
+        entities=6,
+    )
+    mode = torch.zeros(2, 1, 2, dtype=torch.bool)
+    mode[..., 1] = True  # Force PLAY so selected-card placement is exercised.
+    card = torch.ones(2, 1, config.card_slots, dtype=torch.bool)
+    placement = torch.zeros(
+        2,
+        1,
+        config.card_slots,
+        config.placement_rows,
+        config.placement_cols,
+        dtype=torch.bool,
+    )
+    placement[:, 0, :, 1, 2] = True
+    placement[:, 0, :, 3, 1] = True
+    masks = ActionMasks(mode=mode, card=card, placement=placement)
+
+    with torch.inference_mode():
+        reference = policy(
+            raster,
+            global_features,
+            entities,
+            entity_mask,
+            reset_mask=reset_mask,
+            action_masks=masks,
+            include_beliefs=False,
+        )
+        reference_actions, _log_probs, _entropy = _deterministic_action(
+            policy,
+            reference,
+            masks,
+        )
+        fast_actions, fast_hidden = policy.act_deterministic(
+            raster,
+            global_features,
+            entities,
+            entity_mask,
+            masks,
+            reset_mask=reset_mask,
+        )
+
+    assert reference.belief_logits is None
+    assert torch.equal(fast_actions.mode, reference_actions.mode)
+    assert torch.equal(fast_actions.card_slot, reference_actions.card_slot)
+    assert torch.equal(fast_actions.placement, reference_actions.placement)
+    torch.testing.assert_close(fast_hidden, reference.final_hidden)
+
+    wait_masks = ActionMasks(
+        mode=torch.tensor([[[True, False]], [[True, False]]]),
+        card=torch.zeros_like(card),
+        placement=torch.zeros_like(placement),
+    )
+    with torch.inference_mode():
+        wait_reference = policy(
+            raster,
+            global_features,
+            entities,
+            entity_mask,
+            reset_mask=reset_mask,
+            action_masks=wait_masks,
+            include_beliefs=False,
+        )
+        wait_reference_actions, _log_probs, _entropy = _deterministic_action(
+            policy,
+            wait_reference,
+            wait_masks,
+        )
+        wait_fast_actions, wait_fast_hidden = policy.act_deterministic(
+            raster,
+            global_features,
+            entities,
+            entity_mask,
+            wait_masks,
+            reset_mask=reset_mask,
+        )
+
+    assert torch.equal(wait_fast_actions.mode, wait_reference_actions.mode)
+    assert torch.equal(wait_fast_actions.card_slot, wait_reference_actions.card_slot)
+    assert torch.equal(wait_fast_actions.placement, wait_reference_actions.placement)
+    torch.testing.assert_close(wait_fast_hidden, wait_reference.final_hidden)
+
+
+@requires_torch
+def test_one_step_gru_matches_direct_reset_semantics() -> None:
+    from rl import GRURecurrentCore
+
+    torch.manual_seed(17)
+    core = GRURecurrentCore(input_dim=5, hidden_dim=7, layers=2).eval()
+    features = torch.randn(3, 1, 5)
+    hidden = torch.randn(2, 3, 7)
+    reset_mask = torch.tensor([[True], [False], [True]])
+    reset_hidden = hidden.masked_fill(reset_mask[:, 0].reshape(1, 3, 1), 0.0)
+    expected_output, expected_hidden = core.gru(features, reset_hidden)
+
+    with torch.inference_mode():
+        output, final_hidden = core(features, hidden=hidden, reset_mask=reset_mask)
+
+    torch.testing.assert_close(output, expected_output)
+    torch.testing.assert_close(final_hidden, expected_hidden)
 
 
 @requires_torch

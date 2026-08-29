@@ -387,7 +387,7 @@ class EvaluationMatrixConfig:
     policy_mode: str = "actor"
     target_player: int = 0
     max_decisions: int | None = None
-    device: str | None = "cpu"
+    device: str | None = "auto"
     shuffle_decks: bool = True
     include_match_results: bool = True
     held_out: bool = True
@@ -516,7 +516,7 @@ class EvaluationMatrixConfig:
             policy_mode=raw.get("policy_mode", "actor"),
             target_player=raw.get("target_player", 0),
             max_decisions=raw.get("max_decisions"),
-            device=raw.get("device", "cpu"),
+            device=raw.get("device", "auto"),
             shuffle_decks=raw.get("shuffle_decks", True),
             include_match_results=raw.get("include_match_results", True),
             held_out=raw.get("held_out", True),
@@ -1849,7 +1849,7 @@ class _CheckpointMatchRunner:
         reset: bool,
     ) -> tuple[Any, Any]:
         from .collector import _batch_observations
-        from .learner import RecurrentRolloutState, _deterministic_action
+        from .learner import RecurrentRolloutState
         from cr_bot.domain.game_state import Action as PolicyAction
 
         raster, global_features, entities, entity_mask, masks = _batch_observations(
@@ -1862,21 +1862,16 @@ class _CheckpointMatchRunner:
             device=self.learner.device,
         )
         with self._torch.inference_mode():
-            output = self.learner.policy(
+            actions, final_hidden = self.learner.policy.act_deterministic(
                 raster,
                 global_features,
                 entities,
                 entity_mask,
+                masks,
                 reset_mask=reset_mask,
                 hidden=rollout_state.hidden,
-                action_masks=masks,
             )
-            actions, _log_probs, _entropy = _deterministic_action(
-                self.learner.policy,
-                output,
-                masks,
-            )
-        next_state = RecurrentRolloutState(output.final_hidden.detach())
+        next_state = RecurrentRolloutState(final_hidden.detach())
         mode = int(actions.mode[0, 0].item())
         if mode == 0:
             return PolicyAction(kind="Wait"), next_state
@@ -2532,6 +2527,9 @@ def run_evaluation_matrix(
     }
     if config.include_match_results:
         report["matches"] = rows
+    from .exploit_audit import audit_simulation_report
+
+    report["simulation_exploit_audit"] = audit_simulation_report(report)
     report = _json_safe(report)
     try:
         json.dumps(report, allow_nan=False)
@@ -2549,7 +2547,7 @@ def evaluate_checkpoint_matrix(
     policy_mode: str = "actor",
     target_player: int = 0,
     max_decisions: int | None = None,
-    device: str | None = "cpu",
+    device: str | None = "auto",
     shuffle_decks: bool = True,
     include_match_results: bool = True,
     held_out: bool = True,

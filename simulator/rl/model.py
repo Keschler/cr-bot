@@ -98,14 +98,8 @@ class ModelConfig:
     # fresh checkpoints that must distinguish a defensive card from Hog when
     # the same slot changes across the deck cycle.
     direct_public_slot_card_features: bool = False
-    # Fresh strategic actors can represent each public hand card as a learned
-    # identity token in the shared Transformer. The legacy hand projection is
-    # retained when this switch is disabled so older checkpoints remain loadable.
-    card_token_features: bool = False
-    card_embedding_dim: int = 64
-    # Preserve a board-aligned feature map for placement. The legacy path
-    # uses only a globally pooled raster representation; fresh strategic
-    # actors can opt into this path without changing the old checkpoint ABI.
+    # Preserve a board-aligned feature map for placement. The pooled raster
+    # representation remains the fallback when this option is disabled.
     spatial_placement_features: bool = False
     spatial_placement_dim: int = 32
 
@@ -128,7 +122,6 @@ class ModelConfig:
             "belief_card_count",
             "placement_rows",
             "placement_cols",
-            "card_embedding_dim",
             "spatial_placement_dim",
         )
         for field_name in positive_fields:
@@ -154,12 +147,6 @@ class ModelConfig:
             hand_end = self.hand_feature_offset + self.card_slots * self.hand_card_count
             if hand_end > self.global_dim:
                 raise ValueError("explicit hand features must fit inside global_dim")
-        if type(self.card_token_features) is not bool:
-            raise ValueError("card_token_features must be boolean")
-        if self.card_token_features and self.hand_feature_offset < 0:
-            raise ValueError(
-                "card_token_features require explicit public hand features"
-            )
         if type(self.direct_public_action_features) is not bool:
             raise ValueError("direct_public_action_features must be boolean")
         if type(self.direct_public_card_features) is not bool:
@@ -219,7 +206,7 @@ class RecurrentPolicyOutput:
     recurrent_features: torch.Tensor
     final_hidden: torch.Tensor
     belief_logits: OpponentBeliefLogits | None = None
-    # Optional public hand-card token features used by the action heads.
+    # Optional projected public one-hot hand features used by the action heads.
     hand_features: torch.Tensor | None = None
     # Optional board-aligned features used by the spatial placement head.
     spatial_features: torch.Tensor | None = None
@@ -329,7 +316,7 @@ class PrivilegedCritic(nn.Module):
 
 
 class HybridEncoder(nn.Module):
-    """Encode raster, public entity/card tokens, and global features."""
+    """Encode raster, public entity tokens, and global features."""
 
     def __init__(self, config: ModelConfig) -> None:
         super().__init__()
@@ -368,34 +355,12 @@ class HybridEncoder(nn.Module):
             nn.LayerNorm(config.model_dim),
         )
         self.hand_projection: nn.Module | None = None
-        self.card_identity_embedding: nn.Embedding | None = None
-        self.card_token_projection: nn.Module | None = None
-        self.hand_slot_embedding: nn.Embedding | None = None
         if config.hand_feature_offset >= 0:
-            if config.card_token_features:
-                # Index zero is the empty/unsupported hand slot. The remaining
-                # rows correspond directly to the stable card-ID table used by
-                # the public observation's one-hot hand features.
-                self.card_identity_embedding = nn.Embedding(
-                    config.hand_card_count + 1,
-                    config.card_embedding_dim,
-                    padding_idx=0,
-                )
-                self.card_token_projection = nn.Sequential(
-                    nn.Linear(config.card_embedding_dim, config.model_dim),
-                    nn.GELU(),
-                    nn.LayerNorm(config.model_dim),
-                )
-                self.hand_slot_embedding = nn.Embedding(
-                    config.card_slots,
-                    config.model_dim,
-                )
-            else:
-                self.hand_projection = nn.Sequential(
-                    nn.Linear(config.hand_card_count, config.model_dim),
-                    nn.GELU(),
-                    nn.LayerNorm(config.model_dim),
-                )
+            self.hand_projection = nn.Sequential(
+                nn.Linear(config.hand_card_count, config.model_dim),
+                nn.GELU(),
+                nn.LayerNorm(config.model_dim),
+            )
         fusion_input_dim = 3 * config.model_dim
         if config.hand_feature_offset >= 0:
             fusion_input_dim += config.card_slots * config.model_dim
@@ -422,48 +387,16 @@ class HybridEncoder(nn.Module):
         )
         return hand.reshape(batch, time, config.card_slots, config.hand_card_count)
 
-    def public_hand_card_ids(
-        self,
-        global_features: torch.Tensor,
-    ) -> torch.Tensor | None:
-        """Decode public one-hot hand slots into learned-table row indices.
-
-        Row zero is reserved for an empty or unsupported slot. Card IDs are
-        shifted by one so a real card whose stable table ID is zero remains
-        distinct from padding.
-        """
-
-        if self.config.hand_feature_offset < 0:
-            return None
-        hand = self._raw_hand_features(global_features)
-        present = hand.abs().sum(dim=-1) > 0
-        card_ids = hand.argmax(dim=-1).to(dtype=torch.long) + 1
-        return torch.where(present, card_ids, torch.zeros_like(card_ids))
-
     def public_hand_features(
         self,
         global_features: torch.Tensor,
     ) -> torch.Tensor | None:
-        """Encode each public hand slot for action heads and card tokens."""
+        """Project each public one-hot hand slot for the action heads."""
 
         if self.config.hand_feature_offset < 0:
             return None
-        config = self.config
-        if config.card_token_features:
-            if (
-                self.card_identity_embedding is None
-                or self.card_token_projection is None
-            ):  # pragma: no cover - constructor invariant
-                raise RuntimeError("card-token modules are not initialized")
-            card_ids = self.public_hand_card_ids(global_features)
-            if card_ids is None:  # pragma: no cover - validated by ModelConfig
-                raise RuntimeError("card-token features require a public hand")
-            return self.card_token_projection(
-                self.card_identity_embedding(card_ids)
-            )
-
         if self.hand_projection is None:  # pragma: no cover - constructor invariant
-            raise RuntimeError("legacy hand projection is not initialized")
+            raise RuntimeError("hand projection is not initialized")
         hand = self._raw_hand_features(global_features)
         return self.hand_projection(hand)
 
@@ -474,7 +407,7 @@ class HybridEncoder(nn.Module):
         entities: torch.Tensor,
         entity_mask: torch.Tensor,
     ) -> torch.Tensor:
-        """Encode observations while preserving the legacy return contract."""
+        """Encode observations while preserving the two-value return contract."""
 
         encoded, _spatial = self.forward_with_spatial(
             raster,
@@ -491,6 +424,28 @@ class HybridEncoder(nn.Module):
         entities: torch.Tensor,
         entity_mask: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        encoded, spatial, _hand_features = self.forward_with_aux(
+            raster,
+            global_features,
+            entities,
+            entity_mask,
+        )
+        return encoded, spatial
+
+    def forward_with_aux(
+        self,
+        raster: torch.Tensor,
+        global_features: torch.Tensor,
+        entities: torch.Tensor,
+        entity_mask: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
+        """Encode observations and return reusable projected hand features.
+
+        ``forward_with_spatial`` retains its two-value public contract. This
+        auxiliary form lets the recurrent actor reuse the hand features
+        that were already computed for encoder fusion instead of projecting
+        them a second time for the action head.
+        """
         _require_floating("raster", raster, ndim=5)
         _require_floating("global_features", global_features, ndim=3)
         _require_floating("entities", entities, ndim=4)
@@ -551,59 +506,24 @@ class HybridEncoder(nn.Module):
         null_mask = torch.zeros(
             (flat_batch_time, 1), dtype=torch.bool, device=entity_mask.device
         )
-        hand_card_mask_flat: torch.Tensor | None = None
-        if config.card_token_features:
-            if (
-                hand_features is None
-                or self.hand_slot_embedding is None
-            ):  # pragma: no cover - constructor invariant
-                raise RuntimeError("card-token hand features are not initialized")
-            hand_card_ids = self.public_hand_card_ids(global_features)
-            if hand_card_ids is None:  # pragma: no cover - validated by ModelConfig
-                raise RuntimeError("card-token features require a public hand")
-            hand_card_mask_flat = hand_card_ids.reshape(
-                flat_batch_time,
-                config.card_slots,
-            ).ne(0)
-            slot_indices = torch.arange(
-                config.card_slots,
-                device=global_features.device,
-            )
-            card_tokens = hand_features.reshape(
-                flat_batch_time,
-                config.card_slots,
-                config.model_dim,
-            ) + self.hand_slot_embedding(slot_indices).unsqueeze(0)
-            transformer_input = torch.cat(
-                (entity_features, card_tokens, null_entity),
-                dim=1,
-            )
-            key_padding_mask = torch.cat(
-                (~entity_mask_flat, ~hand_card_mask_flat, null_mask),
-                dim=1,
+        # Hand cards are public one-hot table features projected per action
+        # slot. The Transformer remains an entity-only contextualizer.
+        transformer_input = torch.cat((entity_features, null_entity), dim=1)
+        key_padding_mask = torch.cat((~entity_mask_flat, null_mask), dim=1)
+        # A full public token set is common during batched inference. Passing
+        # an all-false padding mask makes PyTorch build a nested tensor even
+        # though there is nothing to pad. Keep the masked path for genuine
+        # padding, but use the dense Transformer kernel when every token is
+        # present; the attention computation is otherwise identical.
+        if bool(key_padding_mask.any().item()):
+            transformed = self.entity_transformer(
+                transformer_input,
+                src_key_padding_mask=key_padding_mask,
             )
         else:
-            transformer_input = torch.cat((entity_features, null_entity), dim=1)
-            key_padding_mask = torch.cat((~entity_mask_flat, null_mask), dim=1)
-        transformed = self.entity_transformer(
-            transformer_input,
-            src_key_padding_mask=key_padding_mask,
-        )
+            transformed = self.entity_transformer(transformer_input)
         transformed_entities = transformed[:, :entity_count]
-        null_index = entity_count
-        transformed_cards: torch.Tensor | None = None
-        if config.card_token_features:
-            null_index += config.card_slots
-            transformed_cards = transformed[
-                :, entity_count : entity_count + config.card_slots
-            ]
-            if hand_card_mask_flat is None:  # pragma: no cover - constructor invariant
-                raise RuntimeError("card-token mask is not initialized")
-            transformed_cards = transformed_cards.masked_fill(
-                ~hand_card_mask_flat.unsqueeze(-1),
-                0.0,
-            )
-        transformed_null = transformed[:, null_index]
+        transformed_null = transformed[:, entity_count]
         present = entity_mask_flat.unsqueeze(-1)
         present_count = present.sum(dim=1)
         pooled_entities = (transformed_entities * present).sum(dim=1)
@@ -616,18 +536,16 @@ class HybridEncoder(nn.Module):
 
         fusion_features = [raster_features, pooled_entities, global_features_encoded]
         if hand_features is not None:
-            if transformed_cards is not None:
-                fusion_features.append(transformed_cards.reshape(
-                    flat_batch_time,
-                    config.card_slots * config.model_dim,
-                ))
-            else:
-                fusion_features.append(hand_features.reshape(
-                    flat_batch_time,
-                    config.card_slots * config.model_dim,
-                ))
+            fusion_features.append(hand_features.reshape(
+                flat_batch_time,
+                config.card_slots * config.model_dim,
+            ))
         fused = self.fusion(torch.cat(fusion_features, dim=-1))
-        return fused.reshape(batch, time, config.encoder_dim), spatial_features
+        return (
+            fused.reshape(batch, time, config.encoder_dim),
+            spatial_features,
+            hand_features,
+        )
 
 
 def _require_floating(name: str, value: torch.Tensor, *, ndim: int) -> None:
@@ -714,6 +632,13 @@ class GRURecurrentCore(nn.Module):
             _require_bool("reset_mask", reset_mask, ndim=2)
             if reset_mask.shape != (batch, time):
                 raise ValueError("reset_mask must have shape [batch, time]")
+
+        if time == 1:
+            # Rollout inference always supplies one timestep. Calling the GRU
+            # directly avoids the Python list/slice/concatenate loop used for
+            # multi-step training sequences while preserving reset semantics.
+            hidden = hidden.masked_fill(reset_mask[:, 0].reshape(1, batch, 1), 0.0)
+            return self.gru(features, hidden)
 
         outputs: list[torch.Tensor] = []
         for timestep in range(time):
@@ -807,8 +732,8 @@ class MaskedAutoregressivePolicy(nn.Module):
             )
         self.card_head = nn.Linear(hidden_dim, config.card_slots)
         # This is positional context for the four action slots. Card identity
-        # comes from ``hand_features`` (the learned table-ID embeddings) when
-        # the explicit hand/card-token variant is enabled.
+        # comes from the projected one-hot card-table features in
+        # ``hand_features``.
         self.card_embedding = nn.Embedding(config.card_slots, hidden_dim)
         self.hand_card_score: nn.Module | None = None
         if config.hand_feature_offset >= 0:
@@ -831,14 +756,16 @@ class MaskedAutoregressivePolicy(nn.Module):
                 config.spatial_placement_dim,
             )
 
-    def forward(
+    def _prepare_action_prefix(
         self,
         recurrent_features: torch.Tensor,
-        hand_features: torch.Tensor | None = None,
-        public_features: torch.Tensor | None = None,
-        public_action_masks: ActionMasks | None = None,
-        spatial_features: torch.Tensor | None = None,
-    ) -> AutoregressiveLogits:
+        hand_features: torch.Tensor | None,
+        public_features: torch.Tensor | None,
+        public_action_masks: ActionMasks | None,
+        spatial_features: torch.Tensor | None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Build mode/card logits and card-conditioned contexts once."""
+
         _require_floating("recurrent features", recurrent_features, ndim=3)
         if recurrent_features.shape[-1] != self.hidden_dim:
             raise ValueError(f"recurrent features final dimension must be {self.hidden_dim}")
@@ -975,17 +902,30 @@ class MaskedAutoregressivePolicy(nn.Module):
         if hand_features is not None:
             card_logits = card_logits + self.hand_card_score(hand_features).squeeze(-1)
             card_context = card_context + hand_features
-        placement_logits = self.placement_head(card_context)
-        placement_logits = placement_logits.reshape(
-            *recurrent_features.shape[:2],
-            self.card_slots,
+
+        return mode_logits, card_logits, card_context
+
+    def _placement_logits(
+        self,
+        card_context: torch.Tensor,
+        spatial_features: torch.Tensor | None,
+    ) -> torch.Tensor:
+        """Decode placement logits for the card contexts supplied by a caller."""
+
+        # ``card_context`` is normally [B, T, K, H]. The selected-card fast
+        # path supplies K=1; the card dimension is already present in the
+        # linear output and must not be appended a second time.
+        placement_logits = self.placement_head(card_context).reshape(
+            *card_context.shape[:3],
             self.placement_rows,
             self.placement_cols,
         )
         if self.spatial_placement_key is not None:
             if self.spatial_placement_query is None:  # pragma: no cover - invariant
                 raise RuntimeError("spatial placement query is not initialized")
-            batch, time = recurrent_features.shape[:2]
+            if spatial_features is None:  # pragma: no cover - validated by prefix
+                raise RuntimeError("spatial placement features are not initialized")
+            batch, time = card_context.shape[:2]
             spatial = spatial_features.reshape(
                 batch * time,
                 self.config.model_dim,
@@ -1012,7 +952,121 @@ class MaskedAutoregressivePolicy(nn.Module):
                 queries,
                 keys,
             ) / math.sqrt(float(self.config.spatial_placement_dim))
+        return placement_logits
+
+    def forward(
+        self,
+        recurrent_features: torch.Tensor,
+        hand_features: torch.Tensor | None = None,
+        public_features: torch.Tensor | None = None,
+        public_action_masks: ActionMasks | None = None,
+        spatial_features: torch.Tensor | None = None,
+    ) -> AutoregressiveLogits:
+        mode_logits, card_logits, card_context = self._prepare_action_prefix(
+            recurrent_features,
+            hand_features,
+            public_features,
+            public_action_masks,
+            spatial_features,
+        )
+        placement_logits = self._placement_logits(card_context, spatial_features)
         return AutoregressiveLogits(mode_logits, card_logits, placement_logits)
+
+    def deterministic_action_fast(
+        self,
+        recurrent_features: torch.Tensor,
+        hand_features: torch.Tensor | None,
+        public_features: torch.Tensor | None,
+        public_action_masks: ActionMasks,
+        spatial_features: torch.Tensor | None,
+    ) -> ActionBatch:
+        """Select a deterministic legal action without decoding unused cards.
+
+        The full :meth:`forward` path remains the reference/training ABI. This
+        deployment path computes the same masked mode and card argmaxes, then
+        decodes placement only for rows that selected PLAY and only for their
+        selected card slot. It deliberately returns actions only because
+        deployment callers do not need PPO logits, entropy, or log-probability
+        diagnostics.
+        """
+
+        mode_logits, card_logits, card_context = self._prepare_action_prefix(
+            recurrent_features,
+            hand_features,
+            public_features,
+            public_action_masks,
+            spatial_features,
+        )
+        if public_action_masks.prefix_shape != tuple(recurrent_features.shape[:2]):
+            raise ValueError("action masks must share recurrent batch/time dimensions")
+        if public_action_masks.card_slots != self.card_slots:
+            raise ValueError("action masks have the wrong card-slot count")
+
+        mode_log_probs = _masked_log_softmax(
+            mode_logits,
+            public_action_masks.mode,
+            "mode",
+        )
+        mode = mode_log_probs.argmax(dim=-1)
+        card_slot = torch.zeros_like(mode, dtype=torch.long)
+        placement = torch.zeros(
+            (*mode.shape, 2),
+            dtype=torch.long,
+            device=mode.device,
+        )
+        play = mode == self.PLAY
+        if bool(play.any().item()):
+            play_card_logits = card_logits[play]
+            play_card_masks = public_action_masks.card[play]
+            card_log_probs = _masked_log_softmax(
+                play_card_logits,
+                play_card_masks,
+                "card",
+            )
+            selected_cards = card_log_probs.argmax(dim=-1)
+            card_slot[play] = selected_cards
+
+            selected_context = card_context[play].gather(
+                1,
+                selected_cards.reshape(-1, 1, 1).expand(
+                    -1,
+                    1,
+                    self.hidden_dim,
+                ),
+            ).unsqueeze(1)
+            selected_spatial = (
+                None
+                if spatial_features is None
+                else spatial_features[play].unsqueeze(1)
+            )
+            selected_placement = self._placement_logits(
+                selected_context,
+                selected_spatial,
+            ).squeeze(2)
+            selected_masks = public_action_masks.placement[play].gather(
+                1,
+                selected_cards.reshape(-1, 1, 1, 1).expand(
+                    -1,
+                    1,
+                    self.placement_rows,
+                    self.placement_cols,
+                ),
+            ).squeeze(1)
+            placement_log_probs = _masked_log_softmax(
+                selected_placement.reshape(selected_cards.shape[0], -1),
+                selected_masks.reshape(selected_cards.shape[0], -1),
+                "placement",
+            )
+            cells = placement_log_probs.argmax(dim=-1)
+            selected_placements = placement[play]
+            selected_placements[:, 0] = torch.div(
+                cells,
+                self.placement_cols,
+                rounding_mode="floor",
+            )
+            selected_placements[:, 1] = cells.remainder(self.placement_cols)
+            placement[play] = selected_placements
+        return ActionBatch(mode=mode, card_slot=card_slot, placement=placement)
 
     def sample(
         self,
@@ -1221,8 +1275,11 @@ class RecurrentHybridPolicy(nn.Module):
         reset_mask: torch.Tensor | None = None,
         hidden: torch.Tensor | None = None,
         action_masks: ActionMasks | None = None,
+        include_beliefs: bool = True,
     ) -> RecurrentPolicyOutput:
-        encoded_features, spatial_features = self.encoder.forward_with_spatial(
+        if type(include_beliefs) is not bool:
+            raise TypeError("include_beliefs must be boolean")
+        encoded_features, spatial_features, hand_features = self.encoder.forward_with_aux(
             raster,
             global_features,
             entities,
@@ -1233,7 +1290,6 @@ class RecurrentHybridPolicy(nn.Module):
             hidden=hidden,
             reset_mask=reset_mask,
         )
-        hand_features = self.encoder.public_hand_features(global_features)
         if hand_features is not None:
             if self.hand_action_projection is None:  # pragma: no cover - constructor invariant
                 raise RuntimeError("explicit hand features have no action projection")
@@ -1245,7 +1301,7 @@ class RecurrentHybridPolicy(nn.Module):
             public_action_masks=action_masks,
             spatial_features=spatial_features,
         )
-        belief_logits = self.belief_heads(recurrent_features)
+        belief_logits = self.belief_heads(recurrent_features) if include_beliefs else None
         return RecurrentPolicyOutput(
             logits=logits,
             encoded_features=encoded_features,
@@ -1255,6 +1311,49 @@ class RecurrentHybridPolicy(nn.Module):
             hand_features=hand_features,
             spatial_features=spatial_features,
         )
+
+    def act_deterministic(
+        self,
+        raster: torch.Tensor,
+        global_features: torch.Tensor,
+        entities: torch.Tensor,
+        entity_mask: torch.Tensor,
+        action_masks: ActionMasks,
+        *,
+        reset_mask: torch.Tensor | None = None,
+        hidden: torch.Tensor | None = None,
+    ) -> tuple[ActionBatch, torch.Tensor]:
+        """Run the deployment actor without unused training outputs.
+
+        This keeps the same encoder, recurrent core, action parameters, and
+        legality masks as :meth:`forward`. It omits belief logits and uses the
+        action head's selected-card placement path, so it is suitable for
+        deterministic evaluation and live shadow/self-play inference.
+        """
+
+        encoded_features, spatial_features, hand_features = self.encoder.forward_with_aux(
+            raster,
+            global_features,
+            entities,
+            entity_mask,
+        )
+        recurrent_features, final_hidden = self.core(
+            encoded_features,
+            hidden=hidden,
+            reset_mask=reset_mask,
+        )
+        if hand_features is not None:
+            if self.hand_action_projection is None:  # pragma: no cover - constructor invariant
+                raise RuntimeError("explicit hand features have no action projection")
+            hand_features = self.hand_action_projection(hand_features)
+        actions = self.action_head.deterministic_action_fast(
+            recurrent_features,
+            hand_features,
+            global_features,
+            action_masks,
+            spatial_features,
+        )
+        return actions, final_hidden
 
     def log_prob(
         self,

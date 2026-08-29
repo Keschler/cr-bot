@@ -21,9 +21,9 @@ a controlled probe when the action boundary or causal behavior matters.
   `training_ready: false`.
 - Generated coverage is deterministic and executable, but 259 structural
   cases still lack an explicit event or final-state obligation.
-- Phase-0 physical-lab software is implemented. No connected run has yet
-  satisfied the evidence/readiness gates; the next fidelity milestone is one
-  complete `hog_cannon_pull` or isolated Hog probe.
+- Phase-0 physical-lab software is implemented, but physical evidence is
+  intentionally deferred for the current RL-first execution path. No
+  connected run has yet satisfied the evidence/readiness gates.
 - The policy is a provisional research harness, not an any-deck player. The
   latest retained generalized actor is
   `outputs/simulator/training/generalized-coverage-ppo-v2.pt`, with reports
@@ -37,6 +37,14 @@ a controlled probe when the action boundary or causal behavior matters.
 
 These results establish plumbing and performance, not game strength or
 sim-to-real fidelity.
+
+## Current execution priority
+
+For the current development pass, proceed directly with RL improvements using
+the executable but provisional V1 simulator. Do not wait for or fabricate
+physical-lab evidence. This is a research-path waiver only: provisional
+training and evaluation may run, but the deferred physical-lab and fidelity
+gates still block `training_ready` and full-V1 release claims.
 
 ## Development workflow
 
@@ -305,14 +313,14 @@ environment steps/s.
 ## Delivery order
 
 1. Freeze V1 roster, ruleset, observation/action contract, and mechanic graph.
-2. Complete one connected physical-lab probe and pass the evidence handoff.
-3. Close air, movement, targeting, and shared-mechanic fidelity gaps.
-4. Implement remaining cards by dependency cluster with generated tests and
-   controlled probes.
-5. Reach all per-mechanic readiness gates.
-6. Prove optimized/reference parity and meet the trainer-derived throughput
+2. Improve the public actor, recurrent PPO training path, evaluator, and
+   behavior-preserving inference fast path.
+3. Run the RL phases with held-out splits, exploit audits, and reproducible
+   checkpoints; promote only clean candidates.
+4. Prove optimized/reference parity and meet the trainer-derived throughput
    gate.
-7. Run the RL phases and promote only clean, held-out-evaluated candidates.
+5. Resume physical-lab evidence and close per-mechanic fidelity gates before
+   declaring `training_ready` or completing the full V1 release.
 
 ## Definition of done
 

@@ -9,6 +9,11 @@ The current `v1` ruleset declares the complete 109-card eligible opponent
 roster, but remains `training_ready: false`. It is an executable research
 ruleset, not a claim that every live-game mechanic has been measured.
 
+The current execution priority is RL-first: physical-lab evidence is deferred
+while the actor, training loop, evaluation, and simulator throughput improve.
+This permits provisional experiments only; it does not satisfy the fidelity
+gates or authorize a `training_ready` claim.
+
 ## Setup and tests
 
 From `simulator/`, use the repository training environment:
@@ -60,7 +65,9 @@ behavioral event or final-state obligations.
 
 ### Physical-fidelity lab
 
-The software-only Phase-0 harness can be run before connecting devices:
+Physical-lab evidence is deferred for the current RL-first pass. The software
+harness remains available for the later release gate and can be exercised
+offline before connecting devices:
 
 ```bash
 PYTHONPATH=.:..:../src ../capture/.venv-train/bin/python -m simulator lab plan \
@@ -287,6 +294,19 @@ The matrix report is schema version 2 with kind
 `actor_controls_actions=true` identify neural actor evidence;
 `actor_controls_actions` is `true` only for the neural actor. Counter-policy
 rows are diagnostics, not checkpoint quality.
+
+Every prototype and matrix report includes `simulation_exploit_audit`. To audit
+an existing report and optional full decision trace, run:
+
+```bash
+PYTHONPATH=.:..:../src \
+../capture/.venv-train/bin/python -m rl.exploit_audit \
+  outputs/simulator/training/evaluation.json \
+  --trace outputs/simulator/training/evaluation-trace.json
+```
+
+Exit status 2 means the artifact is flagged or invalid and must be quarantined
+before promotion.
 
 `target_play_trace` contains target `PLAY` attempts only. Prototype
 `--trace-out` contains every decision. `tower_hp_before`, `tower_hp_after`, `tower_hp_end`

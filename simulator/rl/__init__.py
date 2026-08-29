@@ -37,6 +37,14 @@ from .domain_randomization import (
     DomainVariantSampler,
     SimulationVariant,
 )
+from .exploit_audit import (
+    SIMULATION_EXPLOIT_AUDIT_KIND,
+    SIMULATION_EXPLOIT_AUDIT_SCHEMA_VERSION,
+    SimulationExploitAuditError,
+    audit_json_file,
+    audit_replay_hashes,
+    audit_simulation_report,
+)
 from .league import (
     DeckConditionedOpponentScope,
     DeckSpec,
@@ -201,6 +209,12 @@ _FOUNDATION_EXPORTS = {
     "DomainRandomizedEnv",
     "DomainVariantSampler",
     "SimulationVariant",
+    "SIMULATION_EXPLOIT_AUDIT_KIND",
+    "SIMULATION_EXPLOIT_AUDIT_SCHEMA_VERSION",
+    "SimulationExploitAuditError",
+    "audit_json_file",
+    "audit_replay_hashes",
+    "audit_simulation_report",
 }
 
 _PROTOTYPE_EXPORTS = {

@@ -176,7 +176,6 @@ def _default_prototype_config() -> PrototypeConfig:
         transformer_ff_dim=256,
         gru_hidden_dim=256,
         explicit_hand_features=True,
-        card_token_features=True,
         spatial_placement_features=True,
     )
 
@@ -590,7 +589,7 @@ def make_scenario_opponent_action(
     *,
     checkpoint_opponents: Sequence[str | Path] = (),
     checkpoint_assignments: Sequence[str | Path | None] | None = None,
-    device: str | None = "cpu",
+    device: str | None = "auto",
 ) -> Callable[[Any, Any, int], Any]:
     """Build a callback for heuristic and optional frozen self-play lanes.
 
@@ -955,6 +954,12 @@ def train_generalized(
             expert_guidance=config.expert_guidance,
             expert_action_callback=expert_action,
         )
+        audit = report.get("simulation_exploit_audit")
+        if isinstance(audit, Mapping) and audit.get("status") != "clean":
+            raise GeneralizedTrainingError(
+                "quarantining generalized segment because the simulator-exploit "
+                f"audit is not clean: {audit!r}"
+            )
         current_checkpoint = config.checkpoint_out
         stage_reports.append(report)
         if pfsp_sampler is not None and payoff_book is not None:
@@ -1018,7 +1023,7 @@ def train_generalized(
         "losses": sum(int(report.get("outcomes", {}).get("losses", 0)) for report in stage_reports),
         "truncated_matches": sum(int(report.get("outcomes", {}).get("truncated_matches", 0)) for report in stage_reports),
     }
-    return {
+    report = {
         "kind": GENERALIZED_TRAINING_KIND,
         "schema_version": GENERALIZED_TRAINING_SCHEMA_VERSION,
         "checkpoint": str(current_checkpoint),
@@ -1084,6 +1089,10 @@ def train_generalized(
             "the selected ruleset reports training_ready=true."
         ),
     }
+    from .exploit_audit import audit_simulation_report
+
+    report["simulation_exploit_audit"] = audit_simulation_report(report)
+    return report
 
 
 def _read_training_report(path: str | Path) -> tuple[Path, Mapping[str, Any]]:
@@ -1512,7 +1521,7 @@ def build_heldout_matrix_config(
     ),
     seeds: Sequence[int] = (10_000,),
     policy_mode: str = "actor",
-    device: str | None = "cpu",
+    device: str | None = "auto",
     max_decisions: int | None = None,
     batch_size: int = 8,
     include_match_results: bool = True,
@@ -1619,7 +1628,7 @@ def evaluate_heldout_matrix(
     ),
     seeds: Sequence[int] = (10_000,),
     policy_mode: str = "actor",
-    device: str | None = "cpu",
+    device: str | None = "auto",
     max_decisions: int | None = None,
     batch_size: int = 8,
     include_match_results: bool = True,
@@ -1740,7 +1749,11 @@ def _parser() -> argparse.ArgumentParser:
         default=",".join(defaults.player_deck),
         help="comma-separated eight-card learner deck",
     )
-    train.add_argument("--device", default="cpu")
+    train.add_argument(
+        "--device",
+        default="auto",
+        help="policy device (default: auto; pass cpu to force host execution)",
+    )
     train.add_argument("--checkpoint", type=Path)
     train.add_argument("--checkpoint-out", type=Path, default=Path("outputs/simulator/training/generalized-recurrent-prototype.pt"))
     train.add_argument("--allow-provisional", action="store_true")
@@ -1786,7 +1799,10 @@ def _parser() -> argparse.ArgumentParser:
     train.add_argument(
         "--explicit-hand-features",
         action="store_true",
-        help="encode each public hand slot as a learned identity token for new checkpoints",
+        help=(
+            "project each public one-hot card-table hand slot independently; "
+            "the Transformer processes entities only"
+        ),
     )
     train.add_argument(
         "--direct-public-action-features",
@@ -1835,7 +1851,7 @@ def _parser() -> argparse.ArgumentParser:
         dest="strategic_model",
         action="store_true",
         help=(
-            "use the larger public recurrent actor with hand-card identity tokens "
+            "use the larger public recurrent actor with projected hand features "
             "and spatial placement features (default)"
         ),
     )
@@ -1843,7 +1859,7 @@ def _parser() -> argparse.ArgumentParser:
         "--small-model",
         dest="strategic_model",
         action="store_false",
-        help="use the legacy small model for fast smoke tests",
+        help="use the compact model for fast smoke tests",
     )
     train.set_defaults(strategic_model=True)
     train.add_argument(
@@ -1949,7 +1965,11 @@ def _parser() -> argparse.ArgumentParser:
         default=",".join(_default_player_deck()),
         help="comma-separated eight-card learner deck",
     )
-    evaluate.add_argument("--device", default="cpu")
+    evaluate.add_argument(
+        "--device",
+        default="auto",
+        help="inference device (default: auto; pass cpu to force host execution)",
+    )
     evaluate.add_argument(
         "--policy",
         choices=("actor", "public-counter", "strategic-counter", "deterministic-counter"),
@@ -2060,9 +2080,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 transformer_ff_dim=256 if args.strategic_model else 64,
                 gru_hidden_dim=256 if args.strategic_model else 32,
                 explicit_hand_features=(
-                    True if args.strategic_model else args.explicit_hand_features
-                ),
-                card_token_features=(
                     True if args.strategic_model else args.explicit_hand_features
                 ),
                 spatial_placement_features=(

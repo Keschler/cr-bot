@@ -73,6 +73,15 @@ def _probability(name: str, value: object) -> None:
         raise PrototypeConfigurationError(f"{name} must be a finite value in [0, 1]")
 
 
+def _is_cpu_device_request(device: str | None) -> bool:
+    """Return whether a caller explicitly requested CPU inference."""
+
+    if not isinstance(device, str):
+        return False
+    normalized = device.strip().lower()
+    return normalized == "cpu" or normalized.startswith("cpu:")
+
+
 @dataclass(frozen=True, slots=True)
 class PrototypeConfig:
     """Small, serializable settings for one recurrent-PPO prototype run."""
@@ -86,7 +95,7 @@ class PrototypeConfig:
     target_player: int = 0
     shuffle_decks: bool = True
     opponent: str = "deterministic-cycle"
-    device: str = "cpu"
+    device: str = "auto"
     env_backend: str = "reference"
     env_workers: int | None = None
 
@@ -122,22 +131,16 @@ class PrototypeConfig:
     transformer_ff_dim: int = 64
     gru_hidden_dim: int = 32
     gru_layers: int = 1
-    # Keep false for legacy checkpoint compatibility; improved fresh runs can
-    # expose the four public hand slots as learned card tokens.
+    # Public hand cards stay as one-hot card-table features projected per slot.
     explicit_hand_features: bool = False
-    # New strategic runs promote those public hand cards to identity tokens in
-    # the shared Transformer. Keep false with the legacy hand path so old
-    # checkpoints can still be loaded as frozen opponents.
-    card_token_features: bool = False
     direct_public_action_features: bool = False
     direct_public_card_features: bool = False
     contextual_public_card_features: bool = False
     direct_public_mask_features: bool = False
     direct_public_context_features: bool = False
     direct_public_slot_card_features: bool = False
-    # Fresh strategic runs may preserve a board-aligned raster map for
-    # card-conditioned placement. Keep the legacy default disabled so older
-    # checkpoints and small smoke tests retain their exact model ABI.
+    # Strategic runs may preserve a board-aligned raster map for
+    # card-conditioned placement; small smoke tests can disable it.
     spatial_placement_features: bool = False
     spatial_placement_dim: int = 32
 
@@ -172,7 +175,6 @@ class PrototypeConfig:
             "collect_belief_targets",
             "dense_reward",
             "explicit_hand_features",
-            "card_token_features",
             "direct_public_action_features",
             "direct_public_card_features",
             "contextual_public_card_features",
@@ -247,10 +249,6 @@ class PrototypeConfig:
         if self.model_dim % self.transformer_heads:
             raise PrototypeConfigurationError(
                 "model_dim must be divisible by transformer_heads"
-            )
-        if self.card_token_features and not self.explicit_hand_features:
-            raise PrototypeConfigurationError(
-                "card_token_features require explicit_hand_features"
             )
         _nonnegative_int("decision_interval_jitter_ticks", self.decision_interval_jitter_ticks)
         _nonnegative_int("action_latency_max_steps", self.action_latency_max_steps)
@@ -352,7 +350,6 @@ def _model_and_learner(config: PrototypeConfig) -> Any:
         placement_cols=18,
         hand_feature_offset=(len(GLOBAL_SCALAR_IDX) if config.explicit_hand_features else -1),
         hand_card_count=(CARD_COUNT if config.explicit_hand_features else 0),
-        card_token_features=config.card_token_features,
         direct_public_action_features=config.direct_public_action_features,
         direct_public_card_features=config.direct_public_card_features,
         contextual_public_card_features=config.contextual_public_card_features,
@@ -691,7 +688,6 @@ def _architecture_config(config: PrototypeConfig) -> tuple[object, ...]:
         config.gru_layers,
         config.use_privileged_critic,
         config.explicit_hand_features,
-        config.card_token_features,
         config.direct_public_action_features,
         config.direct_public_card_features,
         config.contextual_public_card_features,
@@ -812,7 +808,7 @@ def load_prototype_checkpoint(
 def load_shadow_prototype_checkpoint(
     path: str | Path,
     *,
-    device: str | None = None,
+    device: str | None = "auto",
     allow_stale_ruleset: bool = False,
 ) -> tuple[Any, PrototypeConfig, dict[str, Any]]:
     """Load a checkpoint for actor-only shadow inference.
@@ -1422,6 +1418,9 @@ def train_prototype(
                 "the selected ruleset reports training_ready=true."
             ),
         }
+        from .exploit_audit import audit_simulation_report
+
+        report["simulation_exploit_audit"] = audit_simulation_report(report)
     finally:
         if vector_environment is not None:
             vector_environment.close()
@@ -2208,7 +2207,7 @@ def evaluate_prototype(
     episodes: int = 1,
     seed: int = 10_000,
     max_decisions: int | None = None,
-    device: str | None = None,
+    device: str | None = "auto",
     trace_out: str | Path | None = None,
     batch_size: int | None = None,
     parallel_episodes: bool = False,
@@ -2255,28 +2254,32 @@ def evaluate_prototype(
         "strategic-counter",
         "deterministic-counter",
     } and trace_out is None:
-        return _evaluate_public_counter_fast(
-            checkpoint,
-            episodes=episodes,
-            seed=seed,
-            max_decisions=max_decisions,
-            device=device,
-            episode_offset=episode_offset,
-            policy_mode=policy_mode,
+        return _attach_exploit_audit(
+            _evaluate_public_counter_fast(
+                checkpoint,
+                episodes=episodes,
+                seed=seed,
+                max_decisions=max_decisions,
+                device=device,
+                episode_offset=episode_offset,
+                policy_mode=policy_mode,
+            )
         )
     # Worker startup is noticeable for short smoke checks; batching remains
     # faster there.  For a normal full match (1,200 decisions in the pinned
     # ruleset), parallel physics is the better path.
-    if parallel_episodes and episodes > 1 and (
+    if parallel_episodes and episodes > 1 and _is_cpu_device_request(device) and (
         max_decisions is None or max_decisions >= 600
     ):
-        return _evaluate_parallel_episodes(
-            checkpoint,
-            episodes=episodes,
-            seed=seed,
-            max_decisions=max_decisions,
-            device=device,
-            policy_mode=policy_mode,
+        return _attach_exploit_audit(
+            _evaluate_parallel_episodes(
+                checkpoint,
+                episodes=episodes,
+                seed=seed,
+                max_decisions=max_decisions,
+                device=device,
+                policy_mode=policy_mode,
+            )
         )
     learner, stored_config, metadata = load_prototype_checkpoint(
         checkpoint,
@@ -2554,6 +2557,28 @@ def evaluate_prototype(
             },
         )
         report["trace_out"] = str(trace_path)
+    from .exploit_audit import audit_simulation_report
+
+    report["simulation_exploit_audit"] = audit_simulation_report(
+        report,
+        trace=None if not trace_enabled else {"episodes": trace_episodes},
+    )
+    return report
+
+
+def _attach_exploit_audit(
+    report: dict[str, object],
+    *,
+    trace: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    """Attach the common simulator-exploitation audit to an early result."""
+
+    from .exploit_audit import audit_simulation_report
+
+    report["simulation_exploit_audit"] = audit_simulation_report(
+        report,
+        trace=trace,
+    )
     return report
 
 
@@ -2651,7 +2676,11 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("outputs/simulator/training/recurrent-prototype.pt"),
     )
-    train.add_argument("--device", default="cpu")
+    train.add_argument(
+        "--device",
+        default="auto",
+        help="policy device (default: auto; pass cpu to force host execution)",
+    )
     train.add_argument(
         "--env-backend",
         choices=("reference", "process", "packed-process"),
@@ -2690,9 +2719,8 @@ def _parser() -> argparse.ArgumentParser:
         "--explicit-hand-features",
         action="store_true",
         help=(
-            "encode each public hand slot as a learned identity token before the "
-            "shared Transformer; "
-            "use for new runs, while legacy checkpoints remain compatible"
+            "project each public one-hot card-table hand slot independently; "
+            "the Transformer continues to process entities only"
         ),
     )
     train.add_argument(
@@ -2743,7 +2771,7 @@ def _parser() -> argparse.ArgumentParser:
         "--strategic-model",
         action="store_true",
         help=(
-            "use the larger public recurrent actor with hand-card identity tokens "
+            "use the larger public recurrent actor with projected hand features "
             "and spatial placement features; required for a fresh mainline run"
         ),
     )
@@ -2786,7 +2814,11 @@ def _parser() -> argparse.ArgumentParser:
         help="first reproducible episode index; useful for replaying one failing seed",
     )
     evaluate.add_argument("--max-decisions", type=int)
-    evaluate.add_argument("--device", default=None)
+    evaluate.add_argument(
+        "--device",
+        default="auto",
+        help="inference device (default: auto; pass cpu to force host execution)",
+    )
     evaluate.add_argument(
         "--policy",
         dest="policy_mode",
@@ -2851,8 +2883,8 @@ def _parser() -> argparse.ArgumentParser:
     )
     shadow.add_argument(
         "--device",
-        default="cpu",
-        help="inference device (default: cpu; pass cuda explicitly for a compatible ROCm/CUDA setup)",
+        default="auto",
+        help="inference device (default: auto; pass cpu to force host execution)",
     )
     shadow.add_argument(
         "--allow-stale-ruleset",
@@ -2923,9 +2955,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 transformer_ff_dim=256 if args.strategic_model else 64,
                 gru_hidden_dim=256 if args.strategic_model else 32,
                 explicit_hand_features=(
-                    True if args.strategic_model else args.explicit_hand_features
-                ),
-                card_token_features=(
                     True if args.strategic_model else args.explicit_hand_features
                 ),
                 spatial_placement_features=(
