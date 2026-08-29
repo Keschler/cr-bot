@@ -87,17 +87,6 @@ def _hash(value: object, field_name: str) -> str:
     return value
 
 
-def _finite_number(value: object, field_name: str) -> int | float:
-    if type(value) not in (int, float):
-        raise PhysicalLabError(f"{field_name} must be an integer or float")
-    if isinstance(value, float):
-        import math
-
-        if not math.isfinite(value):
-            raise PhysicalLabError(f"{field_name} must be finite")
-    return value
-
-
 def canonical_json(value: object) -> str:
     """Encode a JSON-compatible value with the lab's canonical settings."""
 

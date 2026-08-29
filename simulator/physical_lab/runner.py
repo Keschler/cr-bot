@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-import json
 from pathlib import Path
-import time
 from typing import Callable, Mapping, Protocol
 
 from .artifacts import ArtifactRef, artifact_manifest, hash_file, physical_output_root, register_retention_records, seal_json
@@ -19,7 +17,6 @@ from .devices import (
     FakeScreenCapture,
     Frame,
     LogicalPhone,
-    PhoneController,
     ScreenCapture,
     monotonic_time_us,
 )
@@ -27,7 +24,6 @@ from .lifecycle import (
     LIFECYCLE_PATH,
     LifecycleMachine,
     LifecycleReport,
-    LifecycleState,
     ScriptedLifecycleDetector,
 )
 from .replay import SimulatorReplay, replay_hash_pair, run_simulator_replay

@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 import math
-from statistics import quantiles
 from typing import Any, Iterable, Mapping, Sequence
 
 from .observation import EntityObservation, NormalizedEvent, ObservationManifest

@@ -30,7 +30,7 @@ from .data_reconciliation import (
     official_override_rows,
     source_sha256,
 )
-from .roster import PLAYER_DECK, load_opponent_roster
+from .roster import load_opponent_roster
 from .ruleset import FIXED_RULESET_ID, calculate_content_hash, ruleset_path
 
 

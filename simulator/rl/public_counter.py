@@ -60,9 +60,7 @@ _CARD_COSTS = {
 }
 _CARD_BY_ID = {card_id: card_name for card_name, card_id in _CARD_IDS.items()}
 
-_FIREBALL_CARD_ID = _CARD_IDS["fireball"]
 _CANNON_CARD_ID = _CARD_IDS["cannon"]
-_HOG_CARD_ID = _CARD_IDS["hog-rider"]
 
 
 def _feature(name: str) -> int:

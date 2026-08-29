@@ -16,17 +16,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 import difflib
-import hashlib
-import json
 from pathlib import Path
 import re
 import subprocess
 import time
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
-from .artifacts import hash_file
 from .calibration import CalibrationArtifact, CalibrationError
-from .comparison import compare_observation_to_replay
 from .devices import (
     ActionReceipt,
     AdbPhoneController,
@@ -38,7 +34,6 @@ from .devices import (
     sha256_bytes,
 )
 from .lifecycle import (
-    LIFECYCLE_PATH,
     LifecycleReport,
     LifecycleState,
     LifecycleTransition,
@@ -59,7 +54,6 @@ from .schema import (
     ExperimentSpec,
     PhysicalAction,
     PhysicalLabError,
-    canonical_hash,
 )
 from .screen_state import TemplateLifecycleDetector
 from .sync import SynchronizationResult, estimate_clock_alignment, markers_from_captures
@@ -982,32 +976,6 @@ class AutonomousPhone:
                 + (f": {detail}" if detail else "")
             )
         return self._parse_ocr_tsv(recognized.stdout)
-
-    def _looks_like_community(self, frame: Frame) -> bool:
-        """Recognize the community list before touching its navigation tab."""
-
-        # ``Online`` is rendered in a heavy outline font and is frequently
-        # missed by OCR. ``Rangliste`` is a more stable companion heading and
-        # does not occur on the lobby or the clan donation surface.
-        expected = {"community", "rangliste"}
-        try:
-            for psm in (11, 3):
-                words = self._ocr_region(
-                    frame,
-                    x=0,
-                    y=0,
-                    width=self.profile.screen_width_px,
-                    height=self.profile.screen_height_px,
-                    psm=psm,
-                    scale=1.0,
-                    enhance=False,
-                )
-                observed = {self._normalize_ocr_name(word) for word, *_ in words}
-                if expected.issubset(observed):
-                    return True
-        except AutomationError:
-            return False
-        return False
 
     def _find_online_player_row(
         self,

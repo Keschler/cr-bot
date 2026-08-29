@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-import math
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping
 
 from ..actions import PlayCardAction
 from ..engine import BASE_HOG_CYCLE_DECK, ENGINE_VERSION, BattleEngine

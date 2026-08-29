@@ -20,8 +20,7 @@ import math
 from pathlib import Path
 import os
 import subprocess
-import sys
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 from ..ruleset import load_ruleset
 from .artifacts import hash_file, seal_json

@@ -1191,12 +1191,6 @@ def _expert_action_weight(environment: Any, action: Any, player: int) -> float:
     return 1.0
 
 
-def _decode_action(actions: Any, lane: int) -> Any:
-    """Compatibility wrapper for callers of the former single-lane helper."""
-
-    return _decode_actions(actions)[lane]
-
-
 __all__ = [
     "BatchStepFn",
     "CollectorConfig",

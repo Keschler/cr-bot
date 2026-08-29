@@ -9,14 +9,13 @@ connects to a phone.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import hashlib
-import os
 from pathlib import Path
 import re
 import subprocess
 import time
-from typing import Callable, Iterable, Protocol
+from typing import Callable, Protocol
 
 from .calibration import CalibrationArtifact, CalibrationError
 from .schema import PhysicalLabError, canonical_hash

@@ -20,7 +20,6 @@ from dataclasses import replace
 import json
 from pathlib import Path
 import time
-from typing import Mapping
 
 from .artifacts import hash_file, physical_output_root
 from .automation import AutonomousPhone, CardVision, UiProfile, bind_spec_to_devices

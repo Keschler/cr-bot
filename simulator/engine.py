@@ -5819,15 +5819,6 @@ class BattleEngine:
             return self.ruleset.towers[entity.card_id]
         return self.ruleset.cards[entity.card_id]
 
-    def _projectile_definition(self, projectile: ProjectileState):
-        if projectile.source_card_id in self.ruleset.cards:
-            definition = self.ruleset.cards[projectile.source_card_id]
-        else:
-            definition = self.ruleset.towers[projectile.source_card_id]
-        if definition.projectile is None:
-            raise ValueError(f"{projectile.source_card_id} has no projectile definition")
-        return definition.projectile
-
     def _in_attack_range(self, source: EntityState, target: EntityState) -> bool:
         definition = self._definition(source)
         range_mtile = definition.range_mtile

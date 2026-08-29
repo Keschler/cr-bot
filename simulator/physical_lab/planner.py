@@ -21,7 +21,6 @@ from .schema import (
     PhysicalLabError,
     Trigger,
     TriggerType,
-    canonical_hash,
 )
 
 

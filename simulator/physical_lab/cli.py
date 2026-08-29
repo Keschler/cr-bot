@@ -40,7 +40,7 @@ from .extraction import (
     extract_physical_run,
 )
 from .evaluation import evaluate_stored_cases, write_stored_evaluation
-from .lifecycle import LIFECYCLE_PATH, LifecycleMachine, LifecyclePolicy, ScriptedLifecycleDetector
+from .lifecycle import LIFECYCLE_PATH, LifecycleMachine, LifecyclePolicy
 from .observation import (
     ObservationManifest,
     RejectedObservation,

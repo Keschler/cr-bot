@@ -47,7 +47,6 @@ from .geometry import (
 from .observation import (
     LegalActionCellsCallback,
     ObservationMemory,
-    PolicyObservationV1,
     battle_state_to_observed_game_state,
     build_policy_observation,
 )
