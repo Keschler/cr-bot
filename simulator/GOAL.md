@@ -19,9 +19,9 @@ a controlled probe when the action boundary or causal behavior matters.
 
 - `rulesets/v1.json` contains the 109-card opponent roster but remains
   `training_ready: false`.
-- Generated coverage is deterministic and executable, but the latest 1,135-case
-  strict run still has 43 structural cases without an explicit event or
-  final-state obligation and 14 execution failures.
+- Generated coverage is deterministic and executable: the latest 1,135-case
+  strict run passes execution, repeated hashes, complete roster coverage, and
+  behavioral obligations.
 - The RL suite is green (`158 passed`); the default non-audio/non-mining suite
   is `409 passed, 11 failed`, with failures limited to unavailable physical-lab
   assets, sandboxed forkserver sockets, and the absent KataCR submodule.

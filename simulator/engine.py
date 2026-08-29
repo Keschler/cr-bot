@@ -2034,6 +2034,13 @@ class BattleEngine:
             # explicitly so a future numeric range can extend the trigger
             # without turning the parent into a damaging attack.
             authored_spawn_range = definition.mechanics.get("spawn_range")
+            if definition.mechanics.get("trigger_on_target"):
+                # The legacy range column on transport cards describes the
+                # carrier's body, not the payload trigger distance.  Let the
+                # explicit contact predicate below control stopping; otherwise
+                # Skeleton Barrel parks at its ordinary melee edge forever and
+                # never reaches the building it is meant to trigger on.
+                in_range = False
             if (
                 definition.mechanics.get("trigger_on_target")
                 and authored_spawn_range is not None

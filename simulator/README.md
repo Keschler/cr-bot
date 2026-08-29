@@ -60,8 +60,8 @@ PYTHONPATH=.:..:../src ../capture/.venv-train/bin/python -m simulator \
   --workers 4 --require-complete
 ```
 
-The strict matrix is intentionally fail-closed while structural cases lack
-behavioral event or final-state obligations.
+The strict matrix is fail-closed on execution, determinism, roster coverage,
+and behavioral-obligation failures.
 
 ### Physical-fidelity lab
 

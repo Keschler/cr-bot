@@ -437,7 +437,25 @@ def _generated_support_plan(
     # receive a Hog body so hooks, reflections, dashes and status payloads
     # cannot pass vacuously against an empty lane.  Charge cases deliberately
     # run against a tower so they have room to accumulate their travel meter.
-    troop_target_case = card.kind == "troop" and mechanic in _TROOP_VICTIM_MECHANICS
+    # Spirits with the explicit no-unassisted-connection contract still need a
+    # real troop target for their movement fixture.  Without this exception the
+    # generated case only proves that the body was deployed and then leaves it
+    # parked at its spawn point because a bare Crown Tower is not a legal target.
+    movement_target_case = (
+        card.kind == "troop"
+        and mechanic in {"movement", "air_navigation"}
+        and card.mechanics.get("crown_tower_connection")
+        == "expected-no-unassisted-connection"
+    )
+    troop_target_case = (
+        card.kind == "troop"
+        and (mechanic in _TROOP_VICTIM_MECHANICS or movement_target_case)
+    )
+    visible_enemy_spawner = (
+        card.kind == "building"
+        and mechanic == "periodic_spawn"
+        and bool((card.mechanics.get("spawn") or {}).get("requires_visible_enemy"))
+    )
     if friendly_setup:
         # Keep the friendly body inside Clone/Rage's impact radius after its
         # one-second deployment without letting it walk all the way to a
@@ -460,7 +478,7 @@ def _generated_support_plan(
         building_target_case
         and mechanic
         not in {"deployment", "lifecycle", "building_navigation", "lifetime", "passive_spawner", "periodic_spawn", "resource_generation"}
-    ) or troop_target_case
+    ) or visible_enemy_spawner or troop_target_case
 
     if mechanic == "projectile_speed":
         # The X-Bow probe uses a defensive Cannon as a durable ground target;
@@ -507,6 +525,13 @@ def _generated_support_plan(
             support_card = "cannon"
             support_slot = PLAYER_DECK.index(support_card)
             support_cell = (3, 20)
+        elif card_id == "mortar":
+            # Mortar has a large blind spot.  A Cannon on the near bridge row
+            # gives it a legal, durable target outside that minimum range while
+            # keeping the projectile-origin/motion cases deterministic.
+            support_card = "cannon"
+            support_slot = PLAYER_DECK.index(support_card)
+            support_cell = (3, 18)
         elif mechanic == "projectile_speed":
             support_card = "cannon"
             support_slot = PLAYER_DECK.index(support_card)
@@ -614,13 +639,13 @@ def _generated_support_plan(
     # one legal victim.  Play two additional fixed-deck bodies on the same
     # lane after Musketeer so the engine must perform its real candidate
     # ordering rather than only hitting a Crown Tower.
-    if mechanic in _MULTI_VICTIM_MECHANICS and enemy_target_setup and not (
+    if (mechanic in _MULTI_VICTIM_MECHANICS or mechanic == "line_piercing") and enemy_target_setup and not (
         card.kind == "troop" and bool(card.mechanics.get("building_only"))
     ) and not (card_id == "sparky" and mechanic == "area_damage"):
         if support_card == "musketeer":
             extra_first = "cannon"
             extra_first_slot = 1
-            extra_first_cell = (3, 20)
+            extra_first_cell = (3, 18) if mechanic == "line_piercing" else (3, 20)
         else:
             extra_first = "musketeer"
             extra_first_slot = 1
@@ -629,10 +654,11 @@ def _generated_support_plan(
             ScheduledAction(401, PlayCardAction(0, extra_first_slot, extra_first_cell))
         )
         required_support.append({"player": 0, "card_id": extra_first})
-        support_actions.append(
-            ScheduledAction(402, PlayCardAction(0, 1, (4, 17)))
-        )
-        required_support.append({"player": 0, "card_id": "skeletons"})
+        if mechanic != "line_piercing":
+            support_actions.append(
+                ScheduledAction(402, PlayCardAction(0, 1, (4, 17)))
+            )
+            required_support.append({"player": 0, "card_id": "skeletons"})
 
     # Mirror is intentionally excluded from the opening hand by the engine.
     # The support play above draws it into the fourth slot, so its generated
@@ -695,7 +721,15 @@ def _required_event_kinds(card: Any, mechanic: str) -> tuple[str, ...]:
             "projectile_motion": ("projectile_resolved",),
             "projectile_speed": ("projectile_spawned",),
             "target_acquisition": ("target_changed",),
-            "target_legality": ("target_changed",) if not passive_spawner else (),
+            "target_legality": ("target_changed",)
+            if not passive_spawner
+            else ("entity_created",),
+            # Buildings do not navigate through the arena; their executable
+            # placement boundary is the materialized entity at the legal cell.
+            # Keep this distinct from the generic deployment case so every
+            # declared component still carries an explicit oracle.
+            "building_navigation": ("entity_created",),
+            "passive_spawner": ("entity_created",),
             "death": ("entity_died",),
             "death_effect": ("entity_died",),
             "death_split": (
@@ -809,6 +843,7 @@ def _required_event_kinds(card: Any, mechanic: str) -> tuple[str, ...]:
             "spell_geometry": ("projectile_resolved",),
             "victim_selection": ("projectile_resolved",),
             "effect_timing": ("projectile_resolved",),
+            "target_legality": ("projectile_resolved",),
             "status_effect": ("status_applied",),
             "persistent_area_effect": ("area_effect_created",),
             "friendly_aura": ("status_applied",),
@@ -890,10 +925,50 @@ def _required_event_matches(card: Any, mechanic: str) -> tuple[dict[str, Any], .
                 "filters": {"card_id": source_card_id, "player": 1},
             },
         )
+    if card.kind == "building" and mechanic in {
+        "building_navigation",
+        "passive_spawner",
+    }:
+        return (
+            {
+                "kind": "entity_created",
+                "filters": {"card_id": card_id, "player": 1},
+            },
+        )
+    if card.kind == "building" and mechanic == "target_legality":
+        passive_spawner = (
+            card.damage is None
+            and card.attack_interval_us is None
+            and card.range_mtile is None
+            and (
+                card.mechanics.get("spawn") is not None
+                or card.mechanics.get("elixir_generation") is not None
+                or card.mechanics.get("death") is not None
+            )
+        )
+        if passive_spawner:
+            return (
+                {
+                    "kind": "entity_created",
+                    "filters": {"card_id": card_id, "player": 1},
+                },
+            )
+    if card.kind == "spell" and mechanic == "target_legality":
+        return (
+            {
+                "kind": "projectile_resolved",
+                "filters": {"card_id": card_id},
+            },
+        )
     if mechanic == "attack" and card.mechanics.get("trigger_on_target"):
         return ({"kind": "entity_triggered", "filters": {"card_id": card_id}},)
     if mechanic in {"attack", "charge_attack", "dash_attack"}:
         return ({"kind": "attack_started", "filters": {"card_id": source_card_id}},)
+    if mechanic == "damage" and card.mechanics.get("trigger_on_target"):
+        # Contact carriers resolve their payload through a trigger, not a
+        # parent damage event.  This obligation proves the actual branch while
+        # avoiding a false source-card damage assertion.
+        return ({"kind": "entity_triggered", "filters": {"card_id": card_id}},)
     if mechanic in {"damage", "area_damage"}:
         return ({"kind": "damage_applied", "filters": {"source_card_id": source_card_id}},)
     if mechanic == "projectile_speed":
@@ -928,7 +1003,12 @@ def _required_event_matches(card: Any, mechanic: str) -> tuple[dict[str, Any], .
     if mechanic == "bayonet":
         return ({"kind": "bayonet_attack", "filters": {"card_id": card_id}},)
     if mechanic in {"deployment_stagger", "formation_mirroring"}:
-        return ({"kind": "entity_created", "filters": {"card_id": card_id, "player": 1}},)
+        card_filter: object = card_id
+        if child_ids:
+            # Formation cards materialize their child bodies directly; there is
+            # no aggregate parent entity for the event stream to report.
+            card_filter = {"one_of": list(child_ids)}
+        return ({"kind": "entity_created", "filters": {"card_id": card_filter, "player": 1}},)
     if mechanic == "river_jump":
         return ({"kind": "river_airborne_changed", "filters": {"card_id": card_id}},)
     if mechanic == "concealment":

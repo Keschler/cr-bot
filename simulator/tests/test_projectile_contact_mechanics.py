@@ -134,3 +134,26 @@ def test_skeleton_barrel_drops_on_building_contact_and_spawns_seven_skeletons() 
     assert tower.hp == tower.max_hp - int(RULESET.card("skeleton-barrel").mechanics["death"]["crown_tower_damage"])
     engine.validate_state(state)
 
+
+def test_skeleton_barrel_crosses_legacy_melee_edge_before_contact_trigger() -> None:
+    engine, state = _state()
+    barrel = _entity(state, "skeleton-barrel", 0, 3_500, 14_500)
+    target = _entity(state, "cannon", 1, 3_500, 18_500)
+    barrel.target_uid = target.uid
+
+    for _ in range(200):
+        engine._move_entities(state)
+        if any(
+            event.kind == "entity_triggered"
+            and event.get("uid") == barrel.uid
+            for event in state.events
+        ):
+            break
+
+    assert any(
+        event.kind == "entity_triggered"
+        and event.get("uid") == barrel.uid
+        and event.get("target_uid") == target.uid
+        for event in state.events
+    )
+    assert engine._edge_distance(barrel, target) <= 250
