@@ -278,14 +278,35 @@ def test_deterministic_fast_action_matches_full_reference_path() -> None:
             reference,
             masks,
         )
-        fast_actions, fast_hidden = policy.act_deterministic(
-            raster,
-            global_features,
-            entities,
-            entity_mask,
-            masks,
-            reset_mask=reset_mask,
-        )
+        mha_backend = getattr(torch.backends, "mha", None)
+        if (
+            mha_backend is None
+            or not hasattr(mha_backend, "get_fastpath_enabled")
+            or not hasattr(mha_backend, "set_fastpath_enabled")
+        ):
+            fast_actions, fast_hidden = policy.act_deterministic(
+                raster,
+                global_features,
+                entities,
+                entity_mask,
+                masks,
+                reset_mask=reset_mask,
+            )
+        else:
+            previous_mha_fastpath = bool(mha_backend.get_fastpath_enabled())
+            mha_backend.set_fastpath_enabled(True)
+            try:
+                fast_actions, fast_hidden = policy.act_deterministic(
+                    raster,
+                    global_features,
+                    entities,
+                    entity_mask,
+                    masks,
+                    reset_mask=reset_mask,
+                )
+                assert mha_backend.get_fastpath_enabled() is True
+            finally:
+                mha_backend.set_fastpath_enabled(previous_mha_fastpath)
 
     assert reference.belief_logits is None
     assert torch.equal(fast_actions.mode, reference_actions.mode)

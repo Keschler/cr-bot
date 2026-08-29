@@ -17,8 +17,10 @@ distribution before log probabilities are evaluated.
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass
 import math
+from threading import Lock
 
 from ._compat import TorchUnavailableError
 
@@ -35,6 +37,9 @@ except ModuleNotFoundError as exc:
     raise
 
 from .trajectory import ActionBatch, ActionMasks
+
+
+_INFERENCE_MHA_LOCK = Lock()
 
 
 @dataclass(frozen=True, slots=True)
@@ -537,6 +542,7 @@ class HybridEncoder(nn.Module):
             transformed = _inference_dense_entity_transformer(
                 self.entity_transformer,
                 transformer_input,
+                disable_mha_fastpath=True,
             )
         else:
             transformed = self.entity_transformer(transformer_input)
@@ -588,6 +594,8 @@ def _require_bool(name: str, value: torch.Tensor, *, ndim: int) -> None:
 def _inference_dense_entity_transformer(
     transformer: nn.TransformerEncoder,
     inputs: torch.Tensor,
+    *,
+    disable_mha_fastpath: bool = False,
 ) -> torch.Tensor:
     """Run a dense CPU entity batch in sequence-first layout.
 
@@ -601,6 +609,11 @@ def _inference_dense_entity_transformer(
     encoder call.  The flag is changed only for this synchronous inference
     call and restored in ``finally``; no parameters or checkpoint keys are
     modified.
+
+    On the benchmark CPU, this sequence-first path is faster when PyTorch's
+    native MHA fast path is disabled.  That backend switch is global, so the
+    optional toggle is protected by a process-local lock and restored in
+    ``finally``.  Compact sparse batches retain PyTorch's default dispatch.
     """
 
     if inputs.device.type != "cpu" or transformer.training:
@@ -614,17 +627,32 @@ def _inference_dense_entity_transformer(
     )
     if not all(previous_batch_first):
         return transformer(inputs)
-    for attention in attention_modules:
-        attention.batch_first = False
-    try:
-        return transformer(inputs.transpose(0, 1)).transpose(0, 1)
-    finally:
-        for attention, batch_first in zip(
-            attention_modules,
-            previous_batch_first,
-            strict=True,
-        ):
-            attention.batch_first = batch_first
+    mha_backend = getattr(torch.backends, "mha", None)
+    can_toggle_mha = bool(
+        disable_mha_fastpath
+        and mha_backend is not None
+        and hasattr(mha_backend, "get_fastpath_enabled")
+        and hasattr(mha_backend, "set_fastpath_enabled")
+    )
+    lock_context = _INFERENCE_MHA_LOCK if can_toggle_mha else nullcontext()
+    with lock_context:
+        for attention in attention_modules:
+            attention.batch_first = False
+        previous_mha_fastpath: bool | None = None
+        try:
+            if can_toggle_mha:
+                previous_mha_fastpath = bool(mha_backend.get_fastpath_enabled())
+                mha_backend.set_fastpath_enabled(False)
+            return transformer(inputs.transpose(0, 1)).transpose(0, 1)
+        finally:
+            if previous_mha_fastpath is not None:
+                mha_backend.set_fastpath_enabled(previous_mha_fastpath)
+            for attention, batch_first in zip(
+                attention_modules,
+                previous_batch_first,
+                strict=True,
+            ):
+                attention.batch_first = batch_first
 
 
 def _inference_compact_entity_pool(
