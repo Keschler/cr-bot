@@ -307,6 +307,12 @@ The matrix report is schema version 2 with kind
 `actor_controls_actions` is `true` only for the neural actor. Counter-policy
 rows are diagnostics, not checkpoint quality.
 
+For robustness evaluation, pass a `DomainRandomizationConfig` as
+`domain_randomization` to `evaluate_checkpoint_matrix`. Such runs are forced
+through the sequential path, record both the declared profile and sampled
+episode variant, and remain separate from baseline throughput and promotion
+evidence.
+
 Every prototype and matrix report includes `simulation_exploit_audit`. To audit
 an existing report and optional full decision trace, run:
 

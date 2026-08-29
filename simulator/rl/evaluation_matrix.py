@@ -40,6 +40,8 @@ from time import perf_counter
 from types import SimpleNamespace
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
+from .domain_randomization import DomainRandomizationConfig, DomainRandomizationError
+from .league import deterministic_seed
 from .provenance import code_revision
 
 
@@ -118,6 +120,25 @@ def _normalize_player_deck(
     if len(set(normalized)) != 8:
         raise EvaluationMatrixError(f"{name} must not contain duplicate cards")
     return normalized
+
+
+def _normalize_domain_randomization(
+    value: object,
+) -> DomainRandomizationConfig | None:
+    """Normalize an optional, explicitly declared evaluation perturbation."""
+
+    if value is None or isinstance(value, DomainRandomizationConfig):
+        return value
+    if isinstance(value, Mapping):
+        try:
+            return DomainRandomizationConfig.from_mapping(value)
+        except DomainRandomizationError as error:
+            raise EvaluationMatrixError(
+                f"invalid domain_randomization: {error}"
+            ) from error
+    raise EvaluationMatrixError(
+        "domain_randomization must be a DomainRandomizationConfig, object, or None"
+    )
 
 
 def _deck_composition_key(cards: Sequence[str]) -> tuple[str, ...]:
@@ -398,6 +419,7 @@ class EvaluationMatrixConfig:
     held_out_source: str | Path | None = None
     excluded_deck_compositions: tuple[tuple[str, ...], ...] = ()
     player_deck: tuple[str, ...] | None = None
+    domain_randomization: DomainRandomizationConfig | None = None
 
     def __post_init__(self) -> None:
         checkpoint = self.checkpoint
@@ -408,6 +430,11 @@ class EvaluationMatrixConfig:
             self,
             "player_deck",
             _normalize_player_deck(self.player_deck),
+        )
+        object.__setattr__(
+            self,
+            "domain_randomization",
+            _normalize_domain_randomization(self.domain_randomization),
         )
 
         decks = _sequence(self.opponent_decks, "opponent_decks")
@@ -527,6 +554,7 @@ class EvaluationMatrixConfig:
             held_out_source=raw.get("held_out_source"),
             excluded_deck_compositions=raw.get("excluded_deck_compositions", ()),
             player_deck=raw.get("player_deck"),
+            domain_randomization=raw.get("domain_randomization"),
         )
 
     def as_dict(self) -> dict[str, object]:
@@ -550,6 +578,11 @@ class EvaluationMatrixConfig:
                 list(cards) for cards in self.excluded_deck_compositions
             ],
             "player_deck": list(self.player_deck),
+            "domain_randomization": (
+                None
+                if self.domain_randomization is None
+                else self.domain_randomization.as_dict()
+            ),
         }
 
 
@@ -567,12 +600,18 @@ class MatchSpec:
     device: str | None
     shuffle_decks: bool
     player_deck: tuple[str, ...] | None = None
+    domain_randomization: DomainRandomizationConfig | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
             self,
             "player_deck",
             _normalize_player_deck(self.player_deck),
+        )
+        object.__setattr__(
+            self,
+            "domain_randomization",
+            _normalize_domain_randomization(self.domain_randomization),
         )
 
     @property
@@ -602,6 +641,11 @@ class MatchSpec:
             "device": self.device,
             "shuffle_decks": self.shuffle_decks,
             "player_deck": list(self.player_deck),
+            "domain_randomization": (
+                None
+                if self.domain_randomization is None
+                else self.domain_randomization.as_dict()
+            ),
         }
 
 
@@ -801,6 +845,7 @@ _COMPARISON_PROVENANCE_FIELDS = (
     "seeds",
     "max_decisions",
     "shuffle_decks",
+    "domain_randomization",
     "held_out",
     "held_out_audit",
     "runner",
@@ -989,6 +1034,10 @@ def _comparison_cell_signature(row: Mapping[str, Any]) -> dict[str, Any]:
         "max_decisions": row.get("max_decisions", _MISSING_REPORT_VALUE),
         "shuffle_decks": row.get("shuffle_decks", _MISSING_REPORT_VALUE),
         "player_deck": row.get("player_deck", _MISSING_REPORT_VALUE),
+        "domain_randomization": row.get(
+            "domain_randomization",
+            _MISSING_REPORT_VALUE,
+        ),
     }
 
 
@@ -1795,6 +1844,7 @@ class _CheckpointMatchRunner:
         self._SimulatorEnv = SimulatorEnv
         self.ruleset = load_ruleset(self.stored_config.ruleset_id)
         self._player_deck = self._canonical_player_deck(config.player_deck)
+        self.domain_randomization = config.domain_randomization
         self._torch = self._require_torch()
         self.learner.policy.eval()
         self.learner.critic.eval()
@@ -1817,6 +1867,11 @@ class _CheckpointMatchRunner:
             "ruleset_hash": self.ruleset.content_hash,
             "actor_privileged_inputs": False,
             "critic_privileged_inputs": bool(self.learner.uses_privileged_critic),
+            "domain_randomization": (
+                None
+                if self.domain_randomization is None
+                else self.domain_randomization.as_dict()
+            ),
             "runner": "simulator-reference",
         }
 
@@ -1853,7 +1908,40 @@ class _CheckpointMatchRunner:
             self.ruleset.match.regulation_us + self.ruleset.match.overtime_us
         )
         interval_us = int(self.stored_config.decision_interval_us)
+        if spec.domain_randomization is not None:
+            base_ticks = max(1, interval_us // int(self.ruleset.tick_us))
+            minimum_ticks = max(
+                1,
+                base_ticks
+                - spec.domain_randomization.decision_interval_jitter_ticks,
+            )
+            interval_us = minimum_ticks * int(self.ruleset.tick_us)
         return max(1, math.ceil(duration_us / interval_us))
+
+    def _make_environment(
+        self,
+        spec: MatchSpec,
+    ) -> Any:
+        environment = self._SimulatorEnv(
+            engine=self._BattleEngine(self.ruleset, validate_every_tick=False),
+            decision_interval_us=int(self.stored_config.decision_interval_us),
+            reward=self._RewardConfig.terminal_outcome(),
+            expose_privileged_info=True,
+            include_authoritative_state=False,
+        )
+        if spec.domain_randomization is None:
+            return environment
+        from .domain_randomization import DomainRandomizedEnv
+
+        return DomainRandomizedEnv(
+            environment,
+            spec.domain_randomization,
+            seed=deterministic_seed(
+                spec.seed,
+                "evaluation-domain-randomization",
+                spec.cell_id,
+            ),
+        )
 
     def _actor_action(
         self,
@@ -1917,6 +2005,10 @@ class _CheckpointMatchRunner:
             raise EvaluationMatrixError("run_batch supports actor policy cells only")
         if any(spec.target_player != 0 for spec in specs):
             raise EvaluationMatrixError("run_batch currently supports target_player=0 only")
+        if any(spec.domain_randomization is not None for spec in specs):
+            raise EvaluationMatrixError(
+                "domain-randomized matrix cells must use sequential evaluation"
+            )
         cap = self._decision_cap(specs[0])
         if any(self._decision_cap(spec) != cap for spec in specs):
             raise EvaluationMatrixError("batched matrix cells must share a decision cap")
@@ -2079,6 +2171,7 @@ class _CheckpointMatchRunner:
                         "opponent_play_trace": opponent_play_trace[index],
                         "tower_hp_end": self._tower_snapshot(environments[index]),
                         "crowns_end": self._crown_snapshot(environments[index]),
+                        "domain_randomization": None,
                         "troop_positions_end": _troop_positions_by_player(
                             environments[index].state
                         ),
@@ -2110,6 +2203,17 @@ class _CheckpointMatchRunner:
                 "max_hp": max(0, maximum),
             }
         return towers
+
+    @staticmethod
+    def _variant_snapshot(environment: Any) -> dict[str, object] | None:
+        variant = getattr(environment, "variant", None)
+        if variant is None:
+            return None
+        as_dict = getattr(variant, "as_dict", None)
+        if not callable(as_dict):
+            return None
+        value = as_dict()
+        return value if isinstance(value, dict) else None
 
     @staticmethod
     def _crown_snapshot(environment: Any) -> dict[str, int]:
@@ -2149,13 +2253,7 @@ class _CheckpointMatchRunner:
             if spec.target_player == 0
             else (opponent_deck, tuple(self._player_deck))
         )
-        environment = self._SimulatorEnv(
-            engine=self._BattleEngine(self.ruleset, validate_every_tick=False),
-            decision_interval_us=int(self.stored_config.decision_interval_us),
-            reward=self._RewardConfig.terminal_outcome(),
-            expose_privileged_info=True,
-            include_authoritative_state=False,
-        )
+        environment = self._make_environment(spec)
         observations = environment.reset_v2(
             seed=spec.seed,
             decks=decks,
@@ -2299,6 +2397,7 @@ class _CheckpointMatchRunner:
                         "opponent_play_trace": opponent_play_trace,
                         "tower_hp_end": self._tower_snapshot(environment),
                         "crowns_end": self._crown_snapshot(environment),
+                        "domain_randomization": self._variant_snapshot(environment),
                         "troop_positions_end": _troop_positions_by_player(
                             environment.state
                         ),
@@ -2319,6 +2418,7 @@ class _CheckpointMatchRunner:
                 "opponent_play_trace": opponent_play_trace,
                 "tower_hp_end": self._tower_snapshot(environment),
                 "crowns_end": self._crown_snapshot(environment),
+                "domain_randomization": self._variant_snapshot(environment),
                 "troop_positions_end": _troop_positions_by_player(
                     environment.state
                 ),
@@ -2381,6 +2481,7 @@ def run_evaluation_matrix(
             device=config.device,
             shuffle_decks=config.shuffle_decks,
             player_deck=config.player_deck,
+            domain_randomization=config.domain_randomization,
         )
         for deck in config.opponent_decks
         for strategy in config.strategies
@@ -2419,6 +2520,7 @@ def run_evaluation_matrix(
         and config.policy_mode == "actor"
         and config.target_player == 0
         and config.batch_size > 1
+        and config.domain_randomization is None
     )
     execution_mode = "batched_actor" if can_batch else "sequential"
     batch_count = (
@@ -2467,6 +2569,7 @@ def run_evaluation_matrix(
                             device=config.device,
                             shuffle_decks=config.shuffle_decks,
                             player_deck=config.player_deck,
+                            domain_randomization=config.domain_randomization,
                         ).as_dict(),
                         **result.as_dict(),
                     }
@@ -2518,6 +2621,11 @@ def run_evaluation_matrix(
         "seeds": list(config.seeds),
         "max_decisions": config.max_decisions,
         "batch_size": config.batch_size,
+        "domain_randomization": (
+            None
+            if config.domain_randomization is None
+            else config.domain_randomization.as_dict()
+        ),
         "matrix_size": config.match_count,
         "cell_ids": [spec.cell_id for spec in specs],
         "held_out_audit": held_out_audit,
@@ -2588,6 +2696,7 @@ def evaluate_checkpoint_matrix(
     held_out_source: str | Path | None = None,
     excluded_deck_compositions: Sequence[Sequence[str]] = (),
     player_deck: Sequence[str] | None = None,
+    domain_randomization: DomainRandomizationConfig | Mapping[str, Any] | None = None,
     match_runner: MatchRunner | None = None,
     progress_callback: Callable[[int, int, MatchSpec, MatchResult], None] | None = None,
 ) -> dict[str, object]:
@@ -2611,6 +2720,7 @@ def evaluate_checkpoint_matrix(
             tuple(cards) for cards in excluded_deck_compositions
         ),
         player_deck=player_deck,
+        domain_randomization=domain_randomization,
     )
     return run_evaluation_matrix(
         config,

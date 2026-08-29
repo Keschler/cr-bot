@@ -22,8 +22,8 @@ a controlled probe when the action boundary or causal behavior matters.
 - Generated coverage is deterministic and executable, but the latest 1,135-case
   strict run still has 43 structural cases without an explicit event or
   final-state obligation and 14 execution failures.
-- The RL suite is green (`156 passed`); the default non-audio/non-mining suite
-  is `407 passed, 11 failed`, with failures limited to unavailable physical-lab
+- The RL suite is green (`158 passed`); the default non-audio/non-mining suite
+  is `409 passed, 11 failed`, with failures limited to unavailable physical-lab
   assets, sandboxed forkserver sockets, and the absent KataCR submodule.
 - Phase-0 physical-lab software is implemented, but physical evidence is
   intentionally deferred for the current RL-first execution path. No
@@ -192,6 +192,10 @@ preflight, exploit audit, and declared quality gates pass.
    rejected/fallback counts, historical regression checks, and
    simulator-perturbation tests. A finite 100% result against one script is
    not an any-deck claim.
+
+   Matrix robustness runs accept a `DomainRandomizationConfig`, force
+   sequential execution, and record the declared profile plus sampled episode
+   variant separately from baseline throughput and promotion evidence.
 
 The executable strategic curriculum stores each phase mix as deterministic
 `sampling_mix` slots and records observed source counts per segment. These

@@ -67,6 +67,12 @@ def test_matrix_config_normalizes_inputs_and_counts_cells() -> None:
             "strategies": ["WAIT"],
             "seeds": [3, 7],
             "max_decisions": 12,
+            "domain_randomization": {
+                "profile_id": "eval-interface",
+                "decision_interval_jitter_ticks": 1,
+                "action_latency_max_steps": 2,
+                "entity_observation_noise_std": 0.01,
+            },
         }
     )
 
@@ -75,6 +81,9 @@ def test_matrix_config_normalizes_inputs_and_counts_cells() -> None:
     assert isinstance(config.strategies[0], OpponentStrategySpec)
     assert config.strategies[0].strategy_id == "wait"
     assert config.as_dict()["seeds"] == [3, 7]
+    assert config.domain_randomization is not None
+    assert config.domain_randomization.profile_id == "eval-interface"
+    assert config.as_dict()["domain_randomization"]["action_latency_max_steps"] == 2
 
 
 def test_evaluation_reports_terminal_crown_totals() -> None:

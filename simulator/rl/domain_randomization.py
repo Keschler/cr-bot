@@ -210,7 +210,7 @@ class DomainRandomizedEnv:
         self._episode_index += 1
         self.variant = self.sampler.sample(self._episode_index)
         self.environment.decision_interval_ticks = self.variant.decision_interval_ticks
-        self._pending_actions = [None] * self.variant.action_latency_steps
+        self._pending_actions = [(None, None)] * self.variant.action_latency_steps
         self._observation_rng = np.random.default_rng(self.variant.observation_seed)
         return self.environment.reset(**kwargs)
 
@@ -220,7 +220,7 @@ class DomainRandomizedEnv:
         self._episode_index += 1
         self.variant = self.sampler.sample(self._episode_index)
         self.environment.decision_interval_ticks = self.variant.decision_interval_ticks
-        self._pending_actions = [None] * self.variant.action_latency_steps
+        self._pending_actions = [(None, None)] * self.variant.action_latency_steps
         self._observation_rng = np.random.default_rng(self.variant.observation_seed)
         reset_v2 = getattr(self.environment, "reset_v2", None)
         if not callable(reset_v2):
@@ -262,7 +262,17 @@ class DomainRandomizedEnv:
             self._pending_actions.append(actions)
         else:
             applied_actions = actions
-        return self.environment.step_v2(applied_actions)
+        result = self.environment.step_v2(applied_actions)
+        return type(result)(
+            observations=tuple(
+                self._noise_observation(observation)
+                for observation in result.observations
+            ),
+            rewards=result.rewards,
+            terminated=result.terminated,
+            truncated=result.truncated,
+            info=result.info,
+        )
 
     def _noise_observation(self, observation: Any) -> Any:
         observation_type = _policy_observation_v2_class()

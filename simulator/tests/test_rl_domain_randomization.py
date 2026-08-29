@@ -65,6 +65,47 @@ def test_domain_randomized_v2_noise_is_seeded_and_does_not_touch_v1() -> None:
     assert np.isfinite(first_v2[0].entity_tokens).all()
 
 
+def test_domain_randomized_v2_step_keeps_noise_on_the_public_stream() -> None:
+    first = _noisy_wrapper(101)
+    second = _noisy_wrapper(101)
+
+    first_step = first.step_v2((None, None))
+    second_step = second.step_v2((None, None))
+
+    np.testing.assert_array_equal(
+        first_step.observations[0].entity_tokens,
+        second_step.observations[0].entity_tokens,
+    )
+    raw_observation = first.environment.observe_v2()[0]
+    valid = first_step.observations[0].entity_mask
+    assert np.any(
+        first_step.observations[0].entity_tokens[valid]
+        != raw_observation.entity_tokens[valid]
+    )
+
+
+def test_domain_randomized_latency_uses_a_two_player_noop() -> None:
+    config = DomainRandomizationConfig(action_latency_max_steps=1)
+    seed = next(
+        seed
+        for seed in range(100)
+        if DomainVariantSampler(config, base_decision_interval_ticks=5, seed=seed)
+        .sample(0)
+        .action_latency_steps
+        == 1
+    )
+    wrapper = DomainRandomizedEnv(
+        SimulatorEnv(),
+        config,
+        seed=seed,
+    )
+    wrapper.reset_v2(seed=7)
+    assert wrapper.variant is not None
+    assert wrapper.variant.action_latency_steps == 1
+    result = wrapper.step_v2((None, None))
+    assert len(result.observations) == 2
+
+
 def test_domain_randomized_wrapper_requires_reset() -> None:
     wrapper = DomainRandomizedEnv(
         SimulatorEnv(),
