@@ -23,7 +23,7 @@ a controlled probe when the action boundary or causal behavior matters.
   strict run passes execution, repeated hashes, complete roster coverage, and
   behavioral obligations.
 - The RL suite is green (`158 passed`); the default non-audio/non-mining suite
-  is `409 passed, 11 failed`, with failures limited to unavailable physical-lab
+  is `410 passed, 11 failed`, with failures limited to unavailable physical-lab
   assets, sandboxed forkserver sockets, and the absent KataCR submodule.
 - Phase-0 physical-lab software is implemented, but physical evidence is
   intentionally deferred for the current RL-first execution path. No
@@ -40,7 +40,7 @@ a controlled probe when the action boundary or causal behavior matters.
   The actor-only path now uses direct masked argmax decoding, a CPU
   channels-last raster layout, and tail-padding removal for sparse entity
   batches. In the current CPU-only training environment it reaches about
-  383 decisions/s at batch 16, versus about 1.51k simulator steps/s; CPU
+  255 decisions/s at batch 16, versus about 1.23k simulator steps/s; CPU
   fallback remains a diagnostic path, not the production throughput target.
 - The current action contract has `WAIT`/`PLAY`, card slot, and placement but
   no learned wait-duration head; `WAIT` advances the fixed simulator decision

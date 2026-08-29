@@ -506,8 +506,8 @@ The current benchmark host measured approximately:
 
 | Path | Throughput |
 | --- | ---: |
-| Simulator, 16 lanes, CPU reference | 1.51k environment steps/s |
-| Actor-only deterministic fast path, batch 16, CPU | 383 decisions/s |
+| Simulator, 16 lanes, CPU reference | 1.23k environment steps/s |
+| Actor-only deterministic fast path, batch 16, CPU | 255 decisions/s |
 | Actor-only deterministic fast path, batch 16, RTX 2050 | 3.61k decisions/s |
 | Full actor selection, batch 16, RTX 2050 | 2.69k decisions/s |
 
