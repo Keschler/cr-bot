@@ -33,7 +33,11 @@ a controlled probe when the action boundary or causal behavior matters.
 - On the benchmark host, batch-16 actor-only deterministic inference reaches
   about 3.61k decisions/s on the RTX 2050 versus about 1.54k simulator
   environment steps/s. The full actor-selection path reaches about 2.69k/s.
-  CPU fallback is slower and is not the production throughput target.
+  The actor-only path now uses direct masked argmax decoding, a CPU
+  channels-last raster layout, and tail-padding removal for sparse entity
+  batches. In the current CPU-only training environment it reaches about
+  383 decisions/s at batch 16, versus about 1.51k simulator steps/s; CPU
+  fallback remains a diagnostic path, not the production throughput target.
 
 These results establish plumbing and performance, not game strength or
 sim-to-real fidelity.
@@ -312,8 +316,9 @@ The neural fast path is already above the simulator on the benchmark host:
 about 3.61k actor-only decisions/s and 2.69k full actor-selection decisions/s
 versus about 1.54k simulator environment steps/s at batch 16. Continue
 profiling full matches, dense swarms, projectile-heavy states, and observation
-construction; the preferred large-self-play target is 5k–10k simulator
-environment steps/s.
+construction. The deployment-only decoding/layout changes preserve the PPO
+forward path and exact selected-action parity on the regression workload. The
+preferred large-self-play target is 5k–10k simulator environment steps/s.
 
 ## Delivery order
 

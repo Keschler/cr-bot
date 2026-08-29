@@ -566,6 +566,79 @@ def _require_bool(name: str, value: torch.Tensor, *, ndim: int) -> None:
         raise TypeError(f"{name} must use dtype torch.bool")
 
 
+def _inference_raster_layout(raster: torch.Tensor, config: ModelConfig) -> torch.Tensor:
+    """Use the faster CPU convolution layout for deployment-only inference.
+
+    The public raster contract remains ``[B, T, C, H, W]``.  This only changes
+    the storage layout of the flattened frames consumed by the convolution;
+    it does not alter values, model parameters, or the actor's computation.
+    Training and the reference forward path deliberately retain their normal
+    layout so this optimization cannot change PPO numerics.
+    """
+
+    if not isinstance(raster, torch.Tensor) or raster.ndim != 5:
+        return raster
+    if raster.device.type != "cpu":
+        return raster
+    batch, time, channels, height, width = raster.shape
+    if (channels, height, width) != (
+        config.raster_channels,
+        config.raster_height,
+        config.raster_width,
+    ):
+        return raster
+    flat = raster.reshape(batch * time, channels, height, width)
+    if flat.is_contiguous(memory_format=torch.channels_last):
+        return raster
+    return flat.contiguous(memory_format=torch.channels_last).reshape(
+        batch,
+        time,
+        channels,
+        height,
+        width,
+    )
+
+
+def _inference_entity_tokens(
+    entities: torch.Tensor,
+    entity_mask: torch.Tensor,
+    config: ModelConfig,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Drop only globally padded tail rows for deployment inference.
+
+    V2 observations append zero-padded, masked rows.  A masked Transformer
+    key cannot affect any valid query, so removing those tail rows is
+    mathematically equivalent while reducing attention work for sparse game
+    states.  The reference/training path keeps the declared tensor width.
+    """
+
+    if (
+        not isinstance(entities, torch.Tensor)
+        or not isinstance(entity_mask, torch.Tensor)
+        or entities.device.type != "cpu"
+        or (
+            entities.ndim != 4
+            or entity_mask.ndim != 3
+            or entities.shape[:3] != entity_mask.shape
+            or entities.shape[2] < 1
+            or entities.shape[2] > config.max_entities
+        )
+    ):
+        return entities, entity_mask
+    present_columns = entity_mask.any(dim=(0, 1))
+    if bool(present_columns[-1].item()):
+        return entities, entity_mask
+    if bool(present_columns.any().item()):
+        active_count = int(present_columns.nonzero()[-1].item()) + 1
+    else:
+        # The model contract requires at least one entity row. Keep one
+        # masked placeholder so the null token has the same role as before.
+        active_count = 1
+    if active_count >= entities.shape[2]:
+        return entities, entity_mask
+    return entities[..., :active_count, :], entity_mask[..., :active_count]
+
+
 class GRURecurrentCore(nn.Module):
     """GRU core with explicit per-timestep episode reset semantics."""
 
@@ -658,6 +731,24 @@ def _masked_log_softmax(logits: torch.Tensor, mask: torch.Tensor, name: str) -> 
         raise ValueError(f"{name} contains a timestep with no legal action")
     masked_logits = torch.where(mask, logits, torch.full_like(logits, -torch.inf))
     return F.log_softmax(masked_logits, dim=-1)
+
+
+def _masked_argmax(logits: torch.Tensor, mask: torch.Tensor, name: str) -> torch.Tensor:
+    """Return a legal argmax without normalizing an unused distribution.
+
+    Deterministic deployment only needs the ordering of legal logits.  The
+    PPO path still uses :func:`_masked_log_softmax`; keeping this helper
+    separate makes the inference shortcut explicit and preserves the same
+    fail-closed validation for empty legality rows.
+    """
+
+    if logits.shape != mask.shape:
+        raise ValueError(f"{name} logits and mask must have the same shape")
+    if mask.dtype != torch.bool:
+        raise TypeError(f"{name} mask must use dtype torch.bool")
+    if not bool(mask.any(dim=-1).all().item()):
+        raise ValueError(f"{name} contains a timestep with no legal action")
+    return torch.where(mask, logits, torch.full_like(logits, -torch.inf)).argmax(dim=-1)
 
 
 def _safe_mask(mask: torch.Tensor) -> torch.Tensor:
@@ -1002,12 +1093,11 @@ class MaskedAutoregressivePolicy(nn.Module):
         if public_action_masks.card_slots != self.card_slots:
             raise ValueError("action masks have the wrong card-slot count")
 
-        mode_log_probs = _masked_log_softmax(
+        mode = _masked_argmax(
             mode_logits,
             public_action_masks.mode,
             "mode",
         )
-        mode = mode_log_probs.argmax(dim=-1)
         card_slot = torch.zeros_like(mode, dtype=torch.long)
         placement = torch.zeros(
             (*mode.shape, 2),
@@ -1018,12 +1108,11 @@ class MaskedAutoregressivePolicy(nn.Module):
         if bool(play.any().item()):
             play_card_logits = card_logits[play]
             play_card_masks = public_action_masks.card[play]
-            card_log_probs = _masked_log_softmax(
+            selected_cards = _masked_argmax(
                 play_card_logits,
                 play_card_masks,
                 "card",
             )
-            selected_cards = card_log_probs.argmax(dim=-1)
             card_slot[play] = selected_cards
 
             selected_context = card_context[play].gather(
@@ -1052,12 +1141,11 @@ class MaskedAutoregressivePolicy(nn.Module):
                     self.placement_cols,
                 ),
             ).squeeze(1)
-            placement_log_probs = _masked_log_softmax(
+            cells = _masked_argmax(
                 selected_placement.reshape(selected_cards.shape[0], -1),
                 selected_masks.reshape(selected_cards.shape[0], -1),
                 "placement",
             )
-            cells = placement_log_probs.argmax(dim=-1)
             selected_placements = placement[play]
             selected_placements[:, 0] = torch.div(
                 cells,
@@ -1331,11 +1419,17 @@ class RecurrentHybridPolicy(nn.Module):
         deterministic evaluation and live shadow/self-play inference.
         """
 
-        encoded_features, spatial_features, hand_features = self.encoder.forward_with_aux(
-            raster,
-            global_features,
+        inference_raster = _inference_raster_layout(raster, self.config)
+        inference_entities, inference_entity_mask = _inference_entity_tokens(
             entities,
             entity_mask,
+            self.config,
+        )
+        encoded_features, spatial_features, hand_features = self.encoder.forward_with_aux(
+            inference_raster,
+            global_features,
+            inference_entities,
+            inference_entity_mask,
         )
         recurrent_features, final_hidden = self.core(
             encoded_features,

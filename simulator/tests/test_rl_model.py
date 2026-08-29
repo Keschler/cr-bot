@@ -324,6 +324,74 @@ def test_deterministic_fast_action_matches_full_reference_path() -> None:
 
 
 @requires_torch
+def test_inference_compacts_padded_entities_without_changing_actions() -> None:
+    from rl import ActionMasks, ModelConfig, RecurrentHybridPolicy
+    from rl.learner import _deterministic_action
+    from rl.model import _inference_entity_tokens
+
+    config = _config()
+    policy = RecurrentHybridPolicy(config).eval()
+    raster, global_features, entities, _entity_mask, reset_mask = _inputs(
+        config,
+        batch=2,
+        time=1,
+        entities=10,
+    )
+    entity_mask = torch.zeros(2, 1, 10, dtype=torch.bool)
+    entity_mask[:, :, :3] = True
+    masks = ActionMasks(
+        mode=torch.ones(2, 1, 2, dtype=torch.bool),
+        card=torch.ones(2, 1, config.card_slots, dtype=torch.bool),
+        placement=torch.ones(
+            2,
+            1,
+            config.card_slots,
+            config.placement_rows,
+            config.placement_cols,
+            dtype=torch.bool,
+        ),
+    )
+
+    compact_entities, compact_mask = _inference_entity_tokens(
+        entities,
+        entity_mask,
+        config,
+    )
+    assert compact_entities.shape[2] == 3
+    assert compact_mask.shape[2] == 3
+
+    with torch.inference_mode():
+        reference = policy(
+            raster,
+            global_features,
+            entities,
+            entity_mask,
+            reset_mask=reset_mask,
+            hidden=None,
+            action_masks=masks,
+            include_beliefs=False,
+        )
+        reference_actions, _log_probs, _entropy = _deterministic_action(
+            policy,
+            reference,
+            masks,
+        )
+        fast_actions, fast_hidden = policy.act_deterministic(
+            raster,
+            global_features,
+            entities,
+            entity_mask,
+            masks,
+            reset_mask=reset_mask,
+        )
+
+    assert torch.equal(fast_actions.mode, reference_actions.mode)
+    assert torch.equal(fast_actions.card_slot, reference_actions.card_slot)
+    assert torch.equal(fast_actions.placement, reference_actions.placement)
+    torch.testing.assert_close(fast_hidden, reference.final_hidden)
+
+
+@requires_torch
 def test_one_step_gru_matches_direct_reset_semantics() -> None:
     from rl import GRURecurrentCore
 

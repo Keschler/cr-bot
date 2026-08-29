@@ -481,12 +481,16 @@ The current benchmark host measured approximately:
 
 | Path | Throughput |
 | --- | ---: |
-| Simulator, 16 lanes | 1.54k environment steps/s |
+| Simulator, 16 lanes, CPU reference | 1.51k environment steps/s |
+| Actor-only deterministic fast path, batch 16, CPU | 383 decisions/s |
 | Actor-only deterministic fast path, batch 16, RTX 2050 | 3.61k decisions/s |
 | Full actor selection, batch 16, RTX 2050 | 2.69k decisions/s |
 
 Thus the actor-only and full actor paths are currently faster than the
-simulator on the accelerated host. CPU fallback is slower. The next target is
+simulator on the accelerated host. The actor-only deployment path avoids
+unused belief heads and distribution normalization, uses a channels-last CPU
+raster, and removes only masked tail entity rows; the PPO/reference forward
+path is unchanged. CPU fallback is still slower, so the next target is
 5k–10k simulator environment steps/s through batched, behavior-preserving
 optimization; every optimization must retain reference parity.
 
