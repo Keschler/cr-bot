@@ -208,8 +208,19 @@ def test_strategic_curriculum_is_staged_and_non_prescriptive() -> None:
     assert curriculum.stage_at(4).stage_id == "scripted-threat-expansion"
     assert curriculum.stage_at(12).stage_id == "meta-deck-diversity"
     assert curriculum.stage_at(32).stage_id == "historical-league"
+    assert curriculum.stage_at(64).stage_id == "small-league"
     assert "air-beatdown" in curriculum.stage_at(12).archetypes
     assert curriculum.stage_at(0).strategies
+    assert curriculum.stage_at(0).sampling_mix == (
+        ("isolated-offense", 0.25),
+        ("ground-defense", 0.25),
+        ("air-defense", 0.20),
+        ("spell-situations", 0.15),
+        ("kiting-cycling-elixir", 0.15),
+    )
+    assert sum(
+        weight for _source, weight in curriculum.stage_at(32).sampling_mix
+    ) == pytest.approx(1.0)
 
     restored = StrategicCurriculum.from_mapping(curriculum.as_dict())
     assert restored == curriculum

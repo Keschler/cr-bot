@@ -181,6 +181,11 @@ preflight, exploit audit, and declared quality gates pass.
    simulator-perturbation tests. A finite 100% result against one script is
    not an any-deck claim.
 
+The executable strategic curriculum stores each phase mix as deterministic
+`sampling_mix` slots and records observed source counts per segment. These
+labels select opponent/scenario provenance only; they never select the
+learner's card, timing, lane, or placement.
+
 ## Implementation loop for RL scaling and frozen evaluation
 
 Run this loop for each curriculum or league segment. Frozen evaluation uses

@@ -361,6 +361,11 @@ opponent and never choose the learner's move.
    per-deck outcomes, confidence intervals, tower/crown outcomes, traces,
    rejected/fallback counts, and regressions.
 
+The default strategic curriculum serializes these phase percentages as
+deterministic `sampling_mix` slots and records source counts per segment. A
+source is opponent/scenario provenance only; it never chooses the learner's
+action.
+
 ### Implementation loop for RL scaling and frozen evaluation
 
 ```text

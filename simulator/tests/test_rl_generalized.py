@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 import hashlib
 import json
 
@@ -79,6 +80,67 @@ def test_threat_stratified_schedule_reserves_air_and_ground_lanes() -> None:
         ]
         assert scenarios[1].strategy in {"aggressive-pressure", "beatdown", "siege-bait"}
         assert scenarios[2].strategy in {"aggressive-pressure", "beatdown", "siege-bait"}
+
+
+def test_phase_sampling_mix_is_interleaved_and_reproducible() -> None:
+    from simulator.rl.curriculum import default_strategic_curriculum
+
+    pool = OpponentPool(load_fixed_ruleset(), seed=46)
+    mix = default_strategic_curriculum().stage_at(0).sampling_mix
+    kwargs = {
+        "envs": 21,
+        "segment_index": 0,
+        "archetypes": (
+            "aggressive-pressure",
+            "defensive-cycle",
+            "beatdown",
+            "air-beatdown",
+            "siege-bait",
+            "random-legal",
+        ),
+        "strategies": (
+            "aggressive-pressure",
+            "defensive-cycle",
+            "beatdown",
+            "siege-bait",
+            "random-legal",
+        ),
+        "sampling_mix": mix,
+    }
+    first = sample_training_scenarios(pool, **kwargs)
+    second = sample_training_scenarios(pool, **kwargs)
+
+    assert [scenario.as_dict() for scenario in first] == [
+        scenario.as_dict() for scenario in second
+    ]
+    assert first[0].sampling_source == "regression-anchor"
+    assert Counter(s.sampling_source for s in first[1:]) == Counter(
+        {
+            "isolated-offense": 5,
+            "ground-defense": 5,
+            "air-defense": 4,
+            "spell-situations": 3,
+            "kiting-cycling-elixir": 3,
+        }
+    )
+    assert first[1].deck.archetype == "aggressive-pressure"
+    assert first[2].deck.archetype == "defensive-cycle"
+
+
+def test_variant_phase_source_requests_variant_decks() -> None:
+    pool = OpponentPool(load_fixed_ruleset(), seed=47)
+    scenarios = sample_training_scenarios(
+        pool,
+        envs=2,
+        segment_index=0,
+        archetypes=("aggressive-pressure",),
+        strategies=("aggressive-pressure",),
+        include_regression=False,
+        sampling_mix=(("randomized-variants", 1.0),),
+    )
+
+    assert scenarios[0].sampling_source == "randomized-variants"
+    assert scenarios[0].deck.source == "curated-variant"
 
 
 def test_generalized_config_records_threat_stratification() -> None:

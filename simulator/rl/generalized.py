@@ -39,6 +39,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 import argparse
 import json
+from math import isfinite
 from pathlib import Path
 import sys
 from typing import Any, Callable, Mapping, Sequence
@@ -83,9 +84,140 @@ _SUPPORTED_STRATEGIES = frozenset(
     }
 )
 
+# These labels are the executable names used by the phase plan.  They are
+# deliberately separate from card/action labels: a source selects an
+# opponent/scenario distribution, while the actor still chooses every learner
+# action from the public observation and legality masks.
+_BASIC_MECHANICS_SOURCES = (
+    "isolated-offense",
+    "ground-defense",
+    "air-defense",
+    "spell-situations",
+    "kiting-cycling-elixir",
+)
+_SCRIPTED_CURRICULUM_SOURCES = (
+    "phase-1-rehearsal",
+    "passive-random-legal",
+    "simple-win-condition",
+    "reactive-defensive-aggressive",
+    "randomized-tempo-placement",
+)
+
+_SOURCE_AXIS_PREFERENCES: Mapping[str, tuple[str, str]] = {
+    "isolated-offense": ("aggressive-pressure", "aggressive-pressure"),
+    "ground-defense": ("defensive-cycle", "defensive-cycle"),
+    "air-defense": ("air-beatdown", "defensive-cycle"),
+    "spell-situations": ("siege-bait", "siege-bait"),
+    "kiting-cycling-elixir": ("defensive-cycle", "random-legal"),
+    "passive-random-legal": ("random-legal", "random-legal"),
+    "simple-win-condition": ("beatdown", "beatdown"),
+    "reactive-defensive-aggressive": ("defensive-cycle", "aggressive-pressure"),
+    "randomized-tempo-placement": ("random-legal", "aggressive-pressure"),
+}
+
 
 class GeneralizedTrainingError(ValueError):
     """Raised when generalized orchestration cannot be represented safely."""
+
+
+def _sampling_cycle(
+    sampling_mix: Sequence[tuple[str, float]] | None,
+) -> tuple[str, ...]:
+    """Expand a normalized mix into a deterministic 1,000-slot cycle.
+
+    A cycle instead of a random draw makes short local runs reproducible and
+    makes the declared percentages converge exactly over each 1,000-source
+    window.  Weighted fair scheduling keeps arbitrary valid decimal weights
+    interleaved instead of grouping each source into one long block.
+    """
+
+    if sampling_mix is None:
+        return ()
+    if isinstance(sampling_mix, (str, bytes)):
+        raise GeneralizedTrainingError("sampling_mix must be a sequence of pairs")
+    try:
+        entries = tuple(sampling_mix)
+    except TypeError as error:
+        raise GeneralizedTrainingError(
+            "sampling_mix must be a sequence of pairs"
+        ) from error
+    if not entries:
+        return ()
+
+    parsed: list[tuple[str, float]] = []
+    seen: set[str] = set()
+    total = 0.0
+    for index, item in enumerate(entries):
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            raise GeneralizedTrainingError(
+                f"sampling_mix[{index}] must be a (source, weight) pair"
+            )
+        source, raw_weight = item
+        if not isinstance(source, str) or not source.strip():
+            raise GeneralizedTrainingError(
+                f"sampling_mix[{index}].source must be non-empty"
+            )
+        if source in seen:
+            raise GeneralizedTrainingError(
+                "sampling_mix sources must not contain duplicates"
+            )
+        if isinstance(raw_weight, bool) or not isinstance(raw_weight, (int, float)):
+            raise GeneralizedTrainingError(
+                f"sampling_mix[{index}].weight must be numeric"
+            )
+        weight = float(raw_weight)
+        if not isfinite(weight) or weight <= 0.0:
+            raise GeneralizedTrainingError(
+                f"sampling_mix[{index}].weight must be finite and positive"
+            )
+        seen.add(source)
+        parsed.append((source, weight))
+        total += weight
+    if not isfinite(total) or abs(total - 1.0) > 1e-9:
+        raise GeneralizedTrainingError("sampling_mix weights must sum to 1")
+
+    target_slots = 1_000
+    # Weighted fair scheduling interleaves sources instead of emitting one
+    # large block per source.  This matters for short local segments: a
+    # twenty-lane smoke should exercise all five 20%-weighted sources rather
+    # than seeing only the first source in a 1,000-slot block.
+    counts = [0] * len(parsed)
+    cycle: list[str] = []
+    for slot in range(1, target_slots + 1):
+        selected = max(
+            range(len(parsed)),
+            key=lambda index: (slot * parsed[index][1] - counts[index], -index),
+        )
+        counts[selected] += 1
+        cycle.append(parsed[selected][0])
+    return tuple(cycle)
+
+
+def _source_axis_preference(source: str | None, ordinal: int) -> tuple[str, str] | None:
+    """Resolve a phase source into optional opponent axes."""
+
+    if source is None:
+        return None
+    direct = _SOURCE_AXIS_PREFERENCES.get(source)
+    if direct is not None:
+        return direct
+    if source == "phase-1-rehearsal":
+        return _SOURCE_AXIS_PREFERENCES[
+            _BASIC_MECHANICS_SOURCES[ordinal % len(_BASIC_MECHANICS_SOURCES)]
+        ]
+    if source == "earlier-curriculum-rehearsal":
+        return _SOURCE_AXIS_PREFERENCES[
+            _SCRIPTED_CURRICULUM_SOURCES[ordinal % len(_SCRIPTED_CURRICULUM_SOURCES)]
+        ]
+    if source == "weakness-prioritized-matchups":
+        return (
+            ("air-beatdown", "defensive-cycle"),
+            ("beatdown", "defensive-cycle"),
+        )[ordinal % 2]
+    # Uniform/meta/historical/league labels intentionally retain the ordinary
+    # axis cycle.  The assignment layer may then attach frozen checkpoints or
+    # PFSP opponents without turning this label into a learner action.
+    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -389,6 +521,7 @@ def sample_training_scenarios(
     strategies: Sequence[str],
     include_regression: bool = True,
     threat_stratified: bool = False,
+    sampling_mix: Sequence[tuple[str, float]] | None = None,
 ) -> tuple[OpponentScenario, ...]:
     """Sample one scenario per rollout lane in deterministic order.
 
@@ -400,8 +533,13 @@ def sample_training_scenarios(
     remaining archetypes are sampled.  This makes air and ground defensive
     sequences present in every segment instead of relying on a long-period
     modulo schedule.
-    ``segment_index`` is part of the sampler index; restarting with the same
-    seed and configuration recreates the exact schedule.
+    ``sampling_mix`` is an optional phase-level source distribution.  When
+    supplied, it is expanded into a deterministic cycle and each non-regression
+    lane is labeled with its source.  Known source labels choose matching
+    opponent axes (and randomized-variant decks where requested); all labels
+    remain opponent provenance only.  ``segment_index`` is part of the sampler
+    index; restarting with the same seed and configuration recreates the exact
+    schedule.
     """
 
     _positive_int("envs", envs)
@@ -410,6 +548,7 @@ def sample_training_scenarios(
         raise GeneralizedTrainingError("threat_stratified must be boolean")
     archetype_names = _names("archetypes", archetypes)
     strategy_names = _names("strategies", strategies)
+    sampling_slots = _sampling_cycle(sampling_mix)
     scenarios: list[OpponentScenario] = []
     seen_decks: set[frozenset[str]] = set()
     base_index = segment_index * envs
@@ -420,7 +559,9 @@ def sample_training_scenarios(
             archetype="deterministic-cycle",
             strategy="deterministic-cycle",
         )
-        scenarios.append(regression)
+        scenarios.append(
+            replace(regression, sampling_source="regression-anchor")
+        )
         seen_decks.add(frozenset(regression.deck.cards))
         lane_start = 1
 
@@ -429,6 +570,8 @@ def sample_training_scenarios(
         *,
         archetype: str,
         strategy: str,
+        sampling_source: str | None = None,
+        allow_variants: bool = False,
     ) -> OpponentScenario:
         # Curated archetypes can have several templates, while random-legal
         # has a much larger stream.  Search the deterministic candidate
@@ -443,18 +586,19 @@ def sample_training_scenarios(
                 episode_index + attempt * max(1, envs),
                 archetype=archetype,
                 strategy=strategy,
+                allow_variants=allow_variants,
             )
             fallback = candidate
             deck_key = frozenset(candidate.deck.cards)
             if deck_key not in seen_decks:
                 seen_decks.add(deck_key)
-                return candidate
+                return replace(candidate, sampling_source=sampling_source)
         if fallback is None:  # pragma: no cover - pool.sample always returns or raises
             raise GeneralizedTrainingError(
                 "could not sample an opponent deck; "
                 f"archetype={archetype!r}, episode_index={episode_index}"
             )
-        return fallback
+        return replace(fallback, sampling_source=sampling_source)
 
     threat_names = tuple(
         name
@@ -468,23 +612,53 @@ def sample_training_scenarios(
     for lane in range(lane_start, envs):
         lane_ordinal = lane - lane_start
         ordinal = segment_index * non_regression_lanes + lane_ordinal
+        source = (
+            sampling_slots[ordinal % len(sampling_slots)]
+            if sampling_slots
+            else None
+        )
+        preferred = _source_axis_preference(source, ordinal)
         if threat_stratified and threat_names and lane_ordinal < len(threat_names):
+            # The explicit threat-stratified switch is a caller override for
+            # local defensive probes.  Keep its lane guarantee even when a
+            # phase mix also carries provenance labels.
             archetype = threat_names[lane_ordinal]
+            strategy = (
+                "defensive-cycle"
+                if "defensive-cycle" in strategy_names
+                else strategy_names[ordinal % len(strategy_names)]
+            )
+        elif preferred is not None:
+            preferred_archetype, preferred_strategy = preferred
+            archetype = (
+                preferred_archetype
+                if preferred_archetype in archetype_names
+                else archetype_names[ordinal % len(archetype_names)]
+            )
+            strategy = (
+                preferred_strategy
+                if preferred_strategy in strategy_names
+                else strategy_names[ordinal % len(strategy_names)]
+            )
         elif threat_stratified and threat_names and not remaining_names:
             archetype = threat_names[ordinal % len(threat_names)]
+            strategy = strategy_names[(ordinal + segment_index) % len(strategy_names)]
         elif threat_stratified and remaining_names:
             archetype = remaining_names[
                 (segment_index + lane_ordinal - len(threat_names))
                 % len(remaining_names)
             ]
+            strategy = strategy_names[(ordinal + segment_index) % len(strategy_names)]
         else:
             archetype = archetype_names[ordinal % len(archetype_names)]
-        strategy = strategy_names[(ordinal + segment_index) % len(strategy_names)]
+            strategy = strategy_names[(ordinal + segment_index) % len(strategy_names)]
         scenarios.append(
             sample_unique(
                 base_index + lane,
                 archetype=archetype,
                 strategy=strategy,
+                sampling_source=source,
+                allow_variants=source == "randomized-variants",
             )
         )
     return tuple(scenarios)
@@ -904,6 +1078,7 @@ def train_generalized(
             strategies=strategies,
             include_regression=config.include_regression,
             threat_stratified=config.threat_stratified,
+            sampling_mix=None if stage is None else stage.sampling_mix,
         )
         checkpoint_assignments = _scenario_checkpoint_assignments(
             scenarios,
@@ -983,12 +1158,25 @@ def train_generalized(
                 checkpoint_assignments=checkpoint_assignments,
             )
         )
+        sampling_source_counts: dict[str, int] = {}
+        for scenario in scenarios:
+            source = scenario.sampling_source or "unspecified"
+            sampling_source_counts[source] = sampling_source_counts.get(source, 0) + 1
         stage_metadata.append(
             {
                 "segment": segment_index,
                 "stage_id": None if stage is None else stage.stage_id,
                 "archetypes": list(archetypes),
                 "strategies": list(strategies),
+                "sampling_mix": (
+                    []
+                    if stage is None
+                    else [
+                        {"source": source, "weight": weight}
+                        for source, weight in stage.sampling_mix
+                    ]
+                ),
+                "sampling_source_counts": sampling_source_counts,
                 "learner_actions": (
                     "actor-sampled"
                     if not (

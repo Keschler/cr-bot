@@ -116,6 +116,9 @@ class OpponentScenario:
     deck: OpponentDeckSpec
     strategy: str
     controller_seed: int
+    # Optional curriculum provenance.  It describes why this opponent was
+    # sampled and never encodes a learner action or label.
+    sampling_source: str | None = None
 
     def __post_init__(self) -> None:
         _validate_index(self.episode_index, field="episode_index")
@@ -126,6 +129,11 @@ class OpponentScenario:
         if not isinstance(self.deck, OpponentDeckSpec):
             raise OpponentPoolError("deck must be an OpponentDeckSpec")
         _normalize_name(self.strategy, field="strategy")
+        if self.sampling_source is not None:
+            if not isinstance(self.sampling_source, str) or not self.sampling_source.strip():
+                raise OpponentPoolError(
+                    "sampling_source must be a non-empty string when provided"
+                )
 
     def build_controller(self) -> OpponentController:
         """Construct a fresh, state-isolated controller for this scenario."""
@@ -133,7 +141,7 @@ class OpponentScenario:
         return make_opponent_controller(self.strategy, seed=self.controller_seed)
 
     def as_dict(self) -> dict[str, object]:
-        return {
+        result = {
             "schema_version": OPPONENT_POOL_SCHEMA_VERSION,
             "episode_index": self.episode_index,
             "selection_seed": self.selection_seed,
@@ -141,6 +149,9 @@ class OpponentScenario:
             "strategy": self.strategy,
             "controller_seed": self.controller_seed,
         }
+        if self.sampling_source is not None:
+            result["sampling_source"] = self.sampling_source
+        return result
 
 
 # These are curated representatives, not claims that the simulator's
@@ -480,11 +491,16 @@ class OpponentPool:
         *,
         archetype: str | None = None,
         strategy: str | None = None,
+        allow_variants: bool = False,
     ) -> OpponentScenario:
         """Sample a deck and a matching reproducible simulator controller."""
 
         _validate_index(episode_index, field="episode_index")
-        deck = self.sample_deck(episode_index, archetype=archetype)
+        deck = self.sample_deck(
+            episode_index,
+            archetype=archetype,
+            allow_variants=allow_variants,
+        )
         selection_seed = _stable_seed(self.seed, "scenario", episode_index)
         if strategy is None:
             selected_strategy = _STRATEGY_ALIASES.get(deck.archetype, "random-legal")

@@ -371,6 +371,11 @@ class StrategicCurriculumStage:
     archetypes: tuple[str, ...]
     strategies: tuple[str, ...]
     description: str = ""
+    # Ordered source names and normalized weights.  These labels describe
+    # opponent/scenario sampling only; they never prescribe the learner's
+    # action.  An empty tuple keeps compatibility with caller-defined stages
+    # that only constrain archetypes and strategies.
+    sampling_mix: tuple[tuple[str, float], ...] = ()
 
     def __post_init__(self) -> None:
         _string(self.stage_id, "stage_id")
@@ -385,6 +390,32 @@ class StrategicCurriculumStage:
         _name_tuple(self.strategies, "strategies")
         if not isinstance(self.description, str):
             raise CurriculumConfigurationError("description must be a string")
+        if not isinstance(self.sampling_mix, tuple):
+            raise CurriculumConfigurationError("sampling_mix must be a tuple")
+        if self.sampling_mix:
+            total = 0.0
+            seen: set[str] = set()
+            for index, item in enumerate(self.sampling_mix):
+                if not isinstance(item, tuple) or len(item) != 2:
+                    raise CurriculumConfigurationError(
+                        f"sampling_mix[{index}] must be a (source, weight) tuple"
+                    )
+                source, weight = item
+                _string(source, f"sampling_mix[{index}].source")
+                if source in seen:
+                    raise CurriculumConfigurationError(
+                        "sampling_mix sources must not contain duplicates"
+                    )
+                seen.add(source)
+                total += _finite_unit(weight, f"sampling_mix[{index}].weight")
+                if float(weight) <= 0.0:
+                    raise CurriculumConfigurationError(
+                        f"sampling_mix[{index}].weight must be greater than zero"
+                    )
+            if not math.isclose(total, 1.0, rel_tol=0.0, abs_tol=1e-9):
+                raise CurriculumConfigurationError(
+                    "sampling_mix weights must sum to 1"
+                )
 
     def contains(self, segment: int) -> bool:
         _integer(segment, "segment", minimum=0)
@@ -400,6 +431,10 @@ class StrategicCurriculumStage:
             "archetypes": list(self.archetypes),
             "strategies": list(self.strategies),
             "description": self.description,
+            "sampling_mix": [
+                {"source": source, "weight": weight}
+                for source, weight in self.sampling_mix
+            ],
         }
 
     @classmethod
@@ -408,6 +443,29 @@ class StrategicCurriculumStage:
             raise CurriculumConfigurationError(
                 "strategic curriculum stage must be an object"
             )
+        raw_mix = raw.get("sampling_mix", ())
+        if isinstance(raw_mix, Mapping):
+            sampling_mix = tuple(
+                (source, weight) for source, weight in raw_mix.items()
+            )
+        elif isinstance(raw_mix, (list, tuple)):
+            parsed_mix: list[tuple[str, float]] = []
+            for index, item in enumerate(raw_mix):
+                if isinstance(item, Mapping):
+                    parsed_mix.append(
+                        (item.get("source", ""), item.get("weight", 0.0))
+                    )
+                elif isinstance(item, (list, tuple)) and len(item) == 2:
+                    parsed_mix.append((item[0], item[1]))
+                else:
+                    raise CurriculumConfigurationError(
+                        f"sampling_mix[{index}] must be an object or pair"
+                    )
+            sampling_mix = tuple(parsed_mix)
+        else:
+            raise CurriculumConfigurationError(
+                "sampling_mix must be an object or list of objects"
+            )
         return cls(
             stage_id=raw.get("stage_id", ""),
             start_segment=raw.get("start_segment", 0),
@@ -415,6 +473,7 @@ class StrategicCurriculumStage:
             archetypes=_name_tuple(raw.get("archetypes", []), "archetypes"),
             strategies=_name_tuple(raw.get("strategies", []), "strategies"),
             description=raw.get("description", ""),
+            sampling_mix=sampling_mix,
         )
 
 
@@ -511,6 +570,40 @@ def default_strategic_curriculum() -> StrategicCurriculum:
         "siege-bait",
         "random-legal",
     )
+    basic_mechanics_mix = (
+        ("isolated-offense", 0.25),
+        ("ground-defense", 0.25),
+        ("air-defense", 0.20),
+        ("spell-situations", 0.15),
+        ("kiting-cycling-elixir", 0.15),
+    )
+    scripted_curriculum_mix = (
+        ("phase-1-rehearsal", 0.20),
+        ("passive-random-legal", 0.20),
+        ("simple-win-condition", 0.20),
+        ("reactive-defensive-aggressive", 0.20),
+        ("randomized-tempo-placement", 0.20),
+    )
+    meta_deck_mix = (
+        ("uniform-archetypes", 0.35),
+        ("weakness-prioritized-matchups", 0.30),
+        ("earlier-curriculum-rehearsal", 0.20),
+        ("randomized-variants", 0.15),
+    )
+    historical_mix = (
+        ("scripted-meta-anchors", 0.30),
+        ("pfsp-historical", 0.30),
+        ("newest-frozen-main", 0.20),
+        ("random-historical-checkpoint", 0.10),
+        ("exploiters-adversarial", 0.10),
+    )
+    league_mix = (
+        ("main-learner", 0.25),
+        ("main-exploiter", 0.15),
+        ("league-exploiter", 0.15),
+        ("historical-frozen", 0.30),
+        ("scripted-anchor", 0.15),
+    )
     return StrategicCurriculum(
         schedule_id="strategic-hog-v1",
         stages=(
@@ -518,9 +611,10 @@ def default_strategic_curriculum() -> StrategicCurriculum:
                 "mechanics-foundation",
                 0,
                 4,
-                ("aggressive-pressure", "defensive-cycle"),
-                ("defensive-cycle", "random-legal"),
-                "Short, varied scripted matches for action/placement and basic defense.",
+                all_archetypes,
+                all_strategies,
+                "Short generated scenarios for action/placement and basic defense.",
+                basic_mechanics_mix,
             ),
             StrategicCurriculumStage(
                 "scripted-threat-expansion",
@@ -529,6 +623,7 @@ def default_strategic_curriculum() -> StrategicCurriculum:
                 all_archetypes,
                 all_strategies,
                 "Mix pressure, air, beatdown, siege/bait, and random legal controllers.",
+                scripted_curriculum_mix,
             ),
             StrategicCurriculumStage(
                 "meta-deck-diversity",
@@ -537,14 +632,25 @@ def default_strategic_curriculum() -> StrategicCurriculum:
                 all_archetypes,
                 all_strategies,
                 "Expand validated archetypes and held-out deck variants with rehearsal.",
+                meta_deck_mix,
             ),
             StrategicCurriculumStage(
                 "historical-league",
                 32,
-                None,
+                64,
                 all_archetypes,
                 all_strategies,
                 "Use frozen checkpoints/PFSP and later league opponents without forgetting anchors.",
+                historical_mix,
+            ),
+            StrategicCurriculumStage(
+                "small-league",
+                64,
+                None,
+                all_archetypes,
+                all_strategies,
+                "Train main and exploiter roles against frozen history and fixed anchors.",
+                league_mix,
             ),
         ),
     )
