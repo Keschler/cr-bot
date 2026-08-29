@@ -709,6 +709,8 @@ def _summary(results: Sequence[MatchResult]) -> dict[str, object]:
     plays_by_card: dict[str, int] = {}
     rejected_actions = 0
     traced_steps = 0
+    crown_totals = {"player_0": 0, "player_1": 0}
+    crown_rows = 0
     for result in results:
         reason = result.terminal_reason or "<unspecified>"
         terminal_reasons[reason] = terminal_reasons.get(reason, 0) + 1
@@ -726,6 +728,13 @@ def _summary(results: Sequence[MatchResult]) -> dict[str, object]:
         raw_trace = metrics.get("target_play_trace", ())
         if isinstance(raw_trace, (list, tuple)):
             traced_steps += len(raw_trace)
+        raw_crowns = metrics.get("crowns_end")
+        if isinstance(raw_crowns, Mapping):
+            values = [raw_crowns.get(player) for player in crown_totals]
+            if all(type(value) is int and 0 <= value <= 3 for value in values):
+                crown_rows += 1
+                for player in crown_totals:
+                    crown_totals[player] += int(raw_crowns[player])
 
     win_rate_interval: dict[str, float] | None
     if completed:
@@ -773,6 +782,8 @@ def _summary(results: Sequence[MatchResult]) -> dict[str, object]:
         "target_plays_by_card": dict(sorted(plays_by_card.items())),
         "target_rejected_actions": rejected_actions,
         "target_play_trace_entries": traced_steps,
+        "crowns_end": crown_totals if crown_rows else None,
+        "crowns_end_matches": crown_rows,
     }
 
 
@@ -2067,6 +2078,7 @@ class _CheckpointMatchRunner:
                         "target_play_trace": target_play_trace[index],
                         "opponent_play_trace": opponent_play_trace[index],
                         "tower_hp_end": self._tower_snapshot(environments[index]),
+                        "crowns_end": self._crown_snapshot(environments[index]),
                         "troop_positions_end": _troop_positions_by_player(
                             environments[index].state
                         ),
@@ -2098,6 +2110,22 @@ class _CheckpointMatchRunner:
                 "max_hp": max(0, maximum),
             }
         return towers
+
+    @staticmethod
+    def _crown_snapshot(environment: Any) -> dict[str, int]:
+        """Return terminal crown totals in canonical world-player order."""
+
+        state = getattr(environment, "state", None)
+        players = getattr(state, "players", ())
+        crowns: dict[str, int] = {}
+        for player in (0, 1):
+            try:
+                value = players[player].crowns
+            except (IndexError, KeyError, TypeError, AttributeError):
+                continue
+            if type(value) is int and 0 <= value <= 3:
+                crowns[f"player_{player}"] = value
+        return crowns
 
     def __call__(self, spec: MatchSpec) -> MatchResult:
         try:
@@ -2270,6 +2298,7 @@ class _CheckpointMatchRunner:
                         "target_play_trace": target_play_trace,
                         "opponent_play_trace": opponent_play_trace,
                         "tower_hp_end": self._tower_snapshot(environment),
+                        "crowns_end": self._crown_snapshot(environment),
                         "troop_positions_end": _troop_positions_by_player(
                             environment.state
                         ),
@@ -2289,6 +2318,7 @@ class _CheckpointMatchRunner:
                 "target_play_trace": target_play_trace,
                 "opponent_play_trace": opponent_play_trace,
                 "tower_hp_end": self._tower_snapshot(environment),
+                "crowns_end": self._crown_snapshot(environment),
                 "troop_positions_end": _troop_positions_by_player(
                     environment.state
                 ),

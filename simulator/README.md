@@ -323,8 +323,9 @@ before promotion.
 `target_play_trace` contains target `PLAY` attempts only. Prototype
 `--trace-out` contains every decision. `tower_hp_before`, `tower_hp_after`, `tower_hp_end`
 distinguish per-decision snapshots from final or cap-time
-snapshots; `troop_positions_end` is likewise terminal/cap-time data, not a
-continuous trajectory.
+snapshots; `crowns_end` reports final world-player crown totals; and
+`troop_positions_end` is likewise terminal/cap-time data, not a continuous
+trajectory.
 
 Current retained results:
 

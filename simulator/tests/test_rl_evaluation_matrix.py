@@ -77,6 +77,41 @@ def test_matrix_config_normalizes_inputs_and_counts_cells() -> None:
     assert config.as_dict()["seeds"] == [3, 7]
 
 
+def test_evaluation_reports_terminal_crown_totals() -> None:
+    from types import SimpleNamespace
+
+    from simulator.rl.evaluation_matrix import (
+        MatchResult,
+        _CheckpointMatchRunner,
+        _summary,
+    )
+
+    environment = SimpleNamespace(
+        state=SimpleNamespace(
+            players=(SimpleNamespace(crowns=2), SimpleNamespace(crowns=1))
+        )
+    )
+    assert _CheckpointMatchRunner._crown_snapshot(environment) == {
+        "player_0": 2,
+        "player_1": 1,
+    }
+
+    summary = _summary(
+        [
+            MatchResult(
+                "win",
+                metrics={"crowns_end": {"player_0": 2, "player_1": 1}},
+            ),
+            MatchResult(
+                "loss",
+                metrics={"crowns_end": {"player_0": 0, "player_1": 3}},
+            ),
+        ]
+    )
+    assert summary["crowns_end"] == {"player_0": 2, "player_1": 4}
+    assert summary["crowns_end_matches"] == 2
+
+
 def test_matrix_aggregates_each_deck_strategy_seed_and_is_json_safe() -> None:
     from simulator.rl.evaluation_matrix import (
         EvaluationMatrixConfig,
