@@ -1813,6 +1813,43 @@ def _controller_action(
     return action
 
 
+def _evaluation_batch_config(
+    stored_config: Any,
+    *,
+    envs: int,
+    horizon: int,
+) -> Any:
+    """Build a collector config for a complete evaluation horizon.
+
+    ``sequence_length`` is a PPO-update chunking setting, not an inference
+    setting.  A full-match cap is derived from the simulator duration and is
+    therefore not guaranteed to be divisible by the training chunk length.
+    The collector carries the recurrent hidden state one decision at a time,
+    so disabling incompatible training-only chunking preserves evaluation
+    behavior while allowing the complete cap to run.
+    """
+
+    try:
+        from .prototype import PrototypeConfig
+    except ImportError:  # pragma: no cover - top-level ``rl`` layout
+        from rl.prototype import PrototypeConfig
+
+    values = {
+        **stored_config.as_dict(),
+        "envs": envs,
+        "horizon": horizon,
+        "updates": 1,
+        "seed": 0,
+        "env_backend": "reference",
+        "env_workers": None,
+        "allow_provisional": True,
+    }
+    sequence_length = getattr(stored_config, "sequence_length", None)
+    if sequence_length is not None and horizon % int(sequence_length):
+        values["sequence_length"] = None
+    return PrototypeConfig.from_mapping(values)
+
+
 class _CheckpointMatchRunner:
     """Load one checkpoint once, then execute matrix cells sequentially."""
 
@@ -2015,7 +2052,6 @@ class _CheckpointMatchRunner:
 
         try:
             from .prototype import (
-                PrototypeConfig,
                 _make_collector,
                 _trace_decision,
             )
@@ -2059,17 +2095,10 @@ class _CheckpointMatchRunner:
                 public_observation=observation,
             )
 
-        batch_config = PrototypeConfig.from_mapping(
-            {
-                **self.stored_config.as_dict(),
-                "envs": len(specs),
-                "horizon": cap,
-                "updates": 1,
-                "seed": 0,
-                "env_backend": "reference",
-                "env_workers": None,
-                "allow_provisional": True,
-            }
+        batch_config = _evaluation_batch_config(
+            self.stored_config,
+            envs=len(specs),
+            horizon=cap,
         )
         last_results: list[Any | None] = [None] * len(specs)
         decisions: list[int] = [0] * len(specs)

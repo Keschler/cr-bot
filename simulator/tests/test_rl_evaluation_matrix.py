@@ -86,6 +86,24 @@ def test_matrix_config_normalizes_inputs_and_counts_cells() -> None:
     assert config.as_dict()["domain_randomization"]["action_latency_max_steps"] == 2
 
 
+def test_evaluation_batch_config_drops_incompatible_training_chunking() -> None:
+    from simulator.rl.evaluation_matrix import _evaluation_batch_config
+    from simulator.rl.prototype import PrototypeConfig
+
+    stored = PrototypeConfig(
+        envs=4,
+        horizon=512,
+        sequence_length=128,
+    )
+
+    full_match = _evaluation_batch_config(stored, envs=2, horizon=1200)
+    compatible = _evaluation_batch_config(stored, envs=2, horizon=1024)
+
+    assert full_match.horizon == 1200
+    assert full_match.sequence_length is None
+    assert compatible.sequence_length == 128
+
+
 def test_evaluation_reports_terminal_crown_totals() -> None:
     from types import SimpleNamespace
 

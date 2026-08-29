@@ -22,8 +22,9 @@ a controlled probe when the action boundary or causal behavior matters.
 - Generated coverage is deterministic and executable: the latest 1,135-case
   strict run passes execution, repeated hashes, complete roster coverage, and
   behavioral obligations.
-- The RL suite is green (`158 passed`); the default non-audio/non-mining suite
-  is `412 passed, 11 failed` in the sandbox, with failures limited to
+- The RL suite is green (`159 passed`; `161` including vector-backend replay
+  parity); the default non-audio/non-mining suite is `413 passed, 11 failed`
+  in the sandbox, with failures limited to
   unavailable physical-lab assets, sandboxed forkserver sockets, and the
   absent KataCR submodule. The intended-context run is `414 passed, 9 failed`;
   its remaining failures are only those unavailable assets and submodule.
@@ -199,6 +200,11 @@ preflight, exploit audit, and declared quality gates pass.
    Matrix robustness runs accept a `DomainRandomizationConfig`, force
    sequential execution, and record the declared profile plus sampled episode
    variant separately from baseline throughput and promotion evidence.
+
+   When no cap is supplied, evaluation derives the complete
+   regulation-plus-overtime horizon. A non-divisible training sequence length
+   is discarded only from the temporary collector configuration; recurrent
+   hidden state remains continuous per decision.
 
 The executable strategic curriculum stores each phase mix as deterministic
 `sampling_mix` slots and records observed source counts per segment. These

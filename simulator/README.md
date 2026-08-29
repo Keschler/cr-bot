@@ -313,6 +313,12 @@ through the sequential path, record both the declared profile and sampled
 episode variant, and remain separate from baseline throughput and promotion
 evidence.
 
+When `--max-decisions` is omitted, the evaluator derives the complete
+regulation-plus-overtime cap from the ruleset. If that cap is not divisible by
+the checkpoint's training sequence length, evaluation drops only that
+training-only chunking setting; recurrent hidden state is still carried at
+every decision, so full-match evaluation is not artificially truncated.
+
 Every prototype and matrix report includes `simulation_exploit_audit`. To audit
 an existing report and optional full decision trace, run:
 
