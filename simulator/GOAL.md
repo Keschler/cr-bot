@@ -22,8 +22,8 @@ a controlled probe when the action boundary or causal behavior matters.
 - Generated coverage is deterministic and executable: the latest 1,135-case
   strict run passes execution, repeated hashes, complete roster coverage, and
   behavioral obligations.
-- The RL suite is green (`163 passed`; `165` including vector-backend replay
-  parity); the default non-audio/non-mining suite is `417 passed, 11 failed`
+- The RL suite is green (`165 passed`; `167` including vector-backend replay
+  parity); the default non-audio/non-mining suite is `419 passed, 11 failed`
   in the sandbox, with failures limited to
   unavailable physical-lab assets, sandboxed forkserver sockets, and the
   absent KataCR submodule. The remaining failures are only those unavailable
@@ -46,7 +46,9 @@ a controlled probe when the action boundary or causal behavior matters.
   open. The path also caps CPU intra-op parallelism at four threads. CPU
   fallback remains below the historical accelerated-host target. Single-
   observation deployment callers bypass one-element host stacking and prepare
-  the raster layout at the observation boundary.
+  the raster layout at the observation boundary; dense CPU entity batches use
+  a sequence-first Transformer layout while padded batches retain the existing
+  path.
 - The current action contract has `WAIT`/`PLAY`, card slot, and placement but
   no learned wait-duration head; `WAIT` advances the fixed simulator decision
   interval. The proposed timing head remains a future architecture change.

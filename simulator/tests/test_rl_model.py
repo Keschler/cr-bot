@@ -397,6 +397,62 @@ def test_inference_compacts_padded_entities_without_changing_actions() -> None:
 
 
 @requires_torch
+def test_dense_inference_transformer_layout_preserves_selected_actions() -> None:
+    from rl import ActionMasks, ModelConfig, RecurrentHybridPolicy
+    from rl.learner import _deterministic_action
+
+    config = _config()
+    policy = RecurrentHybridPolicy(config).eval()
+    raster, global_features, entities, entity_mask, reset_mask = _inputs(
+        config,
+        batch=3,
+        time=1,
+        entities=10,
+    )
+    masks = ActionMasks(
+        mode=torch.ones(3, 1, 2, dtype=torch.bool),
+        card=torch.ones(3, 1, config.card_slots, dtype=torch.bool),
+        placement=torch.ones(
+            3,
+            1,
+            config.card_slots,
+            config.placement_rows,
+            config.placement_cols,
+            dtype=torch.bool,
+        ),
+    )
+
+    with torch.inference_mode():
+        reference = policy(
+            raster,
+            global_features,
+            entities,
+            entity_mask,
+            reset_mask=reset_mask,
+            action_masks=masks,
+            include_beliefs=False,
+        )
+        reference_actions, _log_probs, _entropy = _deterministic_action(
+            policy,
+            reference,
+            masks,
+        )
+        fast_actions, fast_hidden = policy.act_deterministic(
+            raster,
+            global_features,
+            entities,
+            entity_mask,
+            masks,
+            reset_mask=reset_mask,
+        )
+
+    assert torch.equal(fast_actions.mode, reference_actions.mode)
+    assert torch.equal(fast_actions.card_slot, reference_actions.card_slot)
+    assert torch.equal(fast_actions.placement, reference_actions.placement)
+    torch.testing.assert_close(fast_hidden, reference.final_hidden)
+
+
+@requires_torch
 def test_one_step_gru_matches_direct_reset_semantics() -> None:
     from rl import GRURecurrentCore
 

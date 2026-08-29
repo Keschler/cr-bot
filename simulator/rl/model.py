@@ -438,6 +438,8 @@ class HybridEncoder(nn.Module):
         global_features: torch.Tensor,
         entities: torch.Tensor,
         entity_mask: torch.Tensor,
+        *,
+        inference: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
         """Encode observations and return reusable projected hand features.
 
@@ -446,6 +448,8 @@ class HybridEncoder(nn.Module):
         that were already computed for encoder fusion instead of projecting
         them a second time for the action head.
         """
+        if type(inference) is not bool:
+            raise TypeError("inference must be boolean")
         _require_floating("raster", raster, ndim=5)
         _require_floating("global_features", global_features, ndim=3)
         _require_floating("entities", entities, ndim=4)
@@ -520,6 +524,11 @@ class HybridEncoder(nn.Module):
                 transformer_input,
                 src_key_padding_mask=key_padding_mask,
             )
+        elif inference:
+            transformed = _inference_dense_entity_transformer(
+                self.entity_transformer,
+                transformer_input,
+            )
         else:
             transformed = self.entity_transformer(transformer_input)
         transformed_entities = transformed[:, :entity_count]
@@ -564,6 +573,48 @@ def _require_bool(name: str, value: torch.Tensor, *, ndim: int) -> None:
         raise ValueError(f"{name} must have {ndim} dimensions, got {value.ndim}")
     if value.dtype != torch.bool:
         raise TypeError(f"{name} must use dtype torch.bool")
+
+
+def _inference_dense_entity_transformer(
+    transformer: nn.TransformerEncoder,
+    inputs: torch.Tensor,
+) -> torch.Tensor:
+    """Run a dense CPU entity batch in sequence-first layout.
+
+    ``TransformerEncoderLayer`` retains the same parameters and operation
+    ordering in either layout.  On the deployment CPU workload, the regular
+    sequence-first kernel avoids the batch-first fast-path dispatch overhead.
+    Keep the established batch-first path for training, accelerators, and
+    genuinely padded batches so sparse-observation behavior remains unchanged.
+
+    PyTorch stores ``batch_first`` on each attention module rather than on the
+    encoder call.  The flag is changed only for this synchronous inference
+    call and restored in ``finally``; no parameters or checkpoint keys are
+    modified.
+    """
+
+    if inputs.device.type != "cpu" or transformer.training:
+        return transformer(inputs)
+    layers = tuple(transformer.layers)
+    if not layers:
+        return transformer(inputs)
+    attention_modules = tuple(layer.self_attn for layer in layers)
+    previous_batch_first = tuple(
+        bool(attention.batch_first) for attention in attention_modules
+    )
+    if not all(previous_batch_first):
+        return transformer(inputs)
+    for attention in attention_modules:
+        attention.batch_first = False
+    try:
+        return transformer(inputs.transpose(0, 1)).transpose(0, 1)
+    finally:
+        for attention, batch_first in zip(
+            attention_modules,
+            previous_batch_first,
+            strict=True,
+        ):
+            attention.batch_first = batch_first
 
 
 def _inference_raster_layout(raster: torch.Tensor, config: ModelConfig) -> torch.Tensor:
@@ -1488,6 +1539,7 @@ class RecurrentHybridPolicy(nn.Module):
             global_features,
             inference_entities,
             inference_entity_mask,
+            inference=True,
         )
         recurrent_features, final_hidden = self.core(
             encoded_features,
