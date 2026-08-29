@@ -280,6 +280,59 @@ def test_recurrent_prototype_train_resume_and_evaluate(tmp_path) -> None:
         )
 
 
+@requires_torch
+def test_flagged_training_candidate_is_quarantined_without_overwriting_destination(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from rl import exploit_audit, prototype
+
+    destination = tmp_path / "candidate.pt"
+    destination.write_bytes(b"last-clean-checkpoint")
+    monkeypatch.setattr(
+        exploit_audit,
+        "audit_simulation_report",
+        lambda report: {
+            "kind": "simulator_exploit_audit",
+            "schema_version": 1,
+            "status": "flagged",
+            "simulation_exploit": True,
+            "quarantine_required": True,
+            "flags": [{"code": "test-flag", "severity": "warning"}],
+            "checked": [],
+            "metrics": {},
+        },
+    )
+    config = prototype.PrototypeConfig(
+        envs=1,
+        horizon=2,
+        updates=1,
+        decision_interval_us=1_000_000,
+        seed=73,
+        shuffle_decks=False,
+        update_epochs=1,
+        sequence_minibatch_size=1,
+        model_dim=8,
+        encoder_dim=8,
+        transformer_heads=2,
+        transformer_layers=1,
+        transformer_ff_dim=16,
+        gru_hidden_dim=8,
+        use_privileged_critic=False,
+        collect_belief_targets=False,
+        allow_provisional=True,
+    )
+
+    report = prototype.train_prototype(config, checkpoint_out=destination)
+
+    assert report["simulation_exploit_audit"]["status"] == "flagged"
+    assert report["checkpoint_promotion"]["status"] == "quarantined"
+    assert destination.read_bytes() == b"last-clean-checkpoint"
+    quarantined = tmp_path / report["quarantined_checkpoint"]
+    assert quarantined.exists()
+    assert not list(tmp_path.glob("*.candidate"))
+
+
 def test_training_progress_reports_counts_and_elapsed_time() -> None:
     from rl.prototype import _TrainingProgress
 

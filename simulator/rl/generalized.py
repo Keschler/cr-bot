@@ -2187,7 +2187,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (GeneralizedTrainingError, OpponentPoolError, RuntimeError, ValueError) as error:
         raise SystemExit(str(error)) from error
     _write_json(args.json_out, report)
-    return 0
+    audit = report.get("simulation_exploit_audit")
+    return 0 if not isinstance(audit, Mapping) or audit.get("status") == "clean" else 2
 
 
 if __name__ == "__main__":  # pragma: no cover - CLI entry point

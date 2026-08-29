@@ -35,8 +35,10 @@ import argparse
 import json
 import multiprocessing
 from math import ceil, isfinite
+import os
 from pathlib import Path
 import sys
+import tempfile
 from time import perf_counter
 from types import SimpleNamespace
 from typing import Any, Callable, Mapping, Sequence, TextIO
@@ -656,6 +658,27 @@ def save_prototype_checkpoint(
         destination,
     )
     return destination
+
+
+def _temporary_checkpoint_path(destination: Path) -> Path:
+    """Create an adjacent candidate path that cannot replace a clean artifact."""
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, raw_path = tempfile.mkstemp(
+        prefix=f".{destination.name}.",
+        suffix=".candidate",
+        dir=destination.parent,
+    )
+    os.close(descriptor)
+    return Path(raw_path)
+
+
+def _quarantine_checkpoint_path(candidate: Path) -> Path:
+    """Rename a rejected candidate to a visible, recoverable quarantine file."""
+
+    quarantine = candidate.with_name(f"{candidate.name}.quarantine")
+    candidate.replace(quarantine)
+    return quarantine
 
 
 def _read_checkpoint(path: str | Path) -> dict[str, Any]:
@@ -1357,70 +1380,94 @@ def train_prototype(
                     (local_update + 1) * effective_config.envs * effective_config.horizon,
                 )
 
-        destination = save_prototype_checkpoint(
-            checkpoint_out,
-            learner,
-            effective_config,
-            ruleset,
-        )
-        report = {
-            "kind": "recurrent_public_ppo_prototype",
-            "prototype_schema_version": PROTOTYPE_SCHEMA_VERSION,
-            "checkpoint_format": PROTOTYPE_CHECKPOINT_FORMAT,
-            "ruleset_id": ruleset.ruleset_id,
-            "ruleset_hash": ruleset.content_hash,
-            "actor_privileged_inputs": False,
-            "critic_privileged_inputs": bool(learner.uses_privileged_critic),
-            "observation_contract": _checkpoint_metadata(
-                effective_config,
+        destination = Path(checkpoint_out)
+        candidate = _temporary_checkpoint_path(destination)
+        try:
+            save_prototype_checkpoint(
+                candidate,
                 learner,
+                effective_config,
                 ruleset,
-            )["actor_observation"],
-            "reward_config": _reward_config_for(effective_config).as_dict(),
-            "updates": len(update_rows),
-            "starting_update": starting_update,
-            "final_update": int(learner.update_count),
-            "transitions": effective_config.envs * effective_config.horizon * effective_config.updates,
-            "sequence_length": effective_config.sequence_length,
-            "outcomes": {
-                **aggregate,
-                "episode_boundaries": (
-                    aggregate["completed_matches"] + aggregate["truncated_matches"]
+            )
+            report = {
+                "kind": "recurrent_public_ppo_prototype",
+                "prototype_schema_version": PROTOTYPE_SCHEMA_VERSION,
+                "checkpoint_format": PROTOTYPE_CHECKPOINT_FORMAT,
+                "ruleset_id": ruleset.ruleset_id,
+                "ruleset_hash": ruleset.content_hash,
+                "actor_privileged_inputs": False,
+                "critic_privileged_inputs": bool(learner.uses_privileged_critic),
+                "observation_contract": _checkpoint_metadata(
+                    effective_config,
+                    learner,
+                    ruleset,
+                )["actor_observation"],
+                "reward_config": _reward_config_for(effective_config).as_dict(),
+                "updates": len(update_rows),
+                "starting_update": starting_update,
+                "final_update": int(learner.update_count),
+                "transitions": effective_config.envs * effective_config.horizon * effective_config.updates,
+                "sequence_length": effective_config.sequence_length,
+                "outcomes": {
+                    **aggregate,
+                    "episode_boundaries": (
+                        aggregate["completed_matches"] + aggregate["truncated_matches"]
+                    ),
+                },
+                "update_rows": update_rows,
+                "checkpoint": str(destination),
+                "resumed_from": resumed_from,
+                "expert_guidance": bool(expert_guidance),
+                "imitation_only": bool(effective_config.imitation_only),
+                "expert_execution_probability": float(
+                    effective_config.expert_execution_probability
                 ),
-            },
-            "update_rows": update_rows,
-            "checkpoint": str(destination),
-            "resumed_from": resumed_from,
-            "expert_guidance": bool(expert_guidance),
-            "imitation_only": bool(effective_config.imitation_only),
-            "expert_execution_probability": float(
-                effective_config.expert_execution_probability
-            ),
-            "actor_controls_actions": not (
-                expert_guidance
-                and effective_config.expert_execution_probability > 0.0
-            ),
-            "player_deck": list(resolved_player_deck),
-            "opponent_decks": [list(deck) for deck in resolved_opponent_decks],
-            "custom_opponent_policy": opponent_action is not None,
-            "resume_controls": {
-                "learning_rate": (
-                    None
-                    if resume_learning_rate is None
-                    else float(resume_learning_rate)
+                "actor_controls_actions": not (
+                    expert_guidance
+                    and effective_config.expert_execution_probability > 0.0
                 ),
-                "belief_loss_disabled": bool(resume_disable_belief_loss),
-                "optimizer_reset": bool(resume_reset_optimizer),
-            },
-            "wall_seconds": perf_counter() - started,
-            "warning": (
-                "Prototype training uses a provisional deterministic simulator unless "
-                "the selected ruleset reports training_ready=true."
-            ),
-        }
-        from .exploit_audit import audit_simulation_report
+                "player_deck": list(resolved_player_deck),
+                "opponent_decks": [list(deck) for deck in resolved_opponent_decks],
+                "custom_opponent_policy": opponent_action is not None,
+                "resume_controls": {
+                    "learning_rate": (
+                        None
+                        if resume_learning_rate is None
+                        else float(resume_learning_rate)
+                    ),
+                    "belief_loss_disabled": bool(resume_disable_belief_loss),
+                    "optimizer_reset": bool(resume_reset_optimizer),
+                },
+                "wall_seconds": perf_counter() - started,
+                "warning": (
+                    "Prototype training uses a provisional deterministic simulator unless "
+                    "the selected ruleset reports training_ready=true."
+                ),
+            }
+            from .exploit_audit import audit_simulation_report
 
-        report["simulation_exploit_audit"] = audit_simulation_report(report)
+            audit = audit_simulation_report(report)
+            report["simulation_exploit_audit"] = audit
+            if audit.get("status") != "clean":
+                quarantine = _quarantine_checkpoint_path(candidate)
+                report["checkpoint_promotion"] = {
+                    "status": "quarantined",
+                    "destination": str(destination),
+                    "quarantined_checkpoint": str(quarantine),
+                }
+                report["quarantined_checkpoint"] = str(quarantine)
+            else:
+                os.replace(candidate, destination)
+                report["checkpoint_promotion"] = {
+                    "status": "promoted",
+                    "destination": str(destination),
+                }
+        finally:
+            # A candidate is either promoted, renamed to quarantine, or safely
+            # removed after an unexpected save/audit error.  In particular,
+            # the previous destination remains untouched until the audit is
+            # clean.
+            candidate.unlink(missing_ok=True)
     finally:
         if vector_environment is not None:
             vector_environment.close()
@@ -3021,7 +3068,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (PrototypeConfigurationError, TorchUnavailableError, RuntimeError, ValueError) as error:
         raise SystemExit(str(error)) from error
     _write_json(args.json_out, report)
-    return 0
+    audit = report.get("simulation_exploit_audit")
+    return 0 if not isinstance(audit, Mapping) or audit.get("status") == "clean" else 2
 
 
 if __name__ == "__main__":  # pragma: no cover - CLI entry point
