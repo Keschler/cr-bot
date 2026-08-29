@@ -857,34 +857,31 @@ class MaskedAutoregressivePolicy(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Build mode/card logits and card-conditioned contexts once."""
 
+        mode_logits = self._prepare_mode_logits(
+            recurrent_features,
+            public_features,
+            public_action_masks,
+        )
+        card_logits, card_context = self._prepare_card_prefix(
+            recurrent_features,
+            hand_features,
+            public_features,
+        )
+        if self.spatial_placement_key is not None:
+            self._validate_spatial_features(recurrent_features, spatial_features)
+        return mode_logits, card_logits, card_context
+
+    def _prepare_mode_logits(
+        self,
+        recurrent_features: torch.Tensor,
+        public_features: torch.Tensor | None,
+        public_action_masks: ActionMasks | None,
+    ) -> torch.Tensor:
+        """Build only the mode logits needed before a PLAY branch is known."""
+
         _require_floating("recurrent features", recurrent_features, ndim=3)
         if recurrent_features.shape[-1] != self.hidden_dim:
             raise ValueError(f"recurrent features final dimension must be {self.hidden_dim}")
-        if hand_features is not None:
-            if self.hand_card_score is None:
-                raise ValueError("hand features require an explicit-hand model variant")
-            if hand_features.shape != (
-                *recurrent_features.shape[:2],
-                self.card_slots,
-                self.hidden_dim,
-            ):
-                raise ValueError(
-                    "hand_features must have shape [batch, time, card_slots, hidden_dim]"
-                )
-        if self.spatial_placement_key is not None:
-            if spatial_features is None:
-                raise ValueError(
-                    "spatial placement features are required by this model variant"
-                )
-            _require_floating("spatial placement features", spatial_features, ndim=5)
-            if spatial_features.shape[:2] != recurrent_features.shape[:2]:
-                raise ValueError(
-                    "spatial placement features must share recurrent batch/time dimensions"
-                )
-            if spatial_features.shape[2] != self.config.model_dim:
-                raise ValueError(
-                    "spatial placement feature channels must match ModelConfig.model_dim"
-                )
         mode_logits = self.mode_head(recurrent_features)
         if self.public_mode_head is not None:
             if public_features is None:
@@ -911,6 +908,87 @@ class MaskedAutoregressivePolicy(nn.Module):
             raise ValueError(
                 "public action features must share recurrent batch/time dimensions"
             )
+
+        public_mask_features: torch.Tensor | None = None
+        if self.public_mask_head is not None or self.public_context_head is not None:
+            if public_action_masks is None:
+                raise ValueError(
+                    "direct public legality features require public action masks"
+                )
+            if not isinstance(public_action_masks, ActionMasks):
+                raise TypeError("public_action_masks must be an ActionMasks instance")
+            if public_action_masks.prefix_shape != tuple(recurrent_features.shape[:2]):
+                raise ValueError(
+                    "public action masks must share recurrent batch/time dimensions"
+                )
+            if public_action_masks.card_slots != self.card_slots:
+                raise ValueError("public action masks have the wrong card-slot count")
+            public_mask_features = torch.cat(
+                (
+                    public_action_masks.mode.to(
+                        device=recurrent_features.device,
+                        dtype=recurrent_features.dtype,
+                    ),
+                    public_action_masks.card.to(
+                        device=recurrent_features.device,
+                        dtype=recurrent_features.dtype,
+                    ),
+                ),
+                dim=-1,
+            )
+            if self.public_mask_head is not None:
+                mode_logits = mode_logits + self.public_mask_head(public_mask_features)
+        if self.public_context_head is not None:
+            if public_features is None or public_mask_features is None:
+                raise ValueError(
+                    "direct public context features require public features and masks"
+                )
+            mode_logits = self.public_context_head(
+                torch.cat((public_features, public_mask_features), dim=-1)
+            )
+        return mode_logits
+
+    def _validate_spatial_features(
+        self,
+        recurrent_features: torch.Tensor,
+        spatial_features: torch.Tensor | None,
+    ) -> None:
+        if spatial_features is None:
+            raise ValueError(
+                "spatial placement features are required by this model variant"
+            )
+        _require_floating("spatial placement features", spatial_features, ndim=5)
+        if spatial_features.shape[:2] != recurrent_features.shape[:2]:
+            raise ValueError(
+                "spatial placement features must share recurrent batch/time dimensions"
+            )
+        if spatial_features.shape[2] != self.config.model_dim:
+            raise ValueError(
+                "spatial placement feature channels must match ModelConfig.model_dim"
+            )
+
+    def _prepare_card_prefix(
+        self,
+        recurrent_features: torch.Tensor,
+        hand_features: torch.Tensor | None,
+        public_features: torch.Tensor | None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Build card logits and contexts after the mode selects PLAY."""
+
+        _require_floating("recurrent features", recurrent_features, ndim=3)
+        if recurrent_features.shape[-1] != self.hidden_dim:
+            raise ValueError(f"recurrent features final dimension must be {self.hidden_dim}")
+        if hand_features is not None:
+            if self.hand_card_score is None:
+                raise ValueError("hand features require an explicit-hand model variant")
+            if hand_features.shape != (
+                *recurrent_features.shape[:2],
+                self.card_slots,
+                self.hidden_dim,
+            ):
+                raise ValueError(
+                    "hand_features must have shape [batch, time, card_slots, hidden_dim]"
+                )
         card_logits = self.card_head(recurrent_features)
         if self.public_card_head is not None:
             if public_features is None:
@@ -950,43 +1028,6 @@ class MaskedAutoregressivePolicy(nn.Module):
             )
             slot_scores = self.public_slot_card_head(raw_hand).squeeze(-1)
             card_logits = card_logits + slot_scores
-        public_mask_features: torch.Tensor | None = None
-        if self.public_mask_head is not None or self.public_context_head is not None:
-            if public_action_masks is None:
-                raise ValueError(
-                    "direct public legality features require public action masks"
-                )
-            if not isinstance(public_action_masks, ActionMasks):
-                raise TypeError("public_action_masks must be an ActionMasks instance")
-            if public_action_masks.prefix_shape != tuple(recurrent_features.shape[:2]):
-                raise ValueError(
-                    "public action masks must share recurrent batch/time dimensions"
-                )
-            if public_action_masks.card_slots != self.card_slots:
-                raise ValueError("public action masks have the wrong card-slot count")
-            public_mask_features = torch.cat(
-                (
-                    public_action_masks.mode.to(
-                        device=recurrent_features.device,
-                        dtype=recurrent_features.dtype,
-                    ),
-                    public_action_masks.card.to(
-                        device=recurrent_features.device,
-                        dtype=recurrent_features.dtype,
-                    ),
-                ),
-                dim=-1,
-            )
-            if self.public_mask_head is not None:
-                mode_logits = mode_logits + self.public_mask_head(public_mask_features)
-        if self.public_context_head is not None:
-            if public_features is None or public_mask_features is None:
-                raise ValueError(
-                    "direct public context features require public features and masks"
-                )
-            mode_logits = self.public_context_head(
-                torch.cat((public_features, public_mask_features), dim=-1)
-            )
         card_context = recurrent_features.unsqueeze(-2) + self.card_embedding.weight.view(
             1, 1, self.card_slots, self.hidden_dim
         )
@@ -994,7 +1035,7 @@ class MaskedAutoregressivePolicy(nn.Module):
             card_logits = card_logits + self.hand_card_score(hand_features).squeeze(-1)
             card_context = card_context + hand_features
 
-        return mode_logits, card_logits, card_context
+        return card_logits, card_context
 
     def _placement_logits(
         self,
@@ -1081,18 +1122,17 @@ class MaskedAutoregressivePolicy(nn.Module):
         diagnostics.
         """
 
-        mode_logits, card_logits, card_context = self._prepare_action_prefix(
-            recurrent_features,
-            hand_features,
-            public_features,
-            public_action_masks,
-            spatial_features,
-        )
+        _require_floating("recurrent features", recurrent_features, ndim=3)
         if public_action_masks.prefix_shape != tuple(recurrent_features.shape[:2]):
             raise ValueError("action masks must share recurrent batch/time dimensions")
         if public_action_masks.card_slots != self.card_slots:
             raise ValueError("action masks have the wrong card-slot count")
 
+        mode_logits = self._prepare_mode_logits(
+            recurrent_features,
+            public_features,
+            public_action_masks,
+        )
         mode = _masked_argmax(
             mode_logits,
             public_action_masks.mode,
@@ -1106,7 +1146,30 @@ class MaskedAutoregressivePolicy(nn.Module):
         )
         play = mode == self.PLAY
         if bool(play.any().item()):
-            play_card_logits = card_logits[play]
+            # Card and placement heads cannot affect a WAIT action. Restrict
+            # them to PLAY rows after the mode decision so wait-heavy batches
+            # avoid the unused card projections and context construction.
+            play_recurrent = recurrent_features[play].unsqueeze(1)
+            play_hand = (
+                None if hand_features is None else hand_features[play].unsqueeze(1)
+            )
+            play_public = (
+                None if public_features is None else public_features[play].unsqueeze(1)
+            )
+            play_card_logits, play_card_context = self._prepare_card_prefix(
+                play_recurrent,
+                play_hand,
+                play_public,
+            )
+            play_spatial = (
+                None
+                if spatial_features is None
+                else spatial_features[play].unsqueeze(1)
+            )
+            if self.spatial_placement_key is not None:
+                self._validate_spatial_features(play_recurrent, play_spatial)
+            play_card_logits = play_card_logits[:, 0]
+            play_card_context = play_card_context[:, 0]
             play_card_masks = public_action_masks.card[play]
             selected_cards = _masked_argmax(
                 play_card_logits,
@@ -1115,7 +1178,7 @@ class MaskedAutoregressivePolicy(nn.Module):
             )
             card_slot[play] = selected_cards
 
-            selected_context = card_context[play].gather(
+            selected_context = play_card_context.gather(
                 1,
                 selected_cards.reshape(-1, 1, 1).expand(
                     -1,
@@ -1123,14 +1186,9 @@ class MaskedAutoregressivePolicy(nn.Module):
                     self.hidden_dim,
                 ),
             ).unsqueeze(1)
-            selected_spatial = (
-                None
-                if spatial_features is None
-                else spatial_features[play].unsqueeze(1)
-            )
             selected_placement = self._placement_logits(
                 selected_context,
-                selected_spatial,
+                play_spatial,
             ).squeeze(2)
             selected_masks = public_action_masks.placement[play].gather(
                 1,

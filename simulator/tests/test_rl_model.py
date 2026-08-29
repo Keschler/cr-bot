@@ -243,8 +243,13 @@ def test_deterministic_fast_action_matches_full_reference_path() -> None:
         time=1,
         entities=6,
     )
-    mode = torch.zeros(2, 1, 2, dtype=torch.bool)
-    mode[..., 1] = True  # Force PLAY so selected-card placement is exercised.
+    mode = torch.tensor(
+        [
+            [[True, False]],
+            [[False, True]],
+        ],
+        dtype=torch.bool,
+    )  # Exercise both the WAIT fast branch and PLAY placement decoding.
     card = torch.ones(2, 1, config.card_slots, dtype=torch.bool)
     placement = torch.zeros(
         2,

@@ -39,7 +39,8 @@ a controlled probe when the action boundary or causal behavior matters.
 - On the benchmark host, batch-16 actor-only deterministic inference reaches
   about 3.61k decisions/s on the RTX 2050 versus about 1.54k simulator
   environment steps/s. The full actor-selection path reaches about 2.69k/s.
-  The actor-only path now uses direct masked argmax decoding, a CPU
+  The actor-only path now uses direct masked argmax decoding, mode-first
+  decoding that skips card/placement heads for `WAIT` rows, a CPU
   channels-last raster layout, and tail-padding removal for sparse entity
   batches. In the current CPU-only training environment it reaches about
   255 decisions/s at batch 16, versus about 1.23k simulator steps/s; CPU

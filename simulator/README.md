@@ -513,9 +513,10 @@ The current benchmark host measured approximately:
 
 Thus the actor-only and full actor paths are currently faster than the
 simulator on the accelerated host. The actor-only deployment path avoids
-unused belief heads and distribution normalization, uses a channels-last CPU
-raster, and removes only masked tail entity rows; the PPO/reference forward
-path is unchanged. CPU fallback is still slower, so the next target is
+unused belief heads and distribution normalization, resolves `WAIT` before
+building card/placement logits, uses a channels-last CPU raster, and removes
+only masked tail entity rows; the PPO/reference forward path is unchanged.
+CPU fallback is still slower, so the next target is
 5k–10k simulator environment steps/s through batched, behavior-preserving
 optimization; every optimization must retain reference parity. The vector
 backend regression checks state, event-log, and replay hashes for both process
