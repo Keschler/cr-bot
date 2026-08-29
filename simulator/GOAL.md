@@ -44,7 +44,9 @@ a controlled probe when the action boundary or causal behavior matters.
   batches. On the current CPU host it reaches about 1.44k decisions/s at
   batch 16 versus about 3.06k simulator steps/s; the CPU parity gate remains
   open. The path also caps CPU intra-op parallelism at four threads. CPU
-  fallback remains below the historical accelerated-host target.
+  fallback remains below the historical accelerated-host target. Single-
+  observation deployment callers bypass one-element host stacking and prepare
+  the raster layout at the observation boundary.
 - The current action contract has `WAIT`/`PLAY`, card slot, and placement but
   no learned wait-duration head; `WAIT` advances the fixed simulator decision
   interval. The proposed timing head remains a future architecture change.

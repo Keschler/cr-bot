@@ -143,6 +143,7 @@ class PublicCheckpointController:
         raster, global_features, entities, entity_mask, masks = _batch_observations(
             [observation],
             device=self.learner.device,
+            inference=True,
         )
         reset_mask = torch.tensor(
             [[self._reset_pending]],

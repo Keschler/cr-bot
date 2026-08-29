@@ -526,6 +526,8 @@ rate. On the current CPU host, the actor is about 1.44k decisions/s versus
 deployment path avoids belief heads and distribution normalization, resolves
 `WAIT` before card/placement decoding, uses a channels-last raster, removes
 masked entity tails, and caps CPU intra-op parallelism at four threads. The
+single-observation deployment callers also bypass one-element host stacking
+and prepare the raster layout at the observation boundary. The
 PPO/reference forward path and selected-action parity are unchanged. The
 vector-backend regression checks state, event-log, and replay hashes for both
 process transports across consecutive steps with privileged info disabled.

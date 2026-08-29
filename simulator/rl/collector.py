@@ -940,11 +940,18 @@ else:
             _raise_torch_unavailable()
 
 
-def _batch_observations(observations: Sequence[Any], *, device: Any) -> tuple[Any, Any, Any, Any, Any]:
+def _batch_observations(
+    observations: Sequence[Any],
+    *,
+    device: Any,
+    inference: bool = False,
+) -> tuple[Any, Any, Any, Any, Any]:
     if not TORCH_AVAILABLE:
         _raise_torch_unavailable()
     if not observations:
         raise ValueError("at least one observation is required")
+    if type(inference) is not bool:
+        raise TypeError("inference must be boolean")
     try:
         from ..observation_v2 import (
             OBSERVATION_V2_CONTRACT_HASH,
@@ -965,17 +972,43 @@ def _batch_observations(observations: Sequence[Any], *, device: Any) -> tuple[An
             )
     import numpy as np
 
-    def stack_to_device(values: Sequence[Any], *, dtype: Any) -> Any:
+    def stack_to_device(
+        values: Sequence[Any],
+        *,
+        dtype: Any,
+        channels_last: bool = False,
+    ) -> Any:
         # V2 arrays are fixed-shape NumPy snapshots.  Stack on the host first
         # so each field makes one contiguous device transfer instead of one
-        # small transfer per lane.  The explicit dtype keeps this helper's
-        # conversion behavior identical for array-like test doubles too.
-        stacked = torch.from_numpy(np.stack(values, axis=0)).unsqueeze(1)
+        # small transfer per lane.  A single-observation inference call is a
+        # common deployment case; avoid np.stack's extra shape-building work
+        # there while retaining the exact [batch, time, ...] result shape.
+        if len(values) == 1:
+            value = np.asarray(values[0])
+            if not value.flags.c_contiguous:
+                value = np.ascontiguousarray(value)
+            elif not value.flags.writeable:
+                value = value.copy(order="C")
+            stacked = torch.from_numpy(value).unsqueeze(0).unsqueeze(1)
+        else:
+            stacked = torch.from_numpy(np.stack(values, axis=0)).unsqueeze(1)
+        if channels_last and stacked.ndim == 5 and torch.device(device).type == "cpu":
+            # The model's deployment convolution consumes flattened 4-D
+            # frames.  Convert that view once at the observation boundary so
+            # act_deterministic does not repeat the copy on every call.
+            flat = stacked.reshape(
+                stacked.shape[0] * stacked.shape[1],
+                *stacked.shape[2:],
+            )
+            stacked = flat.contiguous(memory_format=torch.channels_last).reshape(
+                stacked.shape
+            )
         return stacked.to(device=device, dtype=dtype)
 
     board = stack_to_device(
         [getattr(observation, "board") for observation in observations],
         dtype=torch.float32,
+        channels_last=inference,
     )
     global_features = stack_to_device(
         [getattr(observation, "global_vector") for observation in observations],

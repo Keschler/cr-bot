@@ -2080,6 +2080,7 @@ class _CheckpointMatchRunner:
         raster, global_features, entities, entity_mask, masks = _batch_observations(
             [observation],
             device=self.learner.device,
+            inference=True,
         )
         reset_mask = self._torch.tensor(
             [[reset]],

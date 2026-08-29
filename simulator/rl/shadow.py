@@ -144,7 +144,11 @@ class ShadowPolicyRunner:
         # ask for a privileged value estimate.
         from .collector import _batch_observations
 
-        return _batch_observations([observation], device=self.learner.device)
+        return _batch_observations(
+            [observation],
+            device=self.learner.device,
+            inference=True,
+        )
 
     def _deterministic_actor_step(self, observation: Any) -> tuple[Any, Any, Any]:
         """Run only the actor, deliberately bypassing a privileged critic."""

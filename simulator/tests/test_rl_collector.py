@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 
+import numpy as np
 import pytest
 
 try:
@@ -57,6 +58,38 @@ def test_rollout_stats_can_attribute_terminal_results_to_lanes() -> None:
 
 
 requires_torch = pytest.mark.skipif(torch is None, reason="PyTorch is not installed")
+
+
+@requires_torch
+def test_single_observation_batching_matches_general_stack() -> None:
+    from simulator.observation_v2 import PolicyObservationV2
+    from rl.collector import _batch_observations
+
+    observation = PolicyObservationV2(
+        board=np.zeros((21, 32, 18), dtype=np.float32),
+        global_vector=np.zeros((768,), dtype=np.float32),
+        entity_tokens=np.zeros((128, 32), dtype=np.float32),
+        entity_mask=np.zeros((128,), dtype=bool),
+        legal_play=np.zeros((4, 32, 18), dtype=bool),
+        legal_wait=True,
+    )
+
+    regular = _batch_observations([observation], device=torch.device("cpu"))
+    inference = _batch_observations(
+        [observation],
+        device=torch.device("cpu"),
+        inference=True,
+    )
+
+    for regular_value, inference_value in zip(regular[:4], inference[:4], strict=True):
+        torch.testing.assert_close(regular_value, inference_value)
+    for regular_value, inference_value in zip(
+        (regular[4].mode, regular[4].card, regular[4].placement),
+        (inference[4].mode, inference[4].card, inference[4].placement),
+        strict=True,
+    ):
+        torch.testing.assert_close(regular_value, inference_value)
+    assert inference[0][:, 0].is_contiguous(memory_format=torch.channels_last)
 
 
 @requires_torch
