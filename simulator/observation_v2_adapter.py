@@ -28,6 +28,7 @@ fail-closed until a future public observation contract exposes those facts.
 from __future__ import annotations
 
 from dataclasses import replace
+from functools import lru_cache
 import math
 from typing import Callable, Collection, Final
 
@@ -44,6 +45,7 @@ from .geometry import (
     position_to_cell,
 )
 from .observation import (
+    LegalActionCellsCallback,
     ObservationMemory,
     PolicyObservationV1,
     battle_state_to_observed_game_state,
@@ -55,6 +57,7 @@ from .observation_v2 import (
     PolicyObservationV2,
 )
 from .ruleset import Ruleset, normalize_identifier
+from .soa import ObservationSoA, is_public_observation_entity
 from .state import BattleState, EntityState
 
 
@@ -65,19 +68,6 @@ _MAX_CARD_ID: Final = max(
     if isinstance(metadata, dict) and type(metadata.get("id")) is int
 )
 _UNIT_SQUARE_DIAGONAL: Final = math.sqrt(2.0)
-_HIDDEN_STATUS_KINDS: Final = frozenset(
-    {
-        "concealed",
-        "concealment",
-        "burrow",
-        "burrowed",
-        "hidden",
-        "invisible",
-        "invisibility",
-        "stealth",
-    }
-)
-
 # These are the same public feature aliases used by the existing V1
 # projection.  They describe the visible form, not private simulator
 # provenance, and are kept local so this additive module does not depend on a
@@ -107,6 +97,9 @@ def build_policy_observation_v2(
     viewer: int = 0,
     memory: ObservationMemory | None = None,
     legality_callback: Callable[[BattleState, PlayCardAction], bool] | None = None,
+    legal_action_cells_callback: LegalActionCellsCallback | None = None,
+    soa_state: ObservationSoA | None = None,
+    _soa_already_synced: bool = False,
 ) -> PolicyObservationV2:
     """Project a simulator state into the trusted public V2 contract.
 
@@ -148,24 +141,117 @@ def build_policy_observation_v2(
         viewer=viewer,
         memory=memory,
         legality_callback=legality_callback,
+        legal_action_cells_callback=legal_action_cells_callback,
+        soa_state=soa_state,
         allow_unrepresented_hand=True,
+        _soa_already_synced=_soa_already_synced,
     )
-    projected = battle_state_to_observed_game_state(
-        public_state,
-        ruleset,
-        viewer=viewer,
-        memory=memory,
-        allow_unrepresented_hand=True,
-    )
-    rows = build_public_entity_rows(
-        projected,
-        viewer=viewer,
-        public_entity_uids=public_uids,
-    )
+    if soa_state is None:
+        projected = battle_state_to_observed_game_state(
+            public_state,
+            ruleset,
+            viewer=viewer,
+            memory=memory,
+            allow_unrepresented_hand=True,
+        )
+        rows = build_public_entity_rows(
+            projected,
+            viewer=viewer,
+            public_entity_uids=public_uids,
+        )
+    else:
+        rows = build_public_entity_rows_from_soa(
+            public_state,
+            viewer=viewer,
+            soa_state=soa_state,
+            public_entity_uids=public_uids,
+        )
     return PolicyObservationV2.from_v1(
         observation_v1,
         public_entity_rows=rows,
     )
+
+
+def build_public_entity_rows_from_soa(
+    public_state: BattleState,
+    *,
+    viewer: int,
+    soa_state: ObservationSoA,
+    public_entity_uids: Collection[int],
+) -> np.ndarray:
+    """Build V2 rows directly from the already-synchronized SoA columns."""
+
+    _validate_viewer(viewer)
+    if not isinstance(public_state, BattleState):
+        raise TypeError("public_state must be a BattleState")
+    if not isinstance(soa_state, ObservationSoA):
+        raise TypeError("soa_state must be an ObservationSoA")
+    allowed_uids = _normalize_uid_allow_list(public_entity_uids)
+    tower_points = _viewer_local_tower_points(viewer)
+    rows: list[tuple[int, np.ndarray]] = []
+
+    for index in range(soa_state.count):
+        uid = int(soa_state.uids[index])
+        if uid not in allowed_uids:
+            continue
+        entity = public_state.entities.get(uid)
+        card_name = soa_state.card_names[index]
+        if entity is None or card_name is None:
+            continue
+        metadata = _public_card_metadata(card_name)
+        if metadata is None:
+            continue
+
+        x_mtile = int(soa_state.x_mtile[index])
+        y_mtile = int(soa_state.y_mtile[index])
+        if viewer == 1:
+            x_mtile, y_mtile = mirror_position(x_mtile, y_mtile)
+        cell = position_to_cell(x_mtile, y_mtile)
+        if cell is None:
+            continue
+        raw_x, raw_y = ACTION_GRID.cell_to_norm_center(*cell)
+        x = _canonicalize_grid_coordinate(raw_x, ACTION_GRID.x0, ACTION_GRID.width)
+        y = _canonicalize_grid_coordinate(raw_y, ACTION_GRID.y0, ACTION_GRID.height)
+
+        row = np.zeros((ENTITY_TOKEN_DIM,), dtype=np.float32)
+        row[_FEATURE_INDEX["card_id"]] = np.float32(
+            float(metadata["id"]) / float(_MAX_CARD_ID)
+        )
+        row[_FEATURE_INDEX["side"]] = np.float32(entity.owner != viewer)
+        row[_FEATURE_INDEX["x"]] = np.float32(x)
+        row[_FEATURE_INDEX["y"]] = np.float32(y)
+        row[_FEATURE_INDEX["hp_fraction"]] = np.float32(
+            _clip_unit(float(soa_state.hp_fraction[index]))
+        )
+        row[_FEATURE_INDEX["is_air"]] = np.float32(bool(metadata.get("is_air")))
+        kind = str(metadata.get("kind") or "")
+        row[_FEATURE_INDEX["is_building"]] = np.float32(kind == "building")
+        row[_FEATURE_INDEX["is_tower"]] = np.float32(kind == "tower")
+        row[_FEATURE_INDEX["is_spell"]] = np.float32(kind == "spell")
+        row[_FEATURE_INDEX["is_visible"]] = 1.0
+        row[_FEATURE_INDEX["is_targetable"]] = 1.0
+        row[_FEATURE_INDEX["lane"]] = np.float32(_lane_value(x))
+        row[_FEATURE_INDEX["distance_to_own_tower"]] = np.float32(
+            _nearest_distance(x, y, tower_points["own"])
+        )
+        row[_FEATURE_INDEX["distance_to_enemy_tower"]] = np.float32(
+            _nearest_distance(x, y, tower_points["enemy"])
+        )
+        row[_FEATURE_INDEX["distance_to_own_king"]] = np.float32(
+            _distance(x, y, tower_points["own_king"])
+        )
+        row[_FEATURE_INDEX["distance_to_enemy_king"]] = np.float32(
+            _distance(x, y, tower_points["enemy_king"])
+        )
+        row[_FEATURE_INDEX["confidence"]] = 1.0
+        rows.append((uid, row))
+
+    if len(rows) > 128:
+        raise ValueError("public entity rows exceed the V2 NMAX=128 bound")
+    if not rows:
+        return np.zeros((0, ENTITY_TOKEN_DIM), dtype=np.float32)
+    rows.sort(key=lambda item: item[0])
+    return np.ascontiguousarray(np.stack([row for _, row in rows], axis=0), dtype=np.float32)
 
 
 def build_public_entity_rows(
@@ -254,18 +340,7 @@ def _is_conservatively_public(entity: EntityState) -> bool:
     the same row contract unsafe for an opponent-side projection.
     """
 
-    if not isinstance(entity, EntityState):
-        return False
-    if not entity.alive or entity.hp <= 0:
-        return False
-    if entity.kind not in {"troop", "building"}:
-        return False
-    if entity.stealth_active or entity.burrow_active or entity.concealed_active:
-        return False
-    for status in entity.statuses:
-        if status.remaining_us > 0 and normalize_identifier(status.kind) in _HIDDEN_STATUS_KINDS:
-            return False
-    return True
+    return is_public_observation_entity(entity)
 
 
 def _row_from_public_detection(detection: object, *, viewer: int) -> np.ndarray | None:
@@ -343,14 +418,19 @@ def _row_from_public_detection(detection: object, *, viewer: int) -> np.ndarray 
     return row
 
 
+@lru_cache(maxsize=512)
 def _public_card_metadata(card_name: str) -> dict[str, object] | None:
-    key = _PUBLIC_CARD_ALIASES.get(normalize_identifier(card_name), normalize_identifier(card_name))
+    normalized = normalize_identifier(card_name)
+    key = _PUBLIC_CARD_ALIASES.get(normalized, normalized)
+    if key == "goblin-gang-goblin":
+        key = "goblins"
     metadata = CARD_METADATA.get(key)
     if not isinstance(metadata, dict) or type(metadata.get("id")) is not int:
         return None
     return metadata
 
 
+@lru_cache(maxsize=2)
 def _viewer_local_tower_points(viewer: int) -> dict[str, tuple[tuple[float, float], ...] | tuple[float, float]]:
     points: dict[str, list[tuple[float, float]]] = {
         "own": [],

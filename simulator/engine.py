@@ -9,6 +9,7 @@ not promote them to ground truth.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Callable, Iterable, Protocol
 
 from .actions import PlayCardAction, SimAction, UseAbilityAction, WaitAction
@@ -16,6 +17,7 @@ from .events import SimEvent
 from .fixed import (
     ELIXIR_SCALE,
     PERMILLE,
+    POSITION_SCALE,
     SECOND_US,
     DeterministicRng,
     ceil_div,
@@ -62,6 +64,69 @@ BASE_HOG_CYCLE_DECK = PLAYER_DECK
 ENGINE_VERSION = "reference-0.31.0"
 
 
+# The policy action grid is fixed by the observation contract.  Keeping its
+# valid cells as immutable tuples lets the legality path avoid rebuilding the
+# same coordinate pairs for every hand slot while retaining a stdlib-only
+# physics core.
+_POLICY_GRID_CELLS: tuple[tuple[int, int], ...] = tuple(
+    (col, row)
+    for row in range(GRID_ROWS)
+    for col in range(GRID_COLS)
+)
+_GROUND_CELLS: tuple[tuple[int, int], ...] = tuple(
+    cell for cell in _POLICY_GRID_CELLS if is_ground_cell(cell)
+)
+_BASIC_DEPLOY_CELLS: tuple[frozenset[tuple[int, int]], ...] = tuple(
+    frozenset(
+        cell
+        for cell in _GROUND_CELLS
+        if is_basic_deploy_cell(player, cell)
+    )
+    for player in (0, 1)
+)
+
+
+@lru_cache(maxsize=512)
+def _blocked_deployment_cells(
+    obstacles: tuple[tuple[int, int, int], ...],
+    radius: int,
+) -> frozenset[tuple[int, int]]:
+    """Cache grid cells blocked by one obstacle layout and card radius."""
+
+    if not obstacles:
+        return frozenset()
+    blocked: set[tuple[int, int]] = set()
+    center_offset = POSITION_SCALE // 2
+    for col, row in _POLICY_GRID_CELLS:
+        x = col * POSITION_SCALE + center_offset
+        y = row * POSITION_SCALE + center_offset
+        for obstacle_x, obstacle_y, obstacle_radius in obstacles:
+            if distance_mtile(x, y, obstacle_x, obstacle_y) < radius + obstacle_radius:
+                blocked.add((col, row))
+                break
+    return frozenset(blocked)
+
+
+@lru_cache(maxsize=128)
+def _footprint_cells_in_allowed(
+    allowed_cells: frozenset[tuple[int, int]],
+    size: int,
+) -> tuple[tuple[int, int], ...]:
+    """Cache building center cells for an unchanged territory layout."""
+
+    low = -(size // 2)
+    high = size - size // 2
+    return tuple(
+        (col, row)
+        for col, row in _POLICY_GRID_CELLS
+        if all(
+            (col + dcol, row + drow) in allowed_cells
+            for drow in range(low, high)
+            for dcol in range(low, high)
+        )
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class ActionResult:
     player: int
@@ -88,6 +153,29 @@ class BattleEngine:
         if type(validate_every_tick) is not bool:
             raise TypeError("validate_every_tick must be boolean")
         self.validate_every_tick = validate_every_tick
+        # These values are immutable for a ruleset.  Keeping the narrow
+        # numeric component columns on the engine avoids repeatedly walking
+        # the card-definition mappings from the per-tick physics loops while
+        # leaving the authoritative EntityState object graph unchanged.
+        self._card_collision_radii = {
+            card_id: int(definition.collision_radius_mtile or 0)
+            for card_id, definition in self.ruleset.cards.items()
+        }
+        self._tower_collision_radii = {
+            tower_id: int(definition.collision_radius_mtile or 0)
+            for tower_id, definition in self.ruleset.towers.items()
+        }
+        self._card_masses = {
+            card_id: max(1, int(definition.mass or 1))
+            for card_id, definition in self.ruleset.cards.items()
+        }
+        self._card_movement_layers = {
+            card_id: str(definition.mechanics.get("movement_layer") or "ground")
+            for card_id, definition in self.ruleset.cards.items()
+        }
+        self._navigation_cache_state: BattleState | None = None
+        self._navigation_cache_revision = -1
+        self._navigation_cache: tuple[NavigationObstacle, ...] = ()
 
     @property
     def decision_interval_ticks(self) -> int:
@@ -287,12 +375,204 @@ class BattleEngine:
             if previous is None or previous == "mirror":
                 return ()
             card = self.ruleset.card(previous)
-        return tuple(
-            (col, row)
-            for row in range(GRID_ROWS)
-            for col in range(GRID_COLS)
-            if self._legal_deployment(state, player, card, (col, row))
+        return self._legal_cells_for_card(state, player, card)
+
+    def legal_action_cells(
+        self,
+        state: BattleState,
+        player: int,
+    ) -> tuple[tuple[tuple[int, int], ...], ...]:
+        """Return exact legal world cells for the first four hand slots.
+
+        Policy observations need the legality of every hand slot, but calling
+        :meth:`validate_action` once per grid cell repeats card resolution,
+        elixir checks, action construction, and type dispatch.  This batched
+        form performs those slot-level checks once and evaluates deployment
+        legality directly.  It intentionally returns world coordinates; the
+        observation adapter handles viewer-local mirroring.
+        """
+
+        if type(player) is not int or player not in (0, 1):
+            raise ValueError(f"player must be 0 or 1, got {player!r}")
+        if state.terminal:
+            return ((), (), (), ())
+
+        player_state = state.players[player]
+        # These predicates are shared by every hand slot in one observation.
+        # The old per-cell validate_action path recomputed them independently
+        # for each card and each candidate coordinate.
+        territory_cells = self._deployment_territory_cells(state, player)
+        deployment_obstacles = self._deployment_obstacles(state)
+        legal_by_slot: list[tuple[tuple[int, int], ...]] = []
+        for raw_card_id in player_state.hand[:4]:
+            card = self.ruleset.card(raw_card_id)
+            placement_card = card
+            if card.card_id == "mirror":
+                previous = player_state.last_played_card_id
+                if previous is None or previous == "mirror":
+                    legal_by_slot.append(())
+                    continue
+                placement_card = self.ruleset.card(previous)
+            if player_state.elixir_milli < self._effective_card_cost(player_state, card):
+                legal_by_slot.append(())
+                continue
+            legal_by_slot.append(
+                self._legal_cells_for_card(
+                    state,
+                    player,
+                    placement_card,
+                    territory_cells=territory_cells,
+                    deployment_obstacles=deployment_obstacles,
+                )
+            )
+
+        while len(legal_by_slot) < 4:
+            legal_by_slot.append(())
+        return tuple(legal_by_slot)
+
+    def _legal_cells_for_card(
+        self,
+        state: BattleState,
+        player: int,
+        card: CardDefinition,
+        *,
+        territory_cells: frozenset[tuple[int, int]] | None = None,
+        deployment_obstacles: tuple[tuple[int, int, int], ...] | None = None,
+    ) -> tuple[tuple[int, int], ...]:
+        """Evaluate one already-resolved card over the policy grid.
+
+        The result is equivalent to calling ``_legal_deployment`` for every
+        cell, but shared territory and obstacle predicates are computed once
+        by ``legal_action_cells``.  This is deliberately kept inside the
+        engine so the generic public ``validate_action`` path remains the
+        authoritative single-action validator.
+        """
+
+        placement = card.mechanics.get("placement_class")
+        if placement == "spell_anywhere":
+            # Every coordinate in the policy grid is already bounds-checked.
+            return _POLICY_GRID_CELLS
+        if placement in {"restricted_spell", "own_ground_spell", "spells"}:
+            return self._restricted_spell_cells(state, player)
+
+        if placement == "miner_anywhere":
+            candidates = _GROUND_CELLS
+        else:
+            if territory_cells is None:
+                territory_cells = self._deployment_territory_cells(state, player)
+            candidates = tuple(cell for cell in _POLICY_GRID_CELLS if cell in territory_cells)
+
+        if deployment_obstacles is None:
+            deployment_obstacles = self._deployment_obstacles(state)
+
+        radius = int(card.collision_radius_mtile or 0)
+        if card.kind == "troop":
+            return self._cells_without_deployment_collision(
+                candidates,
+                radius,
+                deployment_obstacles,
+            )
+
+        if card.kind == "building":
+            if territory_cells is None:
+                territory_cells = self._deployment_territory_cells(state, player)
+            candidates = _footprint_cells_in_allowed(territory_cells, 3)
+            return self._cells_without_deployment_collision(
+                candidates,
+                radius,
+                deployment_obstacles,
+            )
+
+        return candidates
+
+    def _restricted_spell_cells(
+        self,
+        state: BattleState,
+        player: int,
+    ) -> tuple[tuple[int, int], ...]:
+        """Return restricted-spell cells without repeating tower scans."""
+
+        destroyed_enemy_lanes = tuple(
+            tower.x_mtile // 1_000
+            for tower in self._towers_for(state, 1 - player)
+            if not tower.alive and tower.role != "king"
         )
+        cells: list[tuple[int, int]] = []
+        for col, row in _POLICY_GRID_CELLS:
+            if row >= 17 if player == 0 else row <= 14:
+                cells.append((col, row))
+                continue
+            forward = 11 <= row <= 16 if player == 0 else 15 <= row <= 20
+            if forward and any(
+                (col < GRID_COLS // 2) == (tower_col < GRID_COLS // 2)
+                for tower_col in destroyed_enemy_lanes
+            ):
+                cells.append((col, row))
+        return tuple(cells)
+
+    def _deployment_obstacles(
+        self,
+        state: BattleState,
+    ) -> tuple[tuple[int, int, int], ...]:
+        return tuple(
+            (entity.x_mtile, entity.y_mtile, self._collision_radius(entity))
+            for entity in state.entities.values()
+            if entity.alive and entity.kind in {"building", "tower"}
+        )
+
+    @staticmethod
+    def _cells_without_deployment_collision(
+        candidates: tuple[tuple[int, int], ...],
+        radius: int,
+        obstacles: tuple[tuple[int, int, int], ...],
+    ) -> tuple[tuple[int, int], ...]:
+        blocked = _blocked_deployment_cells(obstacles, radius)
+        if not blocked:
+            return candidates
+        return tuple(cell for cell in candidates if cell not in blocked)
+
+    def _deployment_territory_cells(
+        self,
+        state: BattleState,
+        player: int,
+    ) -> frozenset[tuple[int, int]]:
+        """Return the current deployment territory in one shared scan.
+
+        Most states use the immutable basic-deployment map.  Destroyed
+        Princess Towers add small dynamic pockets; those are layered on top
+        only when present instead of asking ``_territory_cell`` to rescan the
+        tower list for every card and every grid cell.
+        """
+
+        territory = set(_BASIC_DEPLOY_CELLS[player])
+        own_towers = self._towers_for(state, player)
+        enemy_towers = self._towers_for(state, 1 - player)
+        dynamic_towers = tuple(
+            tower
+            for tower in (*own_towers, *enemy_towers)
+            if not tower.alive and tower.role != "king"
+        )
+        if not dynamic_towers:
+            return _BASIC_DEPLOY_CELLS[player]
+        for tower in own_towers:
+            if tower.alive or tower.role == "king":
+                continue
+            for cell in _GROUND_CELLS:
+                if distance_mtile(
+                    *cell_center_mtile(cell),
+                    tower.x_mtile,
+                    tower.y_mtile,
+                ) <= 2_000:
+                    territory.add(cell)
+        for tower in enemy_towers:
+            if tower.alive or tower.role == "king":
+                continue
+            for col, row in _GROUND_CELLS:
+                forward = 11 <= row <= 16 if player == 0 else 15 <= row <= 20
+                center_x = col * POSITION_SCALE + POSITION_SCALE // 2
+                if forward and abs(center_x - tower.x_mtile) <= 5_000:
+                    territory.add((col, row))
+        return frozenset(territory)
 
     def run_match(
         self,
@@ -1160,6 +1440,7 @@ class BattleEngine:
                     x_mtile=spawn_x,
                     y_mtile=spawn_y,
                     parent_uid=effect.source_uid,
+                    require_legal_position=effect.source_card_id == "graveyard",
                     level_multiplier_permille=effect.level_multiplier_permille,
                 )
                 effect.spawned_count += 1
@@ -1205,6 +1486,7 @@ class BattleEngine:
             exclude_target=False,
         ):
             target.x_mtile, target.y_mtile = destination
+            self._reset_attack_preload(target)
             target.navigation_waypoints.clear()
             target.navigation_cursor = 0
             target.navigation_revision = -1
@@ -1355,7 +1637,21 @@ class BattleEngine:
     def _advance_spawners(self, state: BattleState, dt: int) -> None:
         """Advance data-driven building and active-troop spawners in UID order."""
 
-        for parent in self._alive_entities(state):
+        # Spawners are iterated over the entry snapshot. New children are not
+        # parents until the next tick, matching the old list-comprehension
+        # boundary. Keep a second, append-only alive view for the two queries
+        # which intentionally observe children spawned by earlier parents in
+        # this same phase.
+        parents = self._alive_entities(state)
+        alive_entities = list(parents)
+        alive_counts: dict[tuple[int, str], int] = {}
+        for entity in alive_entities:
+            if entity.parent_uid is None:
+                continue
+            key = (entity.parent_uid, entity.card_id)
+            alive_counts[key] = alive_counts.get(key, 0) + 1
+
+        for parent in parents:
             if parent.kind == "tower":
                 continue
             if parent.deploy_remaining_us > 0:
@@ -1397,7 +1693,7 @@ class BattleEngine:
                         target.x_mtile,
                         target.y_mtile,
                     ) <= activation_range + self._collision_radius(target)
-                    for target in self._alive_entities(state)
+                    for target in alive_entities
                 )
                 if visible_enemy != parent.spawner_active:
                     parent.spawner_active = visible_enemy
@@ -1420,11 +1716,11 @@ class BattleEngine:
                 )
             raw_max_alive = spawn.get("max_alive")
             max_alive = None if raw_max_alive is None else int(raw_max_alive)
-            alive_children = sum(
-                1
-                for entity in self._alive_entities(state)
-                if entity.owner == parent.owner and entity.card_id == child_card_id
-            )
+            # ``max_alive`` is a cap owned by this spawner instance.  The
+            # previous owner/card aggregate made two independent buildings
+            # suppress one another's waves and produced a materially wrong
+            # board for RL rollouts.
+            alive_children = alive_counts.get((parent.uid, child_card_id), 0)
             # ``None`` is an explicit unbounded stream.  It is needed for the
             # post-2025 Furnace rework: the official notes specify one Fire
             # Spirit per cadence but do not publish a maximum number alive.
@@ -1433,7 +1729,7 @@ class BattleEngine:
                 for _ in range(int(spawn["count"])):
                     if max_alive is not None and alive_children >= max_alive:
                         break
-                    self._spawn_single_child(
+                    child_entity = self._spawn_single_child(
                         state,
                         parent,
                         self.ruleset.card(child_card_id),
@@ -1443,6 +1739,9 @@ class BattleEngine:
                             else None
                         ),
                     )
+                    alive_entities.append(child_entity)
+                    child_key = (parent.uid, child_entity.card_id)
+                    alive_counts[child_key] = alive_counts.get(child_key, 0) + 1
                     alive_children += 1
                     parent.spawned_count += 1
             # A blocked spawner still waits one complete interval; this avoids
@@ -1452,7 +1751,8 @@ class BattleEngine:
     def _advance_concealment(self, state: BattleState) -> None:
         """Raise and lower Tesla-style structures from visible enemy sight."""
 
-        for entity in self._alive_entities(state):
+        alive_entities = self._alive_entities(state)
+        for entity in alive_entities:
             definition = self.ruleset.cards.get(entity.card_id)
             if definition is None:
                 continue
@@ -1476,7 +1776,7 @@ class BattleEngine:
                         target.x_mtile,
                         target.y_mtile,
                     ) <= reveal_range + self._collision_radius(target)
-                    for target in self._alive_entities(state)
+                    for target in alive_entities
                 )
             if should_conceal == entity.concealed_active:
                 continue
@@ -1485,6 +1785,7 @@ class BattleEngine:
                 entity.target_uid = None
                 entity.pending_target_uid = None
                 entity.windup_remaining_us = 0
+                entity.attack_load_remaining_us = 0
             self._emit(
                 state,
                 "entity_concealment_changed",
@@ -1501,7 +1802,7 @@ class BattleEngine:
         *,
         offset_mtile: tuple[int, int] = (0, 0),
         deploy_remaining_us: int | None = None,
-    ) -> None:
+    ) -> EntityState:
         # Clone provenance applies to the whole lifecycle. Death payloads,
         # spawner waves, and status conversions produced by a copied body are
         # copied bodies too; they keep the one-HP clone cap and clone shield
@@ -1516,7 +1817,7 @@ class BattleEngine:
             if authored_child_hp is not None and not is_clone
             else (1 if is_clone else None)
         )
-        self._spawn_single_at(
+        return self._spawn_single_at(
             state,
             child,
             owner=parent.owner,
@@ -1577,10 +1878,13 @@ class BattleEngine:
         carried_by_uid: int | None = None,
         carried_offset_mtile: tuple[int, int] = (0, 0),
         level_multiplier_permille: int = PERMILLE,
+        require_legal_position: bool = False,
     ) -> EntityState:
         uid = self._allocate_uid(state)
         x = min(self.ruleset.arena.width_mtile - 1, max(0, x_mtile))
         y = min(self.ruleset.arena.height_mtile - 1, max(0, y_mtile))
+        if require_legal_position:
+            x, y = self._nearest_legal_spawn_position(state, child, x, y)
         maximum_hp = self._scale_level_value(
             int(child.hitpoints or 1), level_multiplier_permille
         )
@@ -1639,6 +1943,7 @@ class BattleEngine:
             concealed_active=bool(
                 concealment and concealment.get("starts_concealed", False)
             ),
+            parent_uid=parent_uid,
         )
         if entity.max_hp <= 0 or not 0 < entity.hp <= entity.max_hp:
             raise ValueError(f"{child.card_id}: invalid spawned HP override")
@@ -1669,8 +1974,95 @@ class BattleEngine:
             )
         return entity
 
+    def _nearest_legal_spawn_position(
+        self,
+        state: BattleState,
+        child: CardDefinition,
+        x_mtile: int,
+        y_mtile: int,
+    ) -> tuple[int, int]:
+        """Bump a derived ground spawn to the nearest legal free point.
+
+        Persistent effects such as Graveyard author spawn offsets in world
+        space.  The game does not materialize a Skeleton inside a tower, on
+        the river bank, or outside the arena; it resolves that offset to the
+        nearest legal point.  Keep the search deterministic and local so
+        generated replays do not depend on a physics-library implementation.
+        """
+
+        radius = int(child.collision_radius_mtile or 0)
+        movement_layer = str(child.mechanics.get("movement_layer") or "ground")
+        if movement_layer == "air":
+            return (
+                min(self.ruleset.arena.width_mtile - 1, max(0, x_mtile)),
+                min(self.ruleset.arena.height_mtile - 1, max(0, y_mtile)),
+            )
+        structures = [
+            entity
+            for entity in self._alive_entities(state)
+            if entity.kind in {"building", "tower"}
+        ]
+
+        def legal(x: int, y: int) -> bool:
+            if not point_is_walkable(self.ruleset.arena, x, y, radius):
+                return False
+            return all(
+                distance_mtile(x, y, structure.x_mtile, structure.y_mtile)
+                >= radius + self._collision_radius(structure)
+                for structure in structures
+            )
+
+        if legal(x_mtile, y_mtile):
+            return x_mtile, y_mtile
+
+        # A 100-milli-tile lattice is finer than the placement grid and keeps
+        # the worst-case river-to-bridge search bounded.  Search complete
+        # square rings so the first successful ring is spatially local, then
+        # use exact distance/coordinates as the deterministic tie-break.
+        step = 100
+        max_radius = max(self.ruleset.arena.width_mtile, self.ruleset.arena.height_mtile)
+        max_ring = (max_radius + step - 1) // step
+        for ring in range(1, max_ring + 1):
+            candidates: list[tuple[int, int]] = []
+            extent = ring * step
+            for index in range(-ring, ring + 1):
+                candidates.extend(
+                    (
+                        (x_mtile + index * step, y_mtile - extent),
+                        (x_mtile + index * step, y_mtile + extent),
+                        (x_mtile - extent, y_mtile + index * step),
+                        (x_mtile + extent, y_mtile + index * step),
+                    )
+                )
+            legal_candidates = [
+                point
+                for point in set(candidates)
+                if legal(*point)
+            ]
+            if legal_candidates:
+                return min(
+                    legal_candidates,
+                    key=lambda point: (
+                        (point[0] - x_mtile) ** 2 + (point[1] - y_mtile) ** 2,
+                        point,
+                    ),
+                )
+
+        # The arena always contains legal ground cells for the fixed roster;
+        # retain a bounded fallback for malformed custom arenas rather than
+        # allocating an entity at an unbounded coordinate.
+        return (
+            min(self.ruleset.arena.width_mtile - 1, max(radius, x_mtile)),
+            min(self.ruleset.arena.height_mtile - 1, max(radius, y_mtile)),
+        )
+
     def _invalidate_and_acquire_targets(self, state: BattleState) -> None:
-        for entity in self._alive_entities(state):
+        # Target acquisition only mutates target/charge bookkeeping; entity
+        # membership and HP do not change during this phase. Reuse the
+        # canonical UID-ordered alive snapshot across all selectors instead
+        # of sorting and filtering the entity mapping once per candidate.
+        alive_entities = self._alive_entities(state)
+        for entity in alive_entities:
             if entity.deploy_remaining_us > 0:
                 continue
             if entity.target_uid is not None:
@@ -1690,18 +2082,35 @@ class BattleEngine:
                     self._reset_dash(state, entity, reason="target_invalidated")
                     self._reset_attack_ramp(state, entity, reason="target_invalidated")
                     entity.target_uid = None
+                    if entity.pending_target_uid == old_target:
+                        entity.pending_target_uid = None
+                        entity.windup_remaining_us = 0
+                        entity.attack_load_remaining_us = 0
                     self._emit(state, "target_changed", uid=entity.uid, old_target=old_target, target_uid=None)
                 elif current is not None and current.kind == "tower" and entity.kind != "tower":
                     # A newly deployed defender/building must be able to pull a
                     # unit which was previously pathing to a Crown Tower.
-                    nearby = self._nearby_non_tower_targets(state, entity)
-                    replacement = self._preferred_target_uid(state, entity, nearby)
+                    nearby = self._nearby_non_tower_targets(
+                        state,
+                        entity,
+                        alive_entities=alive_entities,
+                    )
+                    replacement = self._preferred_target_uid(
+                        state,
+                        entity,
+                        nearby,
+                        alive_entities=alive_entities,
+                    )
                     if replacement is not None:
                         old_target = entity.target_uid
                         self._reset_attack_charge(state, entity, reason="retargeted")
                         self._reset_dash(state, entity, reason="retargeted")
                         self._reset_attack_ramp(state, entity, reason="retargeted")
                         entity.target_uid = replacement
+                        if entity.pending_target_uid == old_target:
+                            entity.pending_target_uid = None
+                            entity.windup_remaining_us = 0
+                            entity.attack_load_remaining_us = 0
                         self._emit(
                             state,
                             "target_changed",
@@ -1710,7 +2119,11 @@ class BattleEngine:
                             target_uid=replacement,
                         )
             if entity.target_uid is None:
-                target_uid = self._choose_target(state, entity)
+                target_uid = self._choose_target(
+                    state,
+                    entity,
+                    alive_entities=alive_entities,
+                )
                 if target_uid is not None:
                     entity.target_uid = target_uid
                     self._emit(state, "target_changed", uid=entity.uid, old_target=None, target_uid=target_uid)
@@ -1765,8 +2178,15 @@ class BattleEngine:
             return False
         return bool(definition.mechanics.get("targetable_during_deploy"))
 
-    def _choose_target(self, state: BattleState, source: EntityState) -> int | None:
+    def _choose_target(
+        self,
+        state: BattleState,
+        source: EntityState,
+        *,
+        alive_entities: list[EntityState] | None = None,
+    ) -> int | None:
         definition = self._definition(source)
+        alive = self._alive_entities(state) if alive_entities is None else alive_entities
         if source.concealed_active:
             return None
         # Passive collectors/spawners have no attack cadence or range.  They
@@ -1786,7 +2206,7 @@ class BattleEngine:
                 return None
             nearby = [
                 target
-                for target in self._alive_entities(state)
+                for target in alive
                 if target.owner != source.owner
                 and target.kind != "tower"
                 and self._targetable_for_acquisition(state, target)
@@ -1794,38 +2214,46 @@ class BattleEngine:
                 and self._edge_distance(source, target) <= sight
             ]
             return self._nearest_uid(source, nearby)
-        nearby = self._nearby_non_tower_targets(state, source)
+        nearby = self._nearby_non_tower_targets(
+            state,
+            source,
+            alive_entities=alive,
+        )
+        min_attack_range = int(definition.mechanics.get("min_attack_range_mtile") or 0)
         nearby.extend(
             target
-            for target in self._alive_entities(state)
+            for target in alive
             if target.owner != source.owner
             and target.kind == "tower"
             and self._target_allowed(source, target)
             and self._edge_distance(source, target) <= sight
             and self._edge_distance(source, target)
-            >= int(definition.mechanics.get("min_attack_range_mtile") or 0)
+            >= min_attack_range
         )
         if nearby:
-            return self._preferred_target_uid(state, source, nearby)
+            return self._preferred_target_uid(
+                state,
+                source,
+                nearby,
+                alive_entities=alive,
+            )
         towers = [
             target
-            for target in self._alive_entities(state)
+            for target in alive
             if target.owner != source.owner
             and target.kind == "tower"
             and target.role != "king"
             and self._target_allowed(source, target)
-            and self._edge_distance(source, target)
-            >= int(definition.mechanics.get("min_attack_range_mtile") or 0)
+            and self._edge_distance(source, target) >= min_attack_range
         ]
         if not towers:
             towers = [
                 target
-                for target in self._alive_entities(state)
+                for target in alive
                 if target.owner != source.owner
                 and target.kind == "tower"
                 and self._target_allowed(source, target)
-                and self._edge_distance(source, target)
-                >= int(definition.mechanics.get("min_attack_range_mtile") or 0)
+                and self._edge_distance(source, target) >= min_attack_range
             ]
         return self._nearest_uid(source, towers)
 
@@ -1833,21 +2261,24 @@ class BattleEngine:
         self,
         state: BattleState,
         source: EntityState,
+        *,
+        alive_entities: list[EntityState] | None = None,
     ) -> list[EntityState]:
         definition = self._definition(source)
         if definition.sight_range_mtile is None or definition.damage is None:
             return []
         sight = self._sight_range(source)
+        min_attack_range = int(definition.mechanics.get("min_attack_range_mtile") or 0)
+        alive = self._alive_entities(state) if alive_entities is None else alive_entities
         return [
             target
-            for target in self._alive_entities(state)
+            for target in alive
             if target.owner != source.owner
             and target.kind != "tower"
             and self._targetable_for_acquisition(state, target)
             and self._target_allowed(source, target)
             and self._edge_distance(source, target) <= sight
-            and self._edge_distance(source, target)
-            >= int(definition.mechanics.get("min_attack_range_mtile") or 0)
+            and self._edge_distance(source, target) >= min_attack_range
         ]
 
     @staticmethod
@@ -1867,6 +2298,8 @@ class BattleEngine:
         state: BattleState,
         source: EntityState,
         candidates: list[EntityState],
+        *,
+        alive_entities: list[EntityState] | None = None,
     ) -> int | None:
         if not candidates:
             return None
@@ -1874,7 +2307,8 @@ class BattleEngine:
         if source.kind == "tower" or not definition.mechanics.get("spread_targets"):
             return self._nearest_uid(source, candidates)
         sibling_targets: dict[int, int] = {}
-        for sibling in self._alive_entities(state):
+        alive = self._alive_entities(state) if alive_entities is None else alive_entities
+        for sibling in alive:
             if (
                 sibling.owner == source.owner
                 and sibling.card_id == source.card_id
@@ -2011,6 +2445,7 @@ class BattleEngine:
                         target.y_mtile,
                         travel,
                     )
+                    self._reset_attack_preload(entity)
                     entity.dash_attack_active = True
                     entity.navigation_waypoints.clear()
                     entity.navigation_cursor = 0
@@ -2210,15 +2645,14 @@ class BattleEngine:
             ):
                 entity.navigation_cursor += 1
             if entity.navigation_cursor < len(entity.navigation_waypoints):
-                cached_waypoint = entity.navigation_waypoints[entity.navigation_cursor]
-                if segment_is_walkable(
-                    self.ruleset.arena,
-                    start,
-                    cached_waypoint,
-                    agent_radius_mtile=radius,
-                    obstacles=obstacles,
-                ):
-                    return cached_waypoint
+                # The route's first edge was validated when it was created.
+                # Ground units only move monotonically toward that waypoint,
+                # and ``navigation_revision`` changes whenever a structure
+                # obstacle is created, transformed, or destroyed. Therefore
+                # rechecking the shrinking sub-segment on every physics tick
+                # is redundant; a topology change will fall through to the
+                # normal route rebuild on the next call.
+                return entity.navigation_waypoints[entity.navigation_cursor]
             else:
                 return start
 
@@ -2264,15 +2698,34 @@ class BattleEngine:
         state: BattleState,
         target_uid: int | None,
     ) -> tuple[NavigationObstacle, ...]:
-        return tuple(
-            NavigationObstacle(
-                uid=entity.uid,
-                x_mtile=entity.x_mtile,
-                y_mtile=entity.y_mtile,
-                radius_mtile=self._collision_radius(entity),
+        # Structure positions are immutable throughout movement/separation;
+        # ``navigation_revision`` is incremented whenever a structure is
+        # created, transformed, or destroyed. Keep one canonical obstacle
+        # tuple for that state/revision and apply the tiny target exclusion at
+        # the end. Holding the state reference also prevents an object-id
+        # reuse from ever returning a stale tuple to an interleaved caller.
+        if (
+            self._navigation_cache_state is not state
+            or self._navigation_cache_revision != state.navigation_revision
+        ):
+            self._navigation_cache_state = state
+            self._navigation_cache_revision = state.navigation_revision
+            self._navigation_cache = tuple(
+                NavigationObstacle(
+                    uid=entity.uid,
+                    x_mtile=entity.x_mtile,
+                    y_mtile=entity.y_mtile,
+                    radius_mtile=self._collision_radius(entity),
+                )
+                for entity in self._alive_entities(state)
+                if entity.kind in {"building", "tower"}
             )
-            for entity in self._alive_entities(state)
-            if entity.kind in {"building", "tower"} and entity.uid != target_uid
+        if target_uid is None:
+            return self._navigation_cache
+        return tuple(
+            obstacle
+            for obstacle in self._navigation_cache
+            if obstacle.uid != target_uid
         )
 
     def _position_clear_of_structures(
@@ -2307,79 +2760,95 @@ class BattleEngine:
     def _separate_entities(self, state: BattleState) -> None:
         """Resolve troop/structure overlap with stable symmetric iterations."""
 
+        alive_entities = self._alive_entities(state)
         movable = [
             entity
-            for entity in self._alive_entities(state)
+            for entity in alive_entities
             if (
                 entity.kind == "troop"
                 and entity.carried_by_uid is None
                 and entity.deploy_remaining_us <= 0
             )
         ]
-        for _ in range(3):
-            displacement = {entity.uid: [0, 0] for entity in movable}
-            for index, left in enumerate(movable):
-                for right in movable[index + 1 :]:
-                    if self._movement_layer(left) != self._movement_layer(right):
-                        continue
-                    dx = right.x_mtile - left.x_mtile
-                    dy = right.y_mtile - left.y_mtile
-                    distance = distance_mtile(0, 0, dx, dy)
-                    minimum = self._collision_radius(left) + self._collision_radius(right)
-                    if distance >= minimum:
-                        continue
-                    overlap = minimum - distance
-                    left_mass = self._mass(left)
-                    right_mass = self._mass(right)
-                    total_mass = left_mass + right_mass
-                    # Displacement is inversely proportional to mass. Stable
-                    # remainder assignment preserves the exact overlap while
-                    # making a heavier tank push a lighter troop farther.
-                    left_push = overlap * right_mass // total_mass
-                    right_push = overlap - left_push
-                    if distance == 0:
-                        direction = -1 if (left.uid + right.uid) % 2 else 1
-                        unit_x, unit_y, denominator = direction, 0, 1
-                    else:
-                        unit_x, unit_y, denominator = dx, dy, distance
-                    displacement[left.uid][0] -= unit_x * left_push // denominator
-                    displacement[left.uid][1] -= unit_y * left_push // denominator
-                    displacement[right.uid][0] += unit_x * right_push // denominator
-                    displacement[right.uid][1] += unit_y * right_push // denominator
+        if len(movable) > 1:
+            # The pairwise pass is deliberately a scratch SoA, not a second
+            # authoritative state.  ``movable`` is already in the canonical
+            # UID order; keeping one column per immutable-in-this-phase value
+            # removes repeated dataclass/ruleset lookups without changing the
+            # pair sequence or any fixed-point arithmetic.
+            uids = [entity.uid for entity in movable]
+            layers = [self._movement_layer(entity) for entity in movable]
+            radii = [self._collision_radius(entity) for entity in movable]
+            masses = [self._mass(entity) for entity in movable]
+            count = len(movable)
 
-            changed = False
-            for entity in movable:
-                dx, dy = displacement[entity.uid]
-                if not (dx or dy):
-                    continue
-                candidate_x = min(
-                    self.ruleset.arena.width_mtile - 1,
-                    max(0, entity.x_mtile + dx),
-                )
-                candidate_y = min(
-                    self.ruleset.arena.height_mtile - 1,
-                    max(0, entity.y_mtile + dy),
-                )
-                if self._position_clear_of_structures(
-                    state,
-                    entity,
-                    candidate_x,
-                    candidate_y,
-                    exclude_target=False,
-                ):
-                    entity.x_mtile = candidate_x
-                    entity.y_mtile = candidate_y
-                    changed = True
-            if not changed:
-                break
+            for _ in range(3):
+                # Positions are written back only after the complete pair pass,
+                # exactly as in the object-based implementation.  Re-read them
+                # per pass because the prior pass may have moved an entity.
+                x_mtile = [entity.x_mtile for entity in movable]
+                y_mtile = [entity.y_mtile for entity in movable]
+                displacement_x = [0] * count
+                displacement_y = [0] * count
+                for left_index in range(count - 1):
+                    for right_index in range(left_index + 1, count):
+                        if layers[left_index] != layers[right_index]:
+                            continue
+                        dx = x_mtile[right_index] - x_mtile[left_index]
+                        dy = y_mtile[right_index] - y_mtile[left_index]
+                        distance = distance_mtile(0, 0, dx, dy)
+                        minimum = radii[left_index] + radii[right_index]
+                        if distance >= minimum:
+                            continue
+                        overlap = minimum - distance
+                        left_mass = masses[left_index]
+                        right_mass = masses[right_index]
+                        total_mass = left_mass + right_mass
+                        # Displacement is inversely proportional to mass. Stable
+                        # remainder assignment preserves the exact overlap while
+                        # making a heavier tank push a lighter troop farther.
+                        left_push = overlap * right_mass // total_mass
+                        right_push = overlap - left_push
+                        if distance == 0:
+                            direction = -1 if (uids[left_index] + uids[right_index]) % 2 else 1
+                            unit_x, unit_y, denominator = direction, 0, 1
+                        else:
+                            unit_x, unit_y, denominator = dx, dy, distance
+                        displacement_x[left_index] -= unit_x * left_push // denominator
+                        displacement_y[left_index] -= unit_y * left_push // denominator
+                        displacement_x[right_index] += unit_x * right_push // denominator
+                        displacement_y[right_index] += unit_y * right_push // denominator
+
+                changed = False
+                for index, entity in enumerate(movable):
+                    dx = displacement_x[index]
+                    dy = displacement_y[index]
+                    if not (dx or dy):
+                        continue
+                    candidate_x = min(
+                        self.ruleset.arena.width_mtile - 1,
+                        max(0, entity.x_mtile + dx),
+                    )
+                    candidate_y = min(
+                        self.ruleset.arena.height_mtile - 1,
+                        max(0, entity.y_mtile + dy),
+                    )
+                    if self._position_clear_of_structures(
+                        state,
+                        entity,
+                        candidate_x,
+                        candidate_y,
+                        exclude_target=False,
+                    ):
+                        entity.x_mtile = candidate_x
+                        entity.y_mtile = candidate_y
+                        changed = True
+                if not changed:
+                    break
         # A building may be deployed underneath a moving troop. Visibility
         # planning cannot start from inside an inflated obstacle, so project
         # any remaining troop/structure overlap out before the next tick.
-        structures = [
-            entity
-            for entity in self._alive_entities(state)
-            if entity.kind in {"building", "tower"}
-        ]
+        structures = [entity for entity in alive_entities if entity.kind in {"building", "tower"}]
         for troop in movable:
             if self._movement_layer(troop) == "air":
                 continue
@@ -2478,8 +2947,9 @@ class BattleEngine:
         # for Sparky: its cooldown is deliberately cleared after a shot so
         # the next four-second charge can begin on the following tick.
         resolved_this_tick: set[int] = set()
+        alive_entities = self._alive_entities(state)
         # Complete attacks which were already winding up.
-        for entity in self._alive_entities(state):
+        for entity in alive_entities:
             if entity.windup_remaining_us <= 0 or self._is_frozen(entity):
                 continue
             progress = self._attack_time_progress(entity, dt)
@@ -2488,7 +2958,13 @@ class BattleEngine:
                 self._resolve_attack(state, entity)
                 resolved_this_tick.add(entity.uid)
         # Cooldowns and new attack starts are stable by UID.
-        for entity in self._alive_entities(state):
+        for entity in alive_entities:
+            # A resolving attack may have reduced this entity to zero HP (or
+            # consumed a suicide attacker). The next canonical alive scan
+            # would omit it; keep the same filter while reusing the stable
+            # UID-ordered snapshot.
+            if not entity.alive or entity.hp <= 0:
+                continue
             # Preserve the legacy scheduler's same-tick cooldown accounting
             # for ordinary attacks.  Only a recharge-style wind-up (Sparky)
             # needs the guard; its cooldown is intentionally zero after the
@@ -2509,9 +2985,40 @@ class BattleEngine:
             if entity.target_uid is None:
                 continue
             target = state.entities.get(entity.target_uid)
-            if target is None or not target.alive or not self._in_attack_range(entity, target):
+            if target is None or not target.alive:
                 continue
             definition = self._definition(entity)
+            if (
+                definition.attack_interval_us is None
+                or definition.damage is None
+                or definition.range_mtile is None
+            ):
+                continue
+
+            # The game preloads the first attack while a troop is moving.  A
+            # range-only scheduler starts the first-hit clock too late: a
+            # troop that has already spent that interval walking still waits
+            # the full first-hit delay after reaching its target.  Keep the
+            # preload target in the normal pending-target field so the state
+            # remains replayable without another hidden map.
+            first_attack_ready = False
+            if entity.attack_count == 0:
+                if entity.pending_target_uid != target.uid:
+                    entity.pending_target_uid = target.uid
+                    entity.attack_load_remaining_us = max(
+                        0, int(definition.first_hit_delay_us or 0)
+                    )
+                if entity.attack_load_remaining_us > 0:
+                    progress = self._attack_time_progress(entity, dt)
+                    entity.attack_load_remaining_us = max(
+                        0, entity.attack_load_remaining_us - progress
+                    )
+                first_attack_ready = entity.attack_load_remaining_us == 0
+                if not first_attack_ready:
+                    continue
+
+            if not self._in_attack_range(entity, target):
+                continue
             if (
                 entity.kind != "tower"
                 and
@@ -2522,14 +3029,10 @@ class BattleEngine:
                 # not allow the generic attack scheduler to fire while they
                 # are still inside their authored attack range.
                 continue
-            if (
-                definition.attack_interval_us is None
-                or definition.damage is None
-                or definition.range_mtile is None
-            ):
-                continue
             interval = int(definition.attack_interval_us)
-            delay = int(definition.first_hit_delay_us)
+            delay = 0 if first_attack_ready and entity.attack_count == 0 else int(
+                definition.first_hit_delay_us or 0
+            )
             if entity.stealth_active:
                 self._break_stealth(state, entity)
             entity.attack_cooldown_us = interval
@@ -2546,7 +3049,11 @@ class BattleEngine:
             if delay == 0:
                 self._resolve_attack(state, entity)
                 resolved_this_tick.add(entity.uid)
-        self._advance_secondary_attacks(state, dt)
+        self._advance_secondary_attacks(
+            state,
+            dt,
+            alive_entities=alive_entities,
+        )
 
     def _break_stealth(self, state: BattleState, entity: EntityState) -> None:
         """Reveal a stealth troop for its attack/re-cloak lifecycle."""
@@ -2568,7 +3075,13 @@ class BattleEngine:
             recloak_us=entity.stealth_remaining_us,
         )
 
-    def _advance_secondary_attacks(self, state: BattleState, dt: int) -> None:
+    def _advance_secondary_attacks(
+        self,
+        state: BattleState,
+        dt: int,
+        *,
+        alive_entities: list[EntityState] | None = None,
+    ) -> None:
         """Advance independent weapon channels (currently Goblin Machine).
 
         A secondary weapon deliberately does not reuse ``target_uid`` or the
@@ -2577,7 +3090,11 @@ class BattleEngine:
         stopping and resuming a replay cannot shift the rocket cadence.
         """
 
-        for entity in self._alive_entities(state):
+        if alive_entities is None:
+            alive_entities = self._alive_entities(state)
+        for entity in alive_entities:
+            if not entity.alive or entity.hp <= 0:
+                continue
             if entity.deploy_remaining_us > 0 or entity.concealed_active or self._is_frozen(entity):
                 continue
             definition = self._definition(entity)
@@ -2595,7 +3112,9 @@ class BattleEngine:
             if entity.secondary_windup_remaining_us == 0:
                 self._resolve_secondary_attack(state, entity)
 
-        for entity in self._alive_entities(state):
+        for entity in alive_entities:
+            if not entity.alive or entity.hp <= 0:
+                continue
             if entity.deploy_remaining_us > 0 or entity.concealed_active or self._is_frozen(entity):
                 continue
             definition = self._definition(entity)
@@ -2752,6 +3271,7 @@ class BattleEngine:
     def _resolve_attack(self, state: BattleState, source: EntityState) -> None:
         target_uid = source.pending_target_uid
         source.pending_target_uid = None
+        source.attack_load_remaining_us = 0
         if target_uid is None or not source.alive or source.concealed_active:
             return
         target = state.entities.get(target_uid)
@@ -3115,6 +3635,7 @@ class BattleEngine:
             source.y_mtile,
             travel,
         )
+        self._reset_attack_preload(target)
         target.navigation_waypoints.clear()
         target.navigation_cursor = 0
         target.navigation_revision = -1
@@ -3304,6 +3825,8 @@ class BattleEngine:
                     projectile.target_x_mtile = source.x_mtile
                     projectile.target_y_mtile = source.y_mtile
             old_x, old_y = projectile.x_mtile, projectile.y_mtile
+            projectile.previous_x_mtile = old_x
+            projectile.previous_y_mtile = old_y
             numerator = projectile.speed_mtile_per_s * dt + projectile.movement_remainder
             travel, projectile.movement_remainder = divmod(numerator, SECOND_US)
             remaining = distance_mtile(
@@ -3344,6 +3867,8 @@ class BattleEngine:
                         projectile.target_y_mtile = source.y_mtile
                         projectile.speed_mtile_per_s = int(raw_return.get("return_speed_mtile_per_s") or projectile.speed_mtile_per_s)
                         projectile.movement_remainder = 0
+                        projectile.previous_x_mtile = projectile.x_mtile
+                        projectile.previous_y_mtile = projectile.y_mtile
                         self._emit(
                             state,
                             "projectile_return_started",
@@ -3361,6 +3886,11 @@ class BattleEngine:
                     )
                     if spawn:
                         child = self.ruleset.card(str(spawn["card_id"]))
+                        child_deploy_time_us = (
+                            int(spawn["child_deploy_time_us"])
+                            if spawn.get("child_deploy_time_us") is not None
+                            else None
+                        )
                         for _ in range(int(spawn["count"])):
                             self._spawn_single_at(
                                 state,
@@ -3370,6 +3900,7 @@ class BattleEngine:
                                 y_mtile=projectile.target_y_mtile,
                                 parent_uid=projectile.source_uid,
                                 level_multiplier_permille=projectile.level_multiplier_permille,
+                                deploy_remaining_us=child_deploy_time_us,
                             )
                 projectile.alive = False
                 self._emit(
@@ -3508,6 +4039,11 @@ class BattleEngine:
                 spawn = definition.mechanics.get("spawn_on_impact")
                 if spawn:
                     child = self.ruleset.card(str(spawn["card_id"]))
+                    child_deploy_time_us = (
+                        int(spawn["child_deploy_time_us"])
+                        if spawn.get("child_deploy_time_us") is not None
+                        else None
+                    )
                     for _ in range(int(spawn["count"])):
                         self._spawn_single_at(
                             state,
@@ -3517,6 +4053,7 @@ class BattleEngine:
                             y_mtile=projectile.target_y_mtile,
                             parent_uid=projectile.source_uid,
                             level_multiplier_permille=projectile.level_multiplier_permille,
+                            deploy_remaining_us=child_deploy_time_us,
                         )
         if (
             definition is not None
@@ -3710,6 +4247,7 @@ class BattleEngine:
                 target.attack_cooldown_us = 0
                 target.windup_remaining_us = 0
                 target.pending_target_uid = None
+                target.attack_load_remaining_us = 0
             self._emit(
                 state,
                 "multi_target_hit",
@@ -3817,6 +4355,7 @@ class BattleEngine:
             target.attack_cooldown_us = 0
             target.windup_remaining_us = 0
             target.pending_target_uid = None
+            target.attack_load_remaining_us = 0
         self._emit(
             state,
             "chain_hit",
@@ -4098,7 +4637,13 @@ class BattleEngine:
             if hasattr(returning, "get")
             else projectile.radius_mtile
         )
-        ax, ay = projectile.origin_x_mtile, projectile.origin_y_mtile
+        if (
+            projectile.previous_x_mtile is not None
+            and projectile.previous_y_mtile is not None
+        ):
+            ax, ay = projectile.previous_x_mtile, projectile.previous_y_mtile
+        else:
+            ax, ay = projectile.origin_x_mtile, projectile.origin_y_mtile
         # Older replay fixtures (and a few component-level callers) construct
         # ``ProjectileState`` directly, before the fixed line-origin fields
         # were added.  Their zero-valued origin is not an authored launch
@@ -4177,6 +4722,12 @@ class BattleEngine:
                 target_uid=target.uid,
                 return_phase=projectile.return_phase,
             )
+        # The next tick (or a direct component-level helper call) must sweep
+        # only the newly traversed segment.  Retaining the launch origin here
+        # repeatedly re-hits every body that lies anywhere behind the current
+        # projectile position.
+        projectile.previous_x_mtile = bx
+        projectile.previous_y_mtile = by
 
     def _impact_area(
         self,
@@ -4237,6 +4788,7 @@ class BattleEngine:
                 target.attack_cooldown_us = 0
                 target.windup_remaining_us = 0
                 target.pending_target_uid = None
+                target.attack_load_remaining_us = 0
             if target.hp > 0:
                 self._apply_knockback(
                     state,
@@ -4418,6 +4970,7 @@ class BattleEngine:
         entity.secondary_pending_target_uid = None
         entity.deploy_remaining_us = int(target_definition.deploy_time_us)
         entity.attack_cooldown_us = int(target_definition.first_hit_delay_us or 0)
+        entity.attack_load_remaining_us = 0
         entity.windup_remaining_us = 0
         entity.secondary_attack_cooldown_us = 0
         entity.secondary_windup_remaining_us = 0
@@ -4546,6 +5099,7 @@ class BattleEngine:
             attacker.attack_cooldown_us = 0
             attacker.windup_remaining_us = 0
             attacker.pending_target_uid = None
+            attacker.attack_load_remaining_us = 0
         self._emit(
             state,
             "reflected_damage",
@@ -4581,6 +5135,7 @@ class BattleEngine:
             self._reset_attack_charge(state, target, reason=kind)
             self._reset_dash(state, target, reason=kind)
             self._reset_attack_ramp(state, target, reason=kind)
+            self._reset_attack_preload(target)
             # A hard CC on an Inferno beam's victim breaks the lock just as a
             # retarget does.  Reset every attacker currently locked to this
             # target in stable UID order; the next acquisition starts stage 1.
@@ -4598,6 +5153,7 @@ class BattleEngine:
                 target.attack_cooldown_us = 0
                 target.windup_remaining_us = 0
                 target.pending_target_uid = None
+                target.attack_load_remaining_us = 0
         on_death_spawn_card_id = status.get("on_death_spawn_card_id")
         on_death_spawn_count = int(status.get("on_death_spawn_count") or 0)
         on_death_spawn_owner = status.get("on_death_spawn_owner")
@@ -4724,6 +5280,7 @@ class BattleEngine:
             destination = candidate(low)
         target.x_mtile, target.y_mtile = destination
         if destination != (origin_x, origin_y):
+            self._reset_attack_preload(target)
             self._reset_attack_charge(state, target, reason="knockback")
             self._reset_dash(state, target, reason="knockback")
             self._reset_attack_ramp(state, target, reason="knockback")
@@ -4792,6 +5349,7 @@ class BattleEngine:
             if entity.pending_target_uid is not None and not state.entities[entity.pending_target_uid].alive:
                 entity.pending_target_uid = None
                 entity.windup_remaining_us = 0
+                entity.attack_load_remaining_us = 0
             if (
                 entity.secondary_pending_target_uid is not None
                 and not state.entities[entity.secondary_pending_target_uid].alive
@@ -5329,6 +5887,25 @@ class BattleEngine:
             distance_mtile=distance,
         )
 
+    def _reset_attack_preload(self, entity: EntityState) -> None:
+        """Reset a first attack's movement-loaded clock after displacement."""
+
+        if entity.attack_count > 0:
+            return
+        target_uid = entity.pending_target_uid or entity.target_uid
+        if target_uid is None:
+            return
+        definition = self._definition(entity)
+        interval = getattr(definition, "attack_interval_us", None)
+        if interval is None:
+            return
+        # A displacement interrupts the loaded attack.  Retain the target
+        # lock, but restart from the full Hit Time rather than the shortened
+        # First Hit time.  This is the documented Fireball/knockback edge.
+        entity.pending_target_uid = target_uid
+        entity.windup_remaining_us = 0
+        entity.attack_load_remaining_us = int(interval)
+
     def _reset_dash(self, state: BattleState, entity: EntityState, *, reason: str) -> None:
         """Cancel a pending Bandit-style dash impact."""
 
@@ -5372,24 +5949,23 @@ class BattleEngine:
         return max(0, center - self._collision_radius(source) - self._collision_radius(target))
 
     def _collision_radius(self, entity: EntityState) -> int:
-        return int(self._definition(entity).collision_radius_mtile or 0)
+        if entity.kind == "tower":
+            return self._tower_collision_radii[entity.card_id]
+        return self._card_collision_radii[entity.card_id]
 
     def _mass(self, entity: EntityState) -> int:
         if entity.kind == "tower":
             return 1_000_000
-        return max(1, int(self.ruleset.cards[entity.card_id].mass or 1))
+        return self._card_masses[entity.card_id]
 
     def _movement_layer(self, entity: EntityState) -> str:
         """Return the entity's physics navigation layer."""
 
         if entity.kind == "tower":
             return "ground"
-        definition = self.ruleset.cards.get(entity.card_id)
-        if definition is None:
-            return "ground"
         if entity.river_airborne_active:
             return "air"
-        return str(definition.mechanics.get("movement_layer") or "ground")
+        return self._card_movement_layers.get(entity.card_id, "ground")
 
     @staticmethod
     def _is_frozen(entity: EntityState) -> bool:
@@ -5581,6 +6157,7 @@ class BattleEngine:
                 entity.spawn_tick,
                 entity.deploy_remaining_us,
                 entity.attack_cooldown_us,
+                entity.attack_load_remaining_us,
                 entity.windup_remaining_us,
                 entity.secondary_attack_cooldown_us,
                 entity.secondary_windup_remaining_us,
@@ -5619,6 +6196,11 @@ class BattleEngine:
                 raise ValueError("entity target UID must be an integer or None")
             if entity.pending_target_uid is not None and type(entity.pending_target_uid) is not int:
                 raise ValueError("pending target UID must be an integer or None")
+            if entity.parent_uid is not None:
+                if type(entity.parent_uid) is not int:
+                    raise ValueError("parent UID must be an integer or None")
+                if entity.parent_uid not in known_uids:
+                    raise ValueError("dangling parent UID")
             if entity.secondary_pending_target_uid is not None and type(entity.secondary_pending_target_uid) is not int:
                 raise ValueError("secondary pending target UID must be an integer or None")
             if entity.navigation_target_uid is not None and type(entity.navigation_target_uid) is not int:
@@ -5688,7 +6270,12 @@ class BattleEngine:
                 raise ValueError("living entity has invalid HP")
             if not entity.alive and entity.hp != 0:
                 raise ValueError("dead entity must have zero HP")
-            if entity.deploy_remaining_us < 0 or entity.attack_cooldown_us < 0 or entity.windup_remaining_us < 0:
+            if (
+                entity.deploy_remaining_us < 0
+                or entity.attack_cooldown_us < 0
+                or entity.attack_load_remaining_us < 0
+                or entity.windup_remaining_us < 0
+            ):
                 raise ValueError("entity clock cannot be negative")
             if (
                 entity.shield_hp < 0
@@ -5847,6 +6434,12 @@ class BattleEngine:
             )
             if any(type(value) is not int for value in projectile_integer_fields):
                 raise ValueError("projectile fixed-point fields must be integers")
+            for coordinate in (
+                projectile.previous_x_mtile,
+                projectile.previous_y_mtile,
+            ):
+                if coordinate is not None and type(coordinate) is not int:
+                    raise ValueError("projectile previous coordinates must be integers or None")
             if any(type(value) is not int or value <= 0 for value in projectile.chain_target_uids):
                 raise ValueError("projectile chain targets must be positive integer UIDs")
             if (

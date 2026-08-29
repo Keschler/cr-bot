@@ -30,7 +30,7 @@
       "damage": 112,
       "deploy_time_us": 1000000,
       "elixir_milli": 3000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 500000,
       "hitpoints": 304,
       "kind": "troop",
       "lifetime_us": null,
@@ -48,6 +48,7 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "homing",
+        "projectile_speed_code": 600,
         "spawn_layout_mtile": [
           [
             0,
@@ -78,6 +79,9 @@
         "catalog_values": [
           "local-card-metadata-2026-08-14"
         ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
         ],
@@ -87,8 +91,19 @@
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
         ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "mechanics.spirit_one_shot": [
           "official-august-2026"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": 5000,
@@ -158,6 +173,7 @@
         "piercing": false,
         "placement_class": "spell_anywhere",
         "projectile_mode": "ballistic_to_point",
+        "projectile_speed_code": 1100,
         "spawn_layout_mtile": [],
         "spell_origin": "own-king-tower",
         "status": null,
@@ -167,10 +183,10 @@
       "move_speed_mtile_per_s": null,
       "name": "Arrows",
       "projectile": {
-        "homing": false,
+        "homing": true,
         "projectile_id": "arrows-projectile",
         "radius_mtile": 0,
-        "speed_mtile_per_s": 12000,
+        "speed_mtile_per_s": 22000,
         "start_radius_mtile": 0
       },
       "provenance": {
@@ -188,6 +204,17 @@
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": null,
@@ -220,7 +247,7 @@
       "damage": 168,
       "deploy_time_us": 1000000,
       "elixir_milli": 4000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 300000,
       "hitpoints": 1152,
       "kind": "troop",
       "lifetime_us": null,
@@ -238,6 +265,7 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "homing",
+        "projectile_speed_code": 500,
         "spawn_layout_mtile": [
           [
             0,
@@ -255,7 +283,7 @@
         "homing": true,
         "projectile_id": "baby-dragon-projectile",
         "radius_mtile": 0,
-        "speed_mtile_per_s": 12000,
+        "speed_mtile_per_s": 10000,
         "start_radius_mtile": 0
       },
       "provenance": {
@@ -265,6 +293,9 @@
         "damage": [
           "official-july-2026"
         ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
         ],
@@ -273,6 +304,17 @@
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": 3500,
@@ -303,7 +345,7 @@
       "damage": 640,
       "deploy_time_us": 1000000,
       "elixir_milli": 5000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 200000,
       "hitpoints": 1676,
       "kind": "troop",
       "lifetime_us": null,
@@ -351,6 +393,9 @@
         "catalog_values": [
           "local-card-metadata-2026-08-14"
         ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
         ],
@@ -389,7 +434,7 @@
       "damage": 194,
       "deploy_time_us": 1000000,
       "elixir_milli": 3000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 400000,
       "hitpoints": 906,
       "kind": "troop",
       "lifetime_us": null,
@@ -431,6 +476,9 @@
         "catalog_values": [
           "local-card-metadata-2026-08-14"
         ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
         ],
@@ -462,13 +510,13 @@
         "barbarian_child"
       ],
       "area_radius_mtile": null,
-      "attack_interval_us": 1300000,
+      "attack_interval_us": 1400000,
       "collision_radius_mtile": 400,
       "crown_tower_damage": null,
       "damage": 192,
       "deploy_time_us": 1000000,
       "elixir_milli": 5000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 400000,
       "hitpoints": 716,
       "kind": "troop",
       "lifetime_us": null,
@@ -503,8 +551,14 @@
       "name": "Barbarian",
       "projectile": null,
       "provenance": {
+        "attack_interval_us": [
+          "official-march-2026"
+        ],
         "catalog_values": [
           "local-card-metadata-2026-08-14"
+        ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
         ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
@@ -543,7 +597,7 @@
       "attack_interval_us": null,
       "collision_radius_mtile": null,
       "crown_tower_damage": 0,
-      "damage": 233,
+      "damage": 232,
       "deploy_time_us": 0,
       "elixir_milli": 2000,
       "first_hit_delay_us": null,
@@ -569,6 +623,7 @@
         "piercing": true,
         "placement_class": "spells",
         "projectile_mode": "rolling_linear",
+        "projectile_speed_code": 200,
         "rolling_range_mtile": 4500,
         "spawn_layout_mtile": [],
         "spawn_on_impact": {
@@ -586,12 +641,15 @@
         "homing": false,
         "projectile_id": "barbarian-barrel-projectile",
         "radius_mtile": 0,
-        "speed_mtile_per_s": 12000,
+        "speed_mtile_per_s": 4000,
         "start_radius_mtile": 0
       },
       "provenance": {
         "catalog_values": [
           "local-card-metadata-2026-08-14"
+        ],
+        "damage": [
+          "official-february-2026"
         ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
@@ -601,6 +659,17 @@
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": null,
@@ -715,13 +784,13 @@
         "barbarians"
       ],
       "area_radius_mtile": null,
-      "attack_interval_us": 1300000,
+      "attack_interval_us": 1400000,
       "collision_radius_mtile": 400,
       "crown_tower_damage": null,
       "damage": 192,
       "deploy_time_us": 1000000,
       "elixir_milli": 5000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 400000,
       "hitpoints": 716,
       "kind": "troop",
       "lifetime_us": null,
@@ -772,8 +841,14 @@
       "name": "Barbarians",
       "projectile": null,
       "provenance": {
+        "attack_interval_us": [
+          "official-march-2026"
+        ],
         "catalog_values": [
           "local-card-metadata-2026-08-14"
+        ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
         ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
@@ -809,13 +884,13 @@
         "bats"
       ],
       "area_radius_mtile": null,
-      "attack_interval_us": 1300000,
+      "attack_interval_us": 1200000,
       "collision_radius_mtile": 400,
       "crown_tower_damage": null,
       "damage": 81,
       "deploy_time_us": 1000000,
       "elixir_milli": 2000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 600000,
       "hitpoints": 81,
       "kind": "troop",
       "lifetime_us": null,
@@ -866,8 +941,14 @@
       "name": "Bats",
       "projectile": null,
       "provenance": {
+        "attack_interval_us": [
+          "official-march-2026"
+        ],
         "catalog_values": [
           "local-card-metadata-2026-08-14"
+        ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
         ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
@@ -907,7 +988,7 @@
       "damage": 268,
       "deploy_time_us": 1000000,
       "elixir_milli": 4000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 300000,
       "hitpoints": 1920,
       "kind": "troop",
       "lifetime_us": null,
@@ -951,6 +1032,9 @@
         ],
         "damage": [
           "official-august-2026"
+        ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
         ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
@@ -999,7 +1083,7 @@
       "damage": 192,
       "deploy_time_us": 1000000,
       "elixir_milli": 4000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 350000,
       "hitpoints": 670,
       "kind": "troop",
       "lifetime_us": null,
@@ -1050,6 +1134,9 @@
         "catalog_values": [
           "local-card-metadata-2026-08-14"
         ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
         ],
@@ -1088,7 +1175,7 @@
       "damage": 222,
       "deploy_time_us": 1000000,
       "elixir_milli": 4000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 500000,
       "hitpoints": 1356,
       "kind": "building",
       "lifetime_us": 30000000,
@@ -1117,6 +1204,7 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "homing",
+        "projectile_speed_code": 500,
         "spawn_layout_mtile": [
           [
             0,
@@ -1131,15 +1219,18 @@
       "move_speed_mtile_per_s": null,
       "name": "Bomb Tower",
       "projectile": {
-        "homing": true,
+        "homing": false,
         "projectile_id": "bomb-tower-projectile",
         "radius_mtile": 0,
-        "speed_mtile_per_s": 12000,
+        "speed_mtile_per_s": 10000,
         "start_radius_mtile": 0
       },
       "provenance": {
         "catalog_values": [
           "local-card-metadata-2026-08-14"
+        ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
         ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
@@ -1149,6 +1240,17 @@
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": 6000,
@@ -1178,7 +1280,7 @@
       "damage": 225,
       "deploy_time_us": 1000000,
       "elixir_milli": 2000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 200000,
       "hitpoints": 304,
       "kind": "troop",
       "lifetime_us": null,
@@ -1196,6 +1298,7 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "homing",
+        "projectile_speed_code": 400,
         "spawn_layout_mtile": [
           [
             0,
@@ -1210,15 +1313,18 @@
       "move_speed_mtile_per_s": 1200,
       "name": "Bomber",
       "projectile": {
-        "homing": true,
+        "homing": false,
         "projectile_id": "bomber-projectile",
         "radius_mtile": 0,
-        "speed_mtile_per_s": 12000,
+        "speed_mtile_per_s": 8000,
         "start_radius_mtile": 0
       },
       "provenance": {
         "catalog_values": [
           "local-card-metadata-2026-08-14"
+        ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
         ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
@@ -1228,6 +1334,17 @@
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": 4500,
@@ -1257,7 +1374,7 @@
       "damage": 289,
       "deploy_time_us": 1000000,
       "elixir_milli": 5000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 500000,
       "hitpoints": 2081,
       "kind": "troop",
       "lifetime_us": null,
@@ -1280,6 +1397,7 @@
         "piercing": true,
         "placement_class": "own_ground",
         "projectile_mode": "homing",
+        "projectile_speed_code": 170,
         "spawn_layout_mtile": [
           [
             0,
@@ -1294,15 +1412,18 @@
       "move_speed_mtile_per_s": 700,
       "name": "Bowler",
       "projectile": {
-        "homing": true,
+        "homing": false,
         "projectile_id": "bowler-projectile",
         "radius_mtile": 0,
-        "speed_mtile_per_s": 12000,
+        "speed_mtile_per_s": 3400,
         "start_radius_mtile": 0
       },
       "provenance": {
         "catalog_values": [
           "local-card-metadata-2026-08-14"
+        ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
         ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
@@ -1312,6 +1433,17 @@
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ],
         "range_mtile": [
           "official-august-2026"
@@ -1387,6 +1519,9 @@
         "damage": [
           "official-august-2026"
         ],
+        "first_hit_delay_us": [
+          "official-april-2025"
+        ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14",
           "official-august-2026"
@@ -1424,7 +1559,7 @@
       "damage": 202,
       "deploy_time_us": 1000000,
       "elixir_milli": 3000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 1000000,
       "hitpoints": 824,
       "kind": "building",
       "lifetime_us": 30000000,
@@ -1441,6 +1576,7 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "homing",
+        "projectile_speed_code": 1000,
         "spawn_layout_mtile": [
           [
             0,
@@ -1469,6 +1605,9 @@
           "royaleapi-cards-2026-04-19",
           "deckmelon-cannon-2026-08-11"
         ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "identity": [
           "royaleapi-cards-2026-04-19"
         ],
@@ -1487,12 +1626,19 @@
         "mass": [
           "royaleapi-buildings-2026-04-19"
         ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "projectile.start_radius_mtile": [
           "royaleapi-buildings-2026-04-19"
         ],
         "projectile_speed_conversion": [
           "royaleapi-projectiles-2026-04-19",
-          "simulator-baseline-assumptions"
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": 5500,
@@ -1540,7 +1686,7 @@
       "damage": 212,
       "deploy_time_us": 1000000,
       "elixir_milli": 5000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 500000,
       "hitpoints": 1809,
       "kind": "troop",
       "lifetime_us": null,
@@ -1565,6 +1711,7 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "homing",
+        "projectile_speed_code": 1000,
         "spawn_layout_mtile": [
           [
             0,
@@ -1582,12 +1729,15 @@
         "homing": true,
         "projectile_id": "cannon-cart-projectile",
         "radius_mtile": 0,
-        "speed_mtile_per_s": 12000,
+        "speed_mtile_per_s": 20000,
         "start_radius_mtile": 0
       },
       "provenance": {
         "catalog_values": [
           "local-card-metadata-2026-08-14"
+        ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
         ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14",
@@ -1599,6 +1749,17 @@
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": 5500,
@@ -1629,7 +1790,7 @@
       "damage": 212,
       "deploy_time_us": 0,
       "elixir_milli": 0,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 500000,
       "hitpoints": 1809,
       "kind": "building",
       "lifetime_us": 30000000,
@@ -1648,6 +1809,7 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "homing",
+        "projectile_speed_code": 1000,
         "spawn_layout_mtile": [
           [
             0,
@@ -1665,12 +1827,15 @@
         "homing": true,
         "projectile_id": "cannon-cart-projectile",
         "radius_mtile": 0,
-        "speed_mtile_per_s": 12000,
+        "speed_mtile_per_s": 20000,
         "start_radius_mtile": 0
       },
       "provenance": {
         "catalog_values": [
           "local-card-metadata-2026-08-14"
+        ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
         ],
         "generated_mechanics": [
           "official-may-2025-cannon-cart-rework",
@@ -1683,6 +1848,17 @@
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12",
           "deckshop-cannon-cart-2026-08-16"
+        ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": 5500,
@@ -1868,7 +2044,7 @@
       "damage": 266,
       "deploy_time_us": 1000000,
       "elixir_milli": 4000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 400000,
       "hitpoints": 1200,
       "kind": "troop",
       "lifetime_us": null,
@@ -1916,6 +2092,9 @@
         "catalog_values": [
           "local-card-metadata-2026-08-14"
         ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
         ],
@@ -1953,7 +2132,7 @@
       "damage": 151,
       "deploy_time_us": 1000000,
       "elixir_milli": 3000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 350000,
       "hitpoints": 261,
       "kind": "troop",
       "lifetime_us": null,
@@ -1971,6 +2150,7 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "homing",
+        "projectile_speed_code": 800,
         "spawn_layout_mtile": [
           [
             0,
@@ -1985,15 +2165,18 @@
       "move_speed_mtile_per_s": 2400,
       "name": "Dart Goblin",
       "projectile": {
-        "homing": false,
+        "homing": true,
         "projectile_id": "dart-goblin-projectile",
         "radius_mtile": 0,
-        "speed_mtile_per_s": 12000,
+        "speed_mtile_per_s": 16000,
         "start_radius_mtile": 0
       },
       "provenance": {
         "catalog_values": [
           "local-card-metadata-2026-08-14"
+        ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
         ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
@@ -2003,10 +2186,24 @@
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "sight_range_mtile": [
+          "official-march-2026"
         ]
       },
       "range_mtile": 6500,
-      "sight_range_mtile": 6500,
+      "sight_range_mtile": 7000,
       "spawn_count": 1,
       "targets": [
         "air",
@@ -2136,8 +2333,8 @@
       "damage": 192,
       "deploy_time_us": 1000000,
       "elixir_milli": 5000,
-      "first_hit_delay_us": 0,
-      "hitpoints": 949,
+      "first_hit_delay_us": 700000,
+      "hitpoints": 1049,
       "kind": "troop",
       "lifetime_us": null,
       "mass": 1,
@@ -2159,6 +2356,7 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "homing",
+        "projectile_speed_code": 2000,
         "reset_attack": true,
         "spawn_layout_mtile": [
           [
@@ -2182,21 +2380,38 @@
         "homing": true,
         "projectile_id": "electro-dragon-projectile",
         "radius_mtile": 0,
-        "speed_mtile_per_s": 12000,
+        "speed_mtile_per_s": 40000,
         "start_radius_mtile": 0
       },
       "provenance": {
         "catalog_values": [
           "local-card-metadata-2026-08-14"
         ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
+        ],
+        "hitpoints": [
+          "official-june-2026"
         ],
         "identity": [
           "local-card-metadata-2026-08-14"
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": 3500,
@@ -2319,7 +2534,7 @@
       "damage": 99,
       "deploy_time_us": 1000000,
       "elixir_milli": 1000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 200000,
       "hitpoints": 215,
       "kind": "troop",
       "lifetime_us": null,
@@ -2343,6 +2558,7 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "homing",
+        "projectile_speed_code": 2000,
         "reset_attack": true,
         "spawn_layout_mtile": [
           [
@@ -2366,12 +2582,15 @@
         "homing": true,
         "projectile_id": "electro-spirit-projectile",
         "radius_mtile": 0,
-        "speed_mtile_per_s": 12000,
+        "speed_mtile_per_s": 40000,
         "start_radius_mtile": 0
       },
       "provenance": {
         "catalog_values": [
           "local-card-metadata-2026-08-14"
+        ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
         ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
@@ -2390,6 +2609,17 @@
         ],
         "mechanics.crown_tower_connection": [
           "official-august-2026"
+        ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": 2500,
@@ -2420,7 +2650,7 @@
       "damage": 118,
       "deploy_time_us": 1000000,
       "elixir_milli": 4000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 600000,
       "hitpoints": 714,
       "kind": "troop",
       "lifetime_us": null,
@@ -2480,6 +2710,9 @@
         "catalog_values": [
           "local-card-metadata-2026-08-14"
         ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
         ],
@@ -2518,7 +2751,7 @@
       "damage": 384,
       "deploy_time_us": 1000000,
       "elixir_milli": 6000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 500000,
       "hitpoints": 1341,
       "kind": "troop",
       "lifetime_us": null,
@@ -2563,6 +2796,9 @@
         "catalog_values": [
           "local-card-metadata-2026-08-14"
         ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
         ],
@@ -2606,7 +2842,7 @@
       "damage": 64,
       "deploy_time_us": 0,
       "elixir_milli": 0,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 1000000,
       "hitpoints": 360,
       "kind": "troop",
       "lifetime_us": null,
@@ -2646,6 +2882,9 @@
       "name": "Elixir Blob",
       "projectile": null,
       "provenance": {
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "generated_mechanics": [
           "deckmelon-split-level11-2026-08-16"
         ],
@@ -2769,7 +3008,7 @@
       "damage": 253,
       "deploy_time_us": 1000000,
       "elixir_milli": 3000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 1000000,
       "hitpoints": 1569,
       "kind": "troop",
       "lifetime_us": null,
@@ -2820,6 +3059,9 @@
         "catalog_values": [
           "local-card-metadata-2026-08-14"
         ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14",
           "deckmelon-split-level11-2026-08-16"
@@ -2859,7 +3101,7 @@
       "damage": 128,
       "deploy_time_us": 0,
       "elixir_milli": 0,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 1000000,
       "hitpoints": 762,
       "kind": "troop",
       "lifetime_us": null,
@@ -2906,6 +3148,9 @@
       "name": "Elixir Golemite",
       "projectile": null,
       "provenance": {
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "generated_mechanics": [
           "deckmelon-split-level11-2026-08-16"
         ],
@@ -2941,10 +3186,10 @@
       "attack_interval_us": 2400000,
       "collision_radius_mtile": 400,
       "crown_tower_damage": null,
-      "damage": 168,
+      "damage": 179,
       "deploy_time_us": 1000000,
       "elixir_milli": 5000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 500000,
       "hitpoints": 1280,
       "kind": "troop",
       "lifetime_us": null,
@@ -2962,6 +3207,7 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "homing",
+        "projectile_speed_code": 550,
         "returning_projectile": {
           "return_radius_mtile": 1000,
           "return_speed_mtile_per_s": 12000
@@ -2983,12 +3229,18 @@
         "homing": false,
         "projectile_id": "executioner-projectile",
         "radius_mtile": 0,
-        "speed_mtile_per_s": 12000,
+        "speed_mtile_per_s": 11000,
         "start_radius_mtile": 0
       },
       "provenance": {
         "catalog_values": [
           "local-card-metadata-2026-08-14"
+        ],
+        "damage": [
+          "official-march-2026"
+        ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
         ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
@@ -2998,6 +3250,17 @@
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ],
         "range_mtile": [
           "official-august-2026"
@@ -3031,7 +3294,7 @@
       "damage": 207,
       "deploy_time_us": 1000000,
       "elixir_milli": 1000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 200000,
       "hitpoints": 215,
       "kind": "troop",
       "lifetime_us": null,
@@ -3049,6 +3312,7 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "homing",
+        "projectile_speed_code": 400,
         "spawn_layout_mtile": [
           [
             0,
@@ -3066,12 +3330,15 @@
         "homing": true,
         "projectile_id": "fire-spirit-projectile",
         "radius_mtile": 0,
-        "speed_mtile_per_s": 12000,
+        "speed_mtile_per_s": 8000,
         "start_radius_mtile": 0
       },
       "provenance": {
         "catalog_values": [
           "local-card-metadata-2026-08-14"
+        ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
         ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
@@ -3087,6 +3354,17 @@
         ],
         "mechanics.crown_tower_connection": [
           "official-august-2026"
+        ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": 2500,
@@ -3131,6 +3409,7 @@
         "piercing": false,
         "placement_class": "spell_anywhere",
         "projectile_mode": "ballistic_to_point",
+        "projectile_speed_code": 600,
         "spawn_layout_mtile": [],
         "spell_origin": "own-king-tower",
         "status": null,
@@ -3167,9 +3446,16 @@
           "deckmelon-fireball-2026-08-11",
           "deckshop-core-level11-2026-08-15"
         ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "projectile_speed_conversion": [
           "royaleapi-projectiles-2026-04-19",
-          "simulator-baseline-assumptions"
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ],
         "spell_origin": [
           "simulator-baseline-assumptions"
@@ -3211,7 +3497,7 @@
       "damage": 64,
       "deploy_time_us": 1000000,
       "elixir_milli": 3000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 650000,
       "hitpoints": 304,
       "kind": "troop",
       "lifetime_us": null,
@@ -3237,6 +3523,7 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "homing",
+        "projectile_speed_code": 500,
         "recoil_mtile": 1500,
         "spawn_layout_mtile": [
           [
@@ -3252,15 +3539,18 @@
       "move_speed_mtile_per_s": 1800,
       "name": "Firecracker",
       "projectile": {
-        "homing": true,
+        "homing": false,
         "projectile_id": "firecracker-projectile",
         "radius_mtile": 0,
-        "speed_mtile_per_s": 12000,
+        "speed_mtile_per_s": 10000,
         "start_radius_mtile": 0
       },
       "provenance": {
         "catalog_values": [
           "local-card-metadata-2026-08-14"
+        ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
         ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
@@ -3270,6 +3560,17 @@
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": 6000,
@@ -3300,7 +3601,7 @@
       "damage": 194,
       "deploy_time_us": 1000000,
       "elixir_milli": 3000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 100000,
       "hitpoints": 870,
       "kind": "troop",
       "lifetime_us": null,
@@ -3341,6 +3642,9 @@
         "catalog_values": [
           "local-card-metadata-2026-08-14"
         ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
         ],
@@ -3378,7 +3682,7 @@
       "damage": 171,
       "deploy_time_us": 1000000,
       "elixir_milli": 4000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 500000,
       "hitpoints": 614,
       "kind": "troop",
       "lifetime_us": null,
@@ -3396,6 +3700,7 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "homing",
+        "projectile_speed_code": 800,
         "spawn_layout_mtile": [
           [
             0,
@@ -3413,12 +3718,15 @@
         "homing": true,
         "projectile_id": "flying-machine-projectile",
         "radius_mtile": 0,
-        "speed_mtile_per_s": 12000,
+        "speed_mtile_per_s": 16000,
         "start_radius_mtile": 0
       },
       "provenance": {
         "catalog_values": [
           "local-card-metadata-2026-08-14"
+        ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
         ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
@@ -3428,6 +3736,17 @@
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": 6000,
@@ -3640,7 +3959,7 @@
       "damage": 253,
       "deploy_time_us": 1000000,
       "elixir_milli": 5000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 500000,
       "hitpoints": 3968,
       "kind": "troop",
       "lifetime_us": null,
@@ -3675,6 +3994,9 @@
       "provenance": {
         "catalog_values": [
           "local-card-metadata-2026-08-14"
+        ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
         ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
@@ -3714,7 +4036,7 @@
       "damage": 276,
       "deploy_time_us": 1000000,
       "elixir_milli": 6000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 300000,
       "hitpoints": 1313,
       "kind": "troop",
       "lifetime_us": null,
@@ -3761,6 +4083,9 @@
       "provenance": {
         "catalog_values": [
           "local-card-metadata-2026-08-14"
+        ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
         ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
@@ -3817,6 +4142,7 @@
         "piercing": false,
         "placement_class": "spell_anywhere",
         "projectile_mode": "ballistic_to_point",
+        "projectile_speed_code": 800,
         "spawn_layout_mtile": [],
         "spell_origin": "own-king-tower",
         "status": {
@@ -3834,7 +4160,7 @@
         "homing": false,
         "projectile_id": "giant-snowball-projectile",
         "radius_mtile": 0,
-        "speed_mtile_per_s": 12000,
+        "speed_mtile_per_s": 16000,
         "start_radius_mtile": 0
       },
       "provenance": {
@@ -3852,6 +4178,17 @@
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": null,
@@ -3885,7 +4222,7 @@
       "damage": 125,
       "deploy_time_us": 0,
       "elixir_milli": 0,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 400000,
       "hitpoints": 202,
       "kind": "troop",
       "lifetime_us": null,
@@ -3926,6 +4263,9 @@
         "damage": [
           "official-august-2026"
         ],
+        "first_hit_delay_us": [
+          "official-april-2025"
+        ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
         ],
@@ -3960,7 +4300,7 @@
       "attack_interval_us": null,
       "collision_radius_mtile": null,
       "crown_tower_damage": 0,
-      "damage": 120,
+      "damage": 0,
       "deploy_time_us": 0,
       "elixir_milli": 3000,
       "first_hit_delay_us": null,
@@ -3981,9 +4321,11 @@
         "piercing": false,
         "placement_class": "spell_anywhere",
         "projectile_mode": "ballistic_to_point",
+        "projectile_speed_code": 400,
         "spawn_layout_mtile": [],
         "spawn_on_impact": {
-          "card_id": "goblins",
+          "card_id": "goblin",
+          "child_deploy_time_us": 1100000,
           "count": 3
         },
         "spell_origin": "own-king-tower",
@@ -3997,12 +4339,15 @@
         "homing": false,
         "projectile_id": "goblin-barrel-projectile",
         "radius_mtile": 0,
-        "speed_mtile_per_s": 12000,
+        "speed_mtile_per_s": 8000,
         "start_radius_mtile": 0
       },
       "provenance": {
         "catalog_values": [
           "local-card-metadata-2026-08-14"
+        ],
+        "damage": [
+          "local-high-severity-card-fixes-2026-08-29"
         ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
@@ -4012,6 +4357,23 @@
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "mechanics.spawn_on_impact": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "mechanics.spawn_on_impact.child_deploy_time_us": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": null,
@@ -4300,7 +4662,7 @@
       "damage": 186,
       "deploy_time_us": 1000000,
       "elixir_milli": 4000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 500000,
       "hitpoints": 1300,
       "kind": "troop",
       "lifetime_us": null,
@@ -4333,6 +4695,7 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "homing",
+        "projectile_speed_code": 400,
         "spawn_layout_mtile": [
           [
             0,
@@ -4348,15 +4711,18 @@
       "move_speed_mtile_per_s": 1200,
       "name": "Goblin Demolisher",
       "projectile": {
-        "homing": true,
+        "homing": false,
         "projectile_id": "goblin-demolisher-projectile",
         "radius_mtile": 0,
-        "speed_mtile_per_s": 12000,
+        "speed_mtile_per_s": 8000,
         "start_radius_mtile": 0
       },
       "provenance": {
         "catalog_values": [
           "local-card-metadata-2026-08-14"
+        ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
         ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
@@ -4369,6 +4735,17 @@
         ],
         "mechanics.charge_duration_us": [
           "official-june-2025"
+        ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": 5000,
@@ -4410,7 +4787,7 @@
           "crown_tower_damage": 0,
           "damage": 0,
           "radius_mtile": 0,
-          "spawn_card_id": "goblins",
+          "spawn_card_id": "goblin",
           "spawn_count": 2,
           "targets": [
             "ground"
@@ -4440,7 +4817,7 @@
         "placement_class": "own_ground",
         "projectile_mode": "none",
         "spawn": {
-          "card_id": "goblins",
+          "card_id": "goblin",
           "count": 1,
           "interval_us": 3000000,
           "max_alive": 6,
@@ -4507,10 +4884,10 @@
       "attack_interval_us": 1100000,
       "collision_radius_mtile": 400,
       "crown_tower_damage": null,
-      "damage": 120,
+      "damage": 125,
       "deploy_time_us": 1000000,
       "elixir_milli": 3000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 600000,
       "hitpoints": 202,
       "kind": "troop",
       "lifetime_us": null,
@@ -4530,7 +4907,7 @@
         "projectile_mode": "homing",
         "spawn_children": [
           {
-            "card_id": "goblin",
+            "card_id": "goblin-gang-goblin",
             "count": 3
           },
           {
@@ -4583,6 +4960,12 @@
         "catalog_values": [
           "local-card-metadata-2026-08-14"
         ],
+        "damage": [
+          "official-august-2026"
+        ],
+        "first_hit_delay_us": [
+          "official-april-2025"
+        ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
         ],
@@ -4609,6 +4992,87 @@
         }
       ]
     },
+    "goblin-gang-goblin": {
+      "aliases": [
+        "goblin-gang-goblin",
+        "goblin_gang_goblin"
+      ],
+      "area_radius_mtile": null,
+      "attack_interval_us": 1100000,
+      "collision_radius_mtile": 400,
+      "crown_tower_damage": null,
+      "damage": 125,
+      "deploy_time_us": 0,
+      "elixir_milli": 0,
+      "first_hit_delay_us": 600000,
+      "hitpoints": 202,
+      "kind": "troop",
+      "lifetime_us": null,
+      "mass": 1,
+      "mechanics": {
+        "building_only": false,
+        "crown_tower_connection": "normal",
+        "death": null,
+        "impact_mode": "melee",
+        "knockback_mtile": 0,
+        "lifetime_decay": null,
+        "lifetime_start": null,
+        "mirror_spawn_layout": true,
+        "movement_layer": null,
+        "persistent_effect": null,
+        "piercing": false,
+        "placement_class": "own_ground",
+        "projectile_mode": "none",
+        "spawn_layout_mtile": [
+          [
+            0,
+            0
+          ]
+        ],
+        "spawn_stagger_us": 100000,
+        "spell_origin": null,
+        "status": null,
+        "suicide_on_attack": false,
+        "targetable_during_deploy": false
+      },
+      "move_speed_mtile_per_s": 2400,
+      "name": "Goblin (Goblin Gang)",
+      "projectile": null,
+      "provenance": {
+        "catalog_values": [
+          "local-card-metadata-2026-08-14"
+        ],
+        "damage": [
+          "official-august-2026"
+        ],
+        "first_hit_delay_us": [
+          "official-april-2025"
+        ],
+        "generated_mechanics": [
+          "local-card-metadata-2026-08-14"
+        ],
+        "identity": [
+          "local-card-metadata-2026-08-14"
+        ],
+        "level_11_stats": [
+          "local-level11-card-stats-2026-04-12"
+        ]
+      },
+      "range_mtile": 500,
+      "sight_range_mtile": 6000,
+      "spawn_count": 1,
+      "targets": [
+        "ground"
+      ],
+      "uncertainties": [
+        {
+          "field": "goblin_gang_child_definition",
+          "impact": "medium",
+          "reason": "Single Goblin body derived from the Level-11 Goblin Gang formation.",
+          "resolution": "Confirm Goblin Gang child spawn position and deploy timing against isolated footage."
+        }
+      ]
+    },
     "goblin-giant": {
       "aliases": [
         "goblin giant",
@@ -4621,13 +5085,13 @@
       "damage": 176,
       "deploy_time_us": 1000000,
       "elixir_milli": 6000,
-      "first_hit_delay_us": 0,
-      "hitpoints": 3020,
+      "first_hit_delay_us": 800000,
+      "hitpoints": 3110,
       "kind": "troop",
       "lifetime_us": null,
       "mass": 1,
       "mechanics": {
-        "building_only": false,
+        "building_only": true,
         "carrier": {
           "child_card_id": "spear-goblin",
           "count": 2,
@@ -4686,15 +5150,27 @@
         "catalog_values": [
           "local-card-metadata-2026-08-14"
         ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14",
           "deckmelon-split-level11-2026-08-16"
+        ],
+        "hitpoints": [
+          "official-june-2026"
         ],
         "identity": [
           "local-card-metadata-2026-08-14"
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.building_only": [
+          "reference-goblin-giant-targeting"
+        ],
+        "targets": [
+          "reference-goblin-giant-targeting"
         ]
       },
       "range_mtile": 1200,
@@ -4702,9 +5178,7 @@
       "spawn_count": 1,
       "targets": [
         "building",
-        "crown_tower",
-        "air",
-        "ground"
+        "crown_tower"
       ],
       "uncertainties": [
         {
@@ -4822,7 +5296,7 @@
       "damage": 232,
       "deploy_time_us": 1000000,
       "elixir_milli": 5000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 500000,
       "hitpoints": 2265,
       "kind": "troop",
       "lifetime_us": null,
@@ -4843,8 +5317,8 @@
         "secondary_attack": {
           "area_radius_mtile": 1500,
           "attack_interval_us": 5000000,
-          "crown_tower_damage": 196,
-          "damage": 391,
+          "crown_tower_damage": 152,
+          "damage": 304,
           "first_hit_delay_us": 0,
           "max_range_mtile": 5000,
           "min_range_mtile": 2500,
@@ -4878,6 +5352,9 @@
         "damage": [
           "official-august-2026"
         ],
+        "first_hit_delay_us": [
+          "official-july-2024-goblin-machine"
+        ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14",
           "royaleapi-goblin-machine-2024"
@@ -4895,10 +5372,10 @@
           "official-august-2026"
         ],
         "mechanics.secondary_attack.crown_tower_damage": [
-          "official-june-2024-goblin-machine"
+          "official-october-2025"
         ],
         "mechanics.secondary_attack.damage": [
-          "official-june-2024-goblin-machine"
+          "official-october-2025"
         ],
         "mechanics.secondary_attack.projectile_speed_mtile_per_s": [
           "official-august-2026"
@@ -4931,7 +5408,7 @@
       "damage": 125,
       "deploy_time_us": 1000000,
       "elixir_milli": 2000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 600000,
       "hitpoints": 202,
       "kind": "troop",
       "lifetime_us": null,
@@ -4984,6 +5461,9 @@
         "damage": [
           "official-august-2026"
         ],
+        "first_hit_delay_us": [
+          "official-april-2025"
+        ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
         ],
@@ -5021,7 +5501,7 @@
       "damage": 312,
       "deploy_time_us": 3000000,
       "elixir_milli": 8000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 1000000,
       "hitpoints": 5120,
       "kind": "troop",
       "lifetime_us": null,
@@ -5074,6 +5554,9 @@
         "catalog_values": [
           "local-card-metadata-2026-08-14"
         ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14",
           "deckmelon-split-level11-2026-08-16"
@@ -5113,7 +5596,7 @@
       "damage": 84,
       "deploy_time_us": 0,
       "elixir_milli": 0,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 1000000,
       "hitpoints": 1039,
       "kind": "troop",
       "lifetime_us": null,
@@ -5156,6 +5639,9 @@
       "name": "Golemite",
       "projectile": null,
       "provenance": {
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "generated_mechanics": [
           "deckmelon-split-level11-2026-08-16"
         ],
@@ -5326,7 +5812,7 @@
       "damage": 117,
       "deploy_time_us": 1000000,
       "elixir_milli": 3000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 500000,
       "hitpoints": 81,
       "kind": "troop",
       "lifetime_us": null,
@@ -5375,6 +5861,9 @@
         "catalog_values": [
           "local-card-metadata-2026-08-14"
         ],
+        "first_hit_delay_us": [
+          "official-october-2025"
+        ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
         ],
@@ -5412,7 +5901,7 @@
       "damage": 110,
       "deploy_time_us": 1000000,
       "elixir_milli": 1000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 200000,
       "hitpoints": 215,
       "kind": "troop",
       "lifetime_us": null,
@@ -5439,6 +5928,7 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "homing",
+        "projectile_speed_code": 400,
         "spawn_layout_mtile": [
           [
             0,
@@ -5456,12 +5946,15 @@
         "homing": true,
         "projectile_id": "heal-spirit-projectile",
         "radius_mtile": 0,
-        "speed_mtile_per_s": 12000,
+        "speed_mtile_per_s": 8000,
         "start_radius_mtile": 0
       },
       "provenance": {
         "catalog_values": [
           "local-card-metadata-2026-08-14"
+        ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
         ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14",
@@ -5478,6 +5971,17 @@
         ],
         "mechanics.crown_tower_connection": [
           "official-august-2026"
+        ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": 2500,
@@ -5610,7 +6114,7 @@
       "damage": 84,
       "deploy_time_us": 1000000,
       "elixir_milli": 4000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 700000,
       "hitpoints": 885,
       "kind": "troop",
       "lifetime_us": null,
@@ -5632,6 +6136,7 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "homing",
+        "projectile_speed_code": 550,
         "spawn_layout_mtile": [
           [
             0,
@@ -5646,15 +6151,18 @@
       "move_speed_mtile_per_s": 1200,
       "name": "Hunter",
       "projectile": {
-        "homing": true,
+        "homing": false,
         "projectile_id": "hunter-projectile",
         "radius_mtile": 0,
-        "speed_mtile_per_s": 12000,
+        "speed_mtile_per_s": 11000,
         "start_radius_mtile": 0
       },
       "provenance": {
         "catalog_values": [
           "local-card-metadata-2026-08-14"
+        ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
         ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
@@ -5664,6 +6172,17 @@
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": 4000,
@@ -5815,6 +6334,7 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "homing",
+        "projectile_speed_code": 400,
         "spawn_layout_mtile": [
           [
             0,
@@ -5868,6 +6388,17 @@
         "mass": [
           "royaleapi-characters-2026-04-19"
         ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "speed_conversion": [
           "royaleapi-characters-2026-04-19",
           "royaleapi-projectiles-2026-04-19",
@@ -5908,7 +6439,7 @@
       "damage": 90,
       "deploy_time_us": 1000000,
       "elixir_milli": 3000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 500000,
       "hitpoints": 689,
       "kind": "troop",
       "lifetime_us": null,
@@ -5939,6 +6470,7 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "homing",
+        "projectile_speed_code": 700,
         "spawn_layout_mtile": [
           [
             0,
@@ -5948,9 +6480,9 @@
         "spell_origin": null,
         "status": {
           "duration_us": 1500000,
-          "hit_speed_multiplier_milli": 650,
+          "hit_speed_multiplier_milli": 700,
           "kind": "slow",
-          "speed_multiplier_milli": 650
+          "speed_multiplier_milli": 700
         },
         "suicide_on_attack": false,
         "targetable_during_deploy": false
@@ -5961,12 +6493,15 @@
         "homing": true,
         "projectile_id": "ice-wizard-projectile",
         "radius_mtile": 0,
-        "speed_mtile_per_s": 12000,
+        "speed_mtile_per_s": 14000,
         "start_radius_mtile": 0
       },
       "provenance": {
         "catalog_values": [
           "local-card-metadata-2026-08-14"
+        ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
         ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
@@ -5976,6 +6511,23 @@
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "mechanics.status.hit_speed_multiplier_milli": [
+          "official-october-2025"
+        ],
+        "mechanics.status.speed_multiplier_milli": [
+          "official-october-2025"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": 5500,
@@ -6180,7 +6732,7 @@
       "damage": 202,
       "deploy_time_us": 1000000,
       "elixir_milli": 3000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 500000,
       "hitpoints": 1766,
       "kind": "troop",
       "lifetime_us": null,
@@ -6215,6 +6767,9 @@
       "provenance": {
         "catalog_values": [
           "local-card-metadata-2026-08-14"
+        ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
         ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
@@ -6253,7 +6808,7 @@
       "damage": 53,
       "deploy_time_us": 1000000,
       "elixir_milli": 7000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 1000000,
       "hitpoints": 3581,
       "kind": "troop",
       "lifetime_us": null,
@@ -6288,6 +6843,7 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "homing",
+        "projectile_speed_code": 400,
         "spawn_layout_mtile": [
           [
             0,
@@ -6305,12 +6861,15 @@
         "homing": true,
         "projectile_id": "lava-hound-projectile",
         "radius_mtile": 0,
-        "speed_mtile_per_s": 12000,
+        "speed_mtile_per_s": 8000,
         "start_radius_mtile": 0
       },
       "provenance": {
         "catalog_values": [
           "local-card-metadata-2026-08-14"
+        ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
         ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14",
@@ -6321,6 +6880,17 @@
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": 3500,
@@ -6351,7 +6921,7 @@
       "damage": 81,
       "deploy_time_us": 0,
       "elixir_milli": 0,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 1000000,
       "hitpoints": 215,
       "kind": "troop",
       "lifetime_us": null,
@@ -6368,6 +6938,7 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "none",
+        "projectile_speed_code": 500,
         "spawn_layout_mtile": [
           [
             0,
@@ -6381,8 +6952,17 @@
       },
       "move_speed_mtile_per_s": 1200,
       "name": "Lava Pup",
-      "projectile": null,
+      "projectile": {
+        "homing": true,
+        "projectile_id": "lava-pup-projectile",
+        "radius_mtile": 0,
+        "speed_mtile_per_s": 10000,
+        "start_radius_mtile": 0
+      },
       "provenance": {
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "generated_mechanics": [
           "deckmelon-split-level11-2026-08-16"
         ],
@@ -6392,6 +6972,17 @@
         "level_11_stats": [
           "deckmelon-split-level11-2026-08-16",
           "official-december-2025-lava-pup"
+        ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": 1600,
@@ -6442,6 +7033,7 @@
         "piercing": false,
         "placement_class": "spell_anywhere",
         "projectile_mode": "ballistic_to_point",
+        "projectile_speed_code": 500,
         "reset_attack": true,
         "spawn_layout_mtile": [],
         "spell_origin": "own-king-tower",
@@ -6462,7 +7054,7 @@
         "homing": false,
         "projectile_id": "lightning-projectile",
         "radius_mtile": 0,
-        "speed_mtile_per_s": 12000,
+        "speed_mtile_per_s": 10000,
         "start_radius_mtile": 0
       },
       "provenance": {
@@ -6480,6 +7072,17 @@
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": null,
@@ -6622,7 +7225,7 @@
       "damage": 256,
       "deploy_time_us": 1000000,
       "elixir_milli": 4000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 400000,
       "hitpoints": 1282,
       "kind": "troop",
       "lifetime_us": null,
@@ -6632,10 +7235,10 @@
         "crown_tower_connection": "normal",
         "death": null,
         "death_rage": {
-          "duration_us": 6000000,
-          "hit_speed_multiplier_milli": 1400,
+          "duration_us": 5500000,
+          "hit_speed_multiplier_milli": 1300,
           "radius_mtile": 3000,
-          "speed_multiplier_milli": 1400,
+          "speed_multiplier_milli": 1300,
           "targets": [
             "air",
             "ground"
@@ -6669,6 +7272,9 @@
         "catalog_values": [
           "local-card-metadata-2026-08-14"
         ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
         ],
@@ -6677,6 +7283,15 @@
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.death_rage.duration_us": [
+          "official-august-2025"
+        ],
+        "mechanics.death_rage.hit_speed_multiplier_milli": [
+          "official-october-2025"
+        ],
+        "mechanics.death_rage.speed_multiplier_milli": [
+          "official-october-2025"
         ]
       },
       "range_mtile": 700,
@@ -6706,7 +7321,7 @@
       "damage": 135,
       "deploy_time_us": 1000000,
       "elixir_milli": 4000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 700000,
       "hitpoints": 529,
       "kind": "troop",
       "lifetime_us": null,
@@ -6728,6 +7343,7 @@
         "piercing": true,
         "placement_class": "own_ground",
         "projectile_mode": "homing",
+        "projectile_speed_code": 1000,
         "spawn_layout_mtile": [
           [
             0,
@@ -6745,7 +7361,7 @@
         "homing": false,
         "projectile_id": "magic-archer-projectile",
         "radius_mtile": 0,
-        "speed_mtile_per_s": 12000,
+        "speed_mtile_per_s": 20000,
         "start_radius_mtile": 0
       },
       "provenance": {
@@ -6755,6 +7371,9 @@
         "damage": [
           "official-august-2026"
         ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
         ],
@@ -6763,6 +7382,17 @@
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": 7000,
@@ -6793,7 +7423,7 @@
       "damage": 268,
       "deploy_time_us": 1000000,
       "elixir_milli": 7000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 500000,
       "hitpoints": 3993,
       "kind": "troop",
       "lifetime_us": null,
@@ -6842,6 +7472,9 @@
         "catalog_values": [
           "local-card-metadata-2026-08-14"
         ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
         ],
@@ -6879,7 +7512,7 @@
       "damage": 312,
       "deploy_time_us": 1000000,
       "elixir_milli": 3000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 400000,
       "hitpoints": 837,
       "kind": "troop",
       "lifetime_us": null,
@@ -6897,6 +7530,7 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "homing",
+        "projectile_speed_code": 1000,
         "spawn_layout_mtile": [
           [
             0,
@@ -6914,12 +7548,15 @@
         "homing": true,
         "projectile_id": "mega-minion-projectile",
         "radius_mtile": 0,
-        "speed_mtile_per_s": 12000,
+        "speed_mtile_per_s": 20000,
         "start_radius_mtile": 0
       },
       "provenance": {
         "catalog_values": [
           "local-card-metadata-2026-08-14"
+        ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
         ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
@@ -6929,6 +7566,17 @@
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": 1600,
@@ -6959,7 +7607,7 @@
       "damage": 194,
       "deploy_time_us": 1000000,
       "elixir_milli": 3000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 500000,
       "hitpoints": 1210,
       "kind": "troop",
       "lifetime_us": null,
@@ -7003,6 +7651,9 @@
         "crown_tower_damage": [
           "official-july-2026"
         ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
         ],
@@ -7040,7 +7691,7 @@
       "damage": 755,
       "deploy_time_us": 1000000,
       "elixir_milli": 4000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 400000,
       "hitpoints": 1390,
       "kind": "troop",
       "lifetime_us": null,
@@ -7075,6 +7726,9 @@
       "provenance": {
         "catalog_values": [
           "local-card-metadata-2026-08-14"
+        ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
         ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
@@ -7113,7 +7767,7 @@
       "damage": 107,
       "deploy_time_us": 1000000,
       "elixir_milli": 5000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 500000,
       "hitpoints": 230,
       "kind": "troop",
       "lifetime_us": null,
@@ -7132,6 +7786,7 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "homing",
+        "projectile_speed_code": 1000,
         "spawn_layout_mtile": [
           [
             -900,
@@ -7170,12 +7825,15 @@
         "homing": true,
         "projectile_id": "minion-horde-projectile",
         "radius_mtile": 0,
-        "speed_mtile_per_s": 12000,
+        "speed_mtile_per_s": 20000,
         "start_radius_mtile": 0
       },
       "provenance": {
         "catalog_values": [
           "local-card-metadata-2026-08-14"
+        ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
         ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
@@ -7185,6 +7843,17 @@
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": 2500,
@@ -7215,7 +7884,7 @@
       "damage": 107,
       "deploy_time_us": 1000000,
       "elixir_milli": 3000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 500000,
       "hitpoints": 230,
       "kind": "troop",
       "lifetime_us": null,
@@ -7234,6 +7903,7 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "homing",
+        "projectile_speed_code": 1000,
         "spawn_layout_mtile": [
           [
             -450,
@@ -7260,12 +7930,15 @@
         "homing": true,
         "projectile_id": "minions-projectile",
         "radius_mtile": 0,
-        "speed_mtile_per_s": 12000,
+        "speed_mtile_per_s": 20000,
         "start_radius_mtile": 0
       },
       "provenance": {
         "catalog_values": [
           "local-card-metadata-2026-08-14"
+        ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
         ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
@@ -7275,6 +7948,17 @@
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": 2500,
@@ -7382,7 +8066,7 @@
       "damage": 266,
       "deploy_time_us": 3500000,
       "elixir_milli": 4000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 1000000,
       "hitpoints": 1369,
       "kind": "building",
       "lifetime_us": 30000000,
@@ -7401,6 +8085,7 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "homing",
+        "projectile_speed_code": 300,
         "spawn_layout_mtile": [
           [
             0,
@@ -7418,7 +8103,7 @@
         "homing": false,
         "projectile_id": "mortar-projectile",
         "radius_mtile": 0,
-        "speed_mtile_per_s": 12000,
+        "speed_mtile_per_s": 6000,
         "start_radius_mtile": 0
       },
       "provenance": {
@@ -7428,6 +8113,9 @@
         "catalog_values": [
           "local-card-metadata-2026-08-14"
         ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
         ],
@@ -7436,6 +8124,17 @@
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": 11500,
@@ -7465,7 +8164,7 @@
       "damage": 133,
       "deploy_time_us": 1000000,
       "elixir_milli": 4000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 300000,
       "hitpoints": 529,
       "kind": "troop",
       "lifetime_us": null,
@@ -7483,6 +8182,7 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "homing",
+        "projectile_speed_code": 600,
         "spawn_layout_mtile": [
           [
             0,
@@ -7514,6 +8214,9 @@
         "catalog_values": [
           "local-card-metadata-2026-08-14"
         ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
         ],
@@ -7522,6 +8225,17 @@
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": 5500,
@@ -7552,7 +8266,7 @@
       "damage": 217,
       "deploy_time_us": 1000000,
       "elixir_milli": 4000,
-      "first_hit_delay_us": 200000,
+      "first_hit_delay_us": 700000,
       "hitpoints": 721,
       "kind": "troop",
       "lifetime_us": null,
@@ -7567,6 +8281,7 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "homing",
+        "projectile_speed_code": 1000,
         "spawn_layout_mtile": [
           [
             0,
@@ -7599,6 +8314,9 @@
           "royaleapi-cards-2026-04-19",
           "deckmelon-musketeer-2026-08-11"
         ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "identity": [
           "royaleapi-cards-2026-04-19"
         ],
@@ -7613,8 +8331,19 @@
         "mass": [
           "royaleapi-characters-2026-04-19"
         ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "projectile.start_radius_mtile": [
           "royaleapi-characters-2026-04-19"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ],
         "speed_conversion": [
           "royaleapi-characters-2026-04-19",
@@ -7650,7 +8379,7 @@
       "damage": 314,
       "deploy_time_us": 1000000,
       "elixir_milli": 4000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 750000,
       "hitpoints": 906,
       "kind": "troop",
       "lifetime_us": null,
@@ -7658,7 +8387,16 @@
       "mechanics": {
         "building_only": false,
         "crown_tower_connection": "normal",
-        "death": null,
+        "death": {
+          "crown_tower_damage": 0,
+          "damage": 0,
+          "radius_mtile": 0,
+          "spawn_card_id": "bats",
+          "spawn_count": 1,
+          "targets": [
+            "ground"
+          ]
+        },
         "impact_mode": "melee",
         "knockback_mtile": 0,
         "lifetime_decay": null,
@@ -7693,6 +8431,9 @@
         "catalog_values": [
           "local-card-metadata-2026-08-14"
         ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
         ],
@@ -7701,6 +8442,9 @@
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.death": [
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": 1600,
@@ -7731,7 +8475,7 @@
       "damage": 842,
       "deploy_time_us": 1000000,
       "elixir_milli": 7000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 500000,
       "hitpoints": 3760,
       "kind": "troop",
       "lifetime_us": null,
@@ -7769,6 +8513,9 @@
         ],
         "damage": [
           "official-july-2026"
+        ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
         ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
@@ -7816,7 +8563,7 @@
         "building_only": false,
         "crown_tower_connection": "normal",
         "death": {
-          "crown_tower_damage": 49,
+          "crown_tower_damage": 163,
           "damage": 163,
           "knockback_mtile": 1500,
           "radius_mtile": 1500,
@@ -7870,6 +8617,9 @@
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.death.crown_tower_damage": [
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": 1600,
@@ -8089,7 +8839,7 @@
       "damage": 391,
       "deploy_time_us": 1000000,
       "elixir_milli": 5000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 500000,
       "hitpoints": 1920,
       "kind": "troop",
       "lifetime_us": null,
@@ -8134,6 +8884,9 @@
         "catalog_values": [
           "local-card-metadata-2026-08-14"
         ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
         ],
@@ -8171,7 +8924,7 @@
       "damage": 168,
       "deploy_time_us": 1000000,
       "elixir_milli": 3000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 500000,
       "hitpoints": 261,
       "kind": "troop",
       "lifetime_us": null,
@@ -8189,6 +8942,7 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "homing",
+        "projectile_speed_code": 600,
         "spawn_layout_mtile": [
           [
             0,
@@ -8213,6 +8967,9 @@
         "catalog_values": [
           "local-card-metadata-2026-08-14"
         ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
         ],
@@ -8221,6 +8978,17 @@
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": 9000,
@@ -8478,8 +9246,8 @@
       "damage": 217,
       "deploy_time_us": 0,
       "elixir_milli": 0,
-      "first_hit_delay_us": 0,
-      "hitpoints": 1940,
+      "first_hit_delay_us": 400000,
+      "hitpoints": 1832,
       "kind": "troop",
       "lifetime_us": null,
       "mass": 1,
@@ -8512,8 +9280,14 @@
       "name": "Rascal Boy",
       "projectile": null,
       "provenance": {
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
+        ],
+        "hitpoints": [
+          "official-june-2026"
         ],
         "identity": [
           "local-card-metadata-2026-08-14"
@@ -8546,10 +9320,10 @@
       "attack_interval_us": 1500000,
       "collision_radius_mtile": 400,
       "crown_tower_damage": null,
-      "damage": 120,
+      "damage": 125,
       "deploy_time_us": 0,
       "elixir_milli": 0,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 500000,
       "hitpoints": 202,
       "kind": "troop",
       "lifetime_us": null,
@@ -8567,6 +9341,7 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "homing",
+        "projectile_speed_code": 800,
         "spawn_layout_mtile": [
           [
             0,
@@ -8585,10 +9360,16 @@
         "homing": true,
         "projectile_id": "rascals-projectile",
         "radius_mtile": 0,
-        "speed_mtile_per_s": 12000,
+        "speed_mtile_per_s": 16000,
         "start_radius_mtile": 0
       },
       "provenance": {
+        "damage": [
+          "official-august-2026"
+        ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
         ],
@@ -8597,6 +9378,17 @@
         ],
         "level_11_stats": [
           "local-card-metadata-2026-08-14"
+        ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": 5500,
@@ -8624,11 +9416,11 @@
       "attack_interval_us": 1500000,
       "collision_radius_mtile": 400,
       "crown_tower_damage": null,
-      "damage": 217,
+      "damage": 125,
       "deploy_time_us": 1000000,
       "elixir_milli": 5000,
-      "first_hit_delay_us": 0,
-      "hitpoints": 1940,
+      "first_hit_delay_us": 500000,
+      "hitpoints": 1832,
       "kind": "troop",
       "lifetime_us": null,
       "mass": 1,
@@ -8646,6 +9438,7 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "homing",
+        "projectile_speed_code": 800,
         "spawn_children": [
           {
             "card_id": "rascal-boy",
@@ -8682,21 +9475,41 @@
         "homing": true,
         "projectile_id": "rascals-projectile",
         "radius_mtile": 0,
-        "speed_mtile_per_s": 12000,
+        "speed_mtile_per_s": 16000,
         "start_radius_mtile": 0
       },
       "provenance": {
         "catalog_values": [
           "local-card-metadata-2026-08-14"
         ],
+        "damage": [
+          "official-august-2026"
+        ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
+        ],
+        "hitpoints": [
+          "official-june-2026"
         ],
         "identity": [
           "local-card-metadata-2026-08-14"
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": 800,
@@ -8745,6 +9558,7 @@
         "piercing": false,
         "placement_class": "spell_anywhere",
         "projectile_mode": "ballistic_to_point",
+        "projectile_speed_code": 350,
         "spawn_layout_mtile": [],
         "spell_origin": "own-king-tower",
         "status": null,
@@ -8757,7 +9571,7 @@
         "homing": false,
         "projectile_id": "rocket-projectile",
         "radius_mtile": 0,
-        "speed_mtile_per_s": 12000,
+        "speed_mtile_per_s": 7000,
         "start_radius_mtile": 0
       },
       "provenance": {
@@ -8775,6 +9589,17 @@
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": null,
@@ -8817,6 +9642,10 @@
         "crown_tower_connection": "normal",
         "death": null,
         "impact_mode": "at_destination",
+        "impact_targets": [
+          "air",
+          "ground"
+        ],
         "knockback_mtile": 0,
         "lifetime_decay": null,
         "lifetime_start": null,
@@ -8825,6 +9654,7 @@
         "piercing": false,
         "placement_class": "spells",
         "projectile_mode": "ballistic_to_point",
+        "projectile_speed_code": 5000,
         "spawn_layout_mtile": [],
         "spawn_on_impact": {
           "card_id": "royal-recruits",
@@ -8841,7 +9671,7 @@
         "homing": false,
         "projectile_id": "royal-delivery-projectile",
         "radius_mtile": 0,
-        "speed_mtile_per_s": 12000,
+        "speed_mtile_per_s": 100000,
         "start_radius_mtile": 0
       },
       "provenance": {
@@ -8859,6 +9689,23 @@
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.impact_targets": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "targets": [
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": null,
@@ -8866,9 +9713,7 @@
       "spawn_count": 0,
       "targets": [
         "air",
-        "ground",
-        "building",
-        "crown_tower"
+        "ground"
       ],
       "uncertainties": [
         {
@@ -8891,7 +9736,7 @@
       "damage": 261,
       "deploy_time_us": 1000000,
       "elixir_milli": 3000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 600000,
       "hitpoints": 1210,
       "kind": "troop",
       "lifetime_us": null,
@@ -8918,7 +9763,7 @@
         "spell_origin": null,
         "status": null,
         "stealth": true,
-        "stealth_recloak_us": 1500000,
+        "stealth_recloak_us": 2000000,
         "suicide_on_attack": false,
         "targetable_during_deploy": false
       },
@@ -8929,6 +9774,9 @@
         "catalog_values": [
           "local-card-metadata-2026-08-14"
         ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
         ],
@@ -8937,6 +9785,9 @@
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.stealth_recloak_us": [
+          "official-march-2026"
         ]
       },
       "range_mtile": 1200,
@@ -8960,13 +9811,13 @@
         "royal_giant"
       ],
       "area_radius_mtile": null,
-      "attack_interval_us": 1700000,
+      "attack_interval_us": 1800000,
       "collision_radius_mtile": 400,
       "crown_tower_damage": null,
       "damage": 307,
       "deploy_time_us": 1000000,
       "elixir_milli": 6000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 900000,
       "hitpoints": 3164,
       "kind": "troop",
       "lifetime_us": null,
@@ -8984,6 +9835,7 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "homing",
+        "projectile_speed_code": 1000,
         "spawn_layout_mtile": [
           [
             0,
@@ -9001,12 +9853,18 @@
         "homing": true,
         "projectile_id": "royal-giant-projectile",
         "radius_mtile": 0,
-        "speed_mtile_per_s": 12000,
+        "speed_mtile_per_s": 20000,
         "start_radius_mtile": 0
       },
       "provenance": {
+        "attack_interval_us": [
+          "official-march-2026"
+        ],
         "catalog_values": [
           "local-card-metadata-2026-08-14"
+        ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
         ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
@@ -9016,6 +9874,17 @@
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": 5000,
@@ -9046,7 +9915,7 @@
       "damage": 74,
       "deploy_time_us": 1000000,
       "elixir_milli": 5000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 350000,
       "hitpoints": 837,
       "kind": "troop",
       "lifetime_us": null,
@@ -9098,6 +9967,9 @@
         "catalog_values": [
           "local-card-metadata-2026-08-14"
         ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
         ],
@@ -9136,7 +10008,7 @@
       "damage": 133,
       "deploy_time_us": 1000000,
       "elixir_milli": 7000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 500000,
       "hitpoints": 547,
       "kind": "troop",
       "lifetime_us": null,
@@ -9197,6 +10069,9 @@
         "catalog_values": [
           "local-card-metadata-2026-08-14"
         ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
         ],
@@ -9234,7 +10109,7 @@
       "damage": 81,
       "deploy_time_us": 1000000,
       "elixir_milli": 3000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 500000,
       "hitpoints": 81,
       "kind": "troop",
       "lifetime_us": null,
@@ -9327,6 +10202,9 @@
         "catalog_values": [
           "local-card-metadata-2026-08-14"
         ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
         ],
@@ -9364,7 +10242,7 @@
       "damage": 81,
       "deploy_time_us": 1000000,
       "elixir_milli": 3000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 100000,
       "hitpoints": 532,
       "kind": "troop",
       "lifetime_us": null,
@@ -9414,6 +10292,9 @@
         "catalog_values": [
           "local-card-metadata-2026-08-14"
         ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
         ],
@@ -9452,7 +10333,7 @@
       "damage": 151,
       "deploy_time_us": 1000000,
       "elixir_milli": 4000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 400000,
       "hitpoints": 560,
       "kind": "troop",
       "lifetime_us": null,
@@ -9470,6 +10351,7 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "homing",
+        "projectile_speed_code": 500,
         "spawn_layout_mtile": [
           [
             0,
@@ -9492,7 +10374,7 @@
         "homing": true,
         "projectile_id": "skeleton-dragons-projectile",
         "radius_mtile": 0,
-        "speed_mtile_per_s": 12000,
+        "speed_mtile_per_s": 10000,
         "start_radius_mtile": 0
       },
       "provenance": {
@@ -9505,6 +10387,9 @@
         "catalog_values": [
           "local-card-metadata-2026-08-14"
         ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
         ],
@@ -9513,6 +10398,17 @@
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": 3500,
@@ -9656,6 +10552,7 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "homing",
+        "projectile_speed_code": 1400,
         "spawn_layout_mtile": [
           [
             0,
@@ -9673,7 +10570,7 @@
         "homing": true,
         "projectile_id": "sparky-projectile",
         "radius_mtile": 0,
-        "speed_mtile_per_s": 12000,
+        "speed_mtile_per_s": 28000,
         "start_radius_mtile": 0
       },
       "provenance": {
@@ -9688,6 +10585,17 @@
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": 5000,
@@ -9717,7 +10625,7 @@
       "damage": 81,
       "deploy_time_us": 0,
       "elixir_milli": 0,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 500000,
       "hitpoints": 133,
       "kind": "troop",
       "lifetime_us": null,
@@ -9734,6 +10642,7 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "homing",
+        "projectile_speed_code": 500,
         "spawn_layout_mtile": [
           [
             0,
@@ -9752,10 +10661,14 @@
         "homing": true,
         "projectile_id": "spear-goblins-projectile",
         "radius_mtile": 0,
-        "speed_mtile_per_s": 12000,
+        "speed_mtile_per_s": 10000,
         "start_radius_mtile": 0
       },
       "provenance": {
+        "first_hit_delay_us": [
+          "official-october-2025",
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "generated_mechanics": [
           "deckmelon-split-level11-2026-08-16"
         ],
@@ -9764,6 +10677,17 @@
         ],
         "level_11_stats": [
           "deckmelon-split-level11-2026-08-16"
+        ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": 5000,
@@ -9794,7 +10718,7 @@
       "damage": 81,
       "deploy_time_us": 1000000,
       "elixir_milli": 2000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 500000,
       "hitpoints": 133,
       "kind": "troop",
       "lifetime_us": null,
@@ -9812,6 +10736,7 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "homing",
+        "projectile_speed_code": 500,
         "spawn_layout_mtile": [
           [
             -450,
@@ -9838,7 +10763,7 @@
         "homing": true,
         "projectile_id": "spear-goblins-projectile",
         "radius_mtile": 0,
-        "speed_mtile_per_s": 12000,
+        "speed_mtile_per_s": 10000,
         "start_radius_mtile": 0
       },
       "provenance": {
@@ -9848,6 +10773,10 @@
         "catalog_values": [
           "local-card-metadata-2026-08-14"
         ],
+        "first_hit_delay_us": [
+          "official-august-2025",
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
         ],
@@ -9856,6 +10785,17 @@
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": 5000,
@@ -9989,7 +10929,7 @@
       "damage": 220,
       "deploy_time_us": 1000000,
       "elixir_milli": 4000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 500000,
       "hitpoints": 1182,
       "kind": "building",
       "lifetime_us": 25000000,
@@ -10030,6 +10970,9 @@
       "provenance": {
         "catalog_values": [
           "local-card-metadata-2026-08-14"
+        ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
         ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
@@ -10103,6 +11046,7 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "homing",
+        "projectile_speed_code": 1000,
         "spawn_layout_mtile": [
           [
             -450,
@@ -10130,12 +11074,15 @@
         "homing": true,
         "projectile_id": "three-musketeers-projectile",
         "radius_mtile": 0,
-        "speed_mtile_per_s": 12000,
+        "speed_mtile_per_s": 20000,
         "start_radius_mtile": 0
       },
       "provenance": {
         "catalog_values": [
           "local-card-metadata-2026-08-14"
+        ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
         ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
@@ -10145,6 +11092,17 @@
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": 6000,
@@ -10362,7 +11320,7 @@
       "damage": 266,
       "deploy_time_us": 1000000,
       "elixir_milli": 4000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 100000,
       "hitpoints": 1907,
       "kind": "troop",
       "lifetime_us": null,
@@ -10397,6 +11355,9 @@
       "provenance": {
         "catalog_values": [
           "local-card-metadata-2026-08-14"
+        ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
         ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
@@ -10566,7 +11527,7 @@
       "damage": 281,
       "deploy_time_us": 1000000,
       "elixir_milli": 2000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 200000,
       "hitpoints": 330,
       "kind": "troop",
       "lifetime_us": null,
@@ -10616,6 +11577,9 @@
         "damage": [
           "official-august-2026"
         ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
         ],
@@ -10654,7 +11618,7 @@
       "damage": 135,
       "deploy_time_us": 1000000,
       "elixir_milli": 5000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 700000,
       "hitpoints": 839,
       "kind": "troop",
       "lifetime_us": null,
@@ -10681,6 +11645,7 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "homing",
+        "projectile_speed_code": 600,
         "spawn": {
           "card_id": "skeletons",
           "count": 4,
@@ -10712,6 +11677,9 @@
         "catalog_values": [
           "local-card-metadata-2026-08-14"
         ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
         ],
@@ -10720,6 +11688,17 @@
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": 5500,
@@ -10750,7 +11729,7 @@
       "damage": 281,
       "deploy_time_us": 1000000,
       "elixir_milli": 5000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 400000,
       "hitpoints": 755,
       "kind": "troop",
       "lifetime_us": null,
@@ -10768,6 +11747,7 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "homing",
+        "projectile_speed_code": 600,
         "spawn_layout_mtile": [
           [
             0,
@@ -10792,6 +11772,9 @@
         "catalog_values": [
           "local-card-metadata-2026-08-14"
         ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
         ],
@@ -10800,6 +11783,17 @@
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.projectile_speed_code": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": 5500,
@@ -10863,10 +11857,10 @@
       "move_speed_mtile_per_s": null,
       "name": "X Bow",
       "projectile": {
-        "homing": false,
+        "homing": true,
         "projectile_id": "x-bow-projectile",
         "radius_mtile": 0,
-        "speed_mtile_per_s": 12000,
+        "speed_mtile_per_s": 32000,
         "start_radius_mtile": 0
       },
       "provenance": {
@@ -10889,7 +11883,16 @@
           "local-level11-card-stats-2026-04-12"
         ],
         "mechanics.projectile_speed_code": [
-          "official-august-2026"
+          "official-august-2026",
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile.homing": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "projectile_speed_conversion": [
+          "royaleapi-projectiles-2026-04-19",
+          "simulator-baseline-assumptions",
+          "local-high-severity-card-fixes-2026-08-29"
         ]
       },
       "range_mtile": 11500,
@@ -11004,7 +12007,7 @@
       "damage": 117,
       "deploy_time_us": 1000000,
       "elixir_milli": 4000,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 800000,
       "hitpoints": 529,
       "kind": "troop",
       "lifetime_us": null,
@@ -11059,6 +12062,9 @@
         "catalog_values": [
           "local-card-metadata-2026-08-14"
         ],
+        "first_hit_delay_us": [
+          "local-high-severity-card-fixes-2026-08-29"
+        ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
         ],
@@ -11086,7 +12092,7 @@
       ]
     }
   },
-  "content_hash": "sha256:84be7cc2c6476a6609fce80dbe0c834b648b4791919c4d492cb6bfb609c4234b",
+  "content_hash": "sha256:f32e53621d30a60f216187f204eadc40f7616e3c65a23c132701db2bb02c03ba",
   "interaction_set": [
     "archers",
     "arrows",
@@ -11482,6 +12488,16 @@
       "sha256": null,
       "url": null
     },
+    "local-high-severity-card-fixes-2026-08-29": {
+      "confidence_tier": "B",
+      "kind": "audited-card-mechanics-overlay",
+      "lineage": "StatsRoyale card pages, RoyaleAPI projectile data, and official Supercell balance notes",
+      "note": "Narrow overlay for high-severity simulator defects; card-specific source links and rationale are retained in the audit report.",
+      "published_at": null,
+      "retrieved_at": "2026-08-29",
+      "sha256": null,
+      "url": "https://statsroyale.com/card/Wall+Breakers"
+    },
     "local-level11-card-stats-2026-04-12": {
       "confidence_tier": "B",
       "kind": "pinned-structured-level11-snapshot",
@@ -11562,6 +12578,16 @@
       "sha256": "3db0a7057d57e203ba2f53209d43cfb7f4287720736fb99fb66d883de9864b35",
       "url": null
     },
+    "official-april-2025": {
+      "confidence_tier": "A",
+      "kind": "official-patch-note",
+      "lineage": "Supercell",
+      "note": "Goblins and Goblin Gang first-hit changes, including the explicit exception for Goblins spawned by other cards.",
+      "published_at": "2025-04-09",
+      "retrieved_at": "2026-08-29",
+      "sha256": null,
+      "url": "https://supercell.com/en/games/clashroyale/blog/release-notes/april-balance-changes/"
+    },
     "official-april-2026": {
       "confidence_tier": "A",
       "kind": "official-patch-note",
@@ -11591,6 +12617,16 @@
       "retrieved_at": "2026-08-16",
       "sha256": null,
       "url": "https://supercell.com/en/games/clashroyale/blog/news/august-balance-changes/"
+    },
+    "official-august-2025": {
+      "confidence_tier": "A",
+      "kind": "official-patch-note",
+      "lineage": "Supercell",
+      "note": "Spear Goblin range/first-hit changes and the Lumberjack own-Rage duration exception.",
+      "published_at": "2025-08-04",
+      "retrieved_at": "2026-08-29",
+      "sha256": null,
+      "url": "https://supercell.com/en/games/clashroyale/blog/release-notes/august-balance-changes-2/"
     },
     "official-august-2025-furnace-balance": {
       "confidence_tier": "A",
@@ -11642,6 +12678,16 @@
       "sha256": null,
       "url": "https://supercell.com/en/games/clashroyale/blog/release-notes/december-balance-changes/"
     },
+    "official-february-2026": {
+      "confidence_tier": "A",
+      "kind": "official-patch-note",
+      "lineage": "Supercell",
+      "note": "Barbarian Barrel Level-11 damage correction.",
+      "published_at": "2026-02-02",
+      "retrieved_at": "2026-08-29",
+      "sha256": null,
+      "url": "https://supercell.com/en/games/clashroyale/blog/news/february-balance-changes-26/"
+    },
     "official-january-2025-cannon-cart": {
       "confidence_tier": "A",
       "kind": "official-patch-note",
@@ -11651,6 +12697,16 @@
       "retrieved_at": "2026-08-16",
       "sha256": null,
       "url": "https://supercell.com/en/games/clashroyale/blog/release-notes/january-balance-changes-2/"
+    },
+    "official-july-2024-goblin-machine": {
+      "confidence_tier": "A",
+      "kind": "official-patch-note",
+      "lineage": "Supercell",
+      "note": "Goblin Machine main-body first-hit delay correction from 0.2s to 0.5s.",
+      "published_at": "2024-07-01",
+      "retrieved_at": "2026-08-29",
+      "sha256": null,
+      "url": "https://supercell.com/en/games/clashroyale/blog/news/july-balance-changes/"
     },
     "official-july-2025-ice-spirit": {
       "confidence_tier": "A",
@@ -11732,6 +12788,16 @@
       "sha256": null,
       "url": "https://supercell.com/en/games/clashroyale/blog/release-notes/may-balance-changes-2/"
     },
+    "official-october-2025": {
+      "confidence_tier": "A",
+      "kind": "official-patch-note",
+      "lineage": "Supercell",
+      "note": "October 2025 Goblin Giant, Goblin Machine, Guards, Ice Wizard, Rage/Lumberjack, and related first-hit changes.",
+      "published_at": "2025-10-24",
+      "retrieved_at": "2026-08-29",
+      "sha256": null,
+      "url": "https://supercell.com/en/games/clashroyale/blog/release-notes/october-balance-changes-2/"
+    },
     "policy-grid-2026-08-11": {
       "confidence_tier": "E",
       "kind": "repository-calibration",
@@ -11741,6 +12807,16 @@
       "retrieved_at": "2026-08-11",
       "sha256": "41b9a2a0c6d23bc3f8e41edf006738f46956e5a43a18a542f5ab6c28085caec7",
       "url": null
+    },
+    "reference-goblin-giant-targeting": {
+      "confidence_tier": "B",
+      "kind": "card-reference",
+      "lineage": "Clash Royale card reference",
+      "note": "Goblin Giant's main body targets buildings; its carried Spear Goblins are independent air/ground attackers.",
+      "published_at": null,
+      "retrieved_at": "2026-08-29",
+      "sha256": null,
+      "url": "https://clashroyale.fandom.com/wiki/Goblin_Giant"
     },
     "royaleapi-buildings-2026-04-19": {
       "confidence_tier": "D",

@@ -137,6 +137,14 @@ def estimate_threat_weight(card_name) -> float:
     
     damage = metadata.get("damage")
     hit_speed = metadata.get("hit_speed")
+    if (
+        not isinstance(damage, (int, float))
+        or isinstance(damage, bool)
+        or not isinstance(hit_speed, (int, float))
+        or isinstance(hit_speed, bool)
+        or hit_speed <= 0
+    ):
+        return 0.0
     dps = damage / max(hit_speed, 0.1)
 
     return min(dps / 1000.0, 5.0)

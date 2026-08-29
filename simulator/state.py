@@ -68,6 +68,10 @@ class EntityState:
     pending_target_uid: int | None = None
     deploy_remaining_us: int = 0
     attack_cooldown_us: int = 0
+    # Initial attack loading is independent from the repeat-attack cooldown.
+    # It is advanced after deployment even when no target is currently in
+    # range, allowing a body to retain a preloaded first attack in state.
+    attack_load_remaining_us: int = 0
     windup_remaining_us: int = 0
     # Optional independent attack channel for multi-weapon troops such as
     # Goblin Machine.  Keeping the rocket clock separate from the melee clock
@@ -159,6 +163,10 @@ class EntityState:
     jump_target_uid: int | None = None
     jump_landing_x_mtile: int = 0
     jump_landing_y_mtile: int = 0
+    # Parent provenance is authoritative for capped spawners.  Counting by
+    # owner/card alone incorrectly lets one Furnace (or similar building)
+    # consume another parent's cap.
+    parent_uid: int | None = None
 
 
 @dataclass(slots=True)
@@ -216,6 +224,10 @@ class ProjectileState:
     chain_next_index: int = 0
     chain_delay_us: int = 0
     chain_delay_remaining_us: int = 0
+    # Start of the most recent movement segment.  Piercing collisions must be
+    # evaluated on that segment, not repeatedly from the launch point.
+    previous_x_mtile: int | None = None
+    previous_y_mtile: int | None = None
 
 
 @dataclass(slots=True)
@@ -407,6 +419,7 @@ def battle_state_from_primitive(raw: dict[str, Any]) -> BattleState:
         entity_row.setdefault("navigation_cursor", 0)
         entity_row.setdefault("charge_active", False)
         entity_row.setdefault("charge_remaining_us", None)
+        entity_row.setdefault("attack_load_remaining_us", 0)
         entity_row.setdefault("is_clone", False)
         entity_row.setdefault("attack_charge_active", False)
         entity_row.setdefault("attack_charge_distance_mtile", 0)
@@ -429,6 +442,7 @@ def battle_state_from_primitive(raw: dict[str, Any]) -> BattleState:
         entity_row.setdefault("jump_target_uid", None)
         entity_row.setdefault("jump_landing_x_mtile", 0)
         entity_row.setdefault("jump_landing_y_mtile", 0)
+        entity_row.setdefault("parent_uid", None)
         entity_row.setdefault("secondary_attack_cooldown_us", 0)
         entity_row.setdefault("secondary_windup_remaining_us", 0)
         entity_row.setdefault("secondary_pending_target_uid", None)
@@ -461,6 +475,8 @@ def battle_state_from_primitive(raw: dict[str, Any]) -> BattleState:
         projectile_row.setdefault("chain_next_index", 0)
         projectile_row.setdefault("chain_delay_us", 0)
         projectile_row.setdefault("chain_delay_remaining_us", 0)
+        projectile_row.setdefault("previous_x_mtile", None)
+        projectile_row.setdefault("previous_y_mtile", None)
         projectile_row.setdefault("allowed_targets", ())
         projectile_row.setdefault("origin_x_mtile", projectile_row.get("x_mtile", 0))
         projectile_row.setdefault("origin_y_mtile", projectile_row.get("y_mtile", 0))

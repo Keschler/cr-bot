@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from fractions import Fraction
+from functools import lru_cache
 import hashlib
 import json
 from typing import Callable, Final
@@ -40,11 +41,30 @@ from cr_bot.domain.constants import (
     PRINCESS_TOWER_HP,
     TOTAL_MATCH_SECONDS,
 )
-from cr_bot.features.action_masks import get_action_mask
-from cr_bot.features.action_space import ACTION_GRID, map_ground
-from cr_bot.features.board_rasterizer import build_board
-from cr_bot.features.channels import DYNAMIC_CHANNELS, GLOBAL_SCALAR_FEATURES, STATIC_CHANNELS
-from cr_bot.features.global_features import build_global_vector
+from cr_bot.features.action_space import ACTION_GRID, get_card_deploy_mask, map_ground
+from cr_bot.features.board_rasterizer import (
+    ENEMY_KING_TOWER_SITE,
+    ENEMY_LEFT_PRINCESS_TOWER_SITE,
+    ENEMY_RIGHT_PRINCESS_TOWER_SITE,
+    KERNEL_3X3,
+    OWN_KING_TOWER_SITE,
+    OWN_LEFT_PRINCESS_TOWER_SITE,
+    OWN_RIGHT_PRINCESS_TOWER_SITE,
+    build_board,
+    build_static_board,
+)
+from cr_bot.features.channels import (
+    DYNAMIC_CHANNEL_IDX,
+    DYNAMIC_CHANNELS,
+    GLOBAL_SCALAR_FEATURES,
+    STATIC_CHANNELS,
+)
+from cr_bot.features.global_features import (
+    encode_hand_cards,
+    encode_next_card,
+    encode_seen_enemy_cards,
+    build_global_vector,
+)
 
 from .actions import PlayCardAction, SimAction, UseAbilityAction, WaitAction
 from .geometry import (
@@ -59,6 +79,7 @@ from .geometry import (
     validate_cell,
 )
 from .ruleset import CardDefinition, Ruleset, normalize_identifier
+from .soa import ObservationSoA, is_public_observation_entity
 from .state import BattleState, EntityState
 
 
@@ -193,8 +214,28 @@ _NON_PLAYING_PHASES: Final = _FINISHED_PHASES | frozenset(
     {"", "countdown", "not-started", "pre-match", "pregame", "tiebreak"}
 )
 _ARENA_PX: Final = (0.0, 0.0, 1.0, 1.0)
+_SOA_STATIC_BOARD = np.ascontiguousarray(build_static_board(), dtype=np.float32)
+_SOA_STATIC_BOARD.setflags(write=False)
+
+
+def _clip_unit(value: float) -> float:
+    """Fast finite scalar equivalent of the feature-stack unit clip."""
+
+    return min(1.0, max(0.0, float(value)))
+
+
+def _normalize_soa_tower_hp(values: np.ndarray) -> tuple[float, float, float]:
+    left, king, right = (int(value) for value in values)
+    return (
+        _clip_unit(left / PRINCESS_TOWER_HP),
+        _clip_unit(king / FEATURE_MAX_KING_TOWER_HP),
+        _clip_unit(right / PRINCESS_TOWER_HP),
+    )
 
 LegalityCallback = Callable[[BattleState, PlayCardAction], bool]
+LegalActionCellsCallback = Callable[
+    [BattleState, int], tuple[tuple[tuple[int, int], ...], ...]
+]
 
 
 class UnsupportedPolicyFormError(ValueError):
@@ -435,7 +476,10 @@ def build_policy_observation(
     memory: ObservationMemory | None = None,
     compatibility_mode: str = VISION_V1_EXACT,
     legality_callback: LegalityCallback | None = None,
+    legal_action_cells_callback: LegalActionCellsCallback | None = None,
+    soa_state: ObservationSoA | None = None,
     allow_unrepresented_hand: bool = False,
+    _soa_already_synced: bool = False,
 ) -> PolicyObservationV1:
     """Project an authoritative state into the current policy boundary.
 
@@ -454,11 +498,28 @@ def build_policy_observation(
         raise TypeError("allow_unrepresented_hand must be boolean")
     if compatibility_mode != VISION_V1_EXACT:
         raise ValueError(f"unsupported compatibility mode: {compatibility_mode!r}")
+    if legality_callback is not None and legal_action_cells_callback is not None:
+        raise ValueError("legality_callback and legal_action_cells_callback are mutually exclusive")
     if memory is None:
         memory = ObservationMemory(viewer=viewer)
     elif memory.viewer != viewer:
         raise ValueError(f"observation memory belongs to viewer {memory.viewer}, not {viewer}")
     memory.update(state, ruleset)
+
+    if soa_state is not None:
+        if not isinstance(soa_state, ObservationSoA):
+            raise TypeError("soa_state must be an ObservationSoA instance")
+        return _build_policy_observation_soa(
+            state,
+            ruleset,
+            viewer=viewer,
+            memory=memory,
+            legality_callback=legality_callback,
+            legal_action_cells_callback=legal_action_cells_callback,
+            soa_state=soa_state,
+            allow_unrepresented_hand=allow_unrepresented_hand,
+            soa_already_synced=_soa_already_synced,
+        )
 
     observed = battle_state_to_observed_game_state(
         state,
@@ -467,17 +528,33 @@ def build_policy_observation(
         memory=memory,
         allow_unrepresented_hand=allow_unrepresented_hand,
     )
-    board = np.ascontiguousarray(build_board(observed, _ARENA_PX), dtype=np.float32)
+    if _requires_null_safe_board(observed):
+        # The external rasterizer assumes every card has an attack cadence.
+        # Keep its ordinary output byte-compatible, but use the simulator-local
+        # SoA renderer for passive/resource cards whose threat is zero by
+        # definition (for example Elixir Collector).
+        safe_soa = ObservationSoA()
+        safe_soa.sync(state, _feature_card_name)
+        board = np.ascontiguousarray(_build_soa_board(safe_soa, viewer), dtype=np.float32)
+    else:
+        board = np.ascontiguousarray(build_board(observed, _ARENA_PX), dtype=np.float32)
     global_vector = np.ascontiguousarray(build_global_vector(observed), dtype=np.float32)
     spatial_masks = _build_spatial_masks(observed)
-    legal_play = _build_legal_play(
-        state,
-        ruleset,
-        observed,
-        spatial_masks,
-        viewer=viewer,
-        legality_callback=legality_callback,
-    )
+    if legal_action_cells_callback is not None:
+        legal_play = _build_legal_play_from_cells(
+            state,
+            viewer=viewer,
+            legal_action_cells_callback=legal_action_cells_callback,
+        )
+    else:
+        legal_play = _build_legal_play(
+            state,
+            ruleset,
+            observed,
+            spatial_masks,
+            viewer=viewer,
+            legality_callback=legality_callback,
+        )
 
     # Feature arrays are immutable snapshots.  This prevents an agent or a
     # vectorized environment from corrupting a replayable BattleState view.
@@ -490,6 +567,282 @@ def build_policy_observation(
         legal_play=legal_play,
         legal_wait=not state.terminal and _phase_is_active(state.phase),
         compatibility_mode=compatibility_mode,
+    )
+
+
+def _build_policy_observation_soa(
+    state: BattleState,
+    ruleset: Ruleset,
+    *,
+    viewer: int,
+    memory: ObservationMemory,
+    legality_callback: LegalityCallback | None,
+    legal_action_cells_callback: LegalActionCellsCallback | None,
+    soa_state: ObservationSoA,
+    allow_unrepresented_hand: bool,
+    soa_already_synced: bool,
+) -> PolicyObservationV1:
+    """Build the policy tensors directly from reusable SoA columns.
+
+    Legality remains delegated to the exact engine callback.  Only the
+    projection of public board/global features uses the SoA path, so this
+    optimization cannot alter action acceptance or simulator mechanics.
+    """
+
+    if not soa_already_synced:
+        soa_state.sync(state, _feature_card_name)
+    board = _build_soa_board(soa_state, viewer)
+    global_vector = _build_soa_global_vector(
+        state,
+        ruleset,
+        viewer=viewer,
+        memory=memory,
+        soa_state=soa_state,
+        allow_unrepresented_hand=allow_unrepresented_hand,
+    )
+    spatial_masks = _build_soa_spatial_masks(state, viewer=viewer, soa_state=soa_state)
+    if legal_action_cells_callback is not None:
+        legal_play = _build_legal_play_from_cells(
+            state,
+            viewer=viewer,
+            legal_action_cells_callback=legal_action_cells_callback,
+            ruleset=ruleset,
+            soa_state=soa_state,
+        )
+    else:
+        # Preserve the legacy callback/conservative fallback semantics for
+        # callers that did not provide the exact engine legality callback.
+        observed = battle_state_to_observed_game_state(
+            state,
+            ruleset,
+            viewer=viewer,
+            memory=memory,
+            allow_unrepresented_hand=allow_unrepresented_hand,
+        )
+        legal_play = _build_legal_play(
+            state,
+            ruleset,
+            observed,
+            spatial_masks,
+            viewer=viewer,
+            legality_callback=legality_callback,
+        )
+
+    for array in (board, global_vector, spatial_masks, legal_play):
+        array.setflags(write=False)
+    return PolicyObservationV1(
+        board=board,
+        global_vector=global_vector,
+        spatial_masks=spatial_masks,
+        legal_play=legal_play,
+        legal_wait=not state.terminal and _phase_is_active(state.phase),
+        compatibility_mode=VISION_V1_EXACT,
+    )
+
+
+def _feature_card_name(card_id: str) -> str:
+    return _cached_feature_card_name(card_id)
+
+
+@lru_cache(maxsize=512)
+def _cached_feature_card_name(card_id: str) -> str:
+    normalized = normalize_identifier(card_id)
+    card_name = normalized if normalized in CARD_METADATA else _ENTITY_FEATURE_ALIASES.get(normalized)
+    # This private mixed-form ID is deliberately kept out of the public
+    # contract manifest; it renders with the same public profile as Goblins.
+    if card_name is None and normalized == "goblin-gang-goblin":
+        card_name = "goblins"
+    if card_name is None:
+        raise UnsupportedPolicyFormError(
+            f"vision_v1_exact cannot represent visible entity form {card_id!r}"
+        )
+    return card_name
+
+
+def _requires_null_safe_board(observed: GameState) -> bool:
+    """Detect public cards the external rasterizer cannot threat-score."""
+
+    for match in (*observed.own_units, *observed.enemy_units):
+        detection = getattr(match, "troop", None)
+        if detection is None:
+            continue
+        metadata = CARD_METADATA.get(getattr(detection, "class_name", ""))
+        if metadata is None:
+            continue
+        if (
+            type(metadata.get("damage")) not in (int, float)
+            or type(metadata.get("hit_speed")) not in (int, float)
+        ):
+            return True
+    return False
+
+
+def _build_soa_board(soa_state: ObservationSoA, viewer: int) -> np.ndarray:
+    board = np.zeros(BOARD_SHAPE, dtype=np.float32)
+    static_count = len(STATIC_CHANNELS)
+    board[:static_count] = _SOA_STATIC_BOARD
+    dynamic = board[static_count:]
+
+    _, tower_alive = soa_state.viewer_towers(viewer)
+    own_tower_mask = dynamic[DYNAMIC_CHANNEL_IDX["own_alive_tower_mask"]]
+    enemy_tower_mask = dynamic[DYNAMIC_CHANNEL_IDX["enemy_alive_tower_mask"]]
+    # The legacy rasterizer always exposes king tower sites; the alive flag
+    # only controls princess tower sites.
+    own_tower_mask[OWN_KING_TOWER_SITE] = 1.0
+    enemy_tower_mask[ENEMY_KING_TOWER_SITE] = 1.0
+    if tower_alive[0, 0]:
+        own_tower_mask[OWN_LEFT_PRINCESS_TOWER_SITE] = 1.0
+    if tower_alive[0, 2]:
+        own_tower_mask[OWN_RIGHT_PRINCESS_TOWER_SITE] = 1.0
+    if tower_alive[1, 0]:
+        enemy_tower_mask[ENEMY_LEFT_PRINCESS_TOWER_SITE] = 1.0
+    if tower_alive[1, 2]:
+        enemy_tower_mask[ENEMY_RIGHT_PRINCESS_TOWER_SITE] = 1.0
+
+    for index in range(soa_state.count):
+        if not soa_state.renderable[index]:
+            continue
+        if viewer == 1:
+            x_mtile, y_mtile = mirror_position(
+                int(soa_state.x_mtile[index]),
+                int(soa_state.y_mtile[index]),
+            )
+            cell = position_to_cell(x_mtile, y_mtile)
+            if cell is None:
+                continue
+            col, row = cell
+        else:
+            col = int(soa_state.cell_cols[index])
+            row = int(soa_state.cell_rows[index])
+        ally = int(soa_state.owners[index]) == viewer
+        air = bool(soa_state.is_air[index])
+        if ally:
+            presence_name = "ally_air_presence" if air else "ally_ground_presence"
+            hp_name = "ally_hp_mass"
+            threat_name = "ally_threat_mass"
+        else:
+            presence_name = "enemy_air_presence" if air else "enemy_ground_presence"
+            hp_name = "enemy_hp_mass"
+            threat_name = "enemy_threat_mass"
+        _splat_soa(dynamic[DYNAMIC_CHANNEL_IDX[presence_name]], row, col, 1.0)
+        _splat_soa(
+            dynamic[DYNAMIC_CHANNEL_IDX[hp_name]],
+            row,
+            col,
+            float(soa_state.hp_fraction[index]),
+        )
+        _splat_soa(
+            dynamic[DYNAMIC_CHANNEL_IDX[threat_name]],
+            row,
+            col,
+            float(soa_state.threat[index]),
+        )
+    return np.ascontiguousarray(board, dtype=np.float32)
+
+
+def _splat_soa(channel: np.ndarray, row: int, col: int, value: float) -> None:
+    for drow in range(-1, 2):
+        for dcol in range(-1, 2):
+            target_row = row + drow
+            target_col = col + dcol
+            if 0 <= target_row < GRID_ROWS and 0 <= target_col < GRID_COLS:
+                channel[target_row, target_col] += value * KERNEL_3X3[drow + 1, dcol + 1]
+
+
+def _build_soa_spatial_masks(
+    state: BattleState,
+    *,
+    viewer: int,
+    soa_state: ObservationSoA,
+) -> np.ndarray:
+    masks = np.zeros(ACTION_MASK_SHAPE, dtype=bool)
+    _, tower_alive = soa_state.viewer_towers(viewer)
+    for slot, card_name in enumerate(state.players[viewer].hand[:4]):
+        policy_name = policy_card_name(card_name)
+        if policy_name is None:
+            continue
+        masks[slot] = _cached_spatial_mask(
+            policy_name,
+            not tower_alive[0, 0],
+            not tower_alive[0, 2],
+            not tower_alive[1, 0],
+            not tower_alive[1, 2],
+        )
+    return np.ascontiguousarray(masks, dtype=bool)
+
+
+def _build_soa_global_vector(
+    state: BattleState,
+    ruleset: Ruleset,
+    *,
+    viewer: int,
+    memory: ObservationMemory,
+    soa_state: ObservationSoA,
+    allow_unrepresented_hand: bool,
+) -> np.ndarray:
+    own = state.players[viewer]
+    tower_hp, tower_alive = soa_state.viewer_towers(viewer)
+    regulation_us = ruleset.match.regulation_us
+    total_duration_us = regulation_us + ruleset.match.overtime_us
+    total_remaining_s = max(
+        0.0,
+        (total_duration_us - state.elapsed_us) / 1_000_000.0,
+    )
+    overtime = state.elapsed_us >= regulation_us or "overtime" in state.phase.casefold()
+    phase_end_us = total_duration_us if overtime else regulation_us
+    time_left_s = max(0.0, (phase_end_us - state.elapsed_us) / 1_000_000.0)
+
+    global_scalars = np.zeros(len(GLOBAL_SCALAR_FEATURES), dtype=np.float32)
+    global_scalars[0] = _clip_unit((own.elixir_milli / 1_000.0) / MAX_ELIXIR)
+    global_scalars[1] = _clip_unit(memory.opponent_elixir_est / MAX_ELIXIR)
+    global_scalars[2] = _clip_unit(total_remaining_s / TOTAL_MATCH_SECONDS)
+    global_scalars[3] = float(overtime)
+    global_scalars[4] = float(own.king_active)
+    global_scalars[5] = float(state.players[1 - viewer].king_active)
+    global_scalars[6] = float(tower_alive[0, 0])
+    global_scalars[7] = float(tower_alive[0, 2])
+    global_scalars[8] = float(tower_alive[1, 0])
+    global_scalars[9] = float(tower_alive[1, 2])
+    global_scalars[10] = float(not tower_alive[1, 0])
+    global_scalars[11] = float(not tower_alive[1, 2])
+    own_left, own_king, own_right = _normalize_soa_tower_hp(tower_hp[0])
+    enemy_left, enemy_king, enemy_right = _normalize_soa_tower_hp(tower_hp[1])
+    global_scalars[12:15] = (own_left, own_king, own_right)
+    global_scalars[15:18] = (enemy_left, enemy_king, enemy_right)
+
+    if allow_unrepresented_hand:
+        hand = [policy_card_name(card) or "" for card in own.hand[:4]]
+    else:
+        hand = [
+            _require_policy_feature_name(card, context="viewer hand")
+            for card in own.hand[:4]
+        ]
+    hand.extend([""] * (4 - len(hand)))
+    if own.draw_pile:
+        next_card = (
+            policy_card_name(own.draw_pile[0]) or ""
+            if allow_unrepresented_hand
+            else _require_policy_feature_name(own.draw_pile[0], context="viewer next card")
+        )
+    else:
+        next_card = ""
+    seen_ids = sorted(
+        {
+            int(CARD_METADATA[name]["id"])
+            for name in memory.seen_opponent_cards
+            if name in CARD_METADATA and isinstance(CARD_METADATA[name].get("id"), int)
+        }
+    )
+    return np.ascontiguousarray(
+        np.concatenate(
+            [
+                global_scalars,
+                encode_hand_cards(hand),
+                encode_next_card(next_card),
+                encode_seen_enemy_cards(seen_ids),
+            ]
+        ).astype(np.float32),
+        dtype=np.float32,
     )
 
 
@@ -566,7 +919,11 @@ def battle_state_to_observed_game_state(
     enemy_units: list[Match] = []
     for uid in sorted(state.entities):
         entity = state.entities[uid]
-        if not entity.alive or entity.hp <= 0 or _is_tower(entity) or entity.kind == "spell":
+        if (
+            not is_public_observation_entity(entity)
+            or _is_tower(entity)
+            or entity.kind == "spell"
+        ):
             continue
         match = _entity_to_match(entity, viewer)
         # A known entity can leave the finite vision arena before the
@@ -613,6 +970,11 @@ def policy_card_name(card_id_or_alias: str | None) -> str | None:
 
     if not isinstance(card_id_or_alias, str) or not card_id_or_alias.strip():
         return None
+    return _cached_policy_card_name(card_id_or_alias)
+
+
+@lru_cache(maxsize=512)
+def _cached_policy_card_name(card_id_or_alias: str) -> str | None:
     normalized = normalize_identifier(card_id_or_alias)
     normalized = _POLICY_ALIASES.get(normalized, normalized)
     return normalized if normalized in BASE_POLICY_CARD_IDS else None
@@ -741,12 +1103,14 @@ def _viewer_position(entity: EntityState, viewer: int) -> tuple[int, int]:
 
 
 def _is_tower(entity: EntityState) -> bool:
-    return entity.kind == "tower" or "tower" in entity.card_id
+    return entity.kind == "tower"
 
 
 def _entity_to_match(entity: EntityState, viewer: int) -> Match | None:
     normalized = normalize_identifier(entity.card_id)
     card_name = normalized if normalized in CARD_METADATA else _ENTITY_FEATURE_ALIASES.get(normalized)
+    if card_name is None and normalized == "goblin-gang-goblin":
+        card_name = "goblins"
     if card_name is None:
         raise UnsupportedPolicyFormError(
             f"vision_v1_exact cannot represent visible entity form {entity.card_id!r}"
@@ -791,7 +1155,7 @@ def _viewer_tower_state(
             continue
         relative_team = 0 if entity.owner == viewer else 1
         x_mtile, _ = _viewer_position(entity, viewer)
-        if entity.role == "king" or "king" in entity.card_id:
+        if entity.role == "king":
             role = "king"
         else:
             role = "left" if x_mtile < GRID_COLS * 1_000 // 2 else "right"
@@ -802,11 +1166,43 @@ def _viewer_tower_state(
 
 def _build_spatial_masks(observed: GameState) -> np.ndarray:
     masks = np.zeros(ACTION_MASK_SHAPE, dtype=bool)
+    tower_flags = observed.hud.princess_towers.as_deploy_kwargs()
     for slot, card_name in enumerate(observed.hud.hand_cards[:4]):
-        if policy_card_name(card_name) is None:
+        policy_name = policy_card_name(card_name)
+        if policy_name is None:
             continue
-        masks[slot] = get_action_mask(card_name, observed)
+        masks[slot] = _cached_spatial_mask(
+            policy_name,
+            tower_flags["own_left_princess_down"],
+            tower_flags["own_right_princess_down"],
+            tower_flags["enemy_left_princess_down"],
+            tower_flags["enemy_right_princess_down"],
+        )
     return np.ascontiguousarray(masks, dtype=bool)
+
+
+@lru_cache(maxsize=128)
+def _cached_spatial_mask(
+    card_name: str,
+    own_left_princess_down: bool,
+    own_right_princess_down: bool,
+    enemy_left_princess_down: bool,
+    enemy_right_princess_down: bool,
+) -> np.ndarray:
+    """Cache the legacy static deployment mask by its complete input."""
+
+    mask = np.ascontiguousarray(
+        get_card_deploy_mask(
+            card_name,
+            own_left_princess_down=own_left_princess_down,
+            own_right_princess_down=own_right_princess_down,
+            enemy_left_princess_down=enemy_left_princess_down,
+            enemy_right_princess_down=enemy_right_princess_down,
+        ),
+        dtype=bool,
+    )
+    mask.setflags(write=False)
+    return mask
 
 
 def _build_legal_play(
@@ -843,6 +1239,70 @@ def _build_legal_play(
                 if allowed:
                     legal[slot, row, col] = True
     return np.ascontiguousarray(legal, dtype=bool)
+
+
+def _build_legal_play_from_cells(
+    state: BattleState,
+    *,
+    viewer: int,
+    legal_action_cells_callback: LegalActionCellsCallback,
+    ruleset: Ruleset | None = None,
+    soa_state: ObservationSoA | None = None,
+) -> np.ndarray:
+    """Build the policy mask from an exact, already-batched legality query."""
+
+    legal = np.zeros(ACTION_MASK_SHAPE, dtype=bool)
+    if state.terminal or not _phase_is_active(state.phase):
+        return legal
+
+    legal_cells_by_slot = None
+    legal_masks_by_slot = None
+    if (
+        ruleset is not None
+        and soa_state is not None
+        and _is_engine_legal_action_cells_callback(legal_action_cells_callback)
+    ):
+        legal_masks_by_slot = soa_state.legal_action_masks_if_static(
+            state,
+            ruleset,
+            viewer,
+        )
+    if legal_masks_by_slot is not None:
+        for slot, raw_card_name in enumerate(state.players[viewer].hand[:4]):
+            if policy_card_name(raw_card_name) is None:
+                continue
+            if viewer == 0:
+                legal[slot] = legal_masks_by_slot[slot]
+            else:
+                legal[slot] = legal_masks_by_slot[slot][::-1, ::-1]
+        return np.ascontiguousarray(legal, dtype=bool)
+
+    if legal_cells_by_slot is None:
+        legal_cells_by_slot = legal_action_cells_callback(state, viewer)
+    if len(legal_cells_by_slot) != 4:
+        raise ValueError("legal action cell callback must return four hand-slot rows")
+    for slot, raw_card_name in enumerate(state.players[viewer].hand[:4]):
+        # V2 can expose an opponent hand containing cards outside the fixed
+        # actor vocabulary.  The engine callback is authoritative about
+        # simulator legality, but those forms must remain empty in this mask.
+        if policy_card_name(raw_card_name) is None:
+            continue
+        for world_col, world_row in legal_cells_by_slot[slot]:
+            if viewer == 1:
+                col = GRID_COLS - 1 - world_col
+                row = GRID_ROWS - 1 - world_row
+            else:
+                col, row = world_col, world_row
+            legal[slot, row, col] = True
+    return np.ascontiguousarray(legal, dtype=bool)
+
+
+def _is_engine_legal_action_cells_callback(callback: LegalActionCellsCallback) -> bool:
+    """Identify the built-in engine callback without changing custom hooks."""
+
+    from .engine import BattleEngine
+
+    return getattr(callback, "__func__", None) is BattleEngine.legal_action_cells
 
 
 def _conservative_cell_is_legal(

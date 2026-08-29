@@ -164,6 +164,8 @@ class Ruleset:
     _tower_aliases: Mapping[str, str] = field(repr=False)
 
     def resolve_card_id(self, card_id_or_alias: str) -> str:
+        if type(card_id_or_alias) is str and card_id_or_alias in self.cards:
+            return card_id_or_alias
         normalized = normalize_identifier(card_id_or_alias)
         try:
             return self._card_aliases[normalized]
@@ -171,6 +173,8 @@ class Ruleset:
             raise KeyError(f"unknown card for ruleset {self.ruleset_id}: {card_id_or_alias!r}") from error
 
     def resolve_tower_id(self, tower_id_or_alias: str) -> str:
+        if type(tower_id_or_alias) is str and tower_id_or_alias in self.towers:
+            return tower_id_or_alias
         normalized = normalize_identifier(tower_id_or_alias)
         try:
             return self._tower_aliases[normalized]
@@ -1240,13 +1244,22 @@ def _validate_mechanics(row: dict[str, Any], context: str) -> None:
             spawn_on_impact,
             f"{context}.mechanics.spawn_on_impact",
         )
-        _reject_unknown(
-            impact_row,
-            {"card_id", "count"},
-            f"{context}.mechanics.spawn_on_impact",
+        impact_context = f"{context}.mechanics.spawn_on_impact"
+        unknown_impact = sorted(
+            set(impact_row) - {"card_id", "count", "child_deploy_time_us"}
         )
+        if unknown_impact:
+            raise RulesetError(
+                f"unknown fields at {impact_context}: {unknown_impact}"
+            )
         _require_str(impact_row, "card_id")
         _require_int(impact_row, "count", minimum=1)
+        if "child_deploy_time_us" in impact_row:
+            _require_int(
+                impact_row,
+                "child_deploy_time_us",
+                minimum=0,
+            )
     carrier = row.get("carrier")
     if carrier is not None:
         carrier_context = f"{context}.mechanics.carrier"

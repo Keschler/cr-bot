@@ -37,6 +37,7 @@ from .ruleset import FIXED_RULESET_ID, calculate_content_hash, ruleset_path
 ROSTER_RULESET_ID = "2026-08-04-roster"
 CATALOG_SOURCE_ID = "local-card-metadata-2026-08-14"
 CATALOG_GENERATED_AT = "2026-08-14"
+HIGH_SEVERITY_CARD_FIX_SOURCE_ID = "local-high-severity-card-fixes-2026-08-29"
 GOBLIN_MACHINE_SOURCE_ID = "royaleapi-goblin-machine-2024"
 LEVEL11_SOURCE_PAYLOAD = load_level11_source()
 DECKSHOP_SOURCE_ID = "deckshop-battle-healer-2026-08-14"
@@ -124,7 +125,10 @@ SHIELD_DEFINITIONS: Mapping[str, Mapping[str, int]] = {
 # below and remain outside the playable interaction set.
 SPAWN_CHILDREN_DEFINITIONS: Mapping[str, tuple[Mapping[str, Any], ...]] = {
     "goblin-gang": (
-        {"card_id": "goblin", "count": 3},
+        # April 2025 changed the Goblin Gang's Goblins to a 0.6 s first hit.
+        # Keep them separate from the generic child used by Goblin Barrel,
+        # Goblin Curse, and Goblin Drill, whose first hit stayed at 0.4 s.
+        {"card_id": "goblin-gang-goblin", "count": 3},
         {"card_id": "spear-goblin", "count": 3},
     ),
     "rascals": (
@@ -135,11 +139,11 @@ SPAWN_CHILDREN_DEFINITIONS: Mapping[str, tuple[Mapping[str, Any], ...]] = {
 
 DEATH_RAGE_DEFINITIONS: Mapping[str, Mapping[str, Any]] = {
     "lumberjack": {
-        "duration_us": 6_000_000,
+        "duration_us": 5_500_000,
         "tick_interval_us": 100_000,
         "radius_mtile": 3_000,
-        "speed_multiplier_milli": 1400,
-        "hit_speed_multiplier_milli": 1400,
+        "speed_multiplier_milli": 1300,
+        "hit_speed_multiplier_milli": 1300,
         "targets": ["air", "ground"],
     },
 }
@@ -208,7 +212,7 @@ SPAWNER_DEFINITIONS: Mapping[str, Mapping[str, int | str | None]] = {
         "child_deploy_time_us": 500_000,
     },
     "goblin-drill": {
-        "card_id": "goblins",
+        "card_id": "goblin",
         "interval_us": 3_000_000,
         "start_delay_us": 1_000_000,
         "max_alive": 6,
@@ -253,8 +257,8 @@ STATUS_DEFINITIONS: Mapping[str, Mapping[str, int | str]] = {
     "ice-wizard": {
         "kind": "slow",
         "duration_us": 1_500_000,
-        "speed_multiplier_milli": 650,
-        "hit_speed_multiplier_milli": 650,
+        "speed_multiplier_milli": 700,
+        "hit_speed_multiplier_milli": 700,
     },
     "poison": {
         "kind": "poison-slow",
@@ -568,7 +572,7 @@ DEATH_DEFINITIONS: Mapping[str, Mapping[str, Any]] = {
         "crown_tower_damage": 0,
         "radius_mtile": 0,
         "targets": ["ground"],
-        "spawn_card_id": "goblins",
+        "spawn_card_id": "goblin",
         "spawn_count": 2,
     },
     "skeleton-barrel": {
@@ -589,6 +593,14 @@ DEATH_DEFINITIONS: Mapping[str, Mapping[str, Any]] = {
         "targets": ["ground"],
         "spawn_card_id": "skeletons",
         "spawn_count": 3,
+    },
+    "night-witch": {
+        "damage": 0,
+        "crown_tower_damage": 0,
+        "radius_mtile": 0,
+        "targets": ["ground"],
+        "spawn_card_id": "bats",
+        "spawn_count": 1,
     },
     # Suspicious Bush is a transport-like troop rather than a normal attacker:
     # it releases two private Bush Goblins when it reaches a building or is
@@ -617,11 +629,11 @@ DEATH_DEFINITIONS: Mapping[str, Mapping[str, Any]] = {
         "knockback_mtile": 0,
     },
     "phoenix": {
-        # Level-11 death damage and the reduced Crown-Tower amount are
-        # corroborated by the fixed card snapshot; radius/knockback remain
-        # provisional until the visual oracle fits the burst edge.
+        # The current body death damage also applies to Crown Towers; radius
+        # and knockback remain provisional until the visual oracle fits the
+        # burst edge.
         "damage": 163,
-        "crown_tower_damage": 49,
+        "crown_tower_damage": 163,
         "radius_mtile": 1_500,
         "targets": ["air", "ground", "building", "crown_tower"],
         "knockback_mtile": 1_500,
@@ -660,7 +672,7 @@ HEALTH_TRANSFORM_DEFINITIONS: Mapping[str, Mapping[str, Any]] = {
 
 SPAWN_ON_IMPACT: Mapping[str, Mapping[str, int | str]] = {
     "barbarian-barrel": {"card_id": "barbarian", "count": 1},
-    "goblin-barrel": {"card_id": "goblins", "count": 3},
+    "goblin-barrel": {"card_id": "goblin", "count": 3},
     "graveyard": {"card_id": "skeletons", "count": 5},
     "royal-delivery": {"card_id": "royal-recruits", "count": 1},
 }
@@ -867,6 +879,272 @@ def _speed(value: object) -> int | None:
         "fast": 1_800,
         "very fast": 2_400,
     }.get(normalized, 1_200)
+
+
+PROJECTILE_SPEED_FIXES: Mapping[str, Mapping[str, int | bool]] = {
+    # Values are the current in-game projectile speed codes from the pinned
+    # RoyaleAPI projectile table, with current card-page/official corrections
+    # called out where that table is stale.  The runtime stores milli-tiles/s,
+    # so the conversion is applied once below instead of baking mixed units
+    # into individual card rows.
+    "arrows": {"speed_code": 1_100, "homing": True},
+    "archers": {"speed_code": 600, "homing": True},
+    "baby-dragon": {"speed_code": 500, "homing": True},
+    # The simulator models the rolling phase as the single barrel projectile;
+    # the rolling phase is 200 rather than the separate launch value.
+    "barbarian-barrel": {"speed_code": 200, "homing": False},
+    "bomb-tower": {"speed_code": 500, "homing": False},
+    "bomber": {"speed_code": 400, "homing": False},
+    "bowler": {"speed_code": 170, "homing": False},
+    "cannon": {"speed_code": 1_000, "homing": True},
+    "cannon-cart": {"speed_code": 1_000, "homing": True},
+    "cannon-cart-building": {"speed_code": 1_000, "homing": True},
+    "dart-goblin": {"speed_code": 800, "homing": True},
+    "electro-dragon": {"speed_code": 2_000, "homing": True},
+    "electro-spirit": {"speed_code": 2_000, "homing": True},
+    "executioner": {"speed_code": 550, "homing": False},
+    "fire-spirit": {"speed_code": 400, "homing": True},
+    "firecracker": {"speed_code": 500, "homing": False},
+    "flying-machine": {"speed_code": 800, "homing": True},
+    "giant-snowball": {"speed_code": 800, "homing": False},
+    "goblin-demolisher": {"speed_code": 400, "homing": False},
+    "x-bow": {"speed_code": 1_600, "homing": True},
+    "fireball": {"speed_code": 600, "homing": False},
+    "heal-spirit": {"speed_code": 400, "homing": True},
+    "ice-spirit": {"speed_code": 400, "homing": True},
+    "ice-wizard": {"speed_code": 700, "homing": True},
+    "lava-hound": {"speed_code": 400, "homing": True},
+    "lava-pup": {"speed_code": 500, "homing": True},
+    "lightning": {"speed_code": 500, "homing": False},
+    "magic-archer": {"speed_code": 1_000, "homing": False},
+    "mega-minion": {"speed_code": 1_000, "homing": True},
+    "minion-horde": {"speed_code": 1_000, "homing": True},
+    "minions": {"speed_code": 1_000, "homing": True},
+    "mortar": {"speed_code": 300, "homing": False},
+    "musketeer": {"speed_code": 1_000, "homing": True},
+    "mother-witch": {"speed_code": 600, "homing": True},
+    "hunter": {"speed_code": 550, "homing": False},
+    "princess": {"speed_code": 600, "homing": False},
+    "rascal-girl": {"speed_code": 800, "homing": True},
+    "rascals": {"speed_code": 800, "homing": True},
+    "royal-giant": {"speed_code": 1_000, "homing": True},
+    "rocket": {"speed_code": 350, "homing": False},
+    "royal-delivery": {"speed_code": 5_000, "homing": False},
+    "goblin-barrel": {"speed_code": 400, "homing": False},
+    "skeleton-dragons": {"speed_code": 500, "homing": True},
+    "sparky": {"speed_code": 1_400, "homing": True},
+    "spear-goblin": {"speed_code": 500, "homing": True},
+    "spear-goblins": {"speed_code": 500, "homing": True},
+    "three-musketeers": {"speed_code": 1_000, "homing": True},
+    "witch": {"speed_code": 600, "homing": True},
+    "wizard": {"speed_code": 600, "homing": True},
+}
+
+FIRST_HIT_DELAY_FIXES_US: Mapping[str, int] = {
+    # Current card-reference values for the remaining ordinary attack
+    # channels which previously fell through to the zero default.  Keep
+    # special channels (Inferno ramps, contact suicides, and X-Bow's
+    # immediate lock) out of this table; they have their own timing logic.
+    "archers": 500_000,
+    "balloon": 200_000,
+    "bandit": 400_000,
+    "barbarian": 400_000,
+    "barbarians": 400_000,
+    "bats": 600_000,
+    "battle-healer": 300_000,
+    "battle-ram": 350_000,
+    "bomb-tower": 500_000,
+    "dark-prince": 400_000,
+    "baby-dragon": 300_000,
+    "bomber": 200_000,
+    "bowler": 500_000,
+    "cannon": 1_000_000,
+    "cannon-cart": 500_000,
+    "cannon-cart-building": 500_000,
+    "dart-goblin": 350_000,
+    "electro-dragon": 700_000,
+    "electro-spirit": 200_000,
+    "electro-wizard": 600_000,
+    "elite-barbarians": 500_000,
+    "elixir-blob": 1_000_000,
+    "elixir-golem": 1_000_000,
+    "elixir-golemite": 1_000_000,
+    "executioner": 500_000,
+    "fire-spirit": 200_000,
+    "firecracker": 650_000,
+    "fisherman": 100_000,
+    "flying-machine": 500_000,
+    "giant": 500_000,
+    "giant-skeleton": 300_000,
+    "goblin-giant": 800_000,
+    "golem": 1_000_000,
+    "golemite": 1_000_000,
+    "heal-spirit": 200_000,
+    "ice-wizard": 500_000,
+    "knight": 500_000,
+    "lava-hound": 1_000_000,
+    "lava-pup": 1_000_000,
+    "lumberjack": 400_000,
+    "magic-archer": 700_000,
+    "mega-minion": 400_000,
+    "mega-knight": 500_000,
+    "mini-pekka": 400_000,
+    "minion-horde": 500_000,
+    "minions": 500_000,
+    "miner": 500_000,
+    "mortar": 1_000_000,
+    "musketeer": 700_000,
+    "mother-witch": 300_000,
+    "hunter": 700_000,
+    "goblin-demolisher": 500_000,
+    "night-witch": 750_000,
+    "pekka": 500_000,
+    "princess": 500_000,
+    "prince": 500_000,
+    "rascal-girl": 500_000,
+    "rascal-boy": 400_000,
+    "rascals": 500_000,
+    "royal-giant": 900_000,
+    "royal-ghost": 600_000,
+    "royal-hogs": 350_000,
+    "royal-recruits": 500_000,
+    "skeleton-dragons": 400_000,
+    "skeleton-army": 500_000,
+    "skeleton-barrel": 100_000,
+    "spear-goblin": 500_000,
+    "spear-goblins": 500_000,
+    "tesla": 500_000,
+    "three-musketeers": 700_000,
+    "valkyrie": 100_000,
+    "witch": 700_000,
+    "wizard": 400_000,
+    "wall-breakers": 200_000,
+    "zappies": 800_000,
+}
+
+
+def _projectile_speed_code_to_mtile_per_s(speed_code: int) -> int:
+    """Convert one raw projectile position step per 50 ms to milli-tiles/s."""
+
+    return speed_code * 20
+
+
+def _append_card_provenance(
+    raw: dict[str, Any], field: str, *source_ids: str
+) -> None:
+    provenance = {
+        str(key): list(value) if isinstance(value, (list, tuple)) else [str(value)]
+        for key, value in dict(raw.get("provenance", {})).items()
+    }
+    sources = provenance.setdefault(field, [])
+    for source_id in source_ids:
+        if source_id not in sources:
+            sources.append(source_id)
+    raw["provenance"] = provenance
+
+
+def _apply_high_severity_card_fixes(
+    card_id: str, raw: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Apply narrowly scoped, card-specific corrections to a card row."""
+
+    fixed = deepcopy(dict(raw))
+    projectile_fix = PROJECTILE_SPEED_FIXES.get(card_id)
+    if projectile_fix is not None:
+        projectile = dict(fixed.get("projectile") or {})
+        projectile.setdefault("projectile_id", f"{card_id}-projectile")
+        projectile.setdefault("radius_mtile", 0)
+        projectile.setdefault("start_radius_mtile", 0)
+        speed_code = int(projectile_fix["speed_code"])
+        projectile["speed_mtile_per_s"] = _projectile_speed_code_to_mtile_per_s(
+            speed_code
+        )
+        projectile["homing"] = bool(projectile_fix["homing"])
+        fixed["projectile"] = projectile
+        mechanics = dict(fixed.get("mechanics", {}))
+        mechanics["projectile_speed_code"] = speed_code
+        fixed["mechanics"] = mechanics
+        _append_card_provenance(
+            fixed,
+            "projectile_speed_conversion",
+            "royaleapi-projectiles-2026-04-19",
+            "simulator-baseline-assumptions",
+            HIGH_SEVERITY_CARD_FIX_SOURCE_ID,
+        )
+        _append_card_provenance(
+            fixed,
+            "mechanics.projectile_speed_code",
+            HIGH_SEVERITY_CARD_FIX_SOURCE_ID,
+        )
+        _append_card_provenance(
+            fixed, "projectile.homing", HIGH_SEVERITY_CARD_FIX_SOURCE_ID
+        )
+
+    first_hit_delay_us = FIRST_HIT_DELAY_FIXES_US.get(card_id)
+    if first_hit_delay_us is not None:
+        fixed["first_hit_delay_us"] = first_hit_delay_us
+        _append_card_provenance(
+            fixed, "first_hit_delay_us", HIGH_SEVERITY_CARD_FIX_SOURCE_ID
+        )
+
+    if card_id == "goblin-barrel":
+        fixed["damage"] = 0
+        mechanics = dict(fixed.get("mechanics", {}))
+        # RoyaleAPI exposes the spell's 1.1 s character deployment delay;
+        # without carrying it into the impact component the three Goblins
+        # become active on the impact frame and can attack immediately.
+        mechanics["spawn_on_impact"] = {
+            "card_id": "goblin",
+            "count": 3,
+            "child_deploy_time_us": 1_100_000,
+        }
+        fixed["mechanics"] = mechanics
+        _append_card_provenance(
+            fixed, "damage", HIGH_SEVERITY_CARD_FIX_SOURCE_ID
+        )
+        _append_card_provenance(
+            fixed, "mechanics.spawn_on_impact", HIGH_SEVERITY_CARD_FIX_SOURCE_ID
+        )
+        _append_card_provenance(
+            fixed,
+            "mechanics.spawn_on_impact.child_deploy_time_us",
+            HIGH_SEVERITY_CARD_FIX_SOURCE_ID,
+        )
+
+    if card_id == "phoenix":
+        mechanics = dict(fixed.get("mechanics", {}))
+        death = dict(mechanics.get("death") or DEATH_DEFINITIONS[card_id])
+        death["crown_tower_damage"] = int(death.get("damage") or 0)
+        mechanics["death"] = death
+        fixed["mechanics"] = mechanics
+        _append_card_provenance(
+            fixed,
+            "mechanics.death.crown_tower_damage",
+            HIGH_SEVERITY_CARD_FIX_SOURCE_ID,
+        )
+
+    if card_id == "night-witch":
+        mechanics = dict(fixed.get("mechanics", {}))
+        mechanics["death"] = deepcopy(DEATH_DEFINITIONS[card_id])
+        fixed["mechanics"] = mechanics
+        _append_card_provenance(
+            fixed, "mechanics.death", HIGH_SEVERITY_CARD_FIX_SOURCE_ID
+        )
+
+    if card_id == "royal-delivery":
+        targets = ["air", "ground"]
+        fixed["targets"] = targets
+        mechanics = dict(fixed.get("mechanics", {}))
+        mechanics["impact_targets"] = list(targets)
+        fixed["mechanics"] = mechanics
+        _append_card_provenance(
+            fixed, "targets", HIGH_SEVERITY_CARD_FIX_SOURCE_ID
+        )
+        _append_card_provenance(
+            fixed, "mechanics.impact_targets", HIGH_SEVERITY_CARD_FIX_SOURCE_ID
+        )
+
+    return fixed
 
 
 def _formation(count: int, radius: int = 500) -> list[list[int]]:
@@ -1117,7 +1395,7 @@ def _generated_card(card_id: str, metadata: Mapping[str, Any]) -> dict[str, Any]
     if card_id == "royal-ghost":
         mechanics.update({
             "stealth": True,
-            "stealth_recloak_us": 1_500_000,
+            "stealth_recloak_us": 2_000_000,
         })
     if card_id == "miner":
         # Miner is the explicit deployment exception to normal own-territory
@@ -1306,21 +1584,26 @@ def _generated_card(card_id: str, metadata: Mapping[str, Any]) -> dict[str, Any]
     if card_id == "goblin-machine":
         # The machine has an independent rocket weapon.  Official August
         # 2026 notes set its 5-second hit speed and 350-tile/s travel speed;
-        # the fixed Level-11 damage remains the post-June-2024 391 body
-        # damage with the documented 50% Crown-Tower reduction (rounded to
-        # the nearest integer for the game's integer damage model).
+        # the October 2025 note changed the rocket to 304 body damage; the
+        # current Crown-Tower value is 152 after the documented 50% reduction.
         mechanics["secondary_attack"] = {
             "min_range_mtile": 2_500,
             "max_range_mtile": 5_000,
             "attack_interval_us": 5_000_000,
             "first_hit_delay_us": 0,
-            "damage": 391,
-            "crown_tower_damage": 196,
+            "damage": 304,
+            "crown_tower_damage": 152,
             "area_radius_mtile": 1_500,
             "projectile_speed_mtile_per_s": 350_000,
             "projectile_radius_mtile": 0,
             "targets": ["air", "ground", "building", "crown_tower"],
         }
+        # July 2024 changed the machine's primary first hit from 0.2 s to
+        # 0.5 s.  The rocket has its own independent channel and remains on
+        # its separately sourced timing.
+        raw_first_hit_delay_us = 500_000
+    else:
+        raw_first_hit_delay_us = None
     if card_id == "clone":
         # Clone is an impact-only spell.  It does not damage the arena; it
         # copies friendly troop bodies in its radius as one-HP entities.  The
@@ -1439,7 +1722,11 @@ def _generated_card(card_id: str, metadata: Mapping[str, Any]) -> dict[str, Any]
             else (0 if spell else None)
         ),
         "attack_interval_us": interval,
-        "first_hit_delay_us": 0 if interval is not None else None,
+        "first_hit_delay_us": (
+            raw_first_hit_delay_us
+            if raw_first_hit_delay_us is not None
+            else (0 if interval is not None else None)
+        ),
         "move_speed_mtile_per_s": None
         if spell or kind == "building"
         else _speed(source.get("speed") or metadata.get("move_speed")),
@@ -1471,6 +1758,11 @@ def _generated_card(card_id: str, metadata: Mapping[str, Any]) -> dict[str, Any]
             }
         )
     raw, _ = apply_official_overrides(card_id, raw)
+    if card_id == "goblin-giant":
+        # The carrier's main body is building-only.  Its two attached
+        # Spear Goblins are separate entities and retain air/ground targeting.
+        raw["targets"] = ["building", "crown_tower"]
+        raw["mechanics"]["building_only"] = True
     if card_id == "sparky":
         raw["first_hit_delay_us"] = 4_000_000
     if card_id == "ram-rider":
@@ -1635,11 +1927,13 @@ def _bush_goblin_raw(cards: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _goblin_raw(cards: Mapping[str, Any]) -> dict[str, Any]:
-    """Create the one-body Goblin produced by Goblin Curse.
+    """Create the generic one-body Goblin produced by other cards.
 
     The playable ``goblins`` card is a four-body formation.  A transformed
     troop is a single Goblin, so it needs its own internal definition rather
-    than reusing the group card's spawn count and layout.
+    than reusing the group card's spawn count and layout.  April 2025
+    explicitly left Goblins spawned by Goblin Barrel, Goblin Curse, Goblin
+    Drill, and similar cards at the old 0.4-second first hit.
     """
 
     raw = deepcopy(cards["goblins"])
@@ -1650,6 +1944,7 @@ def _goblin_raw(cards: Mapping[str, Any]) -> dict[str, Any]:
             "elixir_milli": 0,
             "deploy_time_us": 0,
             "spawn_count": 1,
+            "first_hit_delay_us": 400_000,
             "mechanics": {
                 **dict(raw["mechanics"]),
                 "spawn_layout_mtile": [[0, 0]],
@@ -1669,6 +1964,42 @@ def _goblin_raw(cards: Mapping[str, Any]) -> dict[str, Any]:
             ],
         }
     )
+    raw, _ = apply_official_overrides("goblin", raw)
+    return raw
+
+
+def _goblin_gang_raw(cards: Mapping[str, Any]) -> dict[str, Any]:
+    """Create the Goblin Gang-specific one-body Goblin child."""
+
+    raw = deepcopy(cards["goblins"])
+    raw.update(
+        {
+            "name": "Goblin (Goblin Gang)",
+            "aliases": ["goblin-gang-goblin", "goblin_gang_goblin"],
+            "elixir_milli": 0,
+            "deploy_time_us": 0,
+            "spawn_count": 1,
+            "first_hit_delay_us": 600_000,
+            "mechanics": {
+                **dict(raw["mechanics"]),
+                "spawn_layout_mtile": [[0, 0]],
+            },
+            "provenance": {
+                **dict(raw.get("provenance", {})),
+                "identity": [CATALOG_SOURCE_ID],
+                "generated_mechanics": [CATALOG_SOURCE_ID],
+            },
+            "uncertainties": [
+                {
+                    "field": "goblin_gang_child_definition",
+                    "reason": "Single Goblin body derived from the Level-11 Goblin Gang formation.",
+                    "impact": "medium",
+                    "resolution": "Confirm Goblin Gang child spawn position and deploy timing against isolated footage.",
+                }
+            ],
+        }
+    )
+    raw, _ = apply_official_overrides("goblin-gang-goblin", raw)
     return raw
 
 
@@ -1914,7 +2245,7 @@ def _spear_goblin_raw(cards: Mapping[str, Any]) -> dict[str, Any]:
     row = SPLIT_SOURCE_PAYLOAD["cards"]["spear-goblin"]
     parent = cards["spear-goblins"]
     projectile = deepcopy(parent.get("projectile"))
-    return _split_child_raw(
+    raw = _split_child_raw(
         cards,
         parent_card_id="spear-goblins",
         child_card_id="spear-goblin",
@@ -1927,14 +2258,17 @@ def _spear_goblin_raw(cards: Mapping[str, Any]) -> dict[str, Any]:
         targets=["air", "ground"],
         movement_layer=None,
         projectile=projectile,
+        first_hit_delay_us=500_000,
         uncertainty="DeckShop identifies Goblin Giant's two carried Spear Goblins; the child scalar values are corroborated by the Level-11 Spear Goblins row, while carried-body timing remains unresolved.",
     )
+    raw, _ = apply_official_overrides("spear-goblin", raw)
+    return raw
 
 
 def _rascal_boy_raw(cards: Mapping[str, Any]) -> dict[str, Any]:
     """Build the melee Rascal Boy child of the three-body Rascals card."""
 
-    return _split_child_raw(
+    raw = _split_child_raw(
         cards,
         parent_card_id="rascals",
         child_card_id="rascal-boy",
@@ -1954,12 +2288,14 @@ def _rascal_boy_raw(cards: Mapping[str, Any]) -> dict[str, Any]:
             "animation require held-out footage."
         ),
     )
+    raw, _ = apply_official_overrides("rascal-boy", raw)
+    return raw
 
 
 def _rascal_girl_raw(cards: Mapping[str, Any]) -> dict[str, Any]:
     """Build the ranged Rascal Girl child of the three-body Rascals card."""
 
-    return _split_child_raw(
+    raw = _split_child_raw(
         cards,
         parent_card_id="rascals",
         child_card_id="rascal-girl",
@@ -1979,6 +2315,8 @@ def _rascal_girl_raw(cards: Mapping[str, Any]) -> dict[str, Any]:
             "formation offsets remain a video-fit target."
         ),
     )
+    raw, _ = apply_official_overrides("rascal-girl", raw)
+    return raw
 
 
 def _cursed_hog_raw(cards: Mapping[str, Any]) -> dict[str, Any]:
@@ -2232,6 +2570,7 @@ def build_roster_ruleset_raw(base_raw: Mapping[str, Any] | None = None) -> dict[
     cards.setdefault("bush-goblin", _bush_goblin_raw(cards))
     cards.setdefault("barbarian", _barbarian_raw(cards))
     cards.setdefault("goblin", _goblin_raw(cards))
+    cards.setdefault("goblin-gang-goblin", _goblin_gang_raw(cards))
     cards.setdefault("phoenix-egg", _phoenix_egg_raw(cards))
     cards.setdefault("golemite", _golemite_raw(cards))
     cards.setdefault("elixir-golemite", _elixir_golemite_raw(cards))
@@ -2243,6 +2582,20 @@ def build_roster_ruleset_raw(base_raw: Mapping[str, Any] | None = None) -> dict[
     cards.setdefault("cursed-hog", _cursed_hog_raw(cards))
     cards.setdefault("goblin-brawler", _goblin_brawler_raw(cards))
     cards.setdefault("cannon-cart-building", _cannon_cart_building_raw(cards))
+
+    # Apply audited corrections to both generated and hand-curated rows.  The
+    # latter are present in the dated base artifact, so applying this only in
+    # ``_generated_card`` would leave the runtime V1 payload unchanged for
+    # cards such as Phoenix, Night Witch, and Goblin Barrel.
+    for card_id in tuple(cards):
+        if card_id in PROJECTILE_SPEED_FIXES or card_id in {
+            *FIRST_HIT_DELAY_FIXES_US,
+            "goblin-barrel",
+            "phoenix",
+            "night-witch",
+            "royal-delivery",
+        }:
+            cards[card_id] = _apply_high_severity_card_fixes(card_id, cards[card_id])
     raw["ruleset_id"] = ROSTER_RULESET_ID
     raw["cards"] = {card_id: cards[card_id] for card_id in sorted(cards)}
     raw["interaction_set"] = sorted(roster.eligible_cards)
@@ -2424,6 +2777,16 @@ def build_roster_ruleset_raw(base_raw: Mapping[str, Any] | None = None) -> dict[
             "sha256": None,
             "lineage": "src/cr_bot/domain/card_metadata.py -> simulator/catalog.py",
             "note": "Provisional dispatch surface only; never sufficient for fidelity readiness.",
+        },
+        HIGH_SEVERITY_CARD_FIX_SOURCE_ID: {
+            "confidence_tier": "B",
+            "kind": "audited-card-mechanics-overlay",
+            "url": "https://statsroyale.com/card/Wall+Breakers",
+            "retrieved_at": "2026-08-29",
+            "published_at": None,
+            "sha256": None,
+            "lineage": "StatsRoyale card pages, RoyaleAPI projectile data, and official Supercell balance notes",
+            "note": "Narrow overlay for high-severity simulator defects; card-specific source links and rationale are retained in the audit report.",
         },
     }
     for source_id, source in load_official_overrides().get("source_records", {}).items():
