@@ -23,7 +23,7 @@ a controlled probe when the action boundary or causal behavior matters.
   1,181 cases passed execution, repeated hashes, complete roster coverage, and
   behavioral obligations (`1,181/1,181`, two repeats, 12 workers).
 - The focused RL/vector suite is green (`163 passed`, including backend replay
-  parity). The default non-audio/non-mining suite is `453 passed, 9 failed`;
+  parity). The default non-audio/non-mining suite is `462 passed, 9 failed`;
   all nine failures require unavailable card-image assets or the absent KataCR
   submodule. Roster completeness is clean, but all 109 cards remain provisional
   (`fidelity_ready: 0`), and strict source reconciliation still has 17
