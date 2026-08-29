@@ -200,6 +200,10 @@ Side-balanced self-play is executable with matched generalized runs using
 ordering, keeps the learner's public observation contract unchanged, and
 records the actor/opponent side in each report.
 
+The league coordinator now retains directional payoff/rating state, provides
+cursor-seeded PFSP sampling, and requires an explicit callback for configured
+periodic exploiter resets; reset state is serialized with the league cursor.
+
 ## Implementation loop for RL scaling and frozen evaluation
 
 Run this loop for each curriculum or league segment. Frozen evaluation uses

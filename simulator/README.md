@@ -379,6 +379,11 @@ deterministic `sampling_mix` slots and records source counts per segment. A
 source is opponent/scenario provenance only; it never chooses the learner's
 action.
 
+`LeagueOrchestrator` retains directional payoff and rating state, exposes PFSP
+sampling at the current cursor, and fails closed when a configured periodic
+exploiter reset has no callback. The callback owns the actual learner reset;
+the league records the completed reset in its serializable run state.
+
 ### Implementation loop for RL scaling and frozen evaluation
 
 ```text

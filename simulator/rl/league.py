@@ -1,10 +1,9 @@
-"""Serializable league and opponent-sampling foundations.
+"""Serializable league scheduling, payoff, and opponent-sampling primitives.
 
-The objects here describe roles, historical artifacts, deck-conditioned scope,
-and deterministic opponent selection.  They do not load checkpoints, run
-matches, update Elo, or claim that a sampled opponent is strong.  A learner or
-match service can use :class:`LeagueSampler` with a serialized
-:class:`LeagueConfig` and match index to reproduce the same schedule.
+This module does not load checkpoints or run physics.  It owns the
+reproducible schedule boundary, directional payoff history, Elo bookkeeping,
+PFSP selection, and fail-closed exploiter-reset handoff used by a match
+service.
 """
 
 from __future__ import annotations
@@ -280,6 +279,7 @@ class LeagueConfig:
     main_agent_exploiter_probability: float = 0.25
     exploiter_main_agent_probability: float = 0.50
     exploiter_historical_probability: float = 0.50
+    exploiter_reset_interval: int | None = None
 
     def __post_init__(self) -> None:
         _string(self.league_id, "league_id")
@@ -293,6 +293,16 @@ class LeagueConfig:
             raise LeagueConfigurationError("exploiter_ids must not contain duplicates")
         for index, agent_id in enumerate(self.exploiter_ids):
             _string(agent_id, f"exploiter_ids[{index}]")
+        if self.exploiter_reset_interval is not None:
+            _integer(
+                self.exploiter_reset_interval,
+                "exploiter_reset_interval",
+                minimum=1,
+            )
+            if not self.exploiter_ids:
+                raise LeagueConfigurationError(
+                    "exploiter_reset_interval requires exploiter IDs"
+                )
         if len(
             {
                 checkpoint.checkpoint_id
@@ -396,6 +406,7 @@ class LeagueConfig:
             "main_agent_exploiter_probability": self.main_agent_exploiter_probability,
             "exploiter_main_agent_probability": self.exploiter_main_agent_probability,
             "exploiter_historical_probability": self.exploiter_historical_probability,
+            "exploiter_reset_interval": self.exploiter_reset_interval,
         }
 
     def to_json(self) -> str:
@@ -436,6 +447,7 @@ class LeagueConfig:
             exploiter_historical_probability=raw.get(
                 "exploiter_historical_probability", 0.50
             ),
+            exploiter_reset_interval=raw.get("exploiter_reset_interval"),
         )
 
     @classmethod
@@ -456,16 +468,26 @@ class LeagueRunState:
 
     league_id: str
     next_match_index: int = 0
+    exploiter_reset_count: int = 0
 
     def __post_init__(self) -> None:
         _string(self.league_id, "league_id")
         _integer(self.next_match_index, "next_match_index", minimum=0)
+        _integer(self.exploiter_reset_count, "exploiter_reset_count", minimum=0)
 
     def after_match(self, count: int = 1) -> "LeagueRunState":
         _integer(count, "count", minimum=1)
         return LeagueRunState(
             league_id=self.league_id,
             next_match_index=self.next_match_index + count,
+            exploiter_reset_count=self.exploiter_reset_count,
+        )
+
+    def after_exploiter_reset(self) -> "LeagueRunState":
+        return LeagueRunState(
+            league_id=self.league_id,
+            next_match_index=self.next_match_index,
+            exploiter_reset_count=self.exploiter_reset_count + 1,
         )
 
     def as_dict(self) -> dict[str, object]:
@@ -473,6 +495,7 @@ class LeagueRunState:
             "schema_version": LEAGUE_SCHEMA_VERSION,
             "league_id": self.league_id,
             "next_match_index": self.next_match_index,
+            "exploiter_reset_count": self.exploiter_reset_count,
         }
 
     @classmethod
@@ -487,6 +510,7 @@ class LeagueRunState:
         return cls(
             league_id=raw.get("league_id", ""),
             next_match_index=raw.get("next_match_index", 0),
+            exploiter_reset_count=raw.get("exploiter_reset_count", 0),
         )
 
 
@@ -1166,6 +1190,7 @@ class LeagueOrchestrator:
         *,
         run_state: LeagueRunState | None = None,
         ratings: LeagueRatingBook | None = None,
+        payoff_book: LeaguePayoffBook | None = None,
     ) -> None:
         if not isinstance(config, LeagueConfig):
             raise LeagueConfigurationError("config must be a LeagueConfig")
@@ -1173,10 +1198,46 @@ class LeagueOrchestrator:
             raise LeagueConfigurationError("run state belongs to a different league")
         if ratings is not None and not isinstance(ratings, LeagueRatingBook):
             raise LeagueConfigurationError("ratings must be a LeagueRatingBook")
+        if payoff_book is not None and not isinstance(payoff_book, LeaguePayoffBook):
+            raise LeagueConfigurationError("payoff_book must be a LeaguePayoffBook")
         self.config = config
         self.sampler = LeagueSampler(config)
         self.run_state = run_state or LeagueRunState(config.league_id)
         self.ratings = ratings or LeagueRatingBook()
+        self.payoff_book = payoff_book or LeaguePayoffBook()
+
+    def exploiter_reset_due(self) -> bool:
+        """Return whether the next match requires an exploiter reset."""
+
+        interval = self.config.exploiter_reset_interval
+        return bool(
+            interval is not None
+            and self.run_state.next_match_index > 0
+            and self.run_state.exploiter_reset_count
+            < self.run_state.next_match_index // interval
+        )
+
+    def reset_exploiters(
+        self,
+        callback: Callable[[tuple[str, ...]], object],
+    ) -> bool:
+        """Run and record the scheduled exploiter reset handoff.
+
+        A configured reset cannot be silently skipped.  The callback owns
+        learner/checkpoint state; this coordinator only supplies the declared
+        exploiter IDs and advances the serializable reset counter after the
+        callback succeeds.
+        """
+
+        if not self.exploiter_reset_due():
+            return False
+        if not callable(callback):
+            raise LeagueConfigurationError(
+                "exploiter reset callback is required when a reset is due"
+            )
+        callback(tuple(self.config.exploiter_ids))
+        self.run_state = self.run_state.after_exploiter_reset()
+        return True
 
     def plan(
         self,
@@ -1188,6 +1249,10 @@ class LeagueOrchestrator:
 
         if self.run_state.league_id != self.config.league_id:
             raise LeagueConfigurationError("run state belongs to a different league")
+        if self.exploiter_reset_due():
+            raise LeagueConfigurationError(
+                "periodic exploiter reset is due; call reset_exploiters before planning"
+            )
         return self.sampler.sample(
             learner_agent_id,
             self.run_state.next_match_index,
@@ -1203,6 +1268,10 @@ class LeagueOrchestrator:
 
         if selection.deck_scope_id != self.config.scope.scope_id:
             raise LeagueConfigurationError("selection belongs to a different deck scope")
+        if self.exploiter_reset_due():
+            raise LeagueConfigurationError(
+                "periodic exploiter reset is due; call reset_exploiters before recording"
+            )
         if selection.match_index != self.run_state.next_match_index:
             raise LeagueConfigurationError(
                 "league matches must be recorded in monotonically increasing order"
@@ -1220,6 +1289,11 @@ class LeagueOrchestrator:
         opponent_before = self.ratings.rating(opponent_rating_id)
         updated = self.ratings.after_match(learner_id, opponent_rating_id, outcome)
         self.ratings = updated
+        self.payoff_book = self.payoff_book.after_match(
+            learner_id,
+            opponent_rating_id,
+            outcome,
+        )
         self.run_state = self.run_state.after_match()
         return LeagueMatchRecord(
             league_id=self.config.league_id,
@@ -1242,13 +1316,39 @@ class LeagueOrchestrator:
         match_runner: Callable[[OpponentSelection], LeagueOutcome],
         *,
         deck_id: str | None = None,
+        exploiter_reset_callback: Callable[[tuple[str, ...]], object] | None = None,
     ) -> LeagueMatchRecord:
         """Plan, delegate one match, and record the returned outcome."""
 
         if not callable(match_runner):
             raise TypeError("match_runner must be callable")
+        if self.exploiter_reset_due():
+            if exploiter_reset_callback is None:
+                raise LeagueConfigurationError(
+                    "periodic exploiter reset is due; provide exploiter_reset_callback"
+                )
+            self.reset_exploiters(exploiter_reset_callback)
         selection = self.plan(learner_agent_id, deck_id=deck_id)
         return self.record(selection, match_runner(selection))
+
+    def sample_pfsp_opponent(
+        self,
+        learner_agent_id: str,
+        opponent_ids: list[str] | tuple[str, ...],
+        *,
+        seed: int | None = None,
+    ) -> str:
+        """Sample a payoff-aware opponent at the current league cursor."""
+
+        sampler = PFSPOpponentSampler(
+            payoff_book=self.payoff_book,
+            seed=self.config.seed if seed is None else seed,
+        )
+        return sampler.sample(
+            learner_agent_id,
+            self.run_state.next_match_index,
+            opponent_ids,
+        )
 
 
 __all__ = [

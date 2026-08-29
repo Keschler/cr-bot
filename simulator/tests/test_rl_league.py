@@ -240,6 +240,7 @@ def test_strategic_curriculum_rejects_gaps() -> None:
             ),
         )
 
+
 def test_league_config_round_trip_preserves_deck_conditioned_scope() -> None:
     config = _league()
     restored = LeagueConfig.from_mapping(json.loads(config.to_json()))
@@ -359,8 +360,51 @@ def test_orchestrator_records_outcomes_and_separates_frozen_checkpoint_rating() 
     assert record.learner_rating_after > record.learner_rating_before
     assert orchestrator.run_state.next_match_index == 1
     assert orchestrator.ratings.rating("main") > 1500.0
+    assert orchestrator.payoff_book.stats("main", "main@main-step-100").wins == 1
     restored = LeagueRatingBook.from_mapping(orchestrator.ratings.as_dict())
     assert restored == orchestrator.ratings
+
+
+def test_orchestrator_requires_and_records_periodic_exploiter_resets() -> None:
+    config = _league(
+        main_agent_historical_probability=1.0,
+        main_agent_exploiter_probability=0.0,
+        exploiter_reset_interval=2,
+    )
+    orchestrator = LeagueOrchestrator(config)
+    reset_ids: list[tuple[str, ...]] = []
+    runner = lambda _selection: "draw"
+
+    orchestrator.run_one("main", runner)
+    orchestrator.run_one("main", runner)
+    assert orchestrator.exploiter_reset_due() is True
+    with pytest.raises(LeagueConfigurationError, match="reset"):
+        orchestrator.run_one("main", runner)
+
+    orchestrator.run_one(
+        "main",
+        runner,
+        exploiter_reset_callback=lambda ids: reset_ids.append(ids),
+    )
+    assert reset_ids == [("exploit-a", "exploit-b")]
+    assert orchestrator.run_state.exploiter_reset_count == 1
+    assert orchestrator.exploiter_reset_due() is False
+
+
+def test_orchestrator_pfsp_uses_its_directional_payoff_book() -> None:
+    config = _league(
+        main_agent_historical_probability=1.0,
+        main_agent_exploiter_probability=0.0,
+    )
+    payoff = LeaguePayoffBook().after_match("main", "main@main-step-100", "win")
+    orchestrator = LeagueOrchestrator(config, payoff_book=payoff)
+
+    selected = orchestrator.sample_pfsp_opponent(
+        "main",
+        ("main@main-step-100", "new-opponent"),
+    )
+
+    assert selected in {"main@main-step-100", "new-opponent"}
 
 
 def test_payoff_book_is_directional_and_json_round_trips() -> None:
