@@ -245,9 +245,6 @@ PYTHONPATH=.:..:../src \
   --episodes 1 --policy actor --device auto
 ```
 
-The NumPy trainer remains a lightweight simulator-regression smoke test. It
-is not the mainline neural training path.
-
 The generalized runner supports explicit public-feature switches including
 `--explicit-hand-features`, `--direct-public-action-features`,
 `--direct-public-card-features`, `--contextual-public-card-features`,
@@ -529,8 +526,8 @@ masked entity tails, and caps CPU intra-op parallelism at four threads. The
 single-observation deployment callers also bypass one-element host stacking
 and prepare the raster layout at the observation boundary. Dense CPU entity
 batches use a sequence-first Transformer layout; padded batches retain the
-existing path, and repeated empty-entity lanes reuse a version-checked null
-encoding. The
+existing path, repeated empty-entity lanes reuse a version-checked null
+encoding, and padded lanes compact raw entities before projection. The
 PPO/reference forward path and selected-action parity are unchanged. The
 vector-backend regression checks state, event-log, and replay hashes for both
 process transports across consecutive steps with privileged info disabled.

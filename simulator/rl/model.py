@@ -508,44 +508,52 @@ class HybridEncoder(nn.Module):
         global_features_encoded = self.global_projection(global_features_flat)
 
         hand_features = self.public_hand_features(global_features)
-        entity_features = entities.reshape(flat_batch_time, entity_count, config.entity_dim)
-        entity_features = self.entity_projection(entity_features)
+        raw_entity_features = entities.reshape(flat_batch_time, entity_count, config.entity_dim)
         entity_mask_flat = entity_mask.reshape(flat_batch_time, entity_count)
         null_entity = self.null_entity.expand(flat_batch_time, -1, -1)
-        null_mask = torch.zeros(
-            (flat_batch_time, 1), dtype=torch.bool, device=entity_mask.device
-        )
         # Hand cards are public one-hot table features projected per action
         # slot. The Transformer remains an entity-only contextualizer.
-        transformer_input = torch.cat((entity_features, null_entity), dim=1)
-        key_padding_mask = torch.cat((~entity_mask_flat, null_mask), dim=1)
-        # A full public token set is common during batched inference. Passing
-        # an all-false padding mask makes PyTorch build a nested tensor even
-        # though there is nothing to pad. Keep the masked path for genuine
-        # padding, but use the dense Transformer kernel when every token is
-        # present; the attention computation is otherwise identical.
-        if bool(key_padding_mask.any().item()):
-            if inference:
-                pooled_entities = _inference_compact_entity_pool(
-                    self.entity_transformer,
-                    entity_features,
-                    entity_mask_flat,
-                    null_entity,
-                )
-                transformed = None
-            else:
+        #
+        # In padded inference lanes, compact before the entity projection as
+        # well as before attention. The projection is row-wise, so applying
+        # it only to active rows is numerically equivalent while avoiding
+        # work for masked entity padding. Training and dense inference retain
+        # the declared tensor layout.
+        if inference and not bool(entity_mask_flat.all().item()):
+            pooled_entities = _inference_compact_entity_pool(
+                self.entity_transformer,
+                raw_entity_features,
+                entity_mask_flat,
+                null_entity,
+                entity_projection=self.entity_projection,
+            )
+            transformed = None
+        else:
+            entity_features = self.entity_projection(raw_entity_features)
+            null_mask = torch.zeros(
+                (flat_batch_time, 1), dtype=torch.bool, device=entity_mask.device
+            )
+            transformer_input = torch.cat((entity_features, null_entity), dim=1)
+            key_padding_mask = torch.cat((~entity_mask_flat, null_mask), dim=1)
+            # A full public token set is common during batched inference.
+            # Passing an all-false padding mask makes PyTorch build a nested
+            # tensor even though there is nothing to pad. Keep the masked
+            # path for genuine padding, but use the dense Transformer kernel
+            # when every token is present; the attention computation is
+            # otherwise identical.
+            if bool(key_padding_mask.any().item()):
                 transformed = self.entity_transformer(
                     transformer_input,
                     src_key_padding_mask=key_padding_mask,
                 )
-        elif inference:
-            transformed = _inference_dense_entity_transformer(
-                self.entity_transformer,
-                transformer_input,
-                disable_mha_fastpath=True,
-            )
-        else:
-            transformed = self.entity_transformer(transformer_input)
+            elif inference:
+                transformed = _inference_dense_entity_transformer(
+                    self.entity_transformer,
+                    transformer_input,
+                    disable_mha_fastpath=True,
+                )
+            else:
+                transformed = self.entity_transformer(transformer_input)
         if transformed is not None:
             transformed_entities = transformed[:, :entity_count]
             transformed_null = transformed[:, entity_count]
@@ -660,34 +668,42 @@ def _inference_compact_entity_pool(
     entity_features: torch.Tensor,
     entity_mask: torch.Tensor,
     null_entity: torch.Tensor,
+    *,
+    entity_projection: nn.Module | None = None,
 ) -> torch.Tensor:
     """Pool masked entity rows after compacting each inference lane.
 
     V2 padding is lane-local, but a regular batched Transformer must use the
     largest lane width.  Since the entity encoder has no positional encoding,
     masked rows can be removed before attention without changing the public
-    entity set or its pooled representation.  Equal active counts are grouped
-    into one call to avoid a Transformer invocation per lane.
+    entity set or its pooled representation.  When supplied, the projection
+    is also applied after compaction so padded raw rows do not incur projection
+    work. Equal active counts are grouped into one call to avoid a Transformer
+    invocation per lane.
     """
 
     if entity_features.ndim != 3 or entity_mask.ndim != 2:
         raise ValueError("compact entity inputs must be [batch, entities, features] and [batch, entities]")
     if entity_features.shape[:2] != entity_mask.shape:
         raise ValueError("compact entity features and mask must share batch/entity dimensions")
-    if null_entity.shape != (
-        entity_features.shape[0],
-        1,
-        entity_features.shape[-1],
-    ):
+    if null_entity.ndim != 3 or null_entity.shape[:2] != (entity_features.shape[0], 1):
         raise ValueError("null_entity must have shape [batch, 1, feature_dim]")
 
     batch, _entity_count, feature_dim = entity_features.shape
+    output_dim = null_entity.shape[-1]
+    if entity_projection is None and output_dim != feature_dim:
+        raise ValueError("null_entity feature dimension must match entity features")
     active_counts = entity_mask.sum(dim=1)
     if not bool(active_counts.any().item()):
         if transformer.training:
             # ``act_deterministic`` is an evaluation API, but preserve the
             # reference semantics if a caller invokes it before ``eval()``.
-            inputs = torch.cat((entity_features, null_entity), dim=1)
+            projected_entities = (
+                entity_projection(entity_features)
+                if entity_projection is not None
+                else entity_features
+            )
+            inputs = torch.cat((projected_entities, null_entity), dim=1)
             padding = torch.cat(
                 (
                     ~entity_mask,
@@ -704,7 +720,7 @@ def _inference_compact_entity_pool(
         return _inference_cached_null_pool(transformer, null_entity)
 
     pooled = torch.empty(
-        (batch, feature_dim),
+        (batch, output_dim),
         dtype=entity_features.dtype,
         device=entity_features.device,
     )
@@ -719,8 +735,12 @@ def _inference_compact_entity_pool(
                 count,
                 feature_dim,
             )
+            if entity_projection is not None:
+                selected_entities = entity_projection(selected_entities)
         else:
-            selected_entities = selected_entities[:, :0]
+            selected_entities = entity_features.new_empty(
+                (rows.shape[0], 0, output_dim)
+            )
         selected_input = torch.cat(
             (selected_entities, null_entity.index_select(0, rows)),
             dim=1,

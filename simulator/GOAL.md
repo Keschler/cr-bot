@@ -23,7 +23,7 @@ a controlled probe when the action boundary or causal behavior matters.
   strict run passes execution, repeated hashes, complete roster coverage, and
   behavioral obligations.
 - The RL suite is green (`168 passed`, including vector-backend replay
-  parity); the default non-audio/non-mining suite is `419 passed, 11 failed`
+  parity); the default non-audio/non-mining suite is `420 passed, 11 failed`
   in the sandbox, with failures limited to
   unavailable physical-lab assets, sandboxed forkserver sockets, and the
   absent KataCR submodule. The remaining failures are only those unavailable
@@ -48,8 +48,8 @@ a controlled probe when the action boundary or causal behavior matters.
   observation deployment callers bypass one-element host stacking and prepare
   the raster layout at the observation boundary; dense CPU entity batches use
   a sequence-first Transformer layout while padded batches retain the existing
-  path, and repeated empty-entity lanes reuse a version-checked null
-  encoding.
+  path, repeated empty-entity lanes reuse a version-checked null encoding,
+  and padded lanes compact raw entities before projection.
 - The current action contract has `WAIT`/`PLAY`, card slot, and placement but
   no learned wait-duration head; `WAIT` advances the fixed simulator decision
   interval. The proposed timing head remains a future architecture change.
