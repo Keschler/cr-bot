@@ -23,8 +23,10 @@ a controlled probe when the action boundary or causal behavior matters.
   strict run passes execution, repeated hashes, complete roster coverage, and
   behavioral obligations.
 - The RL suite is green (`158 passed`); the default non-audio/non-mining suite
-  is `410 passed, 11 failed`, with failures limited to unavailable physical-lab
-  assets, sandboxed forkserver sockets, and the absent KataCR submodule.
+  is `412 passed, 11 failed` in the sandbox, with failures limited to
+  unavailable physical-lab assets, sandboxed forkserver sockets, and the
+  absent KataCR submodule. The intended-context run is `414 passed, 9 failed`;
+  its remaining failures are only those unavailable assets and submodule.
 - Phase-0 physical-lab software is implemented, but physical evidence is
   intentionally deferred for the current RL-first execution path. No
   connected run has yet satisfied the evidence/readiness gates.
@@ -341,6 +343,9 @@ profiling full matches, dense swarms, projectile-heavy states, and observation
 construction. The deployment-only decoding/layout changes preserve the PPO
 forward path and exact selected-action parity on the regression workload. The
 preferred large-self-play target is 5k–10k simulator environment steps/s.
+The vector backend regression also checks state, event-log, and replay hashes
+across consecutive card-play steps with privileged info disabled; both process
+transports pass that parity check.
 
 ## Delivery order
 

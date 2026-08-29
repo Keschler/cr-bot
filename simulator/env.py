@@ -168,8 +168,11 @@ def _parallel_env_step_worker(
     state = environment.state
     if state is None:  # pragma: no cover - defensive worker invariant
         raise RuntimeError("parallel worker lost its authoritative state")
+    # Event history is part of the replay identity, not privileged observation
+    # data. It must survive every worker round trip even when the caller keeps
+    # authoritative state hidden from the policy.
     return (
-        state.to_primitive(include_events=expose_privileged_info),
+        state.to_primitive(include_events=True),
         rewards,
         terminated,
         truncated,
@@ -615,7 +618,12 @@ class VectorSimulatorEnv:
                     reward.win_weight,
                     environment.expose_privileged_info,
                     environment.engine.validate_every_tick,
-                    state.to_primitive(include_events=environment.expose_privileged_info),
+                    # Event history is retained by the parent lane. The
+                    # worker needs the event sequence counter, but only its
+                    # current-step events need to cross the return boundary;
+                    # sending the accumulated log would make every step more
+                    # expensive as a match grows.
+                    state.to_primitive(include_events=False),
                     tuple(row),
                 )
             )
@@ -623,7 +631,10 @@ class VectorSimulatorEnv:
         output: list[EnvStep | EnvStepV2] = []
         for environment, result in zip(self.environments, results, strict=True):
             raw_state, rewards, terminated, truncated, info = result
-            environment.state = battle_state_from_primitive(raw_state)
+            previous_events = list(environment._require_state().events)
+            restored_state = battle_state_from_primitive(raw_state)
+            restored_state.events = previous_events + restored_state.events
+            environment.state = restored_state
             # Observation memory belongs to the parent lane and is deliberately
             # not serialized through the worker. This keeps the public policy
             # boundary identical to the reference backend.

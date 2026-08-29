@@ -517,7 +517,9 @@ unused belief heads and distribution normalization, uses a channels-last CPU
 raster, and removes only masked tail entity rows; the PPO/reference forward
 path is unchanged. CPU fallback is still slower, so the next target is
 5k–10k simulator environment steps/s through batched, behavior-preserving
-optimization; every optimization must retain reference parity.
+optimization; every optimization must retain reference parity. The vector
+backend regression checks state, event-log, and replay hashes for both process
+transports across consecutive steps with privileged info disabled.
 
 ## Automation and current limits
 
