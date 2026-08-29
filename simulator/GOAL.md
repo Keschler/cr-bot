@@ -22,6 +22,9 @@ a controlled probe when the action boundary or causal behavior matters.
 - Generated coverage is deterministic and executable, but the latest 1,135-case
   strict run still has 43 structural cases without an explicit event or
   final-state obligation and 14 execution failures.
+- The RL suite is green (`156 passed`); the default non-audio/non-mining suite
+  is `407 passed, 11 failed`, with failures limited to unavailable physical-lab
+  assets, sandboxed forkserver sockets, and the absent KataCR submodule.
 - Phase-0 physical-lab software is implemented, but physical evidence is
   intentionally deferred for the current RL-first execution path. No
   connected run has yet satisfied the evidence/readiness gates.
