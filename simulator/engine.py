@@ -2352,7 +2352,16 @@ class BattleEngine:
         definition = self.ruleset.cards[target.card_id]
         if definition.mechanics.get("stealth") and target.stealth_active:
             return False
-        return bool(definition.mechanics.get("targetable_during_deploy"))
+        # A normal troop is already a valid damage/target body during its
+        # deployment animation.  ``deploy_remaining_us`` gates the target's
+        # own movement and attacks, but it must not make towers and nearby
+        # troops ignore it.  Tunneling, carried, concealed, and stealth bodies
+        # have been filtered above because those are separate untargetable
+        # mechanics.  Keep the explicit component for non-troop entities and
+        # future card-specific exceptions.
+        return target.kind == "troop" or bool(
+            definition.mechanics.get("targetable_during_deploy")
+        )
 
     def _choose_target(
         self,

@@ -290,6 +290,36 @@ def test_cloned_deploy_damage_is_suppressed() -> None:
     assert not any(event.kind == "landing_attack" for event in state.events)
 
 
+def test_deploying_troops_are_targetable_but_tunneling_bodies_are_not() -> None:
+    engine, state = _state()
+    giant = engine._spawn_single_at(
+        state,
+        RULESET.card("giant"),
+        owner=1,
+        x_mtile=9_000,
+        y_mtile=15_000,
+        deploy_remaining_us=1_000_000,
+    )
+    miner = engine._spawn_single_at(
+        state,
+        RULESET.card("miner"),
+        owner=1,
+        x_mtile=9_000,
+        y_mtile=16_000,
+    )
+
+    assert giant.deploy_remaining_us > 0
+    assert engine._targetable_for_acquisition(state, giant)
+    assert engine._valid_target(
+        state,
+        engine._tower(state, 0, "king"),
+        giant.uid,
+    )
+    assert miner.deploy_remaining_us > 0
+    assert miner.burrow_active
+    assert not engine._targetable_for_acquisition(state, miner)
+
+
 def test_goblin_giant_main_targets_buildings_while_spear_children_target_air() -> None:
     engine, state = _state()
     giant = _entity(state, "goblin-giant", 0, 9_000, 15_000)
