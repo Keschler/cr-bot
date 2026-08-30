@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from simulator.actions import PlayCardAction
 from simulator.engine import BattleEngine
 from simulator.fixed import distance_mtile
 from simulator.navigation import plan_route, point_is_walkable, segment_is_walkable
@@ -129,6 +130,10 @@ def test_high_severity_card_overlays_are_in_the_runtime_ruleset() -> None:
         "air",
         "ground",
     )
+    assert RULESET.card("royal-delivery").mechanics["impact_delay_us"] == 3_000_000
+    assert RULESET.card("royal-delivery").mechanics["spawn_on_impact"][
+        "child_deploy_time_us"
+    ] == 250_000
     assert RULESET.card("tesla").mechanics["building_footprint_size"] == 2
     for card_id in ("log", "earthquake", "bowler"):
         assert RULESET.card(card_id).mechanics["cannot_hit_jumping"] is True
@@ -200,6 +205,47 @@ def test_goblin_barrel_has_no_impact_damage_but_spawns_three_goblins() -> None:
         if entity.alive and entity.card_id == "goblin" and entity.parent_uid is None
     ]
     assert {entity.deploy_remaining_us for entity in goblins} == {1_100_000}
+
+
+def test_royal_delivery_waits_three_seconds_then_deploys_a_delayed_recruit() -> None:
+    deck = (
+        "royal-delivery",
+        "hog-rider",
+        "cannon",
+        "musketeer",
+        "skeletons",
+        "ice-golem",
+        "ice-spirit",
+        "fireball",
+    )
+    engine = BattleEngine(RULESET)
+    state = engine.new_battle((deck, PLAYER_DECK), seed=31, shuffle_decks=False)
+    state.players[0].elixir_milli = 10_000
+    action = PlayCardAction(player=0, card_slot=0, cell=(3, 17))
+    assert engine.validate_action(state, action) is None
+
+    engine.step(state, [action])
+    assert not any(
+        event.kind == "entity_created" and event.get("card_id") == "royal-recruits"
+        for event in state.events
+    )
+    impact_ticks = 3_000_000 // RULESET.tick_us
+    for _ in range(impact_ticks - 2):
+        engine.step(state)
+    assert not any(
+        event.kind == "entity_created" and event.get("card_id") == "royal-recruits"
+        for event in state.events
+    )
+
+    engine.step(state)
+    recruits = [
+        entity
+        for entity in state.entities.values()
+        if entity.alive and entity.card_id == "royal-recruits" and entity.owner == 0
+    ]
+    assert len(recruits) == 1
+    assert recruits[0].deploy_remaining_us == 250_000
+    assert state.elapsed_us == 3_000_000
 
 
 def test_each_spawner_has_an_independent_max_alive_cap() -> None:

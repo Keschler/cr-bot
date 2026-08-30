@@ -48,6 +48,7 @@ ROYAL_RECRUITS_FORMATION_SOURCE_ID = "clash-wiki-royal-recruits-formation-2026-0
 BARBARIAN_HUT_SPAWN_SOURCE_ID = "clash-wiki-barbarian-hut-wave-stagger-2026-08-30"
 GOBLIN_GANG_FORMATION_SOURCE_ID = "clash-wiki-goblin-gang-formation-2026-08-30"
 RASCALS_FORMATION_SOURCE_ID = "clash-wiki-rascals-formation-2026-08-30"
+ROYAL_DELIVERY_TIMING_SOURCE_ID = "clash-wiki-royal-delivery-timing-2026-08-30"
 GOBLIN_MACHINE_SOURCE_ID = "royaleapi-goblin-machine-2024"
 LEVEL11_SOURCE_PAYLOAD = load_level11_source()
 DECKSHOP_SOURCE_ID = "deckshop-battle-healer-2026-08-14"
@@ -1295,12 +1296,34 @@ def _apply_high_severity_card_fixes(
         fixed["targets"] = targets
         mechanics = dict(fixed.get("mechanics", {}))
         mechanics["impact_targets"] = list(targets)
+        # Royal Delivery's visible projectile is a three-second falling
+        # delivery, not an immediate ballistic hit.  The spawned Recruit has
+        # its own 0.25-second deployment delay after the impact.
+        mechanics["impact_delay_us"] = 3_000_000
+        mechanics["spawn_on_impact"] = {
+            "card_id": "royal-recruits",
+            "count": 1,
+            "child_deploy_time_us": 250_000,
+        }
         fixed["mechanics"] = mechanics
         _append_card_provenance(
             fixed, "targets", HIGH_SEVERITY_CARD_FIX_SOURCE_ID
         )
         _append_card_provenance(
             fixed, "mechanics.impact_targets", HIGH_SEVERITY_CARD_FIX_SOURCE_ID
+        )
+        _append_card_provenance(
+            fixed, "mechanics.impact_delay_us", ROYAL_DELIVERY_TIMING_SOURCE_ID
+        )
+        _append_card_provenance(
+            fixed,
+            "mechanics.spawn_on_impact",
+            ROYAL_DELIVERY_TIMING_SOURCE_ID,
+        )
+        _append_card_provenance(
+            fixed,
+            "mechanics.spawn_on_impact.child_deploy_time_us",
+            ROYAL_DELIVERY_TIMING_SOURCE_ID,
         )
 
     if card_id == "tesla":
@@ -3130,6 +3153,16 @@ def build_roster_ruleset_raw(base_raw: Mapping[str, Any] | None = None) -> dict[
             "sha256": None,
             "lineage": "Current Clash Royale Wiki Rascals page and independent formation guide",
             "note": "The current Rascals card deploys one Boy in front of two ranged Girls; the 2025 update also corrected side-dependent mirroring. Exact render-space offsets are not published, so the checked-in offsets preserve the documented lead/rear relationship and are explicitly provisional.",
+        },
+        ROYAL_DELIVERY_TIMING_SOURCE_ID: {
+            "confidence_tier": "B",
+            "kind": "card-mechanics-community-reference",
+            "url": "https://clashroyale.fandom.com/wiki/Royal_Delivery",
+            "retrieved_at": "2026-08-30",
+            "published_at": None,
+            "sha256": None,
+            "lineage": "Current Clash Royale Wiki Royal Delivery page, DeckMelon/independent card references, and community timing test",
+            "note": "Royal Delivery impacts after a three-second falling/deploy schedule; the spawned Royal Recruit has a separate 0.25-second deployment delay. Current documented target classes and Level-11 damage remain separately sourced.",
         },
     }
     for source_id, source in load_official_overrides().get("source_records", {}).items():

@@ -578,6 +578,7 @@ def _validate_mechanics(row: dict[str, Any], context: str) -> None:
             "concealment",
             "rolling_range_mtile",
             "spawn_stagger_us",
+            "impact_delay_us",
             "mirror_spawn_layout",
             "primary_targets",
             "spread_targets",
@@ -762,6 +763,8 @@ def _validate_mechanics(row: dict[str, Any], context: str) -> None:
     # at load time rather than during a replay.
     if "spawn_stagger_us" in row:
         _require_int(row, "spawn_stagger_us", minimum=0)
+    if "impact_delay_us" in row:
+        _require_int(row, "impact_delay_us", minimum=0)
     if "mirror_spawn_layout" in row and not isinstance(row["mirror_spawn_layout"], bool):
         raise RulesetError(f"{context}.mechanics.mirror_spawn_layout must be boolean")
     if "spread_targets" in row and not isinstance(row["spread_targets"], bool):

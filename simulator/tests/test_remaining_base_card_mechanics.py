@@ -119,6 +119,23 @@ def test_mirror_is_excluded_from_opening_hand_and_charges_previous_cost_plus_one
     )
 
 
+def test_mirror_and_elixir_collector_are_excluded_from_opening_hand() -> None:
+    deck = (
+        "mirror",
+        "elixir-collector",
+        "hog-rider",
+        "cannon",
+        "musketeer",
+        "skeletons",
+        "ice-golem",
+        "ice-spirit",
+    )
+    engine, state = _state(deck)
+    assert "mirror" not in state.players[0].hand
+    assert "elixir-collector" not in state.players[0].hand
+    assert sorted(state.players[0].hand + state.players[0].draw_pile) == sorted(deck)
+
+
 def test_elixir_collector_death_grants_final_elixir_and_uses_current_cadence() -> None:
     engine, state = _state()
     collector_definition = RULESET.card("elixir-collector")

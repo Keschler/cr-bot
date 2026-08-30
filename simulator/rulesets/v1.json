@@ -9943,6 +9943,7 @@
         "building_only": false,
         "crown_tower_connection": "normal",
         "death": null,
+        "impact_delay_us": 3000000,
         "impact_mode": "at_destination",
         "impact_targets": [
           "air",
@@ -9960,6 +9961,7 @@
         "spawn_layout_mtile": [],
         "spawn_on_impact": {
           "card_id": "royal-recruits",
+          "child_deploy_time_us": 250000,
           "count": 1
         },
         "spell_origin": "own-king-tower",
@@ -9992,11 +9994,20 @@
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
         ],
+        "mechanics.impact_delay_us": [
+          "clash-wiki-royal-delivery-timing-2026-08-30"
+        ],
         "mechanics.impact_targets": [
           "local-high-severity-card-fixes-2026-08-29"
         ],
         "mechanics.projectile_speed_code": [
           "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "mechanics.spawn_on_impact": [
+          "clash-wiki-royal-delivery-timing-2026-08-30"
+        ],
+        "mechanics.spawn_on_impact.child_deploy_time_us": [
+          "clash-wiki-royal-delivery-timing-2026-08-30"
         ],
         "projectile.homing": [
           "local-high-severity-card-fixes-2026-08-29"
@@ -12456,7 +12467,7 @@
       ]
     }
   },
-  "content_hash": "sha256:1a3441474cc27246708661808082d9d6bde6ae02a1756aff00252b67538f1d60",
+  "content_hash": "sha256:bdc222d31e923c0f34500ad31cf3965d0430e5fbfe5189ea74ac423a5e19d67b",
   "interaction_set": [
     "archers",
     "arrows",
@@ -12731,6 +12742,16 @@
       "retrieved_at": "2026-08-30",
       "sha256": null,
       "url": "https://clashroyale.fandom.com/wiki/Rascals"
+    },
+    "clash-wiki-royal-delivery-timing-2026-08-30": {
+      "confidence_tier": "B",
+      "kind": "card-mechanics-community-reference",
+      "lineage": "Current Clash Royale Wiki Royal Delivery page, DeckMelon/independent card references, and community timing test",
+      "note": "Royal Delivery impacts after a three-second falling/deploy schedule; the spawned Royal Recruit has a separate 0.25-second deployment delay. Current documented target classes and Level-11 damage remain separately sourced.",
+      "published_at": null,
+      "retrieved_at": "2026-08-30",
+      "sha256": null,
+      "url": "https://clashroyale.fandom.com/wiki/Royal_Delivery"
     },
     "clash-wiki-royal-recruits-formation-2026-08-30": {
       "confidence_tier": "B",

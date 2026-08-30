@@ -192,6 +192,11 @@ class ProjectileState:
     damage: int
     crown_damage: int
     speed_mtile_per_s: int
+    # Some spells have an authored fall/deploy delay that is independent of
+    # their normalized projectile travel speed (currently Royal Delivery).
+    # Keeping the remaining delay in authoritative state makes the impact
+    # frame deterministic across snapshots and replays.
+    impact_delay_remaining_us: int = 0
     # Preserve a versioned ruleset projectile speed code alongside the
     # normalized physical speed when a card supplies one.
     speed_code: int | None = None
@@ -564,6 +569,7 @@ def battle_state_from_primitive(raw: dict[str, Any]) -> BattleState:
     for row in raw["projectiles"]:
         projectile_row = dict(row)
         projectile_row.setdefault("speed_code", None)
+        projectile_row.setdefault("impact_delay_remaining_us", 0)
         projectile_row.setdefault("homing", False)
         projectile_row.setdefault("status_hit_speed_magnitude_permille", 1_000)
         projectile_row.setdefault("level_multiplier_permille", 1_000)

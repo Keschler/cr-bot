@@ -207,18 +207,22 @@ class BattleEngine:
             if shuffle_decks:
                 rng.shuffle(draw_order)
             hand_size = self.ruleset.match.hand_size
-            # Mirror is the one base card which is explicitly excluded from
-            # an opening hand. Preserve deterministic order by swapping it
-            # with the first later card instead of reshuffling the deck.
-            if "mirror" in draw_order[:hand_size]:
-                mirror_index = draw_order.index("mirror")
+            # Mirror and Elixir Collector are explicitly excluded from an
+            # opening hand. Preserve deterministic order by swapping each
+            # excluded card with the first later eligible card instead of
+            # reshuffling the deck.
+            opening_hand_exclusions = {"mirror", "elixir-collector"}
+            for opening_index, opening_card_id in enumerate(draw_order[:hand_size]):
+                if opening_card_id not in opening_hand_exclusions:
+                    continue
                 replacement_index = next(
                     index
                     for index in range(hand_size, len(draw_order))
-                    if draw_order[index] != "mirror"
+                    if draw_order[index] not in opening_hand_exclusions
                 )
-                draw_order[mirror_index], draw_order[replacement_index] = (
-                    draw_order[replacement_index], draw_order[mirror_index]
+                draw_order[opening_index], draw_order[replacement_index] = (
+                    draw_order[replacement_index],
+                    draw_order[opening_index],
                 )
             players.append(
                 PlayerState(
@@ -928,6 +932,7 @@ class BattleEngine:
                 level_multiplier_permille,
             ),
             speed_mtile_per_s=card.projectile.speed_mtile_per_s,
+            impact_delay_remaining_us=int(mechanics.get("impact_delay_us") or 0),
             speed_code=(
                 int(card.mechanics["projectile_speed_code"])
                 if card.mechanics.get("projectile_speed_code") is not None
@@ -4090,21 +4095,33 @@ class BattleEngine:
             old_x, old_y = projectile.x_mtile, projectile.y_mtile
             projectile.previous_x_mtile = old_x
             projectile.previous_y_mtile = old_y
-            numerator = projectile.speed_mtile_per_s * dt + projectile.movement_remainder
-            travel, projectile.movement_remainder = divmod(numerator, SECOND_US)
             remaining = distance_mtile(
                 old_x,
                 old_y,
                 projectile.target_x_mtile,
                 projectile.target_y_mtile,
             )
-            projectile.x_mtile, projectile.y_mtile = move_towards(
-                old_x,
-                old_y,
-                projectile.target_x_mtile,
-                projectile.target_y_mtile,
-                travel,
-            )
+            if projectile.impact_delay_remaining_us > 0:
+                delay_before = projectile.impact_delay_remaining_us
+                projectile.impact_delay_remaining_us = max(0, delay_before - dt)
+                if delay_before > dt:
+                    continue
+                # The authored delay is the complete arrival schedule for a
+                # delayed spell. Resolve at the selected point when it
+                # expires instead of adding a second, artificial flight leg.
+                travel = remaining
+                projectile.x_mtile = projectile.target_x_mtile
+                projectile.y_mtile = projectile.target_y_mtile
+            else:
+                numerator = projectile.speed_mtile_per_s * dt + projectile.movement_remainder
+                travel, projectile.movement_remainder = divmod(numerator, SECOND_US)
+                projectile.x_mtile, projectile.y_mtile = move_towards(
+                    old_x,
+                    old_y,
+                    projectile.target_x_mtile,
+                    projectile.target_y_mtile,
+                    travel,
+                )
             if projectile.piercing:
                 self._impact_piercing_projectile(state, projectile)
             if remaining <= travel or projectile.speed_mtile_per_s <= 0:
@@ -6939,6 +6956,7 @@ class BattleEngine:
                 projectile.status_damage_per_tick,
                 projectile.status_tick_interval_us,
                 projectile.knockback_mtile,
+                projectile.impact_delay_remaining_us,
                 projectile.movement_remainder,
                 projectile.origin_x_mtile,
                 projectile.origin_y_mtile,
