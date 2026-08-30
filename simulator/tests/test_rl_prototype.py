@@ -558,6 +558,42 @@ def test_prototype_defaults_to_teacher_free_ppo() -> None:
     assert inspect.signature(evaluate_prototype).parameters["policy_mode"].default == "actor"
 
 
+def test_ppo_kl_guard_rolls_back_only_excessive_updates() -> None:
+    from rl.prototype import _apply_update_approx_kl_guard
+
+    class FakeLearner:
+        update_count = 8
+
+        def __init__(self) -> None:
+            self.loaded_state = None
+
+        def load_checkpoint_state(self, state) -> None:
+            self.loaded_state = state
+            self.update_count = state["update_count"]
+
+    learner = FakeLearner()
+    rolled_back = _apply_update_approx_kl_guard(
+        learner,
+        SimpleNamespace(approx_kl=0.009, update_index=9),
+        max_update_approx_kl=0.008,
+        state_before_update={"update_count": 8},
+        starting_update=8,
+    )
+
+    assert rolled_back["status"] == "rolled_back"
+    assert rolled_back["accepted_update"] == 8
+    assert learner.loaded_state == {"update_count": 8}
+
+    accepted = _apply_update_approx_kl_guard(
+        learner,
+        SimpleNamespace(approx_kl=0.004, update_index=9),
+        max_update_approx_kl=0.008,
+        state_before_update={"update_count": 8},
+        starting_update=8,
+    )
+    assert accepted["status"] == "accepted"
+
+
 def test_sequence_length_is_optional_but_must_tile_the_horizon() -> None:
     from rl.prototype import PrototypeConfig, PrototypeConfigurationError
 

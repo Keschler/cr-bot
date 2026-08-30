@@ -348,6 +348,10 @@ class GeneralizedTrainingConfig:
     # only reward. Zero disables annealing and preserves the configured
     # potential coefficient for the complete run.
     potential_reward_anneal_segments: int = 32
+    # The evidence-backed movement envelope for generalized PPO. A segment
+    # whose mean approximate KL exceeds this value is rolled back before its
+    # checkpoint is promoted; setting None explicitly disables the guard.
+    max_update_approx_kl: float | None = 0.008
     expert_guidance: bool = False
     expert_teacher: str = "public-counter"
     train_archetypes: tuple[str, ...] = (
@@ -403,6 +407,16 @@ class GeneralizedTrainingConfig:
             "potential_reward_anneal_segments",
             self.potential_reward_anneal_segments,
         )
+        if self.max_update_approx_kl is not None:
+            if (
+                isinstance(self.max_update_approx_kl, bool)
+                or not isinstance(self.max_update_approx_kl, (int, float))
+                or not isfinite(float(self.max_update_approx_kl))
+                or float(self.max_update_approx_kl) <= 0.0
+            ):
+                raise GeneralizedTrainingError(
+                    "max_update_approx_kl must be positive and finite or None"
+                )
         if type(self.expert_guidance) is not bool:
             raise GeneralizedTrainingError("expert_guidance must be boolean")
         if type(self.pfsp) is not bool:
@@ -857,6 +871,7 @@ def _segment_config(
     segment_index: int,
     rollouts_per_scenario: int,
     potential_reward_anneal_segments: int = 0,
+    max_update_approx_kl: float | None = None,
 ) -> PrototypeConfig:
     _positive_int("rollouts_per_scenario", rollouts_per_scenario)
     _nonnegative_int(
@@ -875,6 +890,7 @@ def _segment_config(
         updates=rollouts_per_scenario,
         seed=_mix_seed(base.seed, segment_index, 0x47524F57),
         potential_reward_weight=potential_weight,
+        max_update_approx_kl=max_update_approx_kl,
     )
 
 
@@ -1168,6 +1184,7 @@ def train_generalized(
             potential_reward_anneal_segments=(
                 config.potential_reward_anneal_segments
             ),
+            max_update_approx_kl=config.max_update_approx_kl,
         )
         segment_config = replace(
             segment_config,
@@ -1367,6 +1384,7 @@ def train_generalized(
         "sequence_length": config.prototype_config.sequence_length,
         "potential_reward_weight": config.prototype_config.potential_reward_weight,
         "potential_reward_anneal_segments": config.potential_reward_anneal_segments,
+        "max_update_approx_kl": config.max_update_approx_kl,
         "player_deck": list(player_deck),
         "target_player": config.prototype_config.target_player,
         "actor_player": config.prototype_config.target_player,
@@ -2355,6 +2373,15 @@ def _parser() -> argparse.ArgumentParser:
             "0 keeps the configured coefficient fixed"
         ),
     )
+    train.add_argument(
+        "--max-update-approx-kl",
+        type=float,
+        default=defaults.max_update_approx_kl,
+        help=(
+            "roll back a generalized PPO segment when mean approximate KL "
+            "exceeds this evidence-based bound; pass 0 to disable"
+        ),
+    )
     train.add_argument("--json-out", type=Path)
 
     evaluate = subparsers.add_parser("evaluate", help="evaluate a checkpoint on a held-out matrix")
@@ -2454,6 +2481,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         if args.command == "train":
+            max_update_approx_kl = (
+                None if args.max_update_approx_kl == 0.0 else args.max_update_approx_kl
+            )
             prototype_config = PrototypeConfig(
                 envs=args.envs,
                 horizon=args.horizon,
@@ -2480,6 +2510,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 entropy_coef=args.entropy_coef,
                 dense_reward=args.dense_reward,
                 potential_reward_weight=args.potential_reward_weight,
+                max_update_approx_kl=max_update_approx_kl,
                 behavior_cloning_coef=args.bc_coef,
                 behavior_cloning_factor_coef=args.bc_factor_coef,
                 direct_public_action_features=args.direct_public_action_features,
@@ -2517,6 +2548,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 threat_stratified=args.threat_stratified,
                 use_curriculum=not args.flat_curriculum,
                 potential_reward_anneal_segments=args.potential_reward_anneal_segments,
+                max_update_approx_kl=max_update_approx_kl,
                 expert_guidance=args.expert_guidance,
                 expert_teacher=args.expert_teacher,
                 opponent_checkpoints=(

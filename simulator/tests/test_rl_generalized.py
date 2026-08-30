@@ -194,6 +194,27 @@ def test_temporary_potential_reward_anneals_by_global_segment() -> None:
     ).potential_reward_weight == pytest.approx(0.0)
 
 
+def test_generalized_ppo_kl_guard_is_configured_per_segment() -> None:
+    base = PrototypeConfig(horizon=8, max_update_approx_kl=None)
+    config = GeneralizedTrainingConfig(
+        prototype_config=base,
+        segments=1,
+        max_update_approx_kl=0.008,
+    )
+
+    segment = _segment_config(
+        base,
+        segment_index=0,
+        rollouts_per_scenario=1,
+        max_update_approx_kl=config.max_update_approx_kl,
+    )
+
+    assert config.max_update_approx_kl == pytest.approx(0.008)
+    assert segment.max_update_approx_kl == pytest.approx(0.008)
+    with pytest.raises(GeneralizedTrainingError, match="max_update_approx_kl"):
+        GeneralizedTrainingConfig(max_update_approx_kl=0.0)
+
+
 def test_pfsp_updates_use_lane_indexed_terminal_outcomes() -> None:
     assignments = (None, "old-a", "old-b")
     report = {

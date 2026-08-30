@@ -175,6 +175,11 @@ class PrototypeConfig:
     # not encode a preferred card or tactical response; terminal outcome
     # remains the primary objective when this is non-zero.
     potential_reward_weight: float = 0.0
+    # Optional trust-region safety gate for a complete PPO update. When set,
+    # the trainer snapshots the learner before the update and restores it if
+    # the observed mean PPO KL exceeds this bound. This is a training-time
+    # rollback only; it never selects or masks an environment action.
+    max_update_approx_kl: float | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.ruleset_id, str) or not self.ruleset_id.strip():
@@ -254,6 +259,16 @@ class PrototypeConfig:
             value = float(getattr(self, name))
             if not isfinite(value) or value < 0.0:
                 raise PrototypeConfigurationError(f"{name} must be non-negative")
+        if self.max_update_approx_kl is not None:
+            if (
+                isinstance(self.max_update_approx_kl, bool)
+                or not isinstance(self.max_update_approx_kl, (int, float))
+                or not isfinite(float(self.max_update_approx_kl))
+                or float(self.max_update_approx_kl) <= 0.0
+            ):
+                raise PrototypeConfigurationError(
+                    "max_update_approx_kl must be positive and finite or None"
+                )
         if self.imitation_only and not (
             self.behavior_cloning_coef > 0.0
             or self.behavior_cloning_factor_coef > 0.0
@@ -1128,6 +1143,53 @@ def _apply_resume_controls(
     )
 
 
+def _apply_update_approx_kl_guard(
+    learner: Any,
+    metrics: Any,
+    *,
+    max_update_approx_kl: float | None,
+    state_before_update: Any,
+    starting_update: int,
+) -> dict[str, object]:
+    """Accept or roll back one PPO update using its measured policy movement.
+
+    This is deliberately a training-time checkpoint decision. It does not
+    inspect or alter an environment action, legality mask, or observation.
+    Keeping the operation separate also makes the safety envelope directly
+    testable without running a simulator rollout.
+    """
+
+    observed_approx_kl = float(metrics.approx_kl)
+    guard: dict[str, object] = {
+        "status": "disabled",
+        "max_approx_kl": (
+            None
+            if max_update_approx_kl is None
+            else float(max_update_approx_kl)
+        ),
+        "observed_approx_kl": observed_approx_kl,
+        "starting_update": int(starting_update),
+        "attempted_update": int(metrics.update_index),
+        "accepted_update": int(learner.update_count),
+    }
+    if max_update_approx_kl is None:
+        return guard
+    if observed_approx_kl > float(max_update_approx_kl):
+        if state_before_update is None:  # pragma: no cover - config invariant
+            raise RuntimeError("PPO KL guard has no pre-update learner state")
+        learner.load_checkpoint_state(state_before_update)
+        guard.update(
+            {
+                "status": "rolled_back",
+                "accepted_update": int(learner.update_count),
+                "reason": "approx_kl_exceeded_bound",
+            }
+        )
+    else:
+        guard["status"] = "accepted"
+    return guard
+
+
 class _TrainingProgress:
     """Render training progress without affecting stdout JSON."""
 
@@ -1649,6 +1711,12 @@ def train_prototype(
                 else result.learner_batch
             )
             diagnostic_update: dict[str, object] = {}
+            update_state_before_ppo = (
+                learner.checkpoint_state()
+                if effective_config.max_update_approx_kl is not None
+                else None
+            )
+            update_start_count = int(learner.update_count)
             if diagnostic_enabled:
                 from .diagnostics import explained_variance, ppo_ratio_diagnostics
 
@@ -1765,6 +1833,15 @@ def train_prototype(
                 diagnostic_trace_rows.extend(current_diagnostic_rows)
                 diagnostic_update["decisions"] = len(current_diagnostic_rows)
                 diagnostic_update["per_head_gradient_norms"] = dict(metrics.per_head_gradient_norms)
+            update_guard = _apply_update_approx_kl_guard(
+                learner,
+                metrics,
+                max_update_approx_kl=effective_config.max_update_approx_kl,
+                state_before_update=update_state_before_ppo,
+                starting_update=update_start_count,
+            )
+            if diagnostic_enabled:
+                diagnostic_update["update_guard"] = update_guard
             update_wall_seconds = perf_counter() - update_started
             if metrics.skipped_steps:
                 raise PrototypeConfigurationError(
@@ -1784,10 +1861,12 @@ def train_prototype(
             update_rows.append(
                 {
                     "update": int(learner.update_count),
+                    "attempted_update": int(metrics.update_index),
                     "local_update": local_update + 1,
                     "transitions": effective_config.envs * effective_config.horizon,
                     "metrics": metrics.as_dict(),
                     "rollout": stats,
+                    "update_guard": update_guard,
                     "timing": {
                         "rollout_wall_seconds": rollout_wall_seconds,
                         "learner_update_wall_seconds": update_wall_seconds,
@@ -1846,6 +1925,7 @@ def train_prototype(
                 "final_update": int(learner.update_count),
                 "transitions": effective_config.envs * effective_config.horizon * effective_config.updates,
                 "sequence_length": effective_config.sequence_length,
+                "max_update_approx_kl": effective_config.max_update_approx_kl,
                 "outcomes": {
                     **aggregate,
                     "episode_boundaries": (
@@ -3669,6 +3749,15 @@ def _parser() -> argparse.ArgumentParser:
             "the terminal win objective (0 disables it)"
         ),
     )
+    train.add_argument(
+        "--max-update-approx-kl",
+        type=float,
+        default=None,
+        help=(
+            "roll back a PPO update when mean approximate KL exceeds this bound; "
+            "disabled by default for the low-level prototype trainer"
+        ),
+    )
     train.add_argument("--checkpoint", type=Path, help="resume a prototype checkpoint")
     train.add_argument(
         "--checkpoint-out",
@@ -3977,6 +4066,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 collect_belief_targets=not args.no_belief_targets,
                 dense_reward=args.dense_reward,
                 potential_reward_weight=args.potential_reward_weight,
+                max_update_approx_kl=args.max_update_approx_kl,
                 decision_interval_jitter_ticks=args.decision_interval_jitter_ticks,
                 action_latency_max_steps=args.action_latency_max_steps,
                 entity_observation_noise_std=args.entity_observation_noise_std,
