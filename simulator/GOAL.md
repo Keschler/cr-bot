@@ -17,7 +17,7 @@ a controlled probe when the action boundary or causal behavior matters.
 
 ## Current status
 
-- Latest validated implementation revision: `87f96304bfe2ad7e0539298859e8ff953f42e6c7`;
+- Latest validated RL implementation revision: `01f524ce10ac1ee847d79d9fbdd2695a12518abf`;
   its tracked worktree is clean and the current ruleset hash is
   `sha256:992ead6f14016917b5a108eaa1ca370c10a48b70d6a87ad69c7de50a8b020d7a`.
 - `rulesets/v1.json` contains 124 definitions, including all 109 eligible
@@ -26,12 +26,10 @@ a controlled probe when the action boundary or causal behavior matters.
   1,182 cases passed execution, repeated hashes, complete roster coverage, and
   behavioral obligations (`1,182/1,182`, two repeats, per-tick validation,
   eight workers).
-- The focused RL/diagnostics/vector suite is green (`95 passed`). The full
-  non-audio/non-mining suite is `528 passed, 9 failed, 11 warnings`; eight
-  failures require card-image assets from the separate capture tree and one
-  requires the unavailable `katacr` package. Roster completeness is clean,
-  but no card is fidelity-ready, the metadata has nine source conflicts, and
-  three training blockers remain declared.
+- The focused RL/diagnostics/vector suite is green (`230 passed, 11 warnings`)
+  when process-backend tests run with forkserver permissions. The ruleset is
+  still provisional, with unresolved fidelity evidence and `training_ready:
+  false`.
 - Phase-0 physical-lab software is implemented, but physical evidence is
   intentionally deferred for the current RL-first execution path. No
   connected run has yet satisfied the evidence/readiness gates.
@@ -40,23 +38,16 @@ a controlled probe when the action boundary or causal behavior matters.
   `cd22` ruleset/revision hashes and must not be used as current evidence. The
   current engine `reference-0.37.0` is used for new runs, which must be
   revision-pinned.
-- On revision `87f9630`, batch-16 CUDA inference measured 4.69k actor-only
-  decisions/s and 3.77k full actor-selection decisions/s on the RTX 2050.
-  The same workload on CPU measured 0.84k actor-only and 0.74k full
-  decisions/s. The current reference simulator measured 1.63k environment
-  steps/s at 16 lanes; CPU policy parity is therefore still open.
-- The current vector benchmark measured 1,627.7 reference, 878.2 process,
-  45.9 packed-process, and 624.5 persistent-process environment steps/s at
-  16 lanes. All optimized runs matched the reference state-hash sequence;
-  backend replay/event parity is covered by the regression suite. Packed
-  process is correct but currently a throughput outlier.
-- The retained historical trainer baseline is 590 decisions/s on the RTX 2050
-  with 48 lanes, eight rollout workers, and overlap. The current memory-bounded
-  two-lane PPO path measures 96.4 decisions/s end-to-end over 1,536 transitions
-  (98.0 best repeat); current batched matrix evaluation measures 377 decisions/s
-  over 4,753 decisions. Normal evaluation skips replay-hash serialization;
-  `rl.generalized evaluate --replay-hashes` enables it for differential audits.
-  These are throughput results, not strength claims.
+- The current revision benchmark measured 3,377 reference and 508 process
+  environment steps/s at 16 lanes (100 steps, four process workers). All
+  optimized runs matched the reference state-hash sequence; backend
+  replay/event parity is covered by the regression suite. The CUDA actor
+  fast-path benchmark remains 4.69k actor-only and 3.77k full decisions/s.
+- The retained historical end-to-end trainer baseline is 590 decisions/s on
+  the RTX 2050 with 48 lanes, eight rollout workers, and overlap. The
+  memory-bounded two-lane PPO path measures 96.4 decisions/s over 1,536
+  transitions, while current batched matrix evaluation is about 377
+  decisions/s. These are throughput results, not strength claims.
 - The current action contract has `WAIT`/`PLAY`, card slot, and placement but
   no learned wait-duration head; `WAIT` advances the fixed simulator decision
   interval. The proposed timing head remains a future architecture change.
@@ -166,23 +157,25 @@ recovery checkpoints on identical state streams/seeds and reports concrete
 category and consequence evidence. The actor remains the environment action
 source, and every run is subject to the simulator-exploit audit.
 
-The current `cd22` evidence identifies the verified failure as the
-class-balanced factor behavior-cloning auxiliary loss destabilizing
-mixed-PPO mode/card/placement updates. The same defensive stream changed from
-311 bad-vs-good decisions with the term enabled to 8 with it disabled. The
-smallest fix is therefore to apply that auxiliary loss only in explicit
-`imitation_only` warm-starts; mixed PPO records but does not apply its raw
-factor loss. This fixes the diagnosed decision failure, not overall policy
-strength. Resume larger training only after the identical held-out decision
-check and exploit audit are clean.
+The earlier mixed-PPO factor behavior-cloning issue is already isolated to
+explicit `imitation_only` warm-starts; its effective coefficient is zero in
+ordinary PPO. The current continuing-PPO diagnosis is separate: on the exact
+same seed/state stream, update 8 differed from the known-good checkpoint on 4
+decisions, update 9 differed on 437, and update 10 on 438. Update 9 measured
+mean KL `0.009348`, with post-update ratio clipping on `0.1256` of samples;
+the sparse actor-controlled rollout had 1,490 WAIT and 110 PLAY decisions.
+The dominant failure was a shared recurrent update generalizing a single
+loss-making siege/bait lane into premature `WAIT -> PLAY` mode decisions.
 
-The first repaired continuation (segments 33–34, 4,096 actor decisions) was
-clean and actor-controlled. On the exact defensive comparison it reduced the
-bad checkpoint's 311 divergent decisions to 5, with zero additional
-follow-on self-tower damage; the identical six-cell held-out matrix still
-scored 0/6, so this is not a strength promotion. Update 130 also showed value
-loss 0.0149 and explained variance 0.082, which requires continued
-monitoring rather than a convergence claim.
+The smallest justified fix is a generalized-training KL rollback gate with
+default bound `0.008`. It attempts the update, records its diagnostics, and
+restores the complete learner checkpoint when the bound is exceeded; it never
+selects, masks, or executes an environment action. On the identical seed
+`10000`, the regressed update-9 checkpoint still differed on 437 decisions,
+while the guarded checkpoint differed on 4, exactly matching update 8. The
+guarded run had a stable revision and clean simulator-exploit audit. This is a
+decision-level regression fix, not a strength promotion; larger PPO training
+has not yet resumed.
 
 ## Actor architecture
 
@@ -350,11 +343,11 @@ actor runs;
 `tower_hp_before`, `tower_hp_after`, and `tower_hp_end` have different
 per-decision versus terminal/cap-time meanings. The prototype `--trace-out` contains every decision; `troop_positions_end` and `tower_hp_end` are only terminal/cap-time snapshots. A finite `all_wins=true` result is not a universal-win claim.
 
-The latest revision-pinned provisional PPO smoke on `87f9630` promoted a
-checkpoint after 2,048 actor-controlled transitions with a stable revision
-guard, public-only actor inputs, privileged training-only critic, full
-decision tracing, and a clean simulator-exploit audit. It did not complete a
-match, so no held-out strength claim is attached to it.
+The current revision-pinned regression reproduction on `01f524c` attempted
+update 9 from the exact prior checkpoint, rolled it back at KL `0.009348 >
+0.008`, preserved update count 8, and passed the simulator-exploit audit. The
+same-state diagnosis reports `437 -> 4` bad-vs-good divergences. It is
+diagnostic evidence only; no held-out strength claim is attached.
 
 ## Simulator requirements
 
@@ -404,16 +397,15 @@ backend must support batched reset/step, legal masks, terminal/truncation,
 deterministic seeding, and asynchronous reset while producing identical
 canonical state and public-event hashes on the parity corpus.
 
-The neural fast path is above the historical simulator benchmark on an RTX
-2050 (about 4.69k actor-only and 3.77k full actor-selection decisions/s at
-batch 16). On the current CPU host it reaches about 0.84k actor-only and
-0.74k full decisions/s versus about 1.63k simulator steps/s, so CPU parity is
-not yet met. The bounded trainer remains physics-bound; rollout-process and
-larger-lane variants are benchmarked separately and are not enabled by
-default when they trade memory or behavior-policy freshness. The
-deployment-only decoding/layout changes preserve the PPO forward path and
-exact selected-action parity on the regression workload. The preferred
-large-self-play target is 5k–10k simulator environment steps/s.
+The neural fast path remains about 4.69k actor-only and 3.77k full
+actor-selection decisions/s on an RTX 2050 at batch 16; the CPU parity gate is
+still open. The current reference simulator is 3.38k environment steps/s at
+16 lanes. The bounded trainer remains physics-bound; rollout-process and
+larger-lane variants are benchmarked separately when they trade memory or
+behavior-policy freshness. The deployment-only decoding/layout changes
+preserve the PPO forward path and exact selected-action parity on the
+regression workload. The preferred large-self-play target is 5k–10k simulator
+environment steps/s.
 The vector backend regression also checks state, event-log, and replay hashes
 across consecutive card-play steps with privileged info disabled; both process
 transports pass that parity check.

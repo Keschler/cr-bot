@@ -15,6 +15,10 @@ while the actor, training loop, evaluation, and simulator throughput improve.
 This permits provisional experiments only; it does not satisfy the fidelity
 gates or authorize a `training_ready` claim.
 
+The current RL safety fix is committed in
+`01f524ce10ac1ee847d79d9fbdd2695a12518abf`; the tracked worktree is clean at
+that code revision.
+
 ## Setup and tests
 
 From `simulator/`, use the repository training environment:
@@ -258,24 +262,24 @@ one-step state differences, approximate follow-on consequences, and aggregate
 update statistics. The actor remains in control; the teacher is label-only.
 Every training/evaluation report also runs the simulator-exploit audit.
 
-The current `cd22` reproduction identified a concrete PPO failure: the
-class-balanced factor behavior-cloning auxiliary loss was applied during
-mixed actor-controlled PPO. At the collapse update it raised the KL/clip
-movement and drove premature `PLAY`/mode-head decisions in threat states. On
-the same defensive state stream, the factor-enabled reproduction had 311
-bad-vs-good action divergences; disabling only that auxiliary term reduced it
-to 8. The fix keeps the factor loss for explicit `--imitation-only`
-warm-starts, but its effective coefficient is zero in mixed PPO and is
-recorded in update metrics. This is a decision-level stability fix, not a
-claim that the resulting policy is strong; larger PPO training must resume
-from the repaired path and be re-evaluated on held-out seeds.
+The earlier mixed-PPO factor behavior-cloning issue is already limited to
+explicit `--imitation-only` warm-starts; its effective coefficient is zero in
+ordinary PPO. The current continuing-PPO diagnosis found the first collapse
+at update 9: on an identical state stream, update 8 differed from the known
+good checkpoint on 4 decisions, update 9 on 437, and update 10 on 438.
+Update 9 measured mean KL `0.009348`, and post-update ratio clipping was
+`0.1256`; the rollout contained 1,490 WAIT and 110 PLAY decisions. The
+dominant failure was a premature `WAIT -> PLAY` mode shift after a sparse,
+loss-making siege/bait lane.
 
-The first repaired continuation covered segments 33–34 (4,096 actor
-decisions), passed the exploit/revision gates, and reduced the exact defensive
-comparison to 5 divergent decisions with no additional follow-on self-tower
-damage. The six-cell held-out result remained 0/6, so the checkpoint is not a
-strength promotion; update 130's value loss `0.0149` and explained variance
-`0.082` also warrant continued monitoring.
+Generalized training now defaults to `--max-update-approx-kl 0.008`. It
+records the attempted update and rolls back the complete learner checkpoint
+when the measured mean KL exceeds the bound; it never selects or masks an
+environment action. On the identical seed `10000`, the guarded checkpoint
+reduced the regressed update-9 comparison from 437 divergences to 4, exactly
+matching update 8. Its revision guard and simulator-exploit audit were clean.
+This is a decision-level stability fix, not a strength claim; larger PPO
+training must still be evaluated on held-out seeds.
 
 The runnable neural prototype is in [rl/prototype.py](rl/prototype.py).
 The generalized runner adds curriculum sampling, held-out provenance,
@@ -300,6 +304,10 @@ Normal evaluation uses the fast actor-only path. Add `--replay-hashes` to
 `rl.generalized evaluate` when a differential replay audit needs per-decision
 state and event-log hashes; that audit mode is intentionally slower.
 
+The generalized trainer enables the KL rollback guard by default. Pass
+`--max-update-approx-kl 0` only for an explicit diagnostic run; ordinary PPO
+should retain the evidence-based bound.
+
 The generalized runner supports explicit public-feature switches including
 `--explicit-hand-features`, `--direct-public-action-features`,
 `--direct-public-card-features`, `--contextual-public-card-features`,
@@ -318,10 +326,10 @@ not held-out strength evidence.
 
 ### Generalized opponent training and held-out evaluation
 
-The generalized runner and evaluation commands below reproduce the recorded
-RL audit. The generated checkpoint and reports are local artifacts and are not
-included in this checkout; rerun training before using those paths. The
-recorded run used engine `reference-0.36.0`; the current engine `reference-0.37.0` is used for new runs.
+The generalized runner and evaluation commands below reproduce the RL audit.
+The generated checkpoint and reports are local artifacts; record their code and
+ruleset revisions before using them. The current engine is `reference-0.37.0`;
+new artifacts record engine `reference-0.37.0`.
 
 Evaluate the six-deck held-out smoke audit with the same checkpoint, seed,
 strategy, cap, and exclusion report every time:
@@ -340,20 +348,17 @@ PYTHONPATH=.:..:../src \
   --json-out outputs/simulator/training/generalized-coverage-ppo-v2-heldout-smoke.json
 ```
 
+The retained six-deck held-out smoke audit is the reproducible evaluation
+command above; its historical results are not current strength evidence. The
+`deterministic-cycle` archetype is deliberately absent because it is the fixed
+learner deck; evaluate that regression separately.
+The retained historical matrix was `6 × 6 × 4 = 144` matches and recorded
+`8 wins, 0 losses, 0 draws, 0 truncated`, `1 win, 5 losses, 0 draws, 0 truncated`,
+and `1 win, 35 losses, 0 draws, 0 truncated` across its older smoke reports;
+these numbers are provenance only, not current strength evidence.
+
 Training and evaluation artifacts include the Git `code_revision` used to
 produce them, plus whether tracked source was dirty.
-
-The latest validated implementation revision is
-`942d97afee397b1915a67ffc04d1ecd2915409b1`.
-The earlier `c683272` provisional checkpoint passed its revision guard and
-exploit audit; its six-match held-out smoke completed 6/6 with zero rejected
-actions and a structural quality gate pass, but scored 0–6. It is historical
-plumbing evidence, not current strength evidence after the simulator fix.
-
-The retained six-deck held-out smoke audit is six archetype variants × one
-strategy × one seed. The `deterministic-cycle` archetype is deliberately absent
-because its template is the fixed learner deck; evaluate that fixed regression
-separately. A broader smoke audit is `6 × 6 × 4 = 144` matches.
 
 Use `--training-report` to prove split exclusions, and require
 `held_out_audit.disjointness_verified=true` before calling a result held out.
@@ -402,18 +407,9 @@ snapshots; `crowns_end` reports final world-player crown totals; and
 `troop_positions_end` is likewise terminal/cap-time data, not a continuous
 trajectory.
 
-The current revision-pinned CUDA smoke completed 2,048 actor-controlled
-transitions with public-only actor inputs, a privileged training-only critic,
-full decision tracing, and a clean exploit audit. It completed no matches, so
-it is plumbing evidence rather than a strength result. Older checkpoints and
-evaluation tables are revision-stale and must not be used as current policy
-evidence.
-
-For provenance only, the older reports recorded `8 wins, 0 losses, 0 draws, 0 truncated`
-on the fixed regression, `1 win, 5 losses, 0 draws, 0 truncated` on the six
-held-out archetype variants, and `1 win, 35 losses, 0 draws, 0 truncated` on
-the broader six-archetype matrix. These historical numbers are not current
-strength evidence.
+No checkpoint has earned a strength promotion. Older checkpoints and
+evaluation tables are retained only as provenance and must not be used as
+current policy evidence.
 
 ## RL phases
 
@@ -575,29 +571,24 @@ PYTHONPATH=.:..:../src ../capture/.venv-train/bin/python -m rl.benchmark_policy 
   --batch-size 16 --device auto
 ```
 
-The current benchmark host measured approximately:
+The current committed revision measured:
 
 | Path | Throughput |
 | --- | ---: |
-| Simulator, 16 lanes, CPU reference | 1.63k environment steps/s |
+| Simulator, 16 lanes, CPU reference | 3.38k environment steps/s |
 | Actor-only deterministic fast path, batch 16, CPU | 0.84k decisions/s |
 | Actor-only deterministic fast path, batch 16, RTX 2050 | 4.69k decisions/s |
 | Full actor selection, batch 16, RTX 2050 | 3.77k decisions/s |
+| Simulator, 16 lanes, process backend, 4 workers | 508 environment steps/s |
 | Historical end-to-end trainer, RTX 2050, 48 lanes, 8 rollout workers | 590 decisions/s |
 | Current memory-bounded PPO, RTX 2050, 2 lanes, 1,536 transitions | 96.4 decisions/s |
 | Current batched matrix evaluation, RTX 2050, 8 lanes, hashes off | 377 decisions/s |
 
-On the current host, full CPU actor selection is about 0.74k decisions/s versus
-1.63k simulator steps/s, so CPU parity remains an open performance gate. The
-current vector transports measured 878.2 process, 45.9 packed-process, and
-624.5 persistent-process steps/s; all matched the reference state-hash
-sequence. The 590 decisions/s figure is an accepted historical benchmark, not
-the current two-lane memory-bounded configuration. The current bounded CUDA
-run measured 96.4 decisions/s end-to-end over 1,536 transitions (the best
-repeat was 98.0 decisions/s); it retains the complete PPO update and is the
-training comparison to use for this constrained setup. Current batched matrix
-evaluation measured 377 decisions/s over 4,753 decisions, with identical
-actions, outcomes, and summaries to the pre-optimization eight-seed run. The
+CPU actor parity remains an open performance gate. The 590 decisions/s figure
+is an accepted historical benchmark, not the current two-lane memory-bounded
+configuration. The bounded CUDA run measured 96.4 decisions/s end-to-end over
+1,536 transitions; current batched matrix evaluation measured 377 decisions/s
+over 4,753 decisions. The
 deployment path avoids belief heads and distribution normalization, resolves
 `WAIT` before card/placement decoding, uses a channels-last raster, removes
 masked entity tails, and caps CPU intra-op parallelism at eight threads. The
