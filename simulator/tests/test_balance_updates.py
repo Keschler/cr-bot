@@ -101,7 +101,7 @@ def test_current_card_balance_values_are_applied_to_the_fixed_ruleset() -> None:
         "radius_mtile": 3_000,
         "speed_multiplier_milli": 1_300,
         "hit_speed_multiplier_milli": 1_300,
-        "targets": ["air", "ground"],
+        "targets": ["air", "ground", "building", "crown_tower"],
     }
 
 

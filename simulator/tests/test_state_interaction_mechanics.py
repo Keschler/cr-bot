@@ -85,6 +85,144 @@ def test_clones_keep_one_hp_shields_and_clone_death_children() -> None:
     assert children and all(child.is_clone and child.hp == child.max_hp == 1 for child in children)
 
 
+def test_clone_bypasses_deploy_and_preserves_carrier_payload() -> None:
+    engine, state = _state()
+    engine._spawn_card_entities(state, 0, RULESET.card("goblin-giant"), (9, 15))
+    original = next(
+        entity
+        for entity in state.entities.values()
+        if entity.card_id == "goblin-giant" and not entity.is_clone
+    )
+    original_children = [
+        entity
+        for entity in state.entities.values()
+        if entity.carried_by_uid == original.uid
+    ]
+    assert len(original_children) == 2
+
+    engine._impact_clone(
+        state,
+        owner=0,
+        source_uid=None,
+        source_card_id="clone",
+        x=original.x_mtile,
+        y=original.y_mtile,
+        radius=3_000,
+        raw_clone=RULESET.card("clone").mechanics["clone"],
+    )
+
+    cloned_giant = next(
+        entity
+        for entity in state.entities.values()
+        if entity.card_id == "goblin-giant" and entity.is_clone
+    )
+    assert cloned_giant.deploy_remaining_us == 0
+    cloned_children = [
+        entity
+        for entity in state.entities.values()
+        if entity.carried_by_uid == cloned_giant.uid
+    ]
+    assert len(cloned_children) == 2
+    assert all(
+        child.is_clone and child.hp == child.max_hp == 1
+        for child in cloned_children
+    )
+    assert not any(
+        entity.is_clone
+        and entity.card_id == "spear-goblin"
+        and entity.carried_by_uid is None
+        for entity in state.entities.values()
+    )
+
+    # The attached pair is released from the clone; the legacy death payload
+    # must not create a second pair.
+    cloned_giant.hp = 0
+    engine._resolve_deaths(state)
+    assert len(
+        [
+            entity
+            for entity in state.entities.values()
+            if entity.is_clone and entity.card_id == "spear-goblin" and entity.alive
+        ]
+    ) == 2
+    assert all(child.carried_by_uid is None for child in cloned_children)
+
+
+def test_cloned_spawner_starts_immediately_with_a_fresh_spawn_delay() -> None:
+    engine, state = _state()
+    original = _entity(state, "witch", 0, 9_000, 15_000)
+    original.deploy_remaining_us = RULESET.card("witch").deploy_time_us
+    assert original.deploy_remaining_us > 0
+
+    engine._impact_clone(
+        state,
+        owner=0,
+        source_uid=None,
+        source_card_id="clone",
+        x=original.x_mtile,
+        y=original.y_mtile,
+        radius=3_000,
+        raw_clone=RULESET.card("clone").mechanics["clone"],
+    )
+    cloned = next(
+        entity
+        for entity in state.entities.values()
+        if entity.card_id == "witch" and entity.is_clone
+    )
+    assert cloned.deploy_remaining_us == 0
+    assert cloned.spawn_cooldown_us == 1_000_000
+
+    engine._advance_spawners(state, 500_000)
+    assert not any(
+        entity.parent_uid == cloned.uid and entity.card_id == "skeletons"
+        for entity in state.entities.values()
+    )
+    engine._advance_spawners(state, 500_000)
+    skeletons = [
+        entity
+        for entity in state.entities.values()
+        if entity.parent_uid == cloned.uid and entity.card_id == "skeletons"
+    ]
+    assert len(skeletons) == 4
+    assert all(skeleton.is_clone and skeleton.hp == skeleton.max_hp == 1 for skeleton in skeletons)
+
+
+def test_rage_buffs_friendly_buildings_and_crown_towers() -> None:
+    engine, state = _state()
+    tower = next(
+        entity
+        for entity in state.entities.values()
+        if entity.owner == 0 and entity.kind == "tower" and entity.role == "left"
+    )
+    building = engine._spawn_single_at(
+        state,
+        RULESET.card("cannon"),
+        owner=0,
+        x_mtile=tower.x_mtile,
+        y_mtile=tower.y_mtile - 2_000,
+        deploy_remaining_us=0,
+    )
+    engine._create_area_effect(
+        state,
+        owner=0,
+        source_uid=None,
+        source_card_id="rage",
+        x_mtile=tower.x_mtile,
+        y_mtile=tower.y_mtile,
+        default_radius=3_000,
+        default_damage=0,
+        default_crown_damage=0,
+        default_status=None,
+        default_knockback=0,
+        raw_effect=RULESET.card("rage").mechanics["persistent_effect"],
+    )
+
+    for target in (tower, building):
+        rage = [status for status in target.statuses if status.kind == "rage"]
+        assert len(rage) == 1
+        assert rage[0].hit_speed_magnitude_permille == 1_300
+
+
 def test_cloned_deploy_damage_is_suppressed() -> None:
     engine, state = _state()
     target = _entity(state, "giant", 1, 9_000, 15_000, hp=4_000)

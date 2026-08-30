@@ -144,7 +144,7 @@ DEATH_RAGE_DEFINITIONS: Mapping[str, Mapping[str, Any]] = {
         "radius_mtile": 3_000,
         "speed_multiplier_milli": 1300,
         "hit_speed_multiplier_milli": 1300,
-        "targets": ["air", "ground"],
+        "targets": ["air", "ground", "building", "crown_tower"],
     },
 }
 

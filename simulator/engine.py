@@ -830,6 +830,9 @@ class BattleEngine:
                 parent_uid=carrier.uid,
                 event_kind="carrier_child_created",
                 deploy_remaining_us=carrier.deploy_remaining_us,
+                is_clone=carrier.is_clone,
+                hp_override=1 if carrier.is_clone else None,
+                max_hp_override=1 if carrier.is_clone else None,
                 carried_by_uid=carrier.uid,
                 carried_offset_mtile=(offset_x, offset_y),
                 level_multiplier_permille=carrier.level_multiplier_permille,
@@ -1403,7 +1406,6 @@ class BattleEngine:
             for target in self._alive_entities(state):
                 if (
                     target.owner != effect.owner
-                    or target.kind == "tower"
                     or not self._spell_can_hit(
                         effect.source_card_id,
                         target,
@@ -1888,6 +1890,7 @@ class BattleEngine:
         deploy_remaining_us: int | None = None,
         carried_by_uid: int | None = None,
         carried_offset_mtile: tuple[int, int] = (0, 0),
+        spawn_cooldown_us: int | None = None,
         level_multiplier_permille: int = PERMILLE,
         require_legal_position: bool = False,
     ) -> EntityState:
@@ -1929,6 +1932,9 @@ class BattleEngine:
             carried_by_uid=carried_by_uid,
             carried_offset_x_mtile=int(carried_offset_mtile[0]),
             carried_offset_y_mtile=int(carried_offset_mtile[1]),
+            spawn_cooldown_us=(
+                0 if spawn_cooldown_us is None else int(spawn_cooldown_us)
+            ),
             shield_hp=(
                 # Cloned shielded troops keep the shield layer, but the
                 # shield itself is capped at one HP just like the copied
@@ -4454,6 +4460,11 @@ class BattleEngine:
             for entity in self._alive_entities(state)
             if entity.owner == owner
             and entity.kind == copy_kind
+            # Carrier payloads are already represented as first-class bodies
+            # attached to their original. Cloning those hidden bodies as
+            # ordinary troops recreates the historical floating/bodyless
+            # Goblin Giant bug and incorrectly doubles the payload.
+            and entity.carried_by_uid is None
             and (not exclude_clones or not entity.is_clone)
             and distance_mtile(x, y, entity.x_mtile, entity.y_mtile)
             <= radius + self._collision_radius(entity)
@@ -4461,7 +4472,18 @@ class BattleEngine:
         cloned = 0
         for original in originals:
             child = self.ruleset.card(original.card_id)
-            self._spawn_single_at(
+            spawn = child.mechanics.get("spawn")
+            elixir_generation = child.mechanics.get("elixir_generation")
+            initial_spawn_cooldown_us = (
+                int(spawn.get("start_delay_us", 0))
+                if hasattr(spawn, "get")
+                else (
+                    int(elixir_generation.get("interval_us", 0))
+                    if hasattr(elixir_generation, "get")
+                    else 0
+                )
+            )
+            cloned_entity = self._spawn_single_at(
                 state,
                 child,
                 owner=owner,
@@ -4472,8 +4494,16 @@ class BattleEngine:
                 is_clone=True,
                 hp_override=clone_hp,
                 max_hp_override=clone_max_hp,
+                # A clone skips the copied card's normal deploy animation;
+                # its own periodic stream starts afresh.
+                deploy_remaining_us=0,
+                spawn_cooldown_us=initial_spawn_cooldown_us,
                 level_multiplier_permille=level_multiplier_permille,
             )
+            # Carriers materialize their payload as attached clone bodies.
+            # This keeps the payload hidden/sheltered until release and lets
+            # the death-spawn fallback avoid creating duplicates.
+            self._spawn_carried_children(state, cloned_entity)
             cloned += 1
         self._emit(
             state,

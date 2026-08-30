@@ -7275,7 +7275,9 @@
           "speed_multiplier_milli": 1300,
           "targets": [
             "air",
-            "ground"
+            "ground",
+            "building",
+            "crown_tower"
           ],
           "tick_interval_us": 100000
         },
@@ -12126,7 +12128,7 @@
       ]
     }
   },
-  "content_hash": "sha256:0ac958abe2f8e90e7eaf882f23c1dec5b8ebd968cf630cd1d657961e0f2e169b",
+  "content_hash": "sha256:0bdd6811e44545552d2c71e2214366e593f6be6dd335e95544bb11d52dce5baa",
   "interaction_set": [
     "archers",
     "arrows",
