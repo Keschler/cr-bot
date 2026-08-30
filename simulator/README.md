@@ -290,7 +290,8 @@ PYTHONPATH=.:..:../src \
 Training and evaluation artifacts include the Git `code_revision` used to
 produce them, plus whether tracked source was dirty.
 
-The latest sealed revision is `a796f28e55627f34e1bd9a8c4676cad50f8ceb68`.
+The latest validated implementation revision is
+`c683272991f02f16fd437dc620e4b285e73201bf`.
 Its provisional smoke checkpoint passed the revision guard and exploit audit;
 the six-match held-out smoke completed 6/6 with zero rejected actions and a
 structural quality gate pass, but scored 0–6 and is not strength evidence.
