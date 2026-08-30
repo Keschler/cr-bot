@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import numpy as np
+import pytest
+
+from simulator.actions import PlayCardAction, WaitAction
+from simulator.catalog import SIGHT_RANGE_MOBILE
+from simulator.env import SimulatorEnv
 from simulator.engine import BattleEngine
 from simulator.fixed import distance_mtile
 from simulator.roster import PLAYER_DECK
 from simulator.ruleset import load_ruleset
-from simulator.state import EntityState
+from simulator.state import AreaEffectState, EntityState, ProjectileState
 
 
 RULESET = load_ruleset("v1")
@@ -592,6 +598,33 @@ def test_tiebreak_with_equal_lowest_towers_is_a_draw_without_destruction() -> No
     state.phase = "overtime"
     engine._tower(state, 0, "left").hp = 1_500
     engine._tower(state, 1, "left").hp = 1_500
+    troop = _entity(state, "knight", 0, 9_000, 15_000)
+    projectile_uid = engine._allocate_uid(state)
+    state.projectiles[projectile_uid] = ProjectileState(
+        uid=projectile_uid,
+        source_uid=troop.uid,
+        source_card_id="fireball",
+        owner=0,
+        x_mtile=9_000,
+        y_mtile=15_000,
+        target_x_mtile=9_000,
+        target_y_mtile=14_000,
+        damage=1,
+        crown_damage=1,
+        speed_mtile_per_s=1_000,
+    )
+    effect_uid = engine._allocate_uid(state)
+    state.effects[effect_uid] = AreaEffectState(
+        uid=effect_uid,
+        source_uid=troop.uid,
+        source_card_id="poison",
+        owner=0,
+        x_mtile=9_000,
+        y_mtile=14_000,
+        radius_mtile=1_000,
+        remaining_us=1_000_000,
+        tick_interval_us=1_000_000,
+    )
 
     engine._resolve_tiebreak(state)
 
@@ -600,6 +633,104 @@ def test_tiebreak_with_equal_lowest_towers_is_a_draw_without_destruction() -> No
     assert state.terminal_reason == "tiebreak_equal_lowest_hp"
     assert engine._tower(state, 0, "left").alive
     assert engine._tower(state, 1, "left").alive
+    assert not troop.alive and troop.hp == 0
+    assert not state.projectiles[projectile_uid].alive
+    assert not state.effects[effect_uid].alive
+    assert any(event.kind == "tiebreak_projectiles_removed" for event in state.events)
+    assert any(event.kind == "tiebreak_effects_removed" for event in state.events)
+
+
+def test_sight_ranges_use_card_specific_hidden_values_and_keep_official_overrides() -> None:
+    for card_id, expected in SIGHT_RANGE_MOBILE.items():
+        assert RULESET.card(card_id).sight_range_mtile == expected, card_id
+    assert RULESET.card("dart-goblin").sight_range_mtile == 7_000
+    assert RULESET.card("firecracker").sight_range_mtile == 8_000
+
+
+def test_royal_recruits_use_full_width_line_and_documented_split_positions() -> None:
+    engine, state = _state()
+    card = RULESET.card("royal-recruits")
+
+    engine._spawn_card_entities(state, 0, card, (8, 20))
+    central = sorted(
+        entity.x_mtile
+        for entity in state.entities.values()
+        if entity.card_id == "royal-recruits" and entity.owner == 0
+    )
+    assert central == [3_500, 5_500, 7_500, 9_500, 11_500, 13_500]
+    assert len({
+        entity.y_mtile
+        for entity in state.entities.values()
+        if entity.card_id == "royal-recruits" and entity.owner == 0
+    }) == 1
+    assert sum(x < 9_000 for x in central) == 3
+    assert sum(x > 9_000 for x in central) == 3
+
+    shifted_engine, shifted_state = _state()
+    shifted_engine._spawn_card_entities(state=shifted_state, player=0, card=card, cell=(7, 20))
+    shifted = sorted(
+        entity.x_mtile
+        for entity in shifted_state.entities.values()
+        if entity.card_id == "royal-recruits" and entity.owner == 0
+    )
+    assert sum(x < 9_000 for x in shifted) == 4
+    assert sum(x > 9_000 for x in shifted) == 2
+
+
+def test_unlocked_troop_reacquires_nearer_target_but_locked_troop_does_not() -> None:
+    engine, state = _state()
+    attacker = _entity(state, "skeletons", 0, 9_000, 15_000)
+    farther = _entity(state, "giant", 1, 9_000, 10_000)
+    nearer = _entity(state, "giant", 1, 9_000, 13_000)
+    attacker.target_uid = farther.uid
+
+    engine._invalidate_and_acquire_targets(state)
+    assert attacker.target_uid == nearer.uid
+
+    attacker.target_uid = farther.uid
+    attacker.windup_remaining_us = 100_000
+    engine._invalidate_and_acquire_targets(state)
+    assert attacker.target_uid == farther.uid
+
+
+def test_building_targeter_rechecks_closest_building_after_lock() -> None:
+    engine, state = _state()
+    attacker = _entity(state, "giant", 0, 9_000, 12_000)
+    farther = _entity(state, "cannon", 1, 9_000, 13_000)
+    nearer = _entity(state, "cannon", 1, 9_000, 12_500)
+    attacker.target_uid = farther.uid
+
+    engine._invalidate_and_acquire_targets(state)
+    assert attacker.target_uid == nearer.uid
+
+
+def test_load_state_requires_public_event_history_and_round_trips_observation() -> None:
+    env = SimulatorEnv(
+        engine=BattleEngine(RULESET),
+        decision_interval_us=50_000,
+    )
+    env.reset(decks=(PLAYER_DECK, PLAYER_DECK), shuffle_decks=False)
+    state = env.state
+    assert state is not None
+    slot = state.players[1].hand.index("skeletons")
+    cell = env.engine.legal_action_cells(state, 1)[slot][0]
+    env.step((WaitAction(0), PlayCardAction(1, slot, cell)))
+    expected = env.observe()
+
+    with pytest.raises(ValueError, match="event-inclusive"):
+        env.load_state(state.to_primitive(include_events=False))
+
+    restored = SimulatorEnv(
+        engine=BattleEngine(RULESET),
+        decision_interval_us=50_000,
+    )
+    actual = restored.load_state(env.save_state())
+    for expected_view, actual_view in zip(expected, actual, strict=True):
+        np.testing.assert_array_equal(expected_view.board, actual_view.board)
+        np.testing.assert_array_equal(expected_view.global_vector, actual_view.global_vector)
+        np.testing.assert_array_equal(expected_view.spatial_masks, actual_view.spatial_masks)
+        np.testing.assert_array_equal(expected_view.legal_play, actual_view.legal_play)
+        assert expected_view.legal_wait == actual_view.legal_wait
 
 
 def test_tiebreak_caps_crowns_when_equal_lowest_towers_fall_together() -> None:

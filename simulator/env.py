@@ -674,8 +674,19 @@ class SimulatorEnv:
         return self._require_state().to_primitive(include_events=True)
 
     def load_state(self, raw: dict[str, object]) -> tuple[PolicyObservationV1, PolicyObservationV1]:
+        # Public observation memory is intentionally not serialized into the
+        # authoritative battle state.  It reconstructs revealed cards and
+        # opponent-elixir beliefs from the complete public event stream; a
+        # compact state without that stream would silently reset both beliefs
+        # to the beginning of the match while leaving physics mid-match.
+        events = raw.get("events") if isinstance(raw, dict) else None
+        if not isinstance(events, list):
+            raise ValueError("load_state requires an event-inclusive snapshot")
         state = battle_state_from_primitive(raw)
         self.engine.validate_state(state)
+        event_sequences = [event.sequence for event in state.events]
+        if event_sequences != list(range(state.event_sequence)):
+            raise ValueError("load_state requires a complete event history")
         self.state = state
         self._memories = (ObservationMemory(0), ObservationMemory(1))
         self._persistent_observation_cache = None

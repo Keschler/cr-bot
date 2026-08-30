@@ -61,7 +61,7 @@ BASE_HOG_CYCLE_DECK = PLAYER_DECK
 # phase/fuse entities, and structure-safe navigation) are part of this engine
 # identity.  Replays and mined evidence must never be silently interpreted by
 # a newer algorithm.
-ENGINE_VERSION = "reference-0.35.0"
+ENGINE_VERSION = "reference-0.36.0"
 _SEED_MASK = (1 << 64) - 1
 _SLOW_STATUS_KINDS = frozenset({"slow", "freeze", "poison-slow", "earthquake-slow"})
 
@@ -2133,7 +2133,8 @@ class BattleEngine:
                     not invalid
                     and current is not None
                     and current.kind != "tower"
-                    and self._edge_distance(entity, current) > self._sight_range(entity) * 2
+                    and self._edge_distance(entity, current)
+                    > self._sight_range(entity) * 3 // 2
                 ):
                     invalid = True
                 if invalid:
@@ -2147,37 +2148,39 @@ class BattleEngine:
                         entity.windup_remaining_us = 0
                         entity.attack_load_remaining_us = 0
                     self._emit(state, "target_changed", uid=entity.uid, old_target=old_target, target_uid=None)
-                elif current is not None and current.kind == "tower" and entity.kind != "tower":
-                    # A newly deployed defender/building must be able to pull a
-                    # unit which was previously pathing to a Crown Tower.
-                    nearby = self._nearby_non_tower_targets(
-                        state,
-                        entity,
-                        alive_entities=alive_entities,
+                elif current is not None and entity.kind != "tower":
+                    # Moving troops scan for a nearer valid target until they
+                    # have entered attack range and committed to the current
+                    # attack.  Building-targeters are the live-game
+                    # exception: they keep selecting the closest building
+                    # even after entering attack range.
+                    building_targeter = bool(definition.mechanics.get("building_only")) or (
+                        bool(definition.targets)
+                        and set(definition.targets) <= {"building", "crown_tower"}
                     )
-                    replacement = self._preferred_target_uid(
-                        state,
-                        entity,
-                        nearby,
-                        alive_entities=alive_entities,
-                    )
-                    if replacement is not None:
-                        old_target = entity.target_uid
-                        self._reset_attack_charge(state, entity, reason="retargeted")
-                        self._reset_dash(state, entity, reason="retargeted")
-                        self._reset_attack_ramp(state, entity, reason="retargeted")
-                        entity.target_uid = replacement
-                        if entity.pending_target_uid == old_target:
-                            entity.pending_target_uid = None
-                            entity.windup_remaining_us = 0
-                            entity.attack_load_remaining_us = 0
-                        self._emit(
+                    if building_targeter or not self._target_is_locked(entity, current):
+                        replacement = self._choose_target(
                             state,
-                            "target_changed",
-                            uid=entity.uid,
-                            old_target=old_target,
-                            target_uid=replacement,
+                            entity,
+                            alive_entities=alive_entities,
                         )
+                        if replacement is not None and replacement != current.uid:
+                            old_target = entity.target_uid
+                            self._reset_attack_charge(state, entity, reason="retargeted")
+                            self._reset_dash(state, entity, reason="retargeted")
+                            self._reset_attack_ramp(state, entity, reason="retargeted")
+                            entity.target_uid = replacement
+                            if entity.pending_target_uid == old_target:
+                                entity.pending_target_uid = None
+                                entity.windup_remaining_us = 0
+                                entity.attack_load_remaining_us = 0
+                            self._emit(
+                                state,
+                                "target_changed",
+                                uid=entity.uid,
+                                old_target=old_target,
+                                target_uid=replacement,
+                            )
             if entity.target_uid is None:
                 target_uid = self._choose_target(
                     state,
@@ -2199,6 +2202,21 @@ class BattleEngine:
             and self._target_allowed(source, target)
             and not self._projectile_lethally_reserved(state, target)
         )
+
+    def _target_is_locked(self, source: EntityState, target: EntityState) -> bool:
+        """Return whether a primary target has entered attack commitment.
+
+        A first-hit preload may exist while a troop is still walking, so
+        ``pending_target_uid`` alone is not a lock.  An active wind-up, dash,
+        movement charge, or a target already inside the ordinary attack range
+        is committed; unlocked movers are allowed to reacquire each tick.
+        """
+
+        if source.dash_remaining_us > 0 or source.attack_charge_active:
+            return True
+        if source.windup_remaining_us > 0:
+            return True
+        return self._in_attack_range(source, target)
 
     @staticmethod
     def _projectile_lethally_reserved(
@@ -6165,6 +6183,11 @@ class BattleEngine:
                 self._end_match(state, None, "time_draw")
 
     def _resolve_tiebreak(self, state: BattleState) -> None:
+        # The tiebreak transition removes all active combatants and transient
+        # effects before either a tower drain or a draw is resolved.  Draws
+        # need the same cleanup as wins; otherwise terminal observations can
+        # contain troops and projectiles that can never act again.
+        self._remove_entities_for_tiebreak(state)
         alive_towers = [entity for entity in self._alive_entities(state) if entity.kind == "tower"]
         if not alive_towers:
             self._end_match(state, None, "tiebreak_draw")
@@ -6178,10 +6201,6 @@ class BattleEngine:
             self._end_match(state, None, "tiebreak_equal_lowest_hp")
             return
 
-        # The live game clears troops before the tower-drain tiebreak.  Do not
-        # run ordinary death payloads here: tiebreak removal is a terminal
-        # cleanup, not combat damage.
-        self._remove_entities_for_tiebreak(state)
         target = min(minimum, key=lambda tower: tower.uid)
         # The tiebreak is an equal raw-HP drain on every tower.  Applying the
         # full drain before resolving deaths keeps terminal tower snapshots and

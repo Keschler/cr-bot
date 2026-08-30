@@ -42,6 +42,9 @@ ARENA_GEOMETRY_SOURCE_ID = "crforge-arena-geometry-2026-08-30"
 TESLA_FOOTPRINT_SOURCE_ID = "statsroyale-tesla-footprint-2026-08-30"
 MEGA_KNIGHT_JUMP_SOURCE_ID = "community-mega-knight-jump-2026-08-30"
 PHOENIX_EGG_MECHANICS_SOURCE_ID = "supercell-phoenix-egg-mechanics-2026-08-30"
+SIGHT_RANGE_SOURCE_ID = "aesdragon-hidden-sight-ranges-2026-08-30"
+CURSED_HOG_SIGHT_SOURCE_ID = "clash-wiki-cursed-hog-sight-2026-08-30"
+ROYAL_RECRUITS_FORMATION_SOURCE_ID = "clash-wiki-royal-recruits-formation-2026-08-30"
 GOBLIN_MACHINE_SOURCE_ID = "royaleapi-goblin-machine-2024"
 LEVEL11_SOURCE_PAYLOAD = load_level11_source()
 DECKSHOP_SOURCE_ID = "deckshop-battle-healer-2026-08-14"
@@ -68,6 +71,104 @@ GOBLIN_BRAWLER_SOURCE_PATH = (
 GOBLIN_BRAWLER_SOURCE_PAYLOAD = json.loads(
     GOBLIN_BRAWLER_SOURCE_PATH.read_text(encoding="utf-8")
 )
+
+# Sight/aggro is a separate hidden stat from attack range.  The generic
+# six-tile fallback made building chasers fail to pull at their real ranges
+# and made short-range troops acquire units too early.  These values are the
+# current cross-checked hidden-stat table in milli-tiles.  Firecracker and
+# Dart Goblin are intentionally omitted: newer official overrides below pin
+# them to 8.0 and 7.0 tiles respectively.  Ram Rider uses the ram's primary
+# building-targeting channel here; its rider channel has its own secondary
+# range in the card mechanics.
+SIGHT_RANGE_MOBILE: Mapping[str, int] = {
+    "bowler": 4_000,
+    "giant-skeleton": 5_000,
+    "pekka": 5_000,
+    "zappies": 5_000,
+    "sparky": 5_000,
+    "goblin-brawler": 5_500,
+    "minions": 5_500,
+    "archers": 5_500,
+    "knight": 5_500,
+    "mini-pekka": 5_500,
+    "prince": 5_500,
+    "dark-prince": 5_500,
+    "baby-dragon": 5_500,
+    "skeletons": 5_500,
+    "skeleton-army": 5_500,
+    "spear-goblins": 5_500,
+    "spear-goblin": 5_500,
+    "goblins": 5_500,
+    "goblin": 5_500,
+    "goblin-gang-goblin": 5_500,
+    "minion-horde": 5_500,
+    "hunter": 5_500,
+    "bomber": 5_500,
+    "valkyrie": 5_500,
+    "witch": 5_500,
+    "cannon": 5_500,
+    "barbarians": 5_500,
+    "barbarian": 5_500,
+    "battle-ram": 5_500,
+    "mega-minion": 5_500,
+    "miner": 5_500,
+    "lava-hound": 5_500,
+    "lava-pup": 5_500,
+    "bats": 5_500,
+    "fire-spirit": 5_500,
+    "wizard": 5_500,
+    "night-witch": 5_500,
+    "inferno-dragon": 5_500,
+    "royal-recruits": 5_500,
+    "guards": 5_500,
+    "mega-knight": 5_500,
+    "ice-spirit": 5_500,
+    "lumberjack": 5_500,
+    "ice-wizard": 5_500,
+    "rascal-boy": 5_500,
+    "rascal-girl": 5_500,
+    "rascals": 5_500,
+    "elite-barbarians": 5_500,
+    "heal-spirit": 5_500,
+    "cannon-cart-building": 5_500,
+    "bomb-tower": 5_500,
+    "tesla": 5_500,
+    "electro-dragon": 5_500,
+    "electro-wizard": 5_500,
+    "skeleton-dragons": 5_500,
+    "battle-healer": 5_500,
+    "executioner": 5_500,
+    "royal-ghost": 5_500,
+    "musketeer": 6_000,
+    "three-musketeers": 6_000,
+    "inferno-tower": 6_000,
+    "flying-machine": 6_000,
+    "bandit": 6_000,
+    "cannon-cart": 6_000,
+    "wall-breakers": 7_000,
+    "golem": 7_000,
+    "golemite": 7_000,
+    "ice-golem": 7_000,
+    "giant": 7_500,
+    "magic-archer": 7_500,
+    "royal-giant": 7_500,
+    "goblin-giant": 7_500,
+    "ram-rider": 7_500,
+    "fisherman": 7_500,
+    "elixir-golem": 7_500,
+    "elixir-golemite": 7_500,
+    "elixir-blob": 7_500,
+    "balloon": 7_700,
+    "skeleton-barrel": 7_700,
+    "hog-rider": 9_500,
+    "royal-hogs": 9_500,
+    "princess": 9_500,
+    "mortar": 11_500,
+    "x-bow": 11_500,
+    # Mother Witch's hidden child is documented separately as sharing the
+    # longest 9.5-tile sight range with Hog Rider and Royal Hogs.
+    "cursed-hog": 9_500,
+}
 
 # ``CARD_METADATA`` predates the simulator's explicit card-kind contract and
 # has a few spawners represented as troops.  These are gameplay buildings in
@@ -1053,6 +1154,24 @@ def _append_card_provenance(
     raw["provenance"] = provenance
 
 
+def _apply_sight_range(card_id: str, raw: Mapping[str, Any]) -> dict[str, Any]:
+    """Apply an audited hidden sight/aggro range to one card row."""
+
+    sight_range = SIGHT_RANGE_MOBILE.get(card_id)
+    if sight_range is None:
+        return deepcopy(dict(raw))
+    fixed = deepcopy(dict(raw))
+    fixed["sight_range_mtile"] = sight_range
+    _append_card_provenance(
+        fixed,
+        "sight_range_mtile",
+        CURSED_HOG_SIGHT_SOURCE_ID
+        if card_id == "cursed-hog"
+        else SIGHT_RANGE_SOURCE_ID,
+    )
+    return fixed
+
+
 def _apply_high_severity_card_fixes(
     card_id: str, raw: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -1188,6 +1307,25 @@ def _formation(count: int, radius: int = 500) -> list[list[int]]:
         y = (row - ((count - 1) // columns) // 2) * radius
         result.append([x, y])
     return result
+
+
+def _royal_recruits_formation() -> list[list[int]]:
+    """Return the six-tile horizontal Royal Recruits deployment line.
+
+    The card's anchor is the central deployment tile.  Recruits occupy the
+    first, third, and fifth tiles on each side of that anchor, so shifting the
+    anchor one tile changes the lane split while a centered placement remains
+    3/3.  One tile is 1,000 milli-tiles in the simulator arena.
+    """
+
+    return [
+        [-5_000, 0],
+        [-3_000, 0],
+        [-1_000, 0],
+        [1_000, 0],
+        [3_000, 0],
+        [5_000, 0],
+    ]
 
 
 def _kind(card_id: str, metadata: Mapping[str, Any]) -> str:
@@ -1349,7 +1487,11 @@ def _generated_card(card_id: str, metadata: Mapping[str, Any]) -> dict[str, Any]
         "placement_class": placement,
         "movement_layer": "air" if is_air else None,
         "building_only": bool(metadata.get("targets_buildings_only")),
-        "spawn_layout_mtile": _formation(count, 450 if count > 1 else 500),
+        "spawn_layout_mtile": (
+            _royal_recruits_formation()
+            if card_id == "royal-recruits"
+            else _formation(count, 450 if count > 1 else 500)
+        ),
         "death": None,
         "suicide_on_attack": bool(source.get("suicide")),
         "crown_tower_connection": "normal",
@@ -1720,6 +1862,10 @@ def _generated_card(card_id: str, metadata: Mapping[str, Any]) -> dict[str, Any]
         provenance["level_11_stats"] = [LEVEL11_SOURCE_ID]
     if card_id == "goblin-machine":
         provenance.setdefault("generated_mechanics", []).append(GOBLIN_MACHINE_SOURCE_ID)
+    if card_id == "royal-recruits":
+        provenance.setdefault("generated_mechanics", []).append(
+            ROYAL_RECRUITS_FORMATION_SOURCE_ID
+        )
     if card_id in CARRIER_DEFINITIONS:
         provenance.setdefault("generated_mechanics", []).append(SPLIT_SOURCE_ID)
     if deckshop_source:
@@ -1761,7 +1907,11 @@ def _generated_card(card_id: str, metadata: Mapping[str, Any]) -> dict[str, Any]
         if spell or kind == "building"
         else _speed(source.get("speed") or metadata.get("move_speed")),
         "range_mtile": range_mtile,
-        "sight_range_mtile": None if spell else max(range_mtile or 4_000, 6_000),
+        "sight_range_mtile": (
+            None
+            if spell
+            else SIGHT_RANGE_MOBILE.get(card_id, max(range_mtile or 4_000, 6_000))
+        ),
         "collision_radius_mtile": None if spell else (600 if kind == "building" else 400),
         "mass": None if spell else (0 if kind == "building" else 1),
         "lifetime_us": lifetime,
@@ -2641,6 +2791,12 @@ def build_roster_ruleset_raw(base_raw: Mapping[str, Any] | None = None) -> dict[
             "bowler",
         }:
             cards[card_id] = _apply_high_severity_card_fixes(card_id, cards[card_id])
+    # Apply hidden sight ranges after all generated child forms and official
+    # overlays exist.  This also repairs hand-authored base rows and keeps
+    # transformed forms (for example Cannon Cart's stationary body) aligned
+    # with their own targeting profile.
+    for card_id in tuple(cards):
+        cards[card_id] = _apply_sight_range(card_id, cards[card_id])
     raw["ruleset_id"] = ROSTER_RULESET_ID
     raw["cards"] = {card_id: cards[card_id] for card_id in sorted(cards)}
     raw["interaction_set"] = sorted(roster.eligible_cards)
@@ -2873,6 +3029,36 @@ def build_roster_ruleset_raw(base_raw: Mapping[str, Any] | None = None) -> dict[
             "lineage": "Supercell March 2026 update, StatsRoyale Phoenix page, and current mechanic tests",
             "note": "The current official update explicitly fixes Tornado to pull Phoenix Egg; current card references cross-check that the egg is not an ordinary building for Crown-Tower targeting, troop spell damage, Clone, and Rage behavior.",
         },
+        SIGHT_RANGE_SOURCE_ID: {
+            "confidence_tier": "B",
+            "kind": "hidden-card-stat-community-reference",
+            "url": "https://clashroyale.fandom.com/wiki/User_blog:AesDragon/Hidden_card_stats:_Sight_range",
+            "retrieved_at": "2026-08-30",
+            "published_at": "2020-06-09",
+            "sha256": None,
+            "lineage": "AesDragon hidden-stat table cross-checked against current StatsRoyale card pages and current official range overrides",
+            "note": "Sight/aggro ranges are not exposed by ordinary card stat pages. The current executable table uses the published hidden values; newer official Dart Goblin and Firecracker overrides remain authoritative where they differ.",
+        },
+        CURSED_HOG_SIGHT_SOURCE_ID: {
+            "confidence_tier": "B",
+            "kind": "current-card-mechanics-reference",
+            "url": "https://clashroyale.fandom.com/wiki/Mother_Witch",
+            "retrieved_at": "2026-08-30",
+            "published_at": None,
+            "sha256": None,
+            "lineage": "Current Clash Royale Wiki Mother Witch mechanics page",
+            "note": "Cursed Hog is a hidden building-targeting child with a 9.5-tile sight range, tied with Hog Rider and Royal Hogs.",
+        },
+        ROYAL_RECRUITS_FORMATION_SOURCE_ID: {
+            "confidence_tier": "B",
+            "kind": "card-mechanics-community-reference",
+            "url": "https://clashroyale.fandom.com/wiki/Royal_Recruits",
+            "retrieved_at": "2026-08-30",
+            "published_at": None,
+            "sha256": None,
+            "lineage": "Current Clash Royale Wiki Royal Recruits page and documented placement behavior",
+            "note": "Royal Recruits deploy six bodies on a horizontal line; shifting the central deployment tile produces the documented 3/3, 2/4, and 4/2 lane splits. The simulator maps one arena tile to 1,000 milli-tiles.",
+        },
     }
     for source_id, source in load_official_overrides().get("source_records", {}).items():
         raw["sources"].setdefault(
@@ -2948,6 +3134,9 @@ __all__ = [
     "DASH_DEFINITIONS",
     "CATALOG_SOURCE_ID",
     "CATALOG_GENERATED_AT",
+    "SIGHT_RANGE_SOURCE_ID",
+    "SIGHT_RANGE_MOBILE",
+    "ROYAL_RECRUITS_FORMATION_SOURCE_ID",
     "DECKSHOP_SOURCE_ID",
     "DECKSHOP_HEAL_SPIRIT_SOURCE_ID",
     "DEATH_DEFINITIONS",
