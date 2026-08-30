@@ -61,7 +61,7 @@ BASE_HOG_CYCLE_DECK = PLAYER_DECK
 # phase/fuse entities, and structure-safe navigation) are part of this engine
 # identity.  Replays and mined evidence must never be silently interpreted by
 # a newer algorithm.
-ENGINE_VERSION = "reference-0.34.0"
+ENGINE_VERSION = "reference-0.35.0"
 _SEED_MASK = (1 << 64) - 1
 _SLOW_STATUS_KINDS = frozenset({"slow", "freeze", "poison-slow", "earthquake-slow"})
 
@@ -481,7 +481,8 @@ class BattleEngine:
         if card.kind == "building":
             if territory_cells is None:
                 territory_cells = self._deployment_territory_cells(state, player)
-            candidates = _footprint_cells_in_allowed(territory_cells, 3)
+            footprint_size = int(card.mechanics.get("building_footprint_size") or 3)
+            candidates = _footprint_cells_in_allowed(territory_cells, footprint_size)
             return self._cells_without_deployment_collision(
                 candidates,
                 radius,
@@ -1007,7 +1008,8 @@ class BattleEngine:
                 if distance_mtile(x, y, entity.x_mtile, entity.y_mtile) < radius + self._collision_radius(entity):
                     return False
         if card.kind == "building":
-            if not self._building_footprint_fits(state, player, cell, 3):
+            footprint_size = int(card.mechanics.get("building_footprint_size") or 3)
+            if not self._building_footprint_fits(state, player, cell, footprint_size):
                 return False
             x, y = cell_center_mtile(cell)
             radius = int(card.collision_radius_mtile or 0)
@@ -1367,7 +1369,11 @@ class BattleEngine:
                     if target_count_bucket in damage_map
                     else body_damage
                 )
-                if target.kind == "building" and hasattr(raw_effect, "get"):
+                if (
+                    target.kind == "building"
+                    and not self._counts_as_troop(target)
+                    and hasattr(raw_effect, "get")
+                ):
                     if raw_effect.get("building_damage_per_tick") is not None:
                         damage = self._scale_level_value(
                             int(raw_effect.get("building_damage_per_tick") or 0),
@@ -1483,7 +1489,11 @@ class BattleEngine:
     ) -> None:
         """Move a valid target toward an effect center without tunneling."""
 
-        if target.kind in {"tower", "building"} or not target.alive:
+        if (
+            target.kind == "tower"
+            or (target.kind == "building" and not self._pullable_by_area_effect(target))
+            or not target.alive
+        ):
             return
         dx = effect.x_mtile - target.x_mtile
         dy = effect.y_mtile - target.y_mtile
@@ -1582,6 +1592,23 @@ class BattleEngine:
             self._maybe_transform_health(state, entity)
             definition = self._definition(entity)
             mechanics = {} if entity.kind == "tower" else definition.mechanics
+            lifetime_progress_us = dt
+            if mechanics.get("revive_egg") is not None:
+                # Rage is the one documented status that accelerates Phoenix
+                # Egg hatching. Inspect the status at tick entry so a Rage
+                # expiring on this boundary still advances the egg for the
+                # interval during which it was active.
+                rage_multiplier = max(
+                    [
+                        PERMILLE,
+                        *(
+                            int(status.magnitude_permille)
+                            for status in entity.statuses
+                            if status.kind == "rage" and status.remaining_us > 0
+                        ),
+                    ]
+                )
+                lifetime_progress_us = dt * rage_multiplier // PERMILLE
             threshold = mechanics.get("charge_threshold_permille")
             if (
                 threshold is not None
@@ -1639,7 +1666,9 @@ class BattleEngine:
                 and mechanics.get("lifetime_start") != "placement"
             ):
                 continue
-            entity.lifetime_remaining_us = max(0, entity.lifetime_remaining_us - dt)
+            entity.lifetime_remaining_us = max(
+                0, entity.lifetime_remaining_us - lifetime_progress_us
+            )
             lifetime_us = getattr(definition, "lifetime_us", None)
             if (
                 lifetime_us is not None
@@ -2413,13 +2442,19 @@ class BattleEngine:
         mechanics = {} if source.kind == "tower" else definition.mechanics
         authored_primary = mechanics.get("primary_targets")
         targets = set(authored_primary if authored_primary is not None else definition.targets)
+        if (
+            source.kind != "tower"
+            and target.jump_remaining_us > 0
+            and mechanics.get("cannot_hit_jumping")
+        ):
+            return False
         if source.charge_active and mechanics.get("charge_threshold_permille") is not None:
             # Goblin Demolisher's low-health phase becomes building-only.
             targets = {"building", "crown_tower"}
         if source.kind == "tower":
             # Crown Towers attack troops only. Their generic ``ground`` target
             # class must not make placed buildings valid victims.
-            return target.kind == "troop" and str(self._movement_layer(target)) in targets
+            return self._counts_as_troop(target) and str(self._movement_layer(target)) in targets
         if target.kind == "tower":
             # The August 2026 Spirit rules explicitly remove an unassisted
             # Crown-Tower connection.  This is distinct from the authored
@@ -2430,6 +2465,8 @@ class BattleEngine:
                 return False
             return "crown_tower" in targets or "ground" in targets or "building" in targets
         if target.kind == "building":
+            if self._counts_as_troop(target):
+                return str(self._movement_layer(target)) in targets
             return "building" in targets or "ground" in targets
         target_definition = self.ruleset.cards[target.card_id]
         layer = self._movement_layer(target)
@@ -3749,7 +3786,8 @@ class BattleEngine:
 
         if not hasattr(raw_hook, "get"):
             return
-        if bool(raw_hook.get("pull_troops_only")) and target.kind != "troop":
+        pullable = self._hook_pullable(target)
+        if bool(raw_hook.get("pull_troops_only")) and not pullable:
             self._emit(
                 state,
                 "hook_noop",
@@ -3766,7 +3804,7 @@ class BattleEngine:
             target.x_mtile,
             target.y_mtile,
         )
-        if target.kind == "troop":
+        if pullable:
             desired_gap = (
                 pull_distance
                 + self._collision_radius(source)
@@ -3802,7 +3840,7 @@ class BattleEngine:
                     source_uid=source.uid,
                 )
             return
-        if target.kind == "troop":
+        if pullable:
             old_x, old_y = target.x_mtile, target.y_mtile
             target.x_mtile, target.y_mtile = move_towards(
                 target.x_mtile,
@@ -3830,7 +3868,7 @@ class BattleEngine:
             source.navigation_waypoints.clear()
             source.navigation_cursor = 0
             source.navigation_revision = -1
-        if jump_was_active and target.kind == "troop":
+        if jump_was_active and pullable:
             # The hook interrupts the airborne phase rather than allowing the
             # old landing target/coordinates to survive the reel.  Clearing
             # all jump state also suppresses the landing splash, matching the
@@ -4606,7 +4644,10 @@ class BattleEngine:
             entity
             for entity in self._alive_entities(state)
             if entity.owner == owner
-            and entity.kind == copy_kind
+            and (
+                entity.kind == copy_kind
+                or self._mechanic_flag(entity, "cloneable_by_clone")
+            )
             # Carrier payloads are already represented as first-class bodies
             # attached to their original. Cloning those hidden bodies as
             # ordinary troops recreates the historical floating/bodyless
@@ -5069,8 +5110,15 @@ class BattleEngine:
             # impacts.  They become ordinary spell targets only after the
             # carrier release transition.
             return False
+        source_definition = self.ruleset.cards.get(card_id)
+        if (
+            target.jump_remaining_us > 0
+            and source_definition is not None
+            and source_definition.mechanics.get("cannot_hit_jumping")
+        ):
+            return False
         if card_id in self.ruleset.towers:
-            if target.kind != "troop":
+            if not self._counts_as_troop(target):
                 return False
             targets = set(
                 allowed_targets
@@ -5099,6 +5147,8 @@ class BattleEngine:
                     or "building" in targets
                     or "ground" in targets
                 )
+            if target.kind == "building" and self._counts_as_troop(target):
+                return str(self._movement_layer(target)) in targets
             if target.kind == "building":
                 return "building" in targets or "ground" in targets
             layer = self._movement_layer(target)
@@ -6016,9 +6066,13 @@ class BattleEngine:
         revive_values = source.mechanics.get("revive") if source is not None else None
         if revive_values is None:
             raise ValueError(f"{entity.card_id}: hatch card lacks revive component")
-        revived_hitpoints = self._scale_level_value(
-            int(revive_values["revived_hitpoints"]),
-            entity.level_multiplier_permille,
+        revived_hitpoints = (
+            1
+            if entity.is_clone
+            else self._scale_level_value(
+                int(revive_values["revived_hitpoints"]),
+                entity.level_multiplier_permille,
+            )
         )
         revived = self._spawn_single_at(
             state,
@@ -6030,6 +6084,7 @@ class BattleEngine:
             event_kind="phoenix_reborn",
             hp_override=revived_hitpoints,
             max_hp_override=revived_hitpoints,
+            is_clone=entity.is_clone,
             revive_eligible=False,
             level_multiplier_permille=entity.level_multiplier_permille,
         )
@@ -6150,7 +6205,7 @@ class BattleEngine:
         """Clear active combatants and transient effects before tiebreak."""
 
         for entity in sorted(state.entities.values(), key=lambda row: row.uid):
-            if not entity.alive or entity.kind != "troop":
+            if not entity.alive or entity.kind == "tower":
                 continue
             entity.alive = False
             entity.hp = 0
@@ -6219,6 +6274,21 @@ class BattleEngine:
         if entity.kind == "tower":
             return self.ruleset.towers[entity.card_id]
         return self.ruleset.cards[entity.card_id]
+
+    def _mechanic_flag(self, entity: EntityState, name: str) -> bool:
+        if entity.kind == "tower":
+            return False
+        definition = self.ruleset.cards.get(entity.card_id)
+        return bool(definition is not None and definition.mechanics.get(name))
+
+    def _counts_as_troop(self, entity: EntityState) -> bool:
+        return entity.kind == "troop" or self._mechanic_flag(entity, "counts_as_troop")
+
+    def _hook_pullable(self, entity: EntityState) -> bool:
+        return entity.kind == "troop" or self._mechanic_flag(entity, "hook_pullable")
+
+    def _pullable_by_area_effect(self, entity: EntityState) -> bool:
+        return entity.kind == "troop" or self._mechanic_flag(entity, "pullable_by_area_effect")
 
     def _in_attack_range(self, source: EntityState, target: EntityState) -> bool:
         definition = self._definition(source)

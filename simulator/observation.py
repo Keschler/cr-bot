@@ -1406,7 +1406,8 @@ def _conservative_cell_is_legal(
     mechanics = getattr(card, "mechanics", {})
     placement = mechanics.get("placement_class") if hasattr(mechanics, "get") else None
     if card.kind == "building":
-        return building_footprint_fits(player, world_cell)
+        footprint_size = int(mechanics.get("building_footprint_size") or 3)
+        return building_footprint_fits(player, world_cell, footprint_size)
     if card.kind == "spell":
         if placement == "spell_anywhere" or (placement is None and card.card_id != "log"):
             return is_spell_cell(world_cell)

@@ -761,6 +761,11 @@ if TORCH_AVAILABLE:
                     )
                 ]
                 if any(nonterminal_truncation):
+                    boundary_done = ~torch.as_tensor(
+                        nonterminal_truncation,
+                        dtype=torch.bool,
+                        device=self.learner.device,
+                    )
                     no_reset = torch.zeros(
                         batch_size,
                         dtype=torch.bool,
@@ -770,8 +775,8 @@ if TORCH_AVAILABLE:
                         environments,
                         post_step_observations,
                         rollout_state,
-                        no_reset,
-                        no_reset,
+                        boundary_done,
+                        boundary_done,
                     )
                     boundary_bootstrap_values[_time] = boundary_values
 
@@ -1020,7 +1025,21 @@ if TORCH_AVAILABLE:
             reset_mask: Any,
             last_done: Any,
         ) -> tuple[Any, RecurrentRolloutState]:
-            target_observations = [item[self.config.target_player] for item in observations]
+            # A terminal simulator snapshot intentionally has no legal PLAY
+            # cells and may also disable WAIT. Mixed-lane collection still
+            # evaluates one batched value row for a sibling lane, so replace
+            # rows which cannot contribute a future return with a wait-only
+            # public snapshot before batching. Nonterminal truncations keep
+            # their real post-step observation and are bootstrapped normally.
+            done_values = tuple(bool(value) for value in last_done.detach().cpu().tolist())
+            target_observations = [
+                (
+                    _frozen_observation(item[self.config.target_player])
+                    if done and item[self.config.target_player] is not None
+                    else item[self.config.target_player]
+                )
+                for item, done in zip(observations, done_values, strict=True)
+            ]
             raster, global_features, entities, entity_mask, masks = _batch_observations(
                 target_observations,
                 device=self.learner.device,

@@ -38,6 +38,10 @@ ROSTER_RULESET_ID = "2026-08-04-roster"
 CATALOG_SOURCE_ID = "local-card-metadata-2026-08-14"
 CATALOG_GENERATED_AT = "2026-08-14"
 HIGH_SEVERITY_CARD_FIX_SOURCE_ID = "local-high-severity-card-fixes-2026-08-29"
+ARENA_GEOMETRY_SOURCE_ID = "crforge-arena-geometry-2026-08-30"
+TESLA_FOOTPRINT_SOURCE_ID = "statsroyale-tesla-footprint-2026-08-30"
+MEGA_KNIGHT_JUMP_SOURCE_ID = "community-mega-knight-jump-2026-08-30"
+PHOENIX_EGG_MECHANICS_SOURCE_ID = "supercell-phoenix-egg-mechanics-2026-08-30"
 GOBLIN_MACHINE_SOURCE_ID = "royaleapi-goblin-machine-2024"
 LEVEL11_SOURCE_PAYLOAD = load_level11_source()
 DECKSHOP_SOURCE_ID = "deckshop-battle-healer-2026-08-14"
@@ -1150,6 +1154,26 @@ def _apply_high_severity_card_fixes(
             fixed, "mechanics.impact_targets", HIGH_SEVERITY_CARD_FIX_SOURCE_ID
         )
 
+    if card_id == "tesla":
+        mechanics = dict(fixed.get("mechanics", {}))
+        mechanics["building_footprint_size"] = 2
+        fixed["mechanics"] = mechanics
+        _append_card_provenance(
+            fixed,
+            "mechanics.building_footprint_size",
+            TESLA_FOOTPRINT_SOURCE_ID,
+        )
+
+    if card_id in {"log", "earthquake", "bowler"}:
+        mechanics = dict(fixed.get("mechanics", {}))
+        mechanics["cannot_hit_jumping"] = True
+        fixed["mechanics"] = mechanics
+        _append_card_provenance(
+            fixed,
+            "mechanics.cannot_hit_jumping",
+            MEGA_KNIGHT_JUMP_SOURCE_ID,
+        )
+
     return fixed
 
 
@@ -1832,6 +1856,10 @@ def _phoenix_egg_raw(cards: Mapping[str, Any]) -> dict[str, Any]:
             "lifetime_start": "placement",
             "targetable_during_deploy": True,
             "revive_egg": {"hatch_card_id": "phoenix"},
+            "counts_as_troop": True,
+            "hook_pullable": True,
+            "pullable_by_area_effect": True,
+            "cloneable_by_clone": True,
         }
     )
     phoenix.update(
@@ -1864,12 +1892,13 @@ def _phoenix_egg_raw(cards: Mapping[str, Any]) -> dict[str, Any]:
                     CATALOG_SOURCE_ID,
                     "deckmelon-phoenix-2026-08-15",
                     "official-march-2026",
+                    PHOENIX_EGG_MECHANICS_SOURCE_ID,
                 ],
             },
             "uncertainties": [
                 {
                     "field": "phoenix_egg_hatch",
-                    "reason": "Official March 2026 values pin egg HP/lifetime; exact targetability and hatch frame require held-out video confirmation.",
+                    "reason": "Official March 2026 values pin egg HP/lifetime and current Tornado behavior; current card-mechanics cross-checks pin Crown-Tower targeting, troop spell damage, Clone eligibility, and Rage acceleration, while exact frame ordering remains unresolved.",
                     "impact": "high",
                     "resolution": "Measure isolated Phoenix deaths and egg damage/hatch timing in both HUD variants.",
                 }
@@ -2606,6 +2635,10 @@ def build_roster_ruleset_raw(base_raw: Mapping[str, Any] | None = None) -> dict[
             "phoenix",
             "night-witch",
             "royal-delivery",
+            "tesla",
+            "log",
+            "earthquake",
+            "bowler",
         }:
             cards[card_id] = _apply_high_severity_card_fixes(card_id, cards[card_id])
     raw["ruleset_id"] = ROSTER_RULESET_ID
@@ -2799,6 +2832,46 @@ def build_roster_ruleset_raw(base_raw: Mapping[str, Any] | None = None) -> dict[
             "sha256": None,
             "lineage": "StatsRoyale card pages, RoyaleAPI projectile data, and official Supercell balance notes",
             "note": "Narrow overlay for high-severity simulator defects; card-specific source links and rationale are retained in the audit report.",
+        },
+        ARENA_GEOMETRY_SOURCE_ID: {
+            "confidence_tier": "B",
+            "kind": "independent-arena-geometry-reference",
+            "url": "https://github.com/voonhous/crforge/blob/main/docs/arena-and-match.md",
+            "retrieved_at": "2026-08-30",
+            "published_at": None,
+            "sha256": None,
+            "lineage": "CR Forge arena documentation",
+            "note": "The standard arena has an 18x32 grid, river rows 15/16, and three-tile bridge openings at columns [2,5) and [13,16).",
+        },
+        TESLA_FOOTPRINT_SOURCE_ID: {
+            "confidence_tier": "B",
+            "kind": "card-footprint-cross-check",
+            "url": "https://statsroyale.com/card/Tesla",
+            "retrieved_at": "2026-08-30",
+            "published_at": None,
+            "sha256": None,
+            "lineage": "StatsRoyale Tesla page cross-checked against current Clash Royale placement references",
+            "note": "Tesla uses the exceptional 2x2 building footprint; ordinary buildings use 3x3 in the reviewed placement references.",
+        },
+        MEGA_KNIGHT_JUMP_SOURCE_ID: {
+            "confidence_tier": "B",
+            "kind": "community-mechanic-cross-check",
+            "url": "https://clashroyale.fandom.com/wiki/Mega_Knight",
+            "retrieved_at": "2026-08-30",
+            "published_at": None,
+            "sha256": None,
+            "lineage": "Current Clash Royale Wiki and independent Reddit interaction test",
+            "note": "During Mega Knight's jump, The Log, Earthquake, and Bowler cannot damage him; X-Bow, Mortar, Sparky, and Bomber retain their interactions and are not globally converted to air targeting.",
+        },
+        PHOENIX_EGG_MECHANICS_SOURCE_ID: {
+            "confidence_tier": "A",
+            "kind": "official-patch-note-with-community-cross-check",
+            "url": "https://supercell.com/en/games/clashroyale/blog/release-notes/march-update-2026/",
+            "retrieved_at": "2026-08-30",
+            "published_at": "2026-03-02",
+            "sha256": None,
+            "lineage": "Supercell March 2026 update, StatsRoyale Phoenix page, and current mechanic tests",
+            "note": "The current official update explicitly fixes Tornado to pull Phoenix Egg; current card references cross-check that the egg is not an ordinary building for Crown-Tower targeting, troop spell damage, Clone, and Rage behavior.",
         },
     }
     for source_id, source in load_official_overrides().get("source_records", {}).items():

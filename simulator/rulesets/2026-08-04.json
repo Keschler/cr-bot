@@ -3,7 +3,7 @@
   "ruleset_id": "2026-08-04",
   "level": 11,
   "tick_us": 50000,
-  "content_hash": "sha256:0a5316b50d6fec142b1dda0b5444954031d8f7dcbfb58e5cf86320e9e3aa902e",
+  "content_hash": "sha256:3b76a77b58f35c016946a91a3516eca1f9d4ffef9fc8e065cc332e7f7ef4b14a",
   "units": {
     "time": "microseconds",
     "position": "milli-tiles",
@@ -32,11 +32,21 @@
     "river_y_min_mtile": 15000,
     "river_y_max_mtile": 17000,
     "bridge_x_ranges_mtile": [
-      [3000, 4000],
-      [14000, 15000]
+      [2000, 5000],
+      [13000, 16000]
     ]
   },
   "sources": {
+    "crforge-arena-geometry-2026-08-30": {
+      "confidence_tier": "B",
+      "kind": "independent-arena-geometry-reference",
+      "url": "https://github.com/voonhous/crforge/blob/main/docs/arena-and-match.md",
+      "retrieved_at": "2026-08-30",
+      "published_at": null,
+      "sha256": null,
+      "lineage": "CR Forge arena documentation",
+      "note": "The standard arena has an 18x32 grid, river rows 15/16, and three-tile bridge openings at columns [2,5) and [13,16)."
+    },
     "official-august-2026": {
       "confidence_tier": "A",
       "kind": "official-patch-note",

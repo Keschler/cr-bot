@@ -97,7 +97,10 @@ def _visual_legal_mask(card_name: str) -> np.ndarray:
         for col in range(18):
             cell = (col, row)
             if placement == "building":
-                allowed = building_footprint_fits(0, cell)
+                # Tesla is the only ordinary building in the fixed visual
+                # contract with a 2x2 footprint; the other structures use 3x3.
+                footprint_size = 2 if card_name == "tesla" else 3
+                allowed = building_footprint_fits(0, cell, footprint_size)
             elif placement == "spell_anywhere":
                 allowed = is_spell_cell(cell)
             elif placement == "spells":

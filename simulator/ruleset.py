@@ -583,6 +583,12 @@ def _validate_mechanics(row: dict[str, Any], context: str) -> None:
             "spread_targets",
             "bayonet",
             "min_attack_range_mtile",
+            "counts_as_troop",
+            "hook_pullable",
+            "pullable_by_area_effect",
+            "cloneable_by_clone",
+            "cannot_hit_jumping",
+            "building_footprint_size",
             # Balance values for currently excluded Hero/Evolution/champion
             # variants.  These are typed metadata blocks only; the V1 engine
             # remains fail-closed until the corresponding action/component is
@@ -598,6 +604,17 @@ def _validate_mechanics(row: dict[str, Any], context: str) -> None:
     for name in ("building_only", "suicide_on_attack", "piercing"):
         if not isinstance(row[name], bool):
             raise RulesetError(f"{context}.mechanics.{name} must be boolean")
+    for name in (
+        "counts_as_troop",
+        "hook_pullable",
+        "pullable_by_area_effect",
+        "cloneable_by_clone",
+        "cannot_hit_jumping",
+    ):
+        if name in row and not isinstance(row[name], bool):
+            raise RulesetError(f"{context}.mechanics.{name} must be boolean")
+    if "building_footprint_size" in row:
+        _require_int(row, "building_footprint_size", minimum=1)
     layout = row["spawn_layout_mtile"]
     if layout or row.get("placement_class") not in {"spell_anywhere", "spells", "restricted_spell"}:
         _validate_offsets(layout, f"{context}.mechanics.spawn_layout_mtile")

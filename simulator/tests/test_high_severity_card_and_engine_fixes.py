@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from simulator.engine import BattleEngine
 from simulator.fixed import distance_mtile
-from simulator.navigation import point_is_walkable
+from simulator.navigation import plan_route, point_is_walkable, segment_is_walkable
 from simulator.roster import PLAYER_DECK
 from simulator.ruleset import load_ruleset
 from simulator.state import EntityState, ProjectileState
@@ -129,6 +129,9 @@ def test_high_severity_card_overlays_are_in_the_runtime_ruleset() -> None:
         "air",
         "ground",
     )
+    assert RULESET.card("tesla").mechanics["building_footprint_size"] == 2
+    for card_id in ("log", "earthquake", "bowler"):
+        assert RULESET.card(card_id).mechanics["cannot_hit_jumping"] is True
 
 
 def test_hunter_close_range_fan_lands_more_pellets_than_long_range_fan() -> None:
@@ -462,6 +465,77 @@ def test_bridge_walkability_accounts_for_unit_radius() -> None:
     assert point_is_walkable(RULESET.arena, start + radius, y, radius)
     assert point_is_walkable(RULESET.arena, end - radius, y, radius)
     assert not point_is_walkable(RULESET.arena, end - radius + 1, y, radius)
+
+
+def test_large_ground_units_can_route_through_the_three_tile_bridge() -> None:
+    for card_id in ("ice-golem", "giant-skeleton"):
+        radius = int(RULESET.card(card_id).collision_radius_mtile or 0)
+        assert point_is_walkable(RULESET.arena, 3_500, 16_000, radius)
+        route = plan_route(
+            RULESET.arena,
+            (3_500, 14_000),
+            (3_500, 18_000),
+            agent_radius_mtile=radius,
+        )
+        assert route
+        assert route[0] == (3_500, 14_000)
+        assert route[-1] == (3_500, 18_000)
+        assert all(
+            segment_is_walkable(
+                RULESET.arena,
+                start,
+                end,
+                agent_radius_mtile=radius,
+            )
+            for start, end in zip(route, route[1:])
+        )
+
+
+def test_tesla_uses_two_by_two_legality_in_engine_and_policy_cells() -> None:
+    from simulator.geometry import building_footprint_fits
+
+    engine, state = _state()
+    cell = next(
+        cell
+        for row in range(17, 32)
+        for col in range(18)
+        for cell in ((col, row),)
+        if building_footprint_fits(0, cell, 2)
+        and not building_footprint_fits(0, cell, 3)
+    )
+    tesla = RULESET.card("tesla")
+
+    assert engine._legal_deployment(state, 0, tesla, cell)
+    assert cell in engine.legal_cells(state, 0, "tesla")
+
+
+def test_log_earthquake_and_bowler_cannot_hit_a_jumping_mega_knight() -> None:
+    engine, state = _state()
+    knight = _entity(state, "mega-knight", 1, 9_000, 15_000)
+    knight.jump_remaining_us = 200_000
+
+    for card_id in ("log", "earthquake", "bowler"):
+        assert not engine._spell_can_hit(card_id, knight)
+        before = knight.hp
+        engine._impact_area(
+            state,
+            owner=0,
+            source_uid=None,
+            source_card_id=card_id,
+            x=knight.x_mtile,
+            y=knight.y_mtile,
+            damage=100,
+            crown_damage=100,
+            radius=1_000,
+            status=None,
+            knockback=0,
+            primary_target_uid=None,
+            allowed_targets=("ground",),
+        )
+        assert knight.hp == before
+
+    assert engine._spell_can_hit("mortar", knight)
+    assert engine._spell_can_hit("sparky", knight)
 
 
 def test_bandit_dash_ignores_damage_and_hard_control_until_landing() -> None:

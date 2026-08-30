@@ -37,7 +37,7 @@ a controlled probe when the action boundary or causal behavior matters.
 - The policy is a provisional research harness, not an any-deck player. The
   previously recorded generalized checkpoint and reports are generated local
   artifacts and are not present in this checkout; rerun training before using
-  those paths. The recorded run used engine `reference-0.34.0`.
+  those paths. The recorded run used engine `reference-0.35.0`.
 - On the benchmark host, batch-16 actor-only deterministic inference reaches
   about 3.61k decisions/s on the RTX 2050 versus about 1.54k simulator
   environment steps/s. The full actor-selection path reaches about 2.69k/s.

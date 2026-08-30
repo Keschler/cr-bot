@@ -13,7 +13,7 @@ from .schema import PhysicalLabError
 
 HOG_CROSSES_Y_EVENT = "hog_crosses_y_mtile"
 HOG_BRIDGE_BOUNDARY_Y_MTILE = 17_000
-DEFAULT_BRIDGE_X_RANGES_MTILE = ((3_000, 4_000), (14_000, 15_000))
+DEFAULT_BRIDGE_X_RANGES_MTILE = ((2_000, 5_000), (13_000, 16_000))
 
 
 @dataclass(frozen=True, slots=True)

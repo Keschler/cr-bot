@@ -2,12 +2,12 @@
   "arena": {
     "bridge_x_ranges_mtile": [
       [
-        3000,
-        4000
+        2000,
+        5000
       ],
       [
-        14000,
-        15000
+        13000,
+        16000
       ]
     ],
     "grid_columns": 18,
@@ -1382,6 +1382,7 @@
       "mass": 1,
       "mechanics": {
         "building_only": false,
+        "cannot_hit_jumping": true,
         "crown_tower_connection": "normal",
         "death": null,
         "impact_mode": "on_target",
@@ -1434,6 +1435,9 @@
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.cannot_hit_jumping": [
+          "community-mega-knight-jump-2026-08-30"
         ],
         "mechanics.projectile_speed_code": [
           "local-high-severity-card-fixes-2026-08-29"
@@ -2238,6 +2242,7 @@
       "mass": null,
       "mechanics": {
         "building_only": false,
+        "cannot_hit_jumping": true,
         "crown_tower_connection": "normal",
         "death": null,
         "impact_mode": "at_destination",
@@ -2296,6 +2301,9 @@
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.cannot_hit_jumping": [
+          "community-mega-knight-jump-2026-08-30"
         ],
         "mechanics.persistent_effect.crown_damage_per_tick": [
           "official-june-2026"
@@ -7159,6 +7167,7 @@
       "mass": null,
       "mechanics": {
         "building_only": false,
+        "cannot_hit_jumping": true,
         "crown_tower_connection": "normal",
         "death": null,
         "impact_mode": "continuous",
@@ -7199,6 +7208,9 @@
         "level_11_stats": [
           "deckmelon-log-2026-08-11",
           "deckshop-core-level11-2026-08-15"
+        ],
+        "mechanics.cannot_hit_jumping": [
+          "community-mega-knight-jump-2026-08-30"
         ],
         "placement_class": [
           "policy-grid-2026-08-11"
@@ -8695,8 +8707,11 @@
       "mass": 0,
       "mechanics": {
         "building_only": false,
+        "cloneable_by_clone": true,
+        "counts_as_troop": true,
         "crown_tower_connection": "normal",
         "death": null,
+        "hook_pullable": true,
         "impact_mode": "melee",
         "knockback_mtile": 0,
         "lifetime_decay": null,
@@ -8706,6 +8721,7 @@
         "piercing": false,
         "placement_class": "own_ground",
         "projectile_mode": "none",
+        "pullable_by_area_effect": true,
         "revive_egg": {
           "hatch_card_id": "phoenix"
         },
@@ -8730,7 +8746,8 @@
         "generated_mechanics": [
           "local-card-metadata-2026-08-14",
           "deckmelon-phoenix-2026-08-15",
-          "official-march-2026"
+          "official-march-2026",
+          "supercell-phoenix-egg-mechanics-2026-08-30"
         ],
         "identity": [
           "local-card-metadata-2026-08-14"
@@ -8752,7 +8769,7 @@
         {
           "field": "phoenix_egg_hatch",
           "impact": "high",
-          "reason": "Official March 2026 values pin egg HP/lifetime; exact targetability and hatch frame require held-out video confirmation.",
+          "reason": "Official March 2026 values pin egg HP/lifetime and current Tornado behavior; current card-mechanics cross-checks pin Crown-Tower targeting, troop spell damage, Clone eligibility, and Rage acceleration, while exact frame ordering remains unresolved.",
           "resolution": "Measure isolated Phoenix deaths and egg damage/hatch timing in both HUD variants."
         }
       ]
@@ -10973,6 +10990,7 @@
       "lifetime_us": 25000000,
       "mass": 0,
       "mechanics": {
+        "building_footprint_size": 2,
         "building_only": false,
         "concealment": {
           "earthquake_hits": true,
@@ -11026,6 +11044,9 @@
         ],
         "lifetime_us": [
           "official-june-2026"
+        ],
+        "mechanics.building_footprint_size": [
+          "statsroyale-tesla-footprint-2026-08-30"
         ]
       },
       "range_mtile": 5500,
@@ -12130,7 +12151,7 @@
       ]
     }
   },
-  "content_hash": "sha256:0c7a72ac17977902c342dccfb1b30d8b42943a991e23f5f65d4766bd8639a1ec",
+  "content_hash": "sha256:d83a0c2a291ce71688ebb19e129d241f05f88f1d03e653e5c6d621bbaa28f535",
   "interaction_set": [
     "archers",
     "arrows",
@@ -12356,6 +12377,26 @@
   "ruleset_id": "v1",
   "schema_version": 1,
   "sources": {
+    "community-mega-knight-jump-2026-08-30": {
+      "confidence_tier": "B",
+      "kind": "community-mechanic-cross-check",
+      "lineage": "Current Clash Royale Wiki and independent Reddit interaction test",
+      "note": "During Mega Knight's jump, The Log, Earthquake, and Bowler cannot damage him; X-Bow, Mortar, Sparky, and Bomber retain their interactions and are not globally converted to air targeting.",
+      "published_at": null,
+      "retrieved_at": "2026-08-30",
+      "sha256": null,
+      "url": "https://clashroyale.fandom.com/wiki/Mega_Knight"
+    },
+    "crforge-arena-geometry-2026-08-30": {
+      "confidence_tier": "B",
+      "kind": "independent-arena-geometry-reference",
+      "lineage": "CR Forge arena documentation",
+      "note": "The standard arena has an 18x32 grid, river rows 15/16, and three-tile bridge openings at columns [2,5) and [13,16).",
+      "published_at": null,
+      "retrieved_at": "2026-08-30",
+      "sha256": null,
+      "url": "https://github.com/voonhous/crforge/blob/main/docs/arena-and-match.md"
+    },
     "deckmelon-cannon-2026-08-11": {
       "confidence_tier": "D",
       "kind": "third-party-card-page",
@@ -12965,6 +13006,26 @@
       "retrieved_at": "2026-08-30",
       "sha256": null,
       "url": "https://statsroyale.com/card/Goblin+Hut"
+    },
+    "statsroyale-tesla-footprint-2026-08-30": {
+      "confidence_tier": "B",
+      "kind": "card-footprint-cross-check",
+      "lineage": "StatsRoyale Tesla page cross-checked against current Clash Royale placement references",
+      "note": "Tesla uses the exceptional 2x2 building footprint; ordinary buildings use 3x3 in the reviewed placement references.",
+      "published_at": null,
+      "retrieved_at": "2026-08-30",
+      "sha256": null,
+      "url": "https://statsroyale.com/card/Tesla"
+    },
+    "supercell-phoenix-egg-mechanics-2026-08-30": {
+      "confidence_tier": "A",
+      "kind": "official-patch-note-with-community-cross-check",
+      "lineage": "Supercell March 2026 update, StatsRoyale Phoenix page, and current mechanic tests",
+      "note": "The current official update explicitly fixes Tornado to pull Phoenix Egg; current card references cross-check that the egg is not an ordinary building for Crown-Tower targeting, troop spell damage, Clone, and Rage behavior.",
+      "published_at": "2026-03-02",
+      "retrieved_at": "2026-08-30",
+      "sha256": null,
+      "url": "https://supercell.com/en/games/clashroyale/blog/release-notes/march-update-2026/"
     },
     "user-supplied-balance-update-2026-08-26": {
       "confidence_tier": "E",

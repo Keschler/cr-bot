@@ -250,6 +250,77 @@ def test_nonterminal_truncation_bootstraps_from_pre_reset_observation() -> None:
 
 
 @requires_torch
+def test_mixed_terminal_and_truncated_lanes_sanitize_terminal_bootstrap_rows() -> None:
+    from dataclasses import replace
+
+    from simulator.env import SimulatorEnv
+    from rl.collector import CollectorConfig, RecurrentRolloutCollector
+    from rl.learner import LearnerConfig, RecurrentPPOLearner
+    from rl.model import ModelConfig, RecurrentHybridPolicy
+
+    model_config = ModelConfig(
+        raster_channels=21,
+        raster_height=32,
+        raster_width=18,
+        global_dim=768,
+        entity_dim=32,
+        max_entities=128,
+        model_dim=8,
+        encoder_dim=8,
+        transformer_heads=2,
+        transformer_layers=1,
+        transformer_ff_dim=16,
+        gru_hidden_dim=8,
+        card_slots=4,
+        belief_card_count=128,
+        placement_rows=32,
+        placement_cols=18,
+    )
+    learner = RecurrentPPOLearner(
+        RecurrentHybridPolicy(model_config),
+        config=LearnerConfig(update_epochs=1, sequence_minibatch_size=1),
+    )
+    environments = [
+        SimulatorEnv(decision_interval_us=1_000_000),
+        SimulatorEnv(decision_interval_us=1_000_000),
+    ]
+    for lane, environment in enumerate(environments):
+        environment.reset(seed=50 + lane, shuffle_decks=False)
+
+    def batch_step(actions):
+        results = []
+        for lane, environment in enumerate(environments):
+            step = environment.step_v2(actions[lane])
+            if lane == 0:
+                terminal_observation = replace(
+                    step.observations[0],
+                    legal_play=np.zeros_like(step.observations[0].legal_play, dtype=bool),
+                    legal_wait=False,
+                )
+                step = replace(
+                    step,
+                    observations=(terminal_observation, step.observations[1]),
+                    terminated=True,
+                    truncated=False,
+                )
+            else:
+                step = replace(step, terminated=False, truncated=True)
+            results.append(step)
+        return results
+
+    result = RecurrentRolloutCollector(
+        learner,
+        CollectorConfig(horizon=1, shuffle_decks=False),
+        batch_step=batch_step,
+    ).collect(environments)
+
+    assert bool(result.trajectory.terminated[0, 0])
+    assert bool(result.trajectory.truncated[1, 0])
+    assert result.learner_batch.next_values is not None
+    assert float(result.learner_batch.next_values[0, 0]) == pytest.approx(0.0)
+
+
+@requires_torch
 def test_collector_reports_completed_rollout_steps() -> None:
     from simulator.env import SimulatorEnv
     from rl.collector import CollectorConfig, RecurrentRolloutCollector

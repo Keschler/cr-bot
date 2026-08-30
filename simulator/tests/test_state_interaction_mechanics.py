@@ -432,6 +432,7 @@ def test_tiebreak_destroys_lowest_tower_and_clears_combatants() -> None:
     low.hp = 1_500
     engine._tower(state, 0, "left").hp = 2_000
     troop = _entity(state, "knight", 0, 9_000, 15_000)
+    building = _entity(state, "cannon", 1, 9_000, 14_000)
 
     engine._resolve_tiebreak(state)
 
@@ -441,6 +442,7 @@ def test_tiebreak_destroys_lowest_tower_and_clears_combatants() -> None:
     assert not low.alive and low.hp == 0
     assert engine._tower(state, 0, "left").hp == 500
     assert not troop.alive and troop.hp == 0
+    assert not building.alive and building.hp == 0
     assert any(
         event.kind == "tower_destroyed" and event.get("uid") == low.uid
         for event in state.events
@@ -449,7 +451,140 @@ def test_tiebreak_destroys_lowest_tower_and_clears_combatants() -> None:
         event.kind == "tiebreak_entity_removed" and event.get("uid") == troop.uid
         for event in state.events
     )
+    assert any(
+        event.kind == "tiebreak_entity_removed" and event.get("uid") == building.uid
+        for event in state.events
+    )
     engine.validate_state(state)
+
+
+def test_phoenix_egg_uses_troop_damage_and_tower_targeting_but_not_building_only_targets() -> None:
+    engine, state = _state()
+    egg = _entity(state, "phoenix-egg", 1, 9_000, 15_000)
+    tower = engine._tower(state, 0, "king")
+    hog = _entity(state, "hog-rider", 0, 9_000, 15_000)
+
+    assert engine._target_allowed(tower, egg)
+    assert engine._spell_can_hit("earthquake", egg)
+    assert not engine._target_allowed(hog, egg)
+
+    earthquake = RULESET.card("earthquake")
+    before = egg.hp
+    engine._create_area_effect(
+        state,
+        owner=0,
+        source_uid=None,
+        source_card_id="earthquake",
+        x_mtile=egg.x_mtile,
+        y_mtile=egg.y_mtile,
+        default_radius=int(earthquake.area_radius_mtile or 0),
+        default_damage=int(earthquake.damage or 0),
+        default_crown_damage=int(earthquake.crown_tower_damage or 0),
+        default_status=None,
+        default_knockback=0,
+        raw_effect=earthquake.mechanics["persistent_effect"],
+    )
+    assert before - egg.hp == 82
+
+
+def test_phoenix_egg_is_pullable_by_current_tornado_and_fisherman_rules() -> None:
+    engine, state = _state()
+    egg = _entity(state, "phoenix-egg", 1, 10_000, 15_000)
+    tornado = RULESET.card("tornado")
+    old_x = egg.x_mtile
+    engine._create_area_effect(
+        state,
+        owner=0,
+        source_uid=None,
+        source_card_id="tornado",
+        x_mtile=9_000,
+        y_mtile=15_000,
+        default_radius=int(tornado.area_radius_mtile or 0),
+        default_damage=int(tornado.damage or 0),
+        default_crown_damage=int(tornado.crown_tower_damage or 0),
+        default_status=None,
+        default_knockback=0,
+        raw_effect=tornado.mechanics["persistent_effect"],
+    )
+    assert egg.x_mtile < old_x
+
+    fisherman = _entity(state, "fisherman", 0, 7_000, 15_000)
+    egg.x_mtile = 13_000
+    old_fisherman_x = fisherman.x_mtile
+    engine._apply_hook(
+        state,
+        fisherman,
+        egg,
+        RULESET.card("fisherman").mechanics["hook"],
+    )
+    assert egg.x_mtile < 13_000
+    assert fisherman.x_mtile == old_fisherman_x
+
+
+def test_rage_accelerates_phoenix_egg_hatching() -> None:
+    engine, state = _state()
+    egg = engine._spawn_single_at(
+        state,
+        RULESET.card("phoenix-egg"),
+        owner=0,
+        x_mtile=9_000,
+        y_mtile=15_000,
+        deploy_remaining_us=0,
+    )
+    engine._apply_status(
+        state,
+        egg,
+        {
+            "kind": "rage",
+            "duration_us": 100_000,
+            "speed_multiplier_milli": 1_300,
+            "hit_speed_multiplier_milli": 1_300,
+        },
+    )
+
+    engine._advance_statuses_and_lifetimes(state)
+
+    assert egg.lifetime_remaining_us == 3_735_000
+
+
+def test_clone_can_copy_phoenix_egg_and_preserves_clone_hp_on_hatch() -> None:
+    engine, state = _state()
+    egg = engine._spawn_single_at(
+        state,
+        RULESET.card("phoenix-egg"),
+        owner=0,
+        x_mtile=9_000,
+        y_mtile=15_000,
+        deploy_remaining_us=0,
+    )
+    engine._impact_clone(
+        state,
+        owner=0,
+        source_uid=None,
+        source_card_id="clone",
+        x=egg.x_mtile,
+        y=egg.y_mtile,
+        radius=3_000,
+        raw_clone=RULESET.card("clone").mechanics["clone"],
+    )
+    cloned_egg = next(
+        entity
+        for entity in state.entities.values()
+        if entity.card_id == "phoenix-egg" and entity.is_clone
+    )
+    assert (cloned_egg.hp, cloned_egg.max_hp) == (1, 1)
+
+    cloned_egg.lifetime_remaining_us = RULESET.tick_us
+    engine._advance_statuses_and_lifetimes(state)
+    engine._resolve_deaths(state)
+
+    reborn = next(
+        entity
+        for entity in state.entities.values()
+        if entity.card_id == "phoenix" and entity.parent_uid == cloned_egg.uid
+    )
+    assert reborn.is_clone
+    assert (reborn.hp, reborn.max_hp) == (1, 1)
 
 
 def test_tiebreak_with_equal_lowest_towers_is_a_draw_without_destruction() -> None:
