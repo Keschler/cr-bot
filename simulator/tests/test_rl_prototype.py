@@ -132,6 +132,50 @@ def test_trace_reconciles_card_placement_and_troop_positions() -> None:
     assert any(item["owner"] == 0 for item in row["troop_positions_after"])
 
 
+def test_trace_infers_applied_card_when_vector_result_omits_events() -> None:
+    from cr_bot.domain.game_state import Action as PolicyAction
+    from rl.prototype import _trace_decision
+    from simulator.engine import BattleEngine
+    from simulator.env import SimulatorEnv
+    from simulator.ruleset import load_ruleset
+
+    ruleset = load_ruleset("v1")
+    environment = SimulatorEnv(
+        engine=BattleEngine(ruleset, validate_every_tick=False),
+        expose_privileged_info=False,
+        include_authoritative_state=True,
+    )
+    environment.reset_v2(seed=71, shuffle_decks=False)
+    state_before = deepcopy(environment.state)
+    assert state_before is not None
+    card_id = state_before.players[0].hand[0]
+    requested_cell = environment.engine.legal_cells(state_before, 0, card_id)[0]
+    action = PolicyAction(kind="Play", card_idx=0, cell=requested_cell)
+    result = environment.step_v2((action, None))
+
+    row = _trace_decision(
+        SimpleNamespace(
+            decision_index=0,
+            target_action=action,
+            opponent_action=None,
+            result=result,
+            state_after=environment.state,
+            physics_tick_before=state_before.tick,
+            elapsed_us_before=state_before.elapsed_us,
+            hand_before=tuple(state_before.players[0].hand),
+            elixir_before=state_before.players[0].elixir_milli,
+        ),
+        target_player=0,
+        state_before=state_before,
+    )
+
+    assert row["action_events"] == []
+    assert row["accepted"] is True
+    assert row["application_evidence"] == "state_transition"
+    assert row["played_card_id"] == card_id
+    assert row["played_world_cell"] == list(requested_cell)
+
+
 @requires_torch
 def test_recurrent_prototype_train_resume_and_evaluate(tmp_path) -> None:
     from rl.prototype import (
@@ -200,7 +244,7 @@ def test_recurrent_prototype_train_resume_and_evaluate(tmp_path) -> None:
     assert trace["trace_schema_version"] == 2
     assert trace["position_schema"]["version"] == "authoritative-world-v2"
     assert set(trace["position_schema"]["snapshots"]) == {"before", "after"}
-    assert trace["action_schema"]["version"] == "requested-vs-applied-v1"
+    assert trace["action_schema"]["version"] == "requested-vs-applied-v2"
     assert len(trace["episodes"]) == 1
     assert len(trace["episodes"][0]["trace"]) == 2
     assert trace["episodes"][0]["player_deck"] == trace["episodes"][0]["opponent_deck"]

@@ -2197,6 +2197,21 @@ def _trace_decision(
     selected_card = None
     if action.get("mode") == "PLAY" and type(slot) is int and 0 <= slot < len(record.hand_before):
         selected_card = record.hand_before[slot]
+    opponent_hand_before = _state_field(
+        _state_player(diagnostic_state_before, 1 - target_player),
+        "hand",
+        (),
+    )
+    if not isinstance(opponent_hand_before, (tuple, list)):
+        opponent_hand_before = ()
+    opponent_slot = opponent.get("card_slot")
+    opponent_selected_card = None
+    if (
+        opponent.get("mode") == "PLAY"
+        and type(opponent_slot) is int
+        and 0 <= opponent_slot < len(opponent_hand_before)
+    ):
+        opponent_selected_card = opponent_hand_before[opponent_slot]
 
     target_events = [
         event
@@ -2333,6 +2348,64 @@ def _trace_decision(
             return None
         return [int(event_data["col"]), int(event_data["row"])]
 
+    target_event_cell = event_cell(played_target)
+    opponent_event_cell = event_cell(played_opponent)
+    target_application_evidence = (
+        "event"
+        if target_played
+        else "state_transition"
+        if target_accepted is True and action.get("mode") == "PLAY"
+        else "wait"
+        if action.get("mode") == "WAIT"
+        else "not_applied"
+        if target_accepted is False
+        else "unknown"
+    )
+    opponent_application_evidence = (
+        "event"
+        if opponent_played
+        else "state_transition"
+        if opponent_accepted is True and opponent.get("mode") == "PLAY"
+        else "wait"
+        if opponent.get("mode") == "WAIT"
+        else "not_applied"
+        if opponent_accepted is False
+        else "unknown"
+    )
+    # Vector/collector results intentionally omit the event stream.  The
+    # before/after hand and elixir snapshots still prove that a card was
+    # consumed, so retain the selected card/cell as the applied action while
+    # exposing how that fact was established.  This keeps trajectory reports
+    # useful without feeding authoritative diagnostics back into the actor.
+    target_applied_card = (
+        played_target.get("card_id")
+        if isinstance(played_target, Mapping)
+        else selected_card
+        if target_accepted is True and action.get("mode") == "PLAY"
+        else None
+    )
+    opponent_applied_card = (
+        played_opponent.get("card_id")
+        if isinstance(played_opponent, Mapping)
+        else opponent_selected_card
+        if opponent_accepted is True and opponent.get("mode") == "PLAY"
+        else None
+    )
+    target_applied_cell = (
+        target_event_cell
+        if target_event_cell is not None
+        else action.get("world_cell")
+        if target_accepted is True and action.get("mode") == "PLAY"
+        else None
+    )
+    opponent_applied_cell = (
+        opponent_event_cell
+        if opponent_event_cell is not None
+        else opponent.get("world_cell")
+        if opponent_accepted is True and opponent.get("mode") == "PLAY"
+        else None
+    )
+
     row: dict[str, object] = {
         "decision": int(record.decision_index),
         "physics_tick_before": record.physics_tick_before,
@@ -2348,14 +2421,11 @@ def _trace_decision(
         "mode": action.get("mode"),
         "card_slot": slot,
         "card_id": selected_card,
-        "played_card_id": (
-            played_target.get("card_id")
-            if isinstance(played_target, Mapping)
-            else None
-        ),
+        "played_card_id": target_applied_card,
         "policy_cell": action.get("policy_cell"),
         "world_cell": action.get("world_cell"),
-        "played_world_cell": event_cell(played_target),
+        "played_world_cell": target_applied_cell,
+        "application_evidence": target_application_evidence,
         "hand_before": list(record.hand_before),
         "hand_after": list(hand_after),
         "elixir_milli_before": record.elixir_before,
@@ -2371,14 +2441,11 @@ def _trace_decision(
             _troop_locations(authoritative_state) if include_positions else None
         ),
         "opponent_action": opponent,
-        "opponent_card_id": (
-            played_opponent.get("card_id")
-            if isinstance(played_opponent, Mapping)
-            else None
-        ),
+        "opponent_card_id": opponent_applied_card,
         "opponent_policy_cell": opponent.get("policy_cell"),
         "opponent_world_cell": opponent.get("world_cell"),
-        "opponent_played_world_cell": event_cell(played_opponent),
+        "opponent_played_world_cell": opponent_applied_cell,
+        "opponent_application_evidence": opponent_application_evidence,
         "accepted": target_accepted,
         "action_status": (
             "accepted"
@@ -3411,12 +3478,21 @@ def evaluate_prototype(
                     "visibility": "authoritative_diagnostic",
                 },
                 "action_schema": {
-                    "version": "requested-vs-applied-v1",
+                    "version": "requested-vs-applied-v2",
                     "card_id": "selected card from hand_before",
-                    "played_card_id": "card_played event card_id, null when rejected",
+                    "played_card_id": (
+                        "card_played event card_id, or selected card when the "
+                        "before/after state proves application; null when not applied or unknown"
+                    ),
                     "world_cell": "requested authoritative [column,row]",
-                    "played_world_cell": "accepted card_played event [column,row]",
-                    "accepted": "WAIT or matching card_played event",
+                    "played_world_cell": (
+                        "accepted card_played event [column,row], or requested "
+                        "cell when the before/after state proves application"
+                    ),
+                    "application_evidence": (
+                        "event, state_transition, wait, not_applied, or unknown"
+                    ),
+                    "accepted": "WAIT or explicit/state-transition application evidence",
                 },
                 "decision_diagnostics": {
                     "probabilities": "masked actor distributions; top alternatives are complete actions",
