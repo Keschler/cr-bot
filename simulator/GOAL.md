@@ -17,52 +17,43 @@ a controlled probe when the action boundary or causal behavior matters.
 
 ## Current status
 
-- Latest validated implementation revision: `942d97afee397b1915a67ffc04d1ecd2915409b1`;
-  its tracked worktree was clean and its ruleset hash is
-  `sha256:0ac958abe2f8e90e7eaf882f23c1dec5b8ebd968cf630cd1d657961e0f2e169b`.
-- `rulesets/v1.json` contains the 109-card opponent roster but remains
-  `training_ready: false`.
+- Latest validated implementation revision: `87f96304bfe2ad7e0539298859e8ff953f42e6c7`;
+  its tracked worktree is clean and the current ruleset hash is
+  `sha256:992ead6f14016917b5a108eaa1ca370c10a48b70d6a87ad69c7de50a8b020d7a`.
+- `rulesets/v1.json` contains 124 definitions, including all 109 eligible
+  opponent cards, and remains `training_ready: false`.
 - Generated coverage is deterministic and executable: a fresh strict run of
-  1,181 cases passed execution, repeated hashes, complete roster coverage, and
-  behavioral obligations (`1,181/1,181`, two repeats, 12 workers).
-- The post-commit mechanics/RL/vector gate is green (`85 passed, 18 skipped`,
-  including backend replay parity). The default non-audio/non-mining suite is
-  `437 passed, 8 failed, 41 skipped`; all eight failures require unavailable
-  card-image assets. Roster completeness is clean, but all 109 cards remain
-  provisional (`fidelity_ready: 0`), and strict source reconciliation still
-  has 17 unresolved fields.
+  1,182 cases passed execution, repeated hashes, complete roster coverage, and
+  behavioral obligations (`1,182/1,182`, two repeats, per-tick validation,
+  eight workers).
+- The focused RL/diagnostics/vector suite is green (`95 passed`). The full
+  non-audio/non-mining suite is `528 passed, 9 failed, 11 warnings`; eight
+  failures require card-image assets from the separate capture tree and one
+  requires the unavailable `katacr` package. Roster completeness is clean,
+  but no card is fidelity-ready, the metadata has nine source conflicts, and
+  three training blockers remain declared.
 - Phase-0 physical-lab software is implemented, but physical evidence is
   intentionally deferred for the current RL-first execution path. No
   connected run has yet satisfied the evidence/readiness gates.
 - The policy is a provisional research harness, not an any-deck player. The
-  previously recorded generalized checkpoint and reports are generated local
-  artifacts and are not present in this checkout; rerun training before using
-  those paths. The recorded run used engine `reference-0.36.0`; the current engine `reference-0.37.0` is used for new runs.
-- On the benchmark host, batch-16 actor-only deterministic inference reaches
-  about 3.61k decisions/s on the RTX 2050 versus about 1.54k simulator
-  environment steps/s. The full actor-selection path reaches about 2.69k/s.
-  The actor-only path now uses direct masked argmax decoding, mode-first
-  decoding that skips card/placement heads for `WAIT` rows, a CPU
-  channels-last raster layout, and tail-padding removal for sparse entity
-  batches. On the current CPU host it reaches about 1.44k decisions/s at
-  batch 16 versus about 3.06k simulator steps/s; the CPU parity gate remains
-  open. The path also caps CPU intra-op parallelism at eight threads. CPU
-  fallback remains below the historical accelerated-host target. Single-
-  observation deployment callers bypass one-element host stacking and prepare
-  the raster layout at the observation boundary; dense CPU entity batches use
-  a sequence-first Transformer layout while padded batches retain the existing
-  path, repeated empty-entity lanes reuse a version-checked null encoding,
-  and padded lanes compact raw entities before projection.
-- The actual end-to-end trainer baseline is 590 decisions/s on the RTX 2050,
-  measured over 12,288 decisions in 20.83 seconds with 48 lanes, eight
-  persistent rollout workers, four PPO updates, and overlapping collection.
-  This remains the accepted historical working baseline. A fresh direct-path
-  smoke on revision `942d97a` measured 264.9 decisions/s over the same 12,288
-  decisions; its revision guard and simulator-exploit audit were clean.
-- A fresh revision-`942d97a` vector benchmark measured 2,932.9 reference,
-  835.9 process, 42.3 packed-process, and 684.8 persistent-process environment
-  steps/s at 16 lanes. All optimized runs matched the reference state-hash
-  sequence; replay/event parity is covered by the regression suite.
+  retained checkpoints under `outputs/training/` were produced on stale
+  `cd22` ruleset/revision hashes and must not be used as current evidence. The
+  current engine is `reference-0.37.0`; new runs must be revision-pinned.
+- On revision `87f9630`, batch-16 CUDA inference measured 4.69k actor-only
+  decisions/s and 3.77k full actor-selection decisions/s on the RTX 2050.
+  The same workload on CPU measured 0.84k actor-only and 0.74k full
+  decisions/s. The current reference simulator measured 1.63k environment
+  steps/s at 16 lanes; CPU policy parity is therefore still open.
+- The current vector benchmark measured 1,627.7 reference, 878.2 process,
+  45.9 packed-process, and 624.5 persistent-process environment steps/s at
+  16 lanes. All optimized runs matched the reference state-hash sequence;
+  backend replay/event parity is covered by the regression suite. Packed
+  process is correct but currently a throughput outlier.
+- The retained end-to-end trainer baseline is 590 decisions/s on the RTX 2050
+  from the earlier revision-pinned benchmark. The current bounded CUDA smoke
+  is not comparable: it completed 2,048 actor-controlled transitions with a
+  clean revision/exploit audit, but no complete matches, so it is plumbing
+  evidence rather than a strength claim.
 - The current action contract has `WAIT`/`PLAY`, card slot, and placement but
   no learned wait-duration head; `WAIT` advances the fixed simulator decision
   interval. The proposed timing head remains a future architecture change.
@@ -344,22 +335,19 @@ exploit.
 
 ## Current retained RL audit
 
-The previously recorded generalized actor and reports are generated local
-artifacts and are not present in this checkout. The actor used public
-observations, while the critic was training-only.
-
-The fixed deterministic-cycle regression is 8 wins, 0 losses, 0 draws,
-0 truncated. The six held-out archetype smoke is 1 win, 5 losses, 0 draws,
-0 truncated. These results do not establish the mission's any-deck policy
-goal. The matrix records `actor_controls_actions=true` for neural actor runs;
+The older generalized checkpoints and held-out results are stale because they
+were produced on earlier simulator revisions; they are not current strength
+evidence. The actor uses public observations, while the critic is
+training-only. The matrix records `actor_controls_actions=true` for neural
+actor runs;
 `tower_hp_before`, `tower_hp_after`, and `tower_hp_end` have different
 per-decision versus terminal/cap-time meanings. The prototype `--trace-out` contains every decision; `troop_positions_end` and `tower_hp_end` are only terminal/cap-time snapshots. A finite `all_wins=true` result is not a universal-win claim.
 
-The latest revision-pinned provisional PPO smoke promoted a checkpoint after
-1,024 actor-controlled transitions with a stable revision guard and clean
-simulator-exploit audit. Its six-match held-out smoke completed 6/6 with zero
-rejected target actions and a passing structural quality gate, but scored 0–6;
-this is plumbing evidence, not policy-strength evidence.
+The latest revision-pinned provisional PPO smoke on `87f9630` promoted a
+checkpoint after 2,048 actor-controlled transitions with a stable revision
+guard, public-only actor inputs, privileged training-only critic, full
+decision tracing, and a clean simulator-exploit audit. It did not complete a
+match, so no held-out strength claim is attached to it.
 
 ## Simulator requirements
 

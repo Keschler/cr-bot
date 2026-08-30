@@ -5,9 +5,10 @@ for deterministic testing, sim-to-real fidelity work, and reinforcement
 learning. [GOAL.md](GOAL.md) is the authoritative roadmap and release
 definition.
 
-The current `v1` ruleset declares the complete 109-card eligible opponent
-roster, but remains `training_ready: false`. It is an executable research
-ruleset, not a claim that every live-game mechanic has been measured.
+The current `v1` ruleset contains 124 definitions, including the complete
+109-card eligible opponent roster, but remains `training_ready: false`. It is
+an executable research ruleset, not a claim that every live-game mechanic has
+been measured.
 
 The current execution priority is RL-first: physical-lab evidence is deferred
 while the actor, training loop, evaluation, and simulator throughput improve.
@@ -393,19 +394,12 @@ snapshots; `crowns_end` reports final world-player crown totals; and
 `troop_positions_end` is likewise terminal/cap-time data, not a continuous
 trajectory.
 
-Recorded RL results:
-
-| Evaluation | Result |
-| --- | --- |
-| Fixed deterministic-cycle regression | 8 wins, 0 losses, 0 draws, 0 truncated; `actor_controls_actions=true` |
-| Six held-out archetype variants | 1 win, 5 losses, 0 draws, 0 truncated; `held_out_audit.disjointness_verified=true` |
-| Previous actor on the same six held-out cells | 0 wins, 6 losses, 0 draws, 0 truncated |
-| Six archetypes × six strategies × one seed | 1 win, 35 losses, 0 draws, 0 truncated |
-
-The self-play matrix uses the fixed prototype player deck and reports
-`held_out=false`; it is a separate identity/regression check, not diverse-deck
-evidence. A finite 100% result against one script is not a universal-win
-claim.
+The current revision-pinned CUDA smoke completed 2,048 actor-controlled
+transitions with public-only actor inputs, a privileged training-only critic,
+full decision tracing, and a clean exploit audit. It completed no matches, so
+it is plumbing evidence rather than a strength result. Older checkpoints and
+evaluation tables are revision-stale and must not be used as current policy
+evidence.
 
 ## RL phases
 
@@ -571,21 +565,23 @@ The current benchmark host measured approximately:
 
 | Path | Throughput |
 | --- | ---: |
-| Simulator, 16 lanes, CPU reference | 3.06k environment steps/s |
-| Actor-only deterministic fast path, batch 16, CPU | 1.44k decisions/s |
-| Actor-only deterministic fast path, batch 16, RTX 2050 | 3.61k decisions/s |
-| Full actor selection, batch 16, RTX 2050 | 2.69k decisions/s |
+| Simulator, 16 lanes, CPU reference | 1.63k environment steps/s |
+| Actor-only deterministic fast path, batch 16, CPU | 0.84k decisions/s |
+| Actor-only deterministic fast path, batch 16, RTX 2050 | 4.69k decisions/s |
+| Full actor selection, batch 16, RTX 2050 | 3.77k decisions/s |
 | Actual trainer end-to-end, RTX 2050, 48 lanes, 8 rollout workers | 590 decisions/s |
 
-The historical accelerated-host actor result clears the historical simulator
-rate. On the current CPU host, the actor is about 1.44k decisions/s versus
-3.06k simulator steps/s, so CPU parity remains an open performance gate. The
-retained end-to-end trainer baseline is 590 decisions/s, measured over 12,288
-decisions in 20.83 seconds with four PPO updates, persistent rollout workers,
-and overlapping collection. This remains the accepted historical working
-speed for now. A fresh direct-path smoke on revision `942d97a` measured 264.9
-decisions/s over 12,288 decisions; its revision guard and simulator-exploit
-audit were clean. The
+On the current host, full CPU actor selection is about 0.74k decisions/s versus
+1.63k simulator steps/s, so CPU parity remains an open performance gate. The
+current vector transports measured 878.2 process, 45.9 packed-process, and
+624.5 persistent-process steps/s; all matched the reference state-hash
+sequence. The retained end-to-end trainer baseline is 590 decisions/s,
+measured over 12,288 decisions in 20.83 seconds with four PPO updates,
+persistent rollout workers, and overlapping collection. This remains the
+accepted historical working speed for now. A current bounded CUDA smoke
+completed 2,048 actor-controlled transitions with a clean revision guard and
+simulator-exploit audit but no complete matches, so it is not a strength
+result. The
 deployment path avoids belief heads and distribution normalization, resolves
 `WAIT` before card/placement decoding, uses a channels-last raster, removes
 masked entity tails, and caps CPU intra-op parallelism at eight threads. The
@@ -597,11 +593,6 @@ encoding, and padded lanes compact raw entities before projection. The
 PPO/reference forward path and selected-action parity are unchanged. The
 vector-backend regression checks state, event-log, and replay hashes for both
 process transports across consecutive steps with privileged info disabled.
-
-A fresh revision-`942d97a` vector benchmark measured 2,932.9 reference, 835.9
-process, 42.3 packed-process, and 684.8 persistent-process environment steps/s
-at 16 lanes. Each optimized backend produced the same state-hash sequence as
-the reference; these are revision-specific diagnostic measurements.
 
 ## Automation and current limits
 
