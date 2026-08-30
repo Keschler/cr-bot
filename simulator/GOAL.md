@@ -17,7 +17,7 @@ a controlled probe when the action boundary or causal behavior matters.
 
 ## Current status
 
-- Latest sealed simulator revision: `babfa1da4cc1b87bfef8e3eef25ede2d19f3d954`;
+- Latest sealed simulator revision: `a796f28e55627f34e1bd9a8c4676cad50f8ceb68`;
   its tracked worktree is clean and its ruleset hash is
   `sha256:0ac958abe2f8e90e7eaf882f23c1dec5b8ebd968cf630cd1d657961e0f2e169b`.
 - `rulesets/v1.json` contains the 109-card opponent roster but remains
@@ -27,7 +27,7 @@ a controlled probe when the action boundary or causal behavior matters.
   behavioral obligations (`1,181/1,181`, two repeats, 12 workers).
 - The focused RL/vector suite is green (`160 passed, 39 skipped`, including
   backend replay parity). The default non-audio/non-mining suite is
-  `428 passed, 8 failed, 41 skipped`; all eight failures require unavailable
+  `434 passed, 8 failed, 41 skipped`; all eight failures require unavailable
   card-image assets. Roster completeness is clean, but all 109 cards remain
   provisional (`fidelity_ready: 0`), and strict source reconciliation still
   has 17 unresolved fields.
