@@ -5492,6 +5492,14 @@ class BattleEngine:
         attacker = state.entities.get(source_uid)
         if attacker is None or not attacker.alive or attacker.owner == target.owner:
             return
+        # The Zap Pack's ordinary target class is Air/Ground troops.  Crown
+        # Towers are the one non-troop exception and use the reduced reflected
+        # tower-damage value below; defensive buildings are not reflected
+        # victims.  ``_spell_can_hit`` deliberately treats ``ground`` as a
+        # valid building target for ordinary spells, so this card-specific
+        # boundary must be explicit here.
+        if attacker.kind == "building":
+            return
         reflection = raw_reflection
         radius = int(reflection.get("radius_mtile") or 0)
         if distance_mtile(target.x_mtile, target.y_mtile, attacker.x_mtile, attacker.y_mtile) > radius + self._collision_radius(attacker):

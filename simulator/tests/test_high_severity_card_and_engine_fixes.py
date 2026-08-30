@@ -139,6 +139,47 @@ def test_high_severity_card_overlays_are_in_the_runtime_ruleset() -> None:
         assert RULESET.card(card_id).mechanics["cannot_hit_jumping"] is True
 
 
+def test_wizard_deployment_effects_match_current_spawn_payloads() -> None:
+    expected = {
+        "electro-wizard": {
+            "damage": 192,
+            "kind": "stun",
+            "duration_us": 500_000,
+            "speed_multiplier_milli": 0,
+            "hit_speed_multiplier_milli": 0,
+        },
+        "ice-wizard": {
+            "damage": 84,
+            "kind": "slow",
+            "duration_us": 1_000_000,
+            "speed_multiplier_milli": 700,
+            "hit_speed_multiplier_milli": 700,
+        },
+    }
+    for card_id, payload in expected.items():
+        engine, state = _state()
+        wizard = _entity(state, card_id, 0, 9_000, 15_000)
+        victim = _entity(state, "giant", 1, 11_500, 15_000)
+        wizard.deploy_remaining_us = RULESET.tick_us
+        before_hp = victim.hp
+
+        engine._advance_deployments(state)
+
+        assert victim.hp == before_hp - payload["damage"]
+        status = next(row for row in victim.statuses if row.kind == payload["kind"])
+        assert status.remaining_us == payload["duration_us"]
+        assert status.magnitude_permille == payload["speed_multiplier_milli"]
+        assert status.hit_speed_magnitude_permille == payload["hit_speed_multiplier_milli"]
+        effect = RULESET.card(card_id).mechanics["deploy_effect"]
+        assert effect["damage"] == payload["damage"]
+        assert effect["radius_mtile"] == 3_000
+
+    ice_wizard = RULESET.card("ice-wizard")
+    assert ice_wizard.hitpoints == 688
+    assert ice_wizard.damage == 89
+    assert ice_wizard.mechanics["status"]["duration_us"] == 2_500_000
+
+
 def test_hunter_close_range_fan_lands_more_pellets_than_long_range_fan() -> None:
     def damage_at_distance(distance: int) -> int:
         engine, state = _state()
@@ -461,6 +502,47 @@ def test_frozen_electro_giant_does_not_reflect_damage() -> None:
     assert giant.hp < giant.max_hp
     assert hunter.hp == before_hunter
     assert not any(event.kind == "reflected_damage" for event in state.events)
+
+
+def test_electro_giant_does_not_reflect_to_defensive_buildings() -> None:
+    engine, state = _state()
+    building = _entity(state, "cannon", 0, 9_000, 15_000)
+    giant = _entity(state, "electro-giant", 1, 9_500, 15_000)
+    tower = engine._tower(state, 0, "left")
+    tower.x_mtile = 9_500
+    tower.y_mtile = 15_000
+    before_building = building.hp
+    before_tower = tower.hp
+
+    # A building attack can damage the Giant, but the Zap Pack's documented
+    # Air/Ground target filter must not turn the building into a reflected-hit
+    # victim. Crown Towers remain covered by their explicit special branch.
+    engine._deal_damage(
+        state,
+        giant,
+        1,
+        source_uid=building.uid,
+        source_card_id=building.card_id,
+        attack_instance_id=1,
+    )
+
+    assert giant.hp == giant.max_hp - 1
+    assert building.hp == before_building
+    assert not any(event.kind == "reflected_damage" for event in state.events)
+
+    # Crown Towers remain the documented non-troop exception and use the
+    # reduced reflected-tower value.
+    engine._deal_damage(
+        state,
+        giant,
+        1,
+        source_uid=tower.uid,
+        source_card_id=tower.card_id,
+        attack_instance_id=2,
+    )
+    assert tower.hp == before_tower - int(
+        RULESET.card("electro-giant").mechanics["reflection"]["crown_tower_damage"]
+    )
 
 
 def test_crown_tower_does_not_target_a_placed_building() -> None:

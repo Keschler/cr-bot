@@ -49,6 +49,7 @@ BARBARIAN_HUT_SPAWN_SOURCE_ID = "clash-wiki-barbarian-hut-wave-stagger-2026-08-3
 GOBLIN_GANG_FORMATION_SOURCE_ID = "clash-wiki-goblin-gang-formation-2026-08-30"
 RASCALS_FORMATION_SOURCE_ID = "clash-wiki-rascals-formation-2026-08-30"
 ROYAL_DELIVERY_TIMING_SOURCE_ID = "clash-wiki-royal-delivery-timing-2026-08-30"
+WIZARD_DEPLOYMENT_SOURCE_ID = "clash-wiki-deckmelon-wizard-deployment-2026-08-30"
 GOBLIN_MACHINE_SOURCE_ID = "royaleapi-goblin-machine-2024"
 LEVEL11_SOURCE_PAYLOAD = load_level11_source()
 DECKSHOP_SOURCE_ID = "deckshop-battle-healer-2026-08-14"
@@ -285,17 +286,25 @@ DEPLOY_EFFECT_DEFINITIONS: Mapping[str, Mapping[str, Any]] = {
     "electro-wizard": {
         "kind": "stun",
         "duration_us": 500_000,
-        "radius_mtile": 1_000,
+        # Electro Wizard lands with a Zap: the current spawn radius is three
+        # tiles and the Level-11 Zap damage is 192.  It is a one-shot pulse,
+        # not the wizard's ordinary two-target attack.
+        "damage": 192,
+        "radius_mtile": 3_000,
         "speed_multiplier_milli": 0,
         "hit_speed_multiplier_milli": 0,
         "targets": ["air", "ground", "building", "crown_tower"],
     },
     "ice-wizard": {
-        "kind": "freeze",
-        "duration_us": 1_500_000,
-        "radius_mtile": 1_000,
-        "speed_multiplier_milli": 0,
-        "hit_speed_multiplier_milli": 0,
+        # Ice Wizard's deployment pulse is a three-tile spawn-damage slow,
+        # not a hard Freeze.  Its spawn slow is shorter than its ordinary
+        # attack slow and uses the same current -30% speed values.
+        "kind": "slow",
+        "duration_us": 1_000_000,
+        "damage": 84,
+        "radius_mtile": 3_000,
+        "speed_multiplier_milli": 700,
+        "hit_speed_multiplier_milli": 700,
         "targets": ["air", "ground", "building", "crown_tower"],
     },
 }
@@ -392,7 +401,7 @@ STATUS_DEFINITIONS: Mapping[str, Mapping[str, int | str]] = {
     },
     "ice-wizard": {
         "kind": "slow",
-        "duration_us": 1_500_000,
+        "duration_us": 2_500_000,
         "speed_multiplier_milli": 700,
         "hit_speed_multiplier_milli": 700,
     },
@@ -476,15 +485,16 @@ MULTI_TARGET_ATTACK_DEFINITIONS: Mapping[str, Mapping[str, int | str]] = {
 
 REFLECTION_DEFINITIONS: Mapping[str, Mapping[str, Any]] = {
     # Level-11 reflection values are kept separate from Electro Giant's
-    # ordinary melee damage.  The current structured/third-party snapshot
-    # reports 192 body and 128 Crown-Tower damage, a 3.5-tile zap radius, and
-    # a half-second attack reset; held-out footage still owns exact immunity
-    # and projectile-source edge cases.
+    # ordinary melee damage.  The Zap Pack targets Air/Ground troops; Crown
+    # Towers use the separate reduced reflected-tower-damage branch. Ordinary
+    # defensive buildings are not Zap Pack targets, which is why they remain
+    # effective counters. Held-out footage still owns exact immunity and
+    # projectile-source edge cases.
     "electro-giant": {
         "damage": 192,
         "crown_tower_damage": 128,
         "radius_mtile": 3_500,
-        "targets": ["air", "ground", "building", "crown_tower"],
+        "targets": ["air", "ground", "crown_tower"],
         "stun_duration_us": 500_000,
     },
 }
@@ -1345,6 +1355,36 @@ def _apply_high_severity_card_fixes(
             "mechanics.cannot_hit_jumping",
             MEGA_KNIGHT_JUMP_SOURCE_ID,
         )
+
+    if card_id in {"electro-wizard", "ice-wizard"}:
+        mechanics = dict(fixed.get("mechanics", {}))
+        mechanics["deploy_effect"] = deepcopy(DEPLOY_EFFECT_DEFINITIONS[card_id])
+        fixed["mechanics"] = mechanics
+        _append_card_provenance(
+            fixed,
+            "mechanics.deploy_effect",
+            WIZARD_DEPLOYMENT_SOURCE_ID,
+        )
+        if card_id == "ice-wizard":
+            # The pinned Level-11 snapshot is one point stale on both fields;
+            # current independent card tables converge on 688 HP / 89 damage.
+            fixed["hitpoints"] = 688
+            fixed["damage"] = 89
+            _append_card_provenance(
+                fixed,
+                "hitpoints",
+                WIZARD_DEPLOYMENT_SOURCE_ID,
+            )
+            _append_card_provenance(
+                fixed,
+                "damage",
+                WIZARD_DEPLOYMENT_SOURCE_ID,
+            )
+            _append_card_provenance(
+                fixed,
+                "mechanics.status.duration_us",
+                WIZARD_DEPLOYMENT_SOURCE_ID,
+            )
 
     return fixed
 
@@ -2854,6 +2894,8 @@ def build_roster_ruleset_raw(base_raw: Mapping[str, Any] | None = None) -> dict[
             "log",
             "earthquake",
             "bowler",
+            "electro-wizard",
+            "ice-wizard",
         }:
             cards[card_id] = _apply_high_severity_card_fixes(card_id, cards[card_id])
     # Apply hidden sight ranges after all generated child forms and official
@@ -3163,6 +3205,16 @@ def build_roster_ruleset_raw(base_raw: Mapping[str, Any] | None = None) -> dict[
             "sha256": None,
             "lineage": "Current Clash Royale Wiki Royal Delivery page, DeckMelon/independent card references, and community timing test",
             "note": "Royal Delivery impacts after a three-second falling/deploy schedule; the spawned Royal Recruit has a separate 0.25-second deployment delay. Current documented target classes and Level-11 damage remain separately sourced.",
+        },
+        WIZARD_DEPLOYMENT_SOURCE_ID: {
+            "confidence_tier": "B",
+            "kind": "current-card-stats-and-mechanics-cross-check",
+            "url": "https://deckmelon.com/cards/ice-wizard",
+            "retrieved_at": "2026-08-30",
+            "published_at": None,
+            "sha256": None,
+            "lineage": "DeckMelon, current Clash Royale Wiki pages, Liquipedia, and official Supercell balance notes",
+            "note": "Current Level-11 Ice Wizard table pins 688 HP, 89 area damage, and 84 spawn damage; current mechanic references pin a three-tile spawn radius, one-second spawn slow, 2.5-second ordinary slow, and -30% slowdown. Current Electro Wizard references pin a 192-damage, three-tile, 0.5-second-stun deployment Zap.",
         },
     }
     for source_id, source in load_official_overrides().get("source_records", {}).items():

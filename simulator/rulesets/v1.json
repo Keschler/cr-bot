@@ -2533,7 +2533,6 @@
           "targets": [
             "air",
             "ground",
-            "building",
             "crown_tower"
           ]
         },
@@ -2725,10 +2724,11 @@
         "crown_tower_connection": "normal",
         "death": null,
         "deploy_effect": {
+          "damage": 192,
           "duration_us": 500000,
           "hit_speed_multiplier_milli": 0,
           "kind": "stun",
-          "radius_mtile": 1000,
+          "radius_mtile": 3000,
           "speed_multiplier_milli": 0,
           "targets": [
             "air",
@@ -2786,6 +2786,9 @@
         ],
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
+        ],
+        "mechanics.deploy_effect": [
+          "clash-wiki-deckmelon-wizard-deployment-2026-08-30"
         ],
         "sight_range_mtile": [
           "aesdragon-hidden-sight-ranges-2026-08-30"
@@ -6638,11 +6641,11 @@
       "attack_interval_us": 1700000,
       "collision_radius_mtile": 400,
       "crown_tower_damage": null,
-      "damage": 90,
+      "damage": 89,
       "deploy_time_us": 1000000,
       "elixir_milli": 3000,
       "first_hit_delay_us": 500000,
-      "hitpoints": 689,
+      "hitpoints": 688,
       "kind": "troop",
       "lifetime_us": null,
       "mass": 1,
@@ -6651,11 +6654,12 @@
         "crown_tower_connection": "normal",
         "death": null,
         "deploy_effect": {
-          "duration_us": 1500000,
-          "hit_speed_multiplier_milli": 0,
-          "kind": "freeze",
-          "radius_mtile": 1000,
-          "speed_multiplier_milli": 0,
+          "damage": 84,
+          "duration_us": 1000000,
+          "hit_speed_multiplier_milli": 700,
+          "kind": "slow",
+          "radius_mtile": 3000,
+          "speed_multiplier_milli": 700,
           "targets": [
             "air",
             "ground",
@@ -6681,7 +6685,7 @@
         ],
         "spell_origin": null,
         "status": {
-          "duration_us": 1500000,
+          "duration_us": 2500000,
           "hit_speed_multiplier_milli": 700,
           "kind": "slow",
           "speed_multiplier_milli": 700
@@ -6702,11 +6706,17 @@
         "catalog_values": [
           "local-card-metadata-2026-08-14"
         ],
+        "damage": [
+          "clash-wiki-deckmelon-wizard-deployment-2026-08-30"
+        ],
         "first_hit_delay_us": [
           "local-high-severity-card-fixes-2026-08-29"
         ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
+        ],
+        "hitpoints": [
+          "clash-wiki-deckmelon-wizard-deployment-2026-08-30"
         ],
         "identity": [
           "local-card-metadata-2026-08-14"
@@ -6714,8 +6724,14 @@
         "level_11_stats": [
           "local-level11-card-stats-2026-04-12"
         ],
+        "mechanics.deploy_effect": [
+          "clash-wiki-deckmelon-wizard-deployment-2026-08-30"
+        ],
         "mechanics.projectile_speed_code": [
           "local-high-severity-card-fixes-2026-08-29"
+        ],
+        "mechanics.status.duration_us": [
+          "clash-wiki-deckmelon-wizard-deployment-2026-08-30"
         ],
         "mechanics.status.hit_speed_multiplier_milli": [
           "official-october-2025"
@@ -12467,7 +12483,7 @@
       ]
     }
   },
-  "content_hash": "sha256:bdc222d31e923c0f34500ad31cf3965d0430e5fbfe5189ea74ac423a5e19d67b",
+  "content_hash": "sha256:dbb6da849003f7a06eae4accf8aa3ee2ff4c3e19da7898b1e09de959b5047555",
   "interaction_set": [
     "archers",
     "arrows",
@@ -12722,6 +12738,16 @@
       "retrieved_at": "2026-08-30",
       "sha256": null,
       "url": "https://clashroyale.fandom.com/wiki/Mother_Witch"
+    },
+    "clash-wiki-deckmelon-wizard-deployment-2026-08-30": {
+      "confidence_tier": "B",
+      "kind": "current-card-stats-and-mechanics-cross-check",
+      "lineage": "DeckMelon, current Clash Royale Wiki pages, Liquipedia, and official Supercell balance notes",
+      "note": "Current Level-11 Ice Wizard table pins 688 HP, 89 area damage, and 84 spawn damage; current mechanic references pin a three-tile spawn radius, one-second spawn slow, 2.5-second ordinary slow, and -30% slowdown. Current Electro Wizard references pin a 192-damage, three-tile, 0.5-second-stun deployment Zap.",
+      "published_at": null,
+      "retrieved_at": "2026-08-30",
+      "sha256": null,
+      "url": "https://deckmelon.com/cards/ice-wizard"
     },
     "clash-wiki-goblin-gang-formation-2026-08-30": {
       "confidence_tier": "B",
