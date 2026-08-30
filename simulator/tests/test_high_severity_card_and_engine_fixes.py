@@ -486,6 +486,47 @@ def test_bandit_dash_ignores_damage_and_hard_control_until_landing() -> None:
     assert bandit.dash_remaining_us == 0
 
 
+def test_bandit_dash_damage_resolves_immediately_after_landing() -> None:
+    engine, state = _state()
+    bandit = _entity(state, "bandit", 0, 8_000, 15_000)
+    target = _entity(state, "giant", 1, 11_000, 15_000)
+    bandit.target_uid = target.uid
+
+    engine._move_entities(state)
+    for _ in range(4):
+        engine._advance_statuses_and_lifetimes(state)
+    assert bandit.dash_remaining_us == 0
+
+    engine._advance_attacks(state)
+
+    assert target.max_hp - target.hp == int(RULESET.card("bandit").mechanics["dash"]["dash_damage"])
+    assert bandit.attack_count == 1
+    assert not bandit.dash_attack_active
+
+
+def test_bandit_dash_misses_when_target_leaves_landing_range() -> None:
+    engine, state = _state()
+    bandit = _entity(state, "bandit", 0, 8_000, 15_000)
+    target = _entity(state, "giant", 1, 11_000, 15_000)
+    bandit.target_uid = target.uid
+
+    engine._move_entities(state)
+    target.x_mtile = 16_000
+    for _ in range(4):
+        engine._advance_statuses_and_lifetimes(state)
+    before = target.hp
+    engine._advance_attacks(state)
+
+    assert target.hp == before
+    assert not bandit.dash_attack_active
+
+    target.x_mtile = 11_000
+    engine._move_entities(state)
+    for _ in range(8):
+        engine._advance_attacks(state)
+    assert target.max_hp - target.hp == int(RULESET.card("bandit").damage or 0)
+
+
 def test_lumberjack_death_rage_uses_rage_damage_on_its_first_pulse() -> None:
     engine, state = _state()
     lumberjack = _entity(state, "lumberjack", 0, 9_000, 15_000)

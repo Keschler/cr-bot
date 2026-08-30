@@ -61,7 +61,7 @@ BASE_HOG_CYCLE_DECK = PLAYER_DECK
 # phase/fuse entities, and structure-safe navigation) are part of this engine
 # identity.  Replays and mined evidence must never be silently interpreted by
 # a newer algorithm.
-ENGINE_VERSION = "reference-0.33.0"
+ENGINE_VERSION = "reference-0.34.0"
 _SEED_MASK = (1 << 64) - 1
 _SLOW_STATUS_KINDS = frozenset({"slow", "freeze", "poison-slow", "earthquake-slow"})
 
@@ -2529,7 +2529,13 @@ class BattleEngine:
                         target.y_mtile,
                         travel,
                     )
-                    self._reset_attack_preload(entity)
+                    # The dash itself is the loaded attack.  Starting the
+                    # ordinary first-hit clock here would make Bandit wait a
+                    # full Hit Speed after landing before applying the
+                    # authored dash damage.
+                    entity.pending_target_uid = target.uid
+                    entity.windup_remaining_us = 0
+                    entity.attack_load_remaining_us = 0
                     entity.dash_attack_active = True
                     entity.dash_remaining_us = max(
                         self.ruleset.tick_us,
@@ -3105,6 +3111,17 @@ class BattleEngine:
                 or definition.range_mtile is None
             ):
                 continue
+
+            # A Bandit dash is an impact at the locked landing point, not a
+            # deferred damage reservation.  If the target moved out of the
+            # landing envelope while the dash was airborne, the special hit
+            # misses and the body must return to its ordinary attack cycle.
+            if entity.dash_attack_active and not self._in_attack_range(entity, target):
+                self._reset_dash(state, entity, reason="target_out_of_range")
+                if entity.pending_target_uid == target.uid:
+                    entity.pending_target_uid = None
+                    entity.attack_load_remaining_us = 0
+                    entity.windup_remaining_us = 0
 
             # The game preloads the first attack while a troop is moving.  A
             # range-only scheduler starts the first-hit clock too late: a
