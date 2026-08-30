@@ -348,6 +348,9 @@ update 9 from the exact prior checkpoint, rolled it back at KL `0.009348 >
 0.008`, preserved update count 8, and passed the simulator-exploit audit. The
 same-state diagnosis reports `437 -> 4` bad-vs-good divergences. It is
 diagnostic evidence only; no held-out strength claim is attached.
+The clean continuation then accepted segments 9–10 (3,200 transitions) at
+KL `0.004676` and `0.003874`; its exploit audit passed and the same-state
+comparison remained at 4 divergences. This is still not a strength promotion.
 
 ## Simulator requirements
 

@@ -409,7 +409,9 @@ trajectory.
 
 No checkpoint has earned a strength promotion. Older checkpoints and
 evaluation tables are retained only as provenance and must not be used as
-current policy evidence.
+current policy evidence. The clean post-fix continuation accepted segments
+9–10 (3,200 transitions) at KL `0.004676` and `0.003874`, passed the exploit
+audit, and remained at 4 divergences on the identical diagnostic seed.
 
 ## RL phases
 
