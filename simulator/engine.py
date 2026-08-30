@@ -1782,18 +1782,36 @@ class BattleEngine:
             # Spirit per cadence but do not publish a maximum number alive.
             # Other spawners retain their sourced finite caps.
             if max_alive is None or alive_children < max_alive:
-                for _ in range(int(spawn["count"])):
+                for spawn_index in range(int(spawn["count"])):
                     if max_alive is not None and alive_children >= max_alive:
                         break
+                    raw_child_deploy_time = spawn.get("child_deploy_time_us")
+                    child_spawn_stagger_us = int(
+                        spawn.get("child_spawn_stagger_us") or 0
+                    )
+                    if child_spawn_stagger_us:
+                        # A stagger is added to the child's ordinary deploy
+                        # clock.  Explicit child deployment overrides (for
+                        # example Goblin Hut's 0.5 s release delay) remain
+                        # authoritative; without one, use the child card's
+                        # own deployment time rather than silently making the
+                        # first body deploy instantly.
+                        child_deploy_time_us = (
+                            int(raw_child_deploy_time)
+                            if raw_child_deploy_time is not None
+                            else self.ruleset.card(child_card_id).deploy_time_us
+                        ) + spawn_index * child_spawn_stagger_us
+                    else:
+                        child_deploy_time_us = (
+                            int(raw_child_deploy_time)
+                            if raw_child_deploy_time is not None
+                            else None
+                        )
                     child_entity = self._spawn_single_child(
                         state,
                         parent,
                         self.ruleset.card(child_card_id),
-                        deploy_remaining_us=(
-                            int(spawn["child_deploy_time_us"])
-                            if spawn.get("child_deploy_time_us") is not None
-                            else None
-                        ),
+                        deploy_remaining_us=child_deploy_time_us,
                     )
                     alive_entities.append(child_entity)
                     child_key = (parent.uid, child_entity.card_id)

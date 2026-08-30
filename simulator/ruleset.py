@@ -1249,7 +1249,10 @@ def _validate_mechanics(row: dict[str, Any], context: str) -> None:
             "card_id", "interval_us", "start_delay_us", "max_alive", "count"
         }
         spawn_allowed = spawn_required | {
-            "activation_range_mtile", "requires_visible_enemy", "child_deploy_time_us"
+            "activation_range_mtile",
+            "requires_visible_enemy",
+            "child_deploy_time_us",
+            "child_spawn_stagger_us",
         }
         missing_spawn = sorted(spawn_required - set(spawn_row))
         unknown_spawn = sorted(set(spawn_row) - spawn_allowed)
@@ -1269,6 +1272,8 @@ def _validate_mechanics(row: dict[str, Any], context: str) -> None:
             _require_int(spawn_row, "activation_range_mtile", minimum=1)
         if "child_deploy_time_us" in spawn_row:
             _require_int(spawn_row, "child_deploy_time_us", minimum=0)
+        if "child_spawn_stagger_us" in spawn_row:
+            _require_int(spawn_row, "child_spawn_stagger_us", minimum=0)
         if "requires_visible_enemy" in spawn_row and not isinstance(
             spawn_row["requires_visible_enemy"], bool
         ):

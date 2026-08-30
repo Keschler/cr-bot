@@ -124,8 +124,16 @@ def test_spawn_source_specific_first_hit_values_are_kept_separate() -> None:
     assert cards["goblins"]["first_hit_delay_us"] == 600_000
     assert cards["goblin-gang"]["first_hit_delay_us"] == 600_000
     assert cards["goblin-gang"]["mechanics"]["spawn_children"] == [
-        {"card_id": "goblin-gang-goblin", "count": 3},
-        {"card_id": "spear-goblin", "count": 3},
+        {
+            "card_id": "goblin-gang-goblin",
+            "count": 3,
+            "offsets_mtile": [[-800, 400], [0, 400], [800, 400]],
+        },
+        {
+            "card_id": "spear-goblin",
+            "count": 3,
+            "offsets_mtile": [[-800, -400], [0, -400], [800, -400]],
+        },
     ]
     assert cards["goblin-gang-goblin"]["first_hit_delay_us"] == 600_000
     assert cards["goblin"]["first_hit_delay_us"] == 400_000

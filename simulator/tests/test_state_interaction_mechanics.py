@@ -42,6 +42,55 @@ def _entity(state, card_id: str, owner: int, x: int, y: int, *, hp: int | None =
     return entity
 
 
+@pytest.mark.parametrize("card_id", ["goblin-gang", "rascals"])
+def test_mixed_formations_keep_front_and_rear_bodies_on_their_documented_sides(
+    card_id: str,
+) -> None:
+    for owner in (0, 1):
+        engine, state = _state()
+        engine._spawn_card_entities(state, owner, RULESET.card(card_id), (9, 16))
+        children = [
+            entity
+            for entity in state.entities.values()
+            if entity.alive
+            and entity.owner == owner
+            and entity.card_id
+            in (
+                {"goblin-gang-goblin", "spear-goblin"}
+                if card_id == "goblin-gang"
+                else {"rascal-boy", "rascal-girl"}
+            )
+        ]
+
+        if card_id == "goblin-gang":
+            front = [
+                entity for entity in children if entity.card_id == "goblin-gang-goblin"
+            ]
+            rear = [entity for entity in children if entity.card_id == "spear-goblin"]
+        else:
+            front = [entity for entity in children if entity.card_id == "rascal-boy"]
+            rear = [entity for entity in children if entity.card_id == "rascal-girl"]
+
+        assert len(front) == (3 if card_id == "goblin-gang" else 1)
+        assert len(rear) == (3 if card_id == "goblin-gang" else 2)
+        if owner == 0:
+            assert min(entity.y_mtile for entity in front) > max(
+                entity.y_mtile for entity in rear
+            )
+        else:
+            assert max(entity.y_mtile for entity in front) < min(
+                entity.y_mtile for entity in rear
+            )
+
+        # Mixed children are released in documented group order and retain
+        # the side-dependent mirror rather than inheriting the old generic row.
+        assert [entity.deploy_remaining_us for entity in children] == (
+            [0, 100_000, 200_000, 300_000, 400_000, 500_000]
+            if card_id == "goblin-gang"
+            else [0, 100_000, 200_000]
+        )
+
+
 def test_clones_keep_one_hp_shields_and_clone_death_children() -> None:
     engine, state = _state()
     original = _entity(state, "guards", 0, 9_000, 15_000)

@@ -231,6 +231,26 @@ def test_each_spawner_has_an_independent_max_alive_cap() -> None:
     assert len(second_children) == 6
 
 
+def test_barbarian_hut_staggers_bodies_within_each_wave() -> None:
+    engine, state = _state()
+    hut = _entity(state, "barbarian-hut", 0, 9_000, 20_000, hp=1_000)
+    hut.deploy_remaining_us = 0
+    hut.spawn_cooldown_us = 0
+
+    engine._advance_spawners(state, RULESET.tick_us)
+
+    children = [
+        entity
+        for entity in state.entities.values()
+        if entity.alive and entity.parent_uid == hut.uid
+    ]
+    assert [entity.deploy_remaining_us for entity in children] == [
+        1_000_000,
+        1_500_000,
+        2_000_000,
+    ]
+
+
 def test_first_attack_preloads_before_a_troop_reaches_attack_range() -> None:
     engine, state = _state()
     attacker = _entity(state, "knight", 0, 7_000, 15_000)

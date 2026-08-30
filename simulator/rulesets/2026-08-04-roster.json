@@ -746,6 +746,7 @@
         "projectile_mode": "none",
         "spawn": {
           "card_id": "barbarians",
+          "child_spawn_stagger_us": 500000,
           "count": 3,
           "interval_us": 15000000,
           "max_alive": 6,
@@ -770,7 +771,8 @@
           "local-card-metadata-2026-08-14"
         ],
         "generated_mechanics": [
-          "local-card-metadata-2026-08-14"
+          "local-card-metadata-2026-08-14",
+          "clash-wiki-barbarian-hut-wave-stagger-2026-08-30"
         ],
         "identity": [
           "local-card-metadata-2026-08-14"
@@ -5018,6 +5020,7 @@
         "knockback_mtile": 0,
         "lifetime_decay": null,
         "lifetime_start": null,
+        "mirror_spawn_layout": true,
         "movement_layer": null,
         "persistent_effect": null,
         "piercing": false,
@@ -5026,11 +5029,39 @@
         "spawn_children": [
           {
             "card_id": "goblin-gang-goblin",
-            "count": 3
+            "count": 3,
+            "offsets_mtile": [
+              [
+                -800,
+                400
+              ],
+              [
+                0,
+                400
+              ],
+              [
+                800,
+                400
+              ]
+            ]
           },
           {
             "card_id": "spear-goblin",
-            "count": 3
+            "count": 3,
+            "offsets_mtile": [
+              [
+                -800,
+                -400
+              ],
+              [
+                0,
+                -400
+              ],
+              [
+                800,
+                -400
+              ]
+            ]
           }
         ],
         "spawn_layout_mtile": [
@@ -5085,7 +5116,8 @@
           "official-april-2025"
         ],
         "generated_mechanics": [
-          "local-card-metadata-2026-08-14"
+          "local-card-metadata-2026-08-14",
+          "clash-wiki-goblin-gang-formation-2026-08-30"
         ],
         "identity": [
           "local-card-metadata-2026-08-14"
@@ -9692,11 +9724,27 @@
         "spawn_children": [
           {
             "card_id": "rascal-boy",
-            "count": 1
+            "count": 1,
+            "offsets_mtile": [
+              [
+                0,
+                500
+              ]
+            ]
           },
           {
             "card_id": "rascal-girl",
-            "count": 2
+            "count": 2,
+            "offsets_mtile": [
+              [
+                -600,
+                -500
+              ],
+              [
+                600,
+                -500
+              ]
+            ]
           }
         ],
         "spawn_layout_mtile": [
@@ -9739,7 +9787,8 @@
           "local-high-severity-card-fixes-2026-08-29"
         ],
         "generated_mechanics": [
-          "local-card-metadata-2026-08-14"
+          "local-card-metadata-2026-08-14",
+          "clash-wiki-rascals-formation-2026-08-30"
         ],
         "hitpoints": [
           "official-june-2026"
@@ -12407,7 +12456,7 @@
       ]
     }
   },
-  "content_hash": "sha256:b00f139d91479fcba4aa3eda230fa3dbba340cc593514437251519d7ac05f42c",
+  "content_hash": "sha256:1707ae871f288485a15a7179d41ff958ffdfe874f135e793b5fd10a6619549d5",
   "interaction_set": [
     "archers",
     "arrows",
@@ -12641,6 +12690,16 @@
       "sha256": null,
       "url": "https://clashroyale.fandom.com/wiki/User_blog:AesDragon/Hidden_card_stats:_Sight_range"
     },
+    "clash-wiki-barbarian-hut-wave-stagger-2026-08-30": {
+      "confidence_tier": "B",
+      "kind": "card-mechanics-community-reference",
+      "lineage": "Current Clash Royale Wiki Barbarian Hut page, Liquipedia card table, and Supercell October 2022 balance notes",
+      "note": "The current Hut emits three Barbarians every 15 seconds; the current mechanic reference documents a 0.5-second delay between successive Barbarians. The official October 2022 notes independently pin the three-body, 15-second, 30-second configuration.",
+      "published_at": null,
+      "retrieved_at": "2026-08-30",
+      "sha256": null,
+      "url": "https://clashroyale.fandom.com/wiki/Barbarian_Hut"
+    },
     "clash-wiki-cursed-hog-sight-2026-08-30": {
       "confidence_tier": "B",
       "kind": "current-card-mechanics-reference",
@@ -12650,6 +12709,26 @@
       "retrieved_at": "2026-08-30",
       "sha256": null,
       "url": "https://clashroyale.fandom.com/wiki/Mother_Witch"
+    },
+    "clash-wiki-goblin-gang-formation-2026-08-30": {
+      "confidence_tier": "B",
+      "kind": "card-mechanics-community-reference",
+      "lineage": "Current Clash Royale Wiki Goblin Gang page, Liquipedia card table, and community formation discussion",
+      "note": "The current Gang has three Goblins and three Spear Goblins; Goblins spawn before and in front of the Spear Goblins in a hexagon-like formation. The exact render-space offsets are not published, so the checked-in offsets preserve the documented front/back relationship and are explicitly provisional.",
+      "published_at": null,
+      "retrieved_at": "2026-08-30",
+      "sha256": null,
+      "url": "https://clashroyale.fandom.com/wiki/Goblin_Gang"
+    },
+    "clash-wiki-rascals-formation-2026-08-30": {
+      "confidence_tier": "B",
+      "kind": "card-mechanics-community-reference",
+      "lineage": "Current Clash Royale Wiki Rascals page and independent formation guide",
+      "note": "The current Rascals card deploys one Boy in front of two ranged Girls; the 2025 update also corrected side-dependent mirroring. Exact render-space offsets are not published, so the checked-in offsets preserve the documented lead/rear relationship and are explicitly provisional.",
+      "published_at": null,
+      "retrieved_at": "2026-08-30",
+      "sha256": null,
+      "url": "https://clashroyale.fandom.com/wiki/Rascals"
     },
     "clash-wiki-royal-recruits-formation-2026-08-30": {
       "confidence_tier": "B",

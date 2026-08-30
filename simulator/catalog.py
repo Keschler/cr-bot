@@ -45,6 +45,9 @@ PHOENIX_EGG_MECHANICS_SOURCE_ID = "supercell-phoenix-egg-mechanics-2026-08-30"
 SIGHT_RANGE_SOURCE_ID = "aesdragon-hidden-sight-ranges-2026-08-30"
 CURSED_HOG_SIGHT_SOURCE_ID = "clash-wiki-cursed-hog-sight-2026-08-30"
 ROYAL_RECRUITS_FORMATION_SOURCE_ID = "clash-wiki-royal-recruits-formation-2026-08-30"
+BARBARIAN_HUT_SPAWN_SOURCE_ID = "clash-wiki-barbarian-hut-wave-stagger-2026-08-30"
+GOBLIN_GANG_FORMATION_SOURCE_ID = "clash-wiki-goblin-gang-formation-2026-08-30"
+RASCALS_FORMATION_SOURCE_ID = "clash-wiki-rascals-formation-2026-08-30"
 GOBLIN_MACHINE_SOURCE_ID = "royaleapi-goblin-machine-2024"
 LEVEL11_SOURCE_PAYLOAD = load_level11_source()
 DECKSHOP_SOURCE_ID = "deckshop-battle-healer-2026-08-14"
@@ -233,12 +236,36 @@ SPAWN_CHILDREN_DEFINITIONS: Mapping[str, tuple[Mapping[str, Any], ...]] = {
         # April 2025 changed the Goblin Gang's Goblins to a 0.6 s first hit.
         # Keep them separate from the generic child used by Goblin Barrel,
         # Goblin Curse, and Goblin Drill, whose first hit stayed at 0.4 s.
-        {"card_id": "goblin-gang-goblin", "count": 3},
-        {"card_id": "spear-goblin", "count": 3},
+        # The Gang is a front/back hexagon: knife Goblins lead and Spear
+        # Goblins occupy the rear.  The exact render-space offsets are not
+        # published, so these symmetric 0.8 x 0.8-tile centers are the
+        # conservative executable approximation used until video fitting.
+        {
+            "card_id": "goblin-gang-goblin",
+            "count": 3,
+            "offsets_mtile": [[-800, 400], [0, 400], [800, 400]],
+        },
+        {
+            "card_id": "spear-goblin",
+            "count": 3,
+            "offsets_mtile": [[-800, -400], [0, -400], [800, -400]],
+        },
     ),
     "rascals": (
-        {"card_id": "rascal-boy", "count": 1},
-        {"card_id": "rascal-girl", "count": 2},
+        # The Boy takes the lead; the two ranged Girls form the rear row.
+        # Render-space distances are not exposed by card pages, so retain a
+        # compact symmetric approximation rather than the old single-row
+        # generic layout.
+        {
+            "card_id": "rascal-boy",
+            "count": 1,
+            "offsets_mtile": [[0, 500]],
+        },
+        {
+            "card_id": "rascal-girl",
+            "count": 2,
+            "offsets_mtile": [[-600, -500], [600, -500]],
+        },
     ),
 }
 
@@ -293,6 +320,9 @@ SPAWNER_DEFINITIONS: Mapping[str, Mapping[str, int | str | None]] = {
         "start_delay_us": 1_000_000,
         "max_alive": 6,
         "count": 3,
+        # The Hut's three-body wave keeps the Barbarian's normal one-second
+        # deployment clock and adds a half-second between successive bodies.
+        "child_spawn_stagger_us": 500_000,
     },
     "furnace": {
         "card_id": "fire-spirit",
@@ -1676,7 +1706,7 @@ def _generated_card(card_id: str, metadata: Mapping[str, Any]) -> dict[str, Any]
     if card_id in {
         "royal-recruits", "royal-hogs", "guards", "rascals", "goblins",
         "barbarians", "skeleton-army", "skeleton-barrel", "zappies", "bats",
-        "minions", "minion-horde",
+        "minions", "minion-horde", "goblin-gang",
     }:
         mechanics["mirror_spawn_layout"] = True
     if card_id in {"hog-rider", "royal-hogs", "ram-rider", "prince", "dark-prince"}:
@@ -1862,6 +1892,18 @@ def _generated_card(card_id: str, metadata: Mapping[str, Any]) -> dict[str, Any]
         provenance["level_11_stats"] = [LEVEL11_SOURCE_ID]
     if card_id == "goblin-machine":
         provenance.setdefault("generated_mechanics", []).append(GOBLIN_MACHINE_SOURCE_ID)
+    if card_id == "barbarian-hut":
+        provenance.setdefault("generated_mechanics", []).append(
+            BARBARIAN_HUT_SPAWN_SOURCE_ID
+        )
+    if card_id == "goblin-gang":
+        provenance.setdefault("generated_mechanics", []).append(
+            GOBLIN_GANG_FORMATION_SOURCE_ID
+        )
+    if card_id == "rascals":
+        provenance.setdefault("generated_mechanics", []).append(
+            RASCALS_FORMATION_SOURCE_ID
+        )
     if card_id == "royal-recruits":
         provenance.setdefault("generated_mechanics", []).append(
             ROYAL_RECRUITS_FORMATION_SOURCE_ID
@@ -3059,6 +3101,36 @@ def build_roster_ruleset_raw(base_raw: Mapping[str, Any] | None = None) -> dict[
             "lineage": "Current Clash Royale Wiki Royal Recruits page and documented placement behavior",
             "note": "Royal Recruits deploy six bodies on a horizontal line; shifting the central deployment tile produces the documented 3/3, 2/4, and 4/2 lane splits. The simulator maps one arena tile to 1,000 milli-tiles.",
         },
+        BARBARIAN_HUT_SPAWN_SOURCE_ID: {
+            "confidence_tier": "B",
+            "kind": "card-mechanics-community-reference",
+            "url": "https://clashroyale.fandom.com/wiki/Barbarian_Hut",
+            "retrieved_at": "2026-08-30",
+            "published_at": None,
+            "sha256": None,
+            "lineage": "Current Clash Royale Wiki Barbarian Hut page, Liquipedia card table, and Supercell October 2022 balance notes",
+            "note": "The current Hut emits three Barbarians every 15 seconds; the current mechanic reference documents a 0.5-second delay between successive Barbarians. The official October 2022 notes independently pin the three-body, 15-second, 30-second configuration.",
+        },
+        GOBLIN_GANG_FORMATION_SOURCE_ID: {
+            "confidence_tier": "B",
+            "kind": "card-mechanics-community-reference",
+            "url": "https://clashroyale.fandom.com/wiki/Goblin_Gang",
+            "retrieved_at": "2026-08-30",
+            "published_at": None,
+            "sha256": None,
+            "lineage": "Current Clash Royale Wiki Goblin Gang page, Liquipedia card table, and community formation discussion",
+            "note": "The current Gang has three Goblins and three Spear Goblins; Goblins spawn before and in front of the Spear Goblins in a hexagon-like formation. The exact render-space offsets are not published, so the checked-in offsets preserve the documented front/back relationship and are explicitly provisional.",
+        },
+        RASCALS_FORMATION_SOURCE_ID: {
+            "confidence_tier": "B",
+            "kind": "card-mechanics-community-reference",
+            "url": "https://clashroyale.fandom.com/wiki/Rascals",
+            "retrieved_at": "2026-08-30",
+            "published_at": None,
+            "sha256": None,
+            "lineage": "Current Clash Royale Wiki Rascals page and independent formation guide",
+            "note": "The current Rascals card deploys one Boy in front of two ranged Girls; the 2025 update also corrected side-dependent mirroring. Exact render-space offsets are not published, so the checked-in offsets preserve the documented lead/rear relationship and are explicitly provisional.",
+        },
     }
     for source_id, source in load_official_overrides().get("source_records", {}).items():
         raw["sources"].setdefault(
@@ -3137,6 +3209,9 @@ __all__ = [
     "SIGHT_RANGE_SOURCE_ID",
     "SIGHT_RANGE_MOBILE",
     "ROYAL_RECRUITS_FORMATION_SOURCE_ID",
+    "BARBARIAN_HUT_SPAWN_SOURCE_ID",
+    "GOBLIN_GANG_FORMATION_SOURCE_ID",
+    "RASCALS_FORMATION_SOURCE_ID",
     "DECKSHOP_SOURCE_ID",
     "DECKSHOP_HEAL_SPIRIT_SOURCE_ID",
     "DEATH_DEFINITIONS",
