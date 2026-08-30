@@ -407,6 +407,17 @@ def _generated_support_plan(
     required_support: list[dict[str, Any]] = []
     main_tick = 520
     main_cell = _test_cell(card.kind, 1)
+    # Firecracker, Electro Wizard, and Princess need live, non-attacking
+    # bodies for their area/line/multi-target probes.  The ordinary
+    # Musketeer/Cannon fixture
+    # can kill the tested troop before its first attack (or leave only one
+    # target in range), which makes the generated case fail for setup reasons
+    # rather than proving the authored component.
+    passive_target_fixture = (
+        card.kind == "troop"
+        and card.card_id in {"firecracker", "electro-wizard", "princess"}
+        and mechanic in {"area_damage", "line_piercing", "multi_targeting"}
+    )
 
     persistent = card.mechanics.get("persistent_effect") or {}
     friendly_setup = bool(
@@ -482,9 +493,12 @@ def _generated_support_plan(
     ) or visible_enemy_spawner or troop_target_case
 
     if mechanic == "projectile_speed":
-        # The X-Bow probe uses a defensive Cannon as a durable ground target;
-        # row 20 is the legal player-0 building side for this fixture.
-        support_cell = (3, 20)
+        # Keep a building target close enough to a forward defensive
+        # structure to acquire it.  Row 18 is legal for the fixed player
+        # building and leaves the target outside the opposing tower's first
+        # attack window.  Troop projectile probes override this with a
+        # nearby Musketeer below because Spirits have only short range.
+        support_cell = (3, 18)
 
     if friendly_setup:
         support_card = _support_card_for_opponent(ruleset, card_id)
@@ -498,7 +512,7 @@ def _generated_support_plan(
         # The player Hog is placed on the same lane.  Spells can target its
         # own side directly; buildings wait until tick 520 so the Hog is fully
         # deployed and walking when the defensive building appears.
-        support_cell = (3, 20) if mechanic == "projectile_speed" else (3, 17)
+        support_cell = (3, 18) if mechanic == "projectile_speed" else (3, 17)
         # A building-targeting Hog is the useful opponent for a defensive
         # building.  Troop-target branches instead need Musketeer so the
         # tested entity can acquire and damage a troop (and eventually die),
@@ -566,9 +580,38 @@ def _generated_support_plan(
             support_card = "cannon"
             support_slot = player_deck.index(support_card)
             support_cell = (3, 18)
+        elif (
+            mechanic == "projectile_speed"
+            and card.kind == "troop"
+            and not bool(card.mechanics.get("building_only"))
+        ):
+            # Fast Spirits have a short authored acquisition range.  A
+            # fixed-deck Musketeer at row 17 is close enough to the troop
+            # probe at row 14 and does not disappear to the Princess Tower
+            # before the tested projectile is launched.
+            support_card = "musketeer"
+            support_slot = player_deck.index(support_card)
+            support_cell = (3, 17)
+        elif card_id == "elixir-collector" and mechanic == "death_effect":
+            # Put a fresh fixed-deck attacker beside the Collector at the
+            # same scheduled tick.  The ordinary Hog fixture is building-
+            # targeting and uses a different lane, so it can walk past this
+            # passive structure without ever exercising its death branch.
+            support_card = "musketeer"
+            support_slot = player_deck.index(support_card)
+            support_cell = (3, 18)
+            main_cell = (3, 13)
         elif mechanic == "projectile_speed":
             support_card = "cannon"
             support_slot = player_deck.index(support_card)
+        elif passive_target_fixture:
+            # Hog Rider and Ice Golem are building-only/passive targets in
+            # this fixture, so they remain alive long enough for the tested
+            # troop to perform its attack.  Ice Golem is drawn into hand slot
+            # three immediately after Hog is played below.
+            support_card = "hog-rider"
+            support_slot = player_deck.index(support_card)
+            support_cell = (3, 18)
         elif mechanic in {"hook_pull", "hook_targeting"}:
             # Hook semantics are troop-only; use the slot-0 Hog body rather
             # than a ranged support unit that the normal attack scheduler may
@@ -590,7 +633,11 @@ def _generated_support_plan(
         # preserves the real target-acquisition/attack ordering while still
         # using the fixed player deck (no privileged entity injection).
         support_tick = (
-            520
+            470
+            if passive_target_fixture
+            else 520
+            if card_id == "elixir-collector" and mechanic == "death_effect"
+            else 520
             if use_cannon or (card_id == "cannon" and mechanic == "projectile_speed")
             else 470
             if mechanic in {"jump_landing", "deployment_effect", "knockback"}
@@ -598,6 +645,18 @@ def _generated_support_plan(
         )
         support_actions.append(ScheduledAction(support_tick, PlayCardAction(0, support_slot, support_cell)))
         required_support.append({"player": 0, "card_id": support_card})
+        if passive_target_fixture and mechanic in {"line_piercing", "multi_targeting"}:
+            # Playing Hog at slot zero exposes Ice Golem in slot three.  The
+            # one-tick separation keeps both actions legal while the short
+            # lead time prevents either body from walking away from the
+            # tested troop before deployment.
+            support_actions.append(
+                ScheduledAction(
+                    support_tick + 1,
+                    PlayCardAction(0, 3, (3, 20)),
+                )
+            )
+            required_support.append({"player": 0, "card_id": "ice-golem"})
         if mechanic == "secondary_attack":
             # The rocket has a blind inner range and excludes the primary
             # target.  Keep two legal bodies in its 2.5--5 tile window so the
@@ -676,7 +735,7 @@ def _generated_support_plan(
     # one legal victim.  Play two additional fixed-deck bodies on the same
     # lane after Musketeer so the engine must perform its real candidate
     # ordering rather than only hitting a Crown Tower.
-    if (mechanic in _MULTI_VICTIM_MECHANICS or mechanic == "line_piercing") and enemy_target_setup and not (
+    if (mechanic in _MULTI_VICTIM_MECHANICS or mechanic == "line_piercing") and enemy_target_setup and not passive_target_fixture and not (
         card.kind == "troop" and bool(card.mechanics.get("building_only"))
     ) and not (card_id == "sparky" and mechanic == "area_damage"):
         if support_card == "musketeer":
@@ -703,11 +762,18 @@ def _generated_support_plan(
             )
             required_support.append({"player": 0, "card_id": "skeletons"})
 
-    # Mirror is intentionally excluded from the opening hand by the engine.
-    # The support play above draws it into the fourth slot, so its generated
-    # action must follow the actual hand transition instead of assuming every
-    # opponent card starts in slot zero.
-    main_slot = 3 if card.card_id == "mirror" and friendly_setup else 0
+    # Mirror and Elixir Collector are intentionally excluded from the opening
+    # hand by the engine.  Mirror already has a friendly setup play above;
+    # Collector needs one ordinary opening-hand play to expose it in slot
+    # three.  The action is deliberately slot-based: the engine remains the
+    # authority for which non-excluded card occupies slot zero.
+    if card.card_id == "elixir-collector":
+        support_actions.append(
+            ScheduledAction(400, PlayCardAction(1, 0, _test_cell("troop", 1)))
+        )
+        main_slot = 3
+    else:
+        main_slot = 3 if card.card_id == "mirror" and friendly_setup else 0
     main_action = ScheduledAction(main_tick, PlayCardAction(1, main_slot, main_cell))
     actions = tuple(sorted((*support_actions, main_action), key=lambda row: (row.tick, row.action.player)))
     varied_actions = _variant_actions(actions, variant)
