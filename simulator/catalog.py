@@ -395,19 +395,24 @@ DASH_DEFINITIONS: Mapping[str, Mapping[str, int | bool]] = {
     "bandit": {
         "dash_range_mtile": 6_000,
         "dash_damage": 388,
+        # A dash remains invulnerable for the short movement/landing phase.
+        # The 200 ms window is the fixed-tick approximation used by the
+        # current Level-11 interaction snapshot.
+        "duration_us": 200_000,
         "min_dash_distance_mtile": 1_000,
         "reset_on_hit": True,
     },
 }
 
 # Fisherman's long-range hook is represented independently from his short
-# melee attack range.  The pull only moves troop bodies in V1; building/tower
-# hook eligibility and exact reel timing remain explicit unknowns.
+# melee attack range.  Troops are reeled toward him; buildings and Crown
+# Towers cause Fisherman to reel himself to melee range.
 HOOK_DEFINITIONS: Mapping[str, Mapping[str, int | bool]] = {
     "fisherman": {
         "hook_range_mtile": 7_000,
+        "min_hook_range_mtile": 3_500,
         "pull_distance_mtile": 1_200,
-        "pull_troops_only": True,
+        "pull_troops_only": False,
     },
 }
 

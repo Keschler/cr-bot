@@ -120,6 +120,16 @@ class EntityState:
     # Bandit's dash is a distinct one-impact phase; it must not share the
     # movement-charge fields because a dash can arm without a long run.
     dash_attack_active: bool = False
+    # A dash remains an explicit short-lived phase after the body reaches its
+    # landing point.  Damage, hard crowd control, and knockback are ignored
+    # while this clock is positive; the dash attack resolves only after the
+    # phase has ended.
+    dash_remaining_us: int = 0
+    # Electro Giant reflection is once per concrete attack instance.  Keep
+    # the last source/attack pair in authoritative state so multi-projectile
+    # attacks cannot reflect independently while remaining replayable.
+    last_reflection_source_uid: int | None = None
+    last_reflection_attack_instance_id: int | None = None
     # Inferno attacks ramp their damage while a target remains locked.  The
     # elapsed time and stage are authoritative so a replay can be resumed
     # without reconstructing hidden beam state from events.
@@ -228,6 +238,10 @@ class ProjectileState:
     # evaluated on that segment, not repeatedly from the launch point.
     previous_x_mtile: int | None = None
     previous_y_mtile: int | None = None
+    # All pellets emitted by one attacker shot share this identifier.  It is
+    # intentionally optional for old serialized projectiles and single-hit
+    # fixtures that do not need attack-level aggregation.
+    attack_instance_id: int | None = None
 
 
 @dataclass(slots=True)
@@ -503,6 +517,9 @@ def battle_state_from_primitive(raw: dict[str, Any]) -> BattleState:
         entity_row.setdefault("attack_charge_active", False)
         entity_row.setdefault("attack_charge_distance_mtile", 0)
         entity_row.setdefault("dash_attack_active", False)
+        entity_row.setdefault("dash_remaining_us", 0)
+        entity_row.setdefault("last_reflection_source_uid", None)
+        entity_row.setdefault("last_reflection_attack_instance_id", None)
         entity_row.setdefault("ramp_elapsed_us", 0)
         entity_row.setdefault("ramp_stage", 0)
         entity_row.setdefault("revive_eligible", True)
@@ -556,6 +573,7 @@ def battle_state_from_primitive(raw: dict[str, Any]) -> BattleState:
         projectile_row.setdefault("chain_delay_remaining_us", 0)
         projectile_row.setdefault("previous_x_mtile", None)
         projectile_row.setdefault("previous_y_mtile", None)
+        projectile_row.setdefault("attack_instance_id", None)
         projectile_row.setdefault("allowed_targets", ())
         projectile_row.setdefault("origin_x_mtile", projectile_row.get("x_mtile", 0))
         projectile_row.setdefault("origin_y_mtile", projectile_row.get("y_mtile", 0))

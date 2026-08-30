@@ -96,7 +96,7 @@ def test_current_card_balance_values_are_applied_to_the_fixed_ruleset() -> None:
     assert cards["goblin-curse"]["mechanics"]["persistent_effect"]["crown_damage_per_tick"] == 10
     assert cards["hog-rider"]["first_hit_delay_us"] == 600_000
     assert cards["lumberjack"]["mechanics"]["death_rage"] == {
-        "duration_us": 5_500_000,
+            "duration_us": 5_500_000,
         "tick_interval_us": 100_000,
         "radius_mtile": 3_000,
         "speed_multiplier_milli": 1_300,

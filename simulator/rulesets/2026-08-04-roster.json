@@ -445,6 +445,7 @@
         "dash": {
           "dash_damage": 388,
           "dash_range_mtile": 6000,
+          "duration_us": 200000,
           "min_dash_distance_mtile": 1000,
           "reset_on_hit": true
         },
@@ -3618,8 +3619,9 @@
         "death": null,
         "hook": {
           "hook_range_mtile": 7000,
+          "min_hook_range_mtile": 3500,
           "pull_distance_mtile": 1200,
-          "pull_troops_only": true
+          "pull_troops_only": false
         },
         "impact_mode": "melee",
         "knockback_mtile": 0,
@@ -12128,7 +12130,7 @@
       ]
     }
   },
-  "content_hash": "sha256:71de5be6b2f73c2c02ee1a37e41b3d28dbb1775cfbe2cbab70ccac2718cbec4f",
+  "content_hash": "sha256:e9d4f33ceff0dbc126deba5ad1bf69c1a7b6cbe0865b02e1c90b43f6c910ef9c",
   "interaction_set": [
     "archers",
     "arrows",

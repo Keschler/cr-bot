@@ -906,10 +906,23 @@ def _validate_mechanics(row: dict[str, Any], context: str) -> None:
         dash = _as_dict(dash, dash_context)
         _reject_unknown(
             dash,
-            {"dash_range_mtile", "dash_damage", "min_dash_distance_mtile", "reset_on_hit"},
+            {
+                "dash_range_mtile",
+                "dash_damage",
+                "duration_us",
+                "min_dash_distance_mtile",
+                "reset_on_hit",
+            },
             dash_context,
         )
-        for name in ("dash_range_mtile", "dash_damage", "min_dash_distance_mtile"):
+        for name in (
+            "dash_range_mtile",
+            "dash_damage",
+            "duration_us",
+            "min_dash_distance_mtile",
+        ):
+            if name not in dash:
+                continue
             _require_int(dash, name, minimum=1)
         if not isinstance(dash.get("reset_on_hit"), bool):
             raise RulesetError(f"{dash_context}.reset_on_hit must be boolean")
@@ -919,10 +932,17 @@ def _validate_mechanics(row: dict[str, Any], context: str) -> None:
         hook = _as_dict(hook, hook_context)
         _reject_unknown(
             hook,
-            {"hook_range_mtile", "pull_distance_mtile", "pull_troops_only"},
+            {
+                "hook_range_mtile",
+                "min_hook_range_mtile",
+                "pull_distance_mtile",
+                "pull_troops_only",
+            },
             hook_context,
         )
         _require_int(hook, "hook_range_mtile", minimum=1)
+        if "min_hook_range_mtile" in hook:
+            _require_int(hook, "min_hook_range_mtile", minimum=0)
         _require_int(hook, "pull_distance_mtile", minimum=0)
         if not isinstance(hook.get("pull_troops_only"), bool):
             raise RulesetError(f"{hook_context}.pull_troops_only must be boolean")

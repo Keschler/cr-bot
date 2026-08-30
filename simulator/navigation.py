@@ -49,7 +49,12 @@ def point_is_walkable(arena: ArenaGeometry, x: int, y: int, radius: int = 0) -> 
     if not (radius <= y < arena.height_mtile - radius):
         return False
     if arena.river_y_min_mtile < y < arena.river_y_max_mtile:
-        return any(start <= x <= end for start, end in arena.bridge_x_ranges_mtile)
+        # The center must leave a full unit radius inside the bridge opening.
+        # Center-only checking lets large bodies clip through the river bank.
+        return any(
+            start + radius <= x <= end - radius
+            for start, end in arena.bridge_x_ranges_mtile
+        )
     return True
 
 

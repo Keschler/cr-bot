@@ -6,6 +6,7 @@ from simulator.navigation import point_is_walkable
 from simulator.roster import PLAYER_DECK
 from simulator.ruleset import load_ruleset
 from simulator.state import EntityState, ProjectileState
+from simulator.state import StatusState
 
 
 RULESET = load_ruleset("v1")
@@ -308,3 +309,166 @@ def test_graveyard_skeletons_are_bumped_to_legal_ground_positions() -> None:
     )
     assert distance_mtile(skeleton.x_mtile, skeleton.y_mtile, 9_000, 15_000) > 0
     engine.validate_state(state)
+
+
+def test_hog_rider_repeat_hits_use_hit_speed_without_first_hit_windup() -> None:
+    engine, state = _state()
+    hog = _entity(state, "hog-rider", 0, 9_000, 15_000)
+    target = _entity(state, "giant", 1, 10_500, 15_000)
+    hog.target_uid = target.uid
+
+    for _ in range(RULESET.card("hog-rider").first_hit_delay_us // RULESET.tick_us):
+        engine._advance_attacks(state)
+    assert hog.attack_count == 1
+
+    for _ in range(RULESET.card("hog-rider").attack_interval_us // RULESET.tick_us):
+        engine._advance_attacks(state)
+    assert hog.attack_count == 2
+    assert hog.windup_remaining_us == 0
+
+
+def test_hunter_fan_reflects_once_per_attack_instance() -> None:
+    engine, state = _state()
+    hunter = _entity(state, "hunter", 0, 9_000, 15_000)
+    giant = _entity(state, "electro-giant", 1, 9_500, 15_000)
+    hunter.pending_target_uid = giant.uid
+
+    before_hunter = hunter.hp
+    engine._resolve_attack(state, hunter)
+    for projectile in list(state.projectiles.values()):
+        projectile.x_mtile = projectile.target_x_mtile
+        projectile.y_mtile = projectile.target_y_mtile
+        engine._impact_projectile(state, projectile)
+
+    assert before_hunter - hunter.hp == int(
+        RULESET.card("electro-giant").mechanics["reflection"]["damage"]
+    )
+    assert sum(event.kind == "reflected_damage" for event in state.events) == 1
+
+
+def test_frozen_electro_giant_does_not_reflect_damage() -> None:
+    engine, state = _state()
+    hunter = _entity(state, "hunter", 0, 9_000, 15_000)
+    giant = _entity(state, "electro-giant", 1, 9_500, 15_000)
+    giant.statuses.append(StatusState(kind="freeze", remaining_us=1_000_000))
+    hunter.pending_target_uid = giant.uid
+    before_hunter = hunter.hp
+
+    engine._resolve_attack(state, hunter)
+    projectile = next(iter(state.projectiles.values()))
+    projectile.x_mtile = projectile.target_x_mtile
+    projectile.y_mtile = projectile.target_y_mtile
+    engine._impact_projectile(state, projectile)
+
+    assert giant.hp < giant.max_hp
+    assert hunter.hp == before_hunter
+    assert not any(event.kind == "reflected_damage" for event in state.events)
+
+
+def test_crown_tower_does_not_target_a_placed_building() -> None:
+    engine, state = _state()
+    tower = engine._tower(state, 1, "left")
+    building = _entity(state, "cannon", 0, tower.x_mtile - 2_000, tower.y_mtile)
+
+    assert not engine._valid_target(state, tower, building.uid)
+    assert not engine._spell_can_hit(tower.card_id, building)
+    assert engine._choose_target(state, tower) is None
+
+
+def test_fisherman_reels_himself_to_building_melee_range() -> None:
+    engine, state = _state()
+    fisherman = _entity(state, "fisherman", 0, 7_000, 15_000)
+    building = _entity(state, "cannon", 1, 13_000, 15_000)
+    hook = RULESET.card("fisherman").mechanics["hook"]
+
+    engine._apply_hook(state, fisherman, building, hook)
+
+    assert fisherman.x_mtile > 7_000
+    assert engine._edge_distance(fisherman, building) <= int(
+        RULESET.card("fisherman").range_mtile
+    )
+    assert any(event.kind == "hook_pulled" for event in state.events)
+    assert not any(event.kind == "hook_noop" for event in state.events)
+
+
+def test_lethal_in_flight_projectile_frees_attacker_to_retarget() -> None:
+    engine, state = _state()
+    attacker = _entity(state, "musketeer", 0, 9_000, 15_000)
+    projectile_source = _entity(state, "archers", 0, 8_000, 15_000)
+    reserved = _entity(state, "giant", 1, 10_000, 15_000, hp=100)
+    replacement = _entity(state, "giant", 1, 11_000, 15_000)
+    attacker.target_uid = reserved.uid
+    state.projectiles[state.next_uid] = ProjectileState(
+        uid=state.next_uid,
+        source_uid=projectile_source.uid,
+        source_card_id="archers",
+        owner=0,
+        x_mtile=8_500,
+        y_mtile=15_000,
+        target_x_mtile=reserved.x_mtile,
+        target_y_mtile=reserved.y_mtile,
+        target_uid=reserved.uid,
+        damage=100,
+        crown_damage=100,
+        speed_mtile_per_s=12_000,
+    )
+    state.next_uid += 1
+
+    engine._invalidate_and_acquire_targets(state)
+
+    assert attacker.target_uid == replacement.uid
+    in_flight = next(iter(state.projectiles.values()))
+    in_flight.x_mtile = in_flight.target_x_mtile
+    in_flight.y_mtile = in_flight.target_y_mtile
+    engine._impact_projectile(state, in_flight)
+    assert reserved.hp == 0
+
+
+def test_bridge_walkability_accounts_for_unit_radius() -> None:
+    start, end = RULESET.arena.bridge_x_ranges_mtile[0]
+    y = (RULESET.arena.river_y_min_mtile + RULESET.arena.river_y_max_mtile) // 2
+    radius = 500
+
+    assert not point_is_walkable(RULESET.arena, start + radius - 1, y, radius)
+    assert point_is_walkable(RULESET.arena, start + radius, y, radius)
+    assert point_is_walkable(RULESET.arena, end - radius, y, radius)
+    assert not point_is_walkable(RULESET.arena, end - radius + 1, y, radius)
+
+
+def test_bandit_dash_ignores_damage_and_hard_control_until_landing() -> None:
+    engine, state = _state()
+    bandit = _entity(state, "bandit", 0, 8_000, 15_000)
+    target = _entity(state, "giant", 1, 11_000, 15_000)
+    bandit.target_uid = target.uid
+
+    engine._move_entities(state)
+    assert bandit.dash_attack_active
+    assert bandit.dash_remaining_us > 0
+    before = bandit.hp
+    engine._deal_damage(state, bandit, 1_000, target.uid, "giant")
+    engine._apply_status(state, bandit, {"kind": "freeze", "duration_us": 1_000_000})
+    assert bandit.hp == before
+    assert bandit.dash_remaining_us > 0
+
+    for _ in range(10):
+        engine._advance_statuses_and_lifetimes(state)
+        if bandit.dash_remaining_us == 0:
+            break
+    assert bandit.dash_remaining_us == 0
+
+
+def test_lumberjack_death_rage_uses_rage_damage_on_its_first_pulse() -> None:
+    engine, state = _state()
+    lumberjack = _entity(state, "lumberjack", 0, 9_000, 15_000)
+    target = _entity(state, "giant", 1, 10_000, 15_000)
+    lumberjack.hp = 0
+
+    engine._resolve_deaths(state)
+
+    assert target.max_hp - target.hp == int(RULESET.card("rage").damage or 0)
+    effect = next(
+        effect
+        for effect in state.effects.values()
+        if effect.source_uid == lumberjack.uid
+    )
+    assert effect.damage_schedule == (int(RULESET.card("rage").damage or 0),)

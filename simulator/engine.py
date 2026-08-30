@@ -1507,6 +1507,15 @@ class BattleEngine:
     def _advance_statuses_and_lifetimes(self, state: BattleState) -> None:
         dt = self.ruleset.tick_us
         for entity in self._alive_entities(state):
+            if entity.dash_remaining_us > 0:
+                entity.dash_remaining_us = max(0, entity.dash_remaining_us - dt)
+                if entity.dash_remaining_us == 0:
+                    self._emit(
+                        state,
+                        "dash_ended",
+                        uid=entity.uid,
+                        card_id=entity.card_id,
+                    )
             if not entity.stealth_active and entity.stealth_remaining_us > 0:
                 entity.stealth_remaining_us = max(0, entity.stealth_remaining_us - dt)
                 if entity.stealth_remaining_us == 0:
@@ -2154,7 +2163,46 @@ class BattleEngine:
             and target.owner != source.owner
             and self._targetable_for_acquisition(state, target)
             and self._target_allowed(source, target)
+            and not self._projectile_lethally_reserved(state, target)
         )
+
+    @staticmethod
+    def _projectile_lethally_reserved(
+        state: BattleState,
+        target: EntityState,
+    ) -> bool:
+        """Return whether already-launched shots reserve a lethal target.
+
+        A projectile keeps its original target at contact, while the attacker
+        may acquire another target as soon as the in-flight shot is guaranteed
+        to be lethal. Shield damage is a complete hit transaction, so model it
+        explicitly instead of summing raw damage.
+        """
+
+        remaining_hp = target.hp
+        remaining_shield = target.shield_hp
+        incoming: list[tuple[int, int]] = []
+        for projectile in state.projectiles.values():
+            if (
+                projectile.alive
+                and projectile.target_uid == target.uid
+                and projectile.owner != target.owner
+            ):
+                damage = (
+                    projectile.crown_damage
+                    if target.kind == "tower"
+                    else projectile.damage
+                )
+                if damage > 0:
+                    incoming.append((projectile.uid, int(damage)))
+        for _, damage in sorted(incoming):
+            if remaining_shield > 0:
+                remaining_shield = max(0, remaining_shield - damage)
+            else:
+                remaining_hp = max(0, remaining_hp - damage)
+            if remaining_hp == 0:
+                return True
+        return False
 
     def _targetable_for_acquisition(
         self,
@@ -2232,6 +2280,7 @@ class BattleEngine:
                 and target.kind != "tower"
                 and self._targetable_for_acquisition(state, target)
                 and self._target_allowed(source, target)
+                and not self._projectile_lethally_reserved(state, target)
                 and self._edge_distance(source, target) <= sight
             ]
             return self._nearest_uid(source, nearby)
@@ -2248,6 +2297,7 @@ class BattleEngine:
             and target.kind == "tower"
             and self._target_allowed(source, target)
             and self._edge_distance(source, target) <= sight
+            and not self._projectile_lethally_reserved(state, target)
             and self._edge_distance(source, target)
             >= min_attack_range
         )
@@ -2265,6 +2315,7 @@ class BattleEngine:
             and target.kind == "tower"
             and target.role != "king"
             and self._target_allowed(source, target)
+            and not self._projectile_lethally_reserved(state, target)
             and self._edge_distance(source, target) >= min_attack_range
         ]
         if not towers:
@@ -2274,6 +2325,7 @@ class BattleEngine:
                 if target.owner != source.owner
                 and target.kind == "tower"
                 and self._target_allowed(source, target)
+                and not self._projectile_lethally_reserved(state, target)
                 and self._edge_distance(source, target) >= min_attack_range
             ]
         return self._nearest_uid(source, towers)
@@ -2298,6 +2350,7 @@ class BattleEngine:
             and target.kind != "tower"
             and self._targetable_for_acquisition(state, target)
             and self._target_allowed(source, target)
+            and not self._projectile_lethally_reserved(state, target)
             and self._edge_distance(source, target) <= sight
             and self._edge_distance(source, target) >= min_attack_range
         ]
@@ -2358,6 +2411,10 @@ class BattleEngine:
         if source.charge_active and mechanics.get("charge_threshold_permille") is not None:
             # Goblin Demolisher's low-health phase becomes building-only.
             targets = {"building", "crown_tower"}
+        if source.kind == "tower":
+            # Crown Towers attack troops only. Their generic ``ground`` target
+            # class must not make placed buildings valid victims.
+            return target.kind == "troop" and str(self._movement_layer(target)) in targets
         if target.kind == "tower":
             # The August 2026 Spirit rules explicitly remove an unassisted
             # Crown-Tower connection.  This is distinct from the authored
@@ -2407,6 +2464,7 @@ class BattleEngine:
                 or entity.carried_by_uid is not None
                 or entity.deploy_remaining_us > 0
                 or entity.burrow_active
+                or entity.dash_remaining_us > 0
                 or entity.target_uid is None
             ):
                 continue
@@ -2468,6 +2526,10 @@ class BattleEngine:
                     )
                     self._reset_attack_preload(entity)
                     entity.dash_attack_active = True
+                    entity.dash_remaining_us = max(
+                        self.ruleset.tick_us,
+                        int(dash.get("duration_us") or self.ruleset.tick_us),
+                    )
                     entity.navigation_waypoints.clear()
                     entity.navigation_cursor = 0
                     entity.navigation_revision = -1
@@ -3014,7 +3076,12 @@ class BattleEngine:
                 and self._definition(entity).mechanics.get("attack_windup_mode") == "recharge"
             ):
                 continue
-            if entity.deploy_remaining_us > 0 or entity.concealed_active or self._is_frozen(entity):
+            if (
+                entity.deploy_remaining_us > 0
+                or entity.concealed_active
+                or entity.dash_remaining_us > 0
+                or self._is_frozen(entity)
+            ):
                 continue
             if entity.attack_cooldown_us > 0:
                 progress = self._attack_time_progress(entity, dt)
@@ -3069,8 +3136,19 @@ class BattleEngine:
                 # are still inside their authored attack range.
                 continue
             interval = int(definition.attack_interval_us)
-            delay = 0 if first_attack_ready and entity.attack_count == 0 else int(
-                definition.first_hit_delay_us or 0
+            # ``first_hit_delay`` is the acquisition/load time, not an extra
+            # pause after every ordinary hit.  Recharge weapons such as
+            # Sparky explicitly reuse it as their per-shot wind-up; preserve
+            # that authored exception while keeping normal Hit Speed cadence
+            # at one interval between impacts.
+            recharge_windup = (
+                entity.kind != "tower"
+                and definition.mechanics.get("attack_windup_mode") == "recharge"
+            )
+            delay = (
+                int(definition.first_hit_delay_us or 0)
+                if recharge_windup and not (first_attack_ready and entity.attack_count == 0)
+                else 0
             )
             if entity.stealth_active:
                 self._break_stealth(state, entity)
@@ -3287,6 +3365,7 @@ class BattleEngine:
             status_hit_speed_magnitude_permille=(
                 PERMILLE if not raw_status else int(raw_status.get("hit_speed_multiplier_milli") or PERMILLE)
             ),
+            attack_instance_id=source.secondary_attack_count,
         )
         state.projectiles[projectile.uid] = projectile
         self._emit(
@@ -3394,7 +3473,11 @@ class BattleEngine:
             )
         if projectile_definition is None:
             hook = None if source.kind == "tower" else definition.mechanics.get("hook")
-            if hook is not None:
+            if (
+                hook is not None
+                and self._edge_distance(source, target)
+                >= int(hook.get("min_hook_range_mtile") or 0)
+            ):
                 self._apply_hook(state, source, target, hook)
             multi_target = definition.mechanics.get("multi_target_attack")
             if multi_target is not None:
@@ -3554,6 +3637,7 @@ class BattleEngine:
                 direction_y_mtile=base_dy,
                 returning=bool(mechanics.get("returning_projectile")),
                 pellet_index=pellet_index,
+                attack_instance_id=source.attack_count,
                 level_multiplier_permille=source.level_multiplier_permille,
             )
                 state.projectiles[projectile.uid] = projectile
@@ -3660,7 +3744,20 @@ class BattleEngine:
             target.x_mtile,
             target.y_mtile,
         )
-        desired_gap = pull_distance + self._collision_radius(source) + self._collision_radius(target)
+        if target.kind == "troop":
+            desired_gap = (
+                pull_distance
+                + self._collision_radius(source)
+                + self._collision_radius(target)
+            )
+        else:
+            # Buildings do not move: Fisherman reels himself into normal melee
+            # range instead of treating the hook as a no-op.
+            desired_gap = (
+                int(self._definition(source).range_mtile or 0)
+                + self._collision_radius(source)
+                + self._collision_radius(target)
+            )
         travel = max(0, center_distance - desired_gap)
         jump_was_active = target.jump_remaining_us > 0
         if travel <= 0:
@@ -3683,21 +3780,35 @@ class BattleEngine:
                     source_uid=source.uid,
                 )
             return
-        old_x, old_y = target.x_mtile, target.y_mtile
-        target.x_mtile, target.y_mtile = move_towards(
-            target.x_mtile,
-            target.y_mtile,
-            source.x_mtile,
-            source.y_mtile,
-            travel,
-        )
-        self._reset_attack_preload(target)
-        target.navigation_waypoints.clear()
-        target.navigation_cursor = 0
-        target.navigation_revision = -1
-        self._reset_attack_charge(state, target, reason="hooked")
-        self._reset_dash(state, target, reason="hooked")
-        if jump_was_active:
+        if target.kind == "troop":
+            old_x, old_y = target.x_mtile, target.y_mtile
+            target.x_mtile, target.y_mtile = move_towards(
+                target.x_mtile,
+                target.y_mtile,
+                source.x_mtile,
+                source.y_mtile,
+                travel,
+            )
+            self._reset_attack_preload(target)
+            target.navigation_waypoints.clear()
+            target.navigation_cursor = 0
+            target.navigation_revision = -1
+            self._reset_attack_charge(state, target, reason="hooked")
+            self._reset_dash(state, target, reason="hooked")
+        else:
+            old_x, old_y = source.x_mtile, source.y_mtile
+            source.x_mtile, source.y_mtile = move_towards(
+                source.x_mtile,
+                source.y_mtile,
+                target.x_mtile,
+                target.y_mtile,
+                travel,
+            )
+            self._reset_attack_preload(source)
+            source.navigation_waypoints.clear()
+            source.navigation_cursor = 0
+            source.navigation_revision = -1
+        if jump_was_active and target.kind == "troop":
             # The hook interrupts the airborne phase rather than allowing the
             # old landing target/coordinates to survive the reel.  Clearing
             # all jump state also suppresses the landing splash, matching the
@@ -4067,6 +4178,7 @@ class BattleEngine:
                 knockback=projectile.knockback_mtile,
                 primary_target_uid=projectile.target_uid,
                 allowed_targets=projectile.allowed_targets or None,
+                attack_instance_id=projectile.attack_instance_id,
                 knockback_direction=(
                     (projectile.direction_x_mtile, projectile.direction_y_mtile)
                     if definition is not None
@@ -4232,6 +4344,7 @@ class BattleEngine:
                 direction_x_mtile=base_dx,
                 direction_y_mtile=base_dy,
                 pellet_index=index + 1,
+                attack_instance_id=projectile.attack_instance_id,
                 level_multiplier_permille=projectile.level_multiplier_permille,
             )
             state.projectiles[shrapnel.uid] = shrapnel
@@ -4296,7 +4409,14 @@ class BattleEngine:
                 else int(definition.damage or 0)
             )
             dealt = self._scale_level_value(dealt, source.level_multiplier_permille)
-            self._deal_damage(state, target, dealt, source.uid, source.card_id)
+            self._deal_damage(
+                state,
+                target,
+                dealt,
+                source.uid,
+                source.card_id,
+                source.attack_count,
+            )
             if status and target.hp > 0:
                 self._apply_status(state, target, status)
             if reset_attack and target.hp > 0:
@@ -4392,7 +4512,12 @@ class BattleEngine:
     ) -> None:
         dealt = projectile.crown_damage if target.kind == "tower" else projectile.damage
         self._deal_damage(
-            state, target, dealt, projectile.source_uid, projectile.source_card_id
+            state,
+            target,
+            dealt,
+            projectile.source_uid,
+            projectile.source_card_id,
+            projectile.attack_instance_id,
         )
         if projectile.status_kind and target.hp > 0:
             self._apply_status(
@@ -4772,7 +4897,14 @@ class BattleEngine:
                     continue
             projectile.hit_uids.append(target.uid)
             damage = projectile.crown_damage if target.kind == "tower" else projectile.damage
-            self._deal_damage(state, target, damage, projectile.source_uid, projectile.source_card_id)
+            self._deal_damage(
+                state,
+                target,
+                damage,
+                projectile.source_uid,
+                projectile.source_card_id,
+                projectile.attack_instance_id,
+            )
             direction: tuple[int, int] | None = None
             if mechanics.get("knockback_direction") == "projectile_travel":
                 direction = (
@@ -4829,6 +4961,7 @@ class BattleEngine:
         target_selection: str | None = None,
         reset_attack: bool = False,
         knockback_direction: tuple[int, int] | None = None,
+        attack_instance_id: int | None = None,
     ) -> None:
         candidates: list[EntityState] = []
         if radius <= 0 and primary_target_uid is not None:
@@ -4876,7 +5009,14 @@ class BattleEngine:
             curse_status = bool(status and hasattr(status, "get") and status.get("on_death_spawn_card_id"))
             if curse_status and target.hp > 0:
                 self._apply_status(state, target, status)
-            self._deal_damage(state, target, dealt, source_uid, source_card_id)
+            self._deal_damage(
+                state,
+                target,
+                dealt,
+                source_uid,
+                source_card_id,
+                attack_instance_id,
+            )
             if status and target.hp > 0 and not curse_status:
                 self._apply_status(state, target, status)
             if reset_attack and target.hp > 0:
@@ -4907,6 +5047,15 @@ class BattleEngine:
             # impacts.  They become ordinary spell targets only after the
             # carrier release transition.
             return False
+        if card_id in self.ruleset.towers:
+            if target.kind != "troop":
+                return False
+            targets = set(
+                allowed_targets
+                if allowed_targets is not None
+                else self.ruleset.towers[card_id].targets
+            )
+            return str(self._movement_layer(target)) in targets
         if target.concealed_active and card_id not in {"earthquake", "freeze"}:
             return False
         if allowed_targets is not None or card_id in self.ruleset.cards:
@@ -4941,8 +5090,14 @@ class BattleEngine:
         damage: int,
         source_uid: int | None,
         source_card_id: str,
+        attack_instance_id: int | None = None,
     ) -> None:
-        if damage <= 0 or not target.alive or target.hp <= 0:
+        if (
+            damage <= 0
+            or not target.alive
+            or target.hp <= 0
+            or target.dash_remaining_us > 0
+        ):
             return
         source_definition = self.ruleset.cards.get(source_card_id)
         if (
@@ -5003,6 +5158,7 @@ class BattleEngine:
                 target=target,
                 source_uid=source_uid,
                 source_card_id=source_card_id,
+                attack_instance_id=attack_instance_id,
             )
         if target.kind == "tower" and target.role == "king":
             self._activate_king(state, target.owner, "damaged")
@@ -5138,6 +5294,7 @@ class BattleEngine:
         target: EntityState,
         source_uid: int | None,
         source_card_id: str,
+        attack_instance_id: int | None = None,
     ) -> None:
         """Apply a reactive damage/stun pulse from a reflecting entity.
 
@@ -5150,6 +5307,13 @@ class BattleEngine:
         """
 
         if source_uid is None or source_card_id.endswith(":reflection"):
+            return
+        if any(
+            status.kind == "freeze" and status.remaining_us > 0
+            for status in target.statuses
+        ):
+            # Freeze suppresses Electro Giant's reactive aura for the whole
+            # frozen window.  A regular damage hit still lands normally.
             return
         if target.kind != "troop":
             return
@@ -5169,6 +5333,14 @@ class BattleEngine:
         allowed = tuple(str(value) for value in reflection.get("targets", ()))
         if not self._spell_can_hit(target.card_id, attacker, allowed_targets=allowed):
             return
+        if attack_instance_id is not None:
+            if (
+                target.last_reflection_source_uid == source_uid
+                and target.last_reflection_attack_instance_id == attack_instance_id
+            ):
+                return
+            target.last_reflection_source_uid = source_uid
+            target.last_reflection_attack_instance_id = attack_instance_id
         damage = (
             int(reflection.get("crown_tower_damage") or 0)
             if attacker.kind == "tower"
@@ -5232,6 +5404,11 @@ class BattleEngine:
         if not kind or duration <= 0:
             return
         if kind in {"stun", "freeze"}:
+            if target.dash_remaining_us > 0:
+                # Bandit is invulnerable and crowd-control immune during the
+                # authored dash phase.  Do not reset/cancel the dash before
+                # its landing attack has resolved.
+                return
             self._reset_attack_charge(state, target, reason=kind)
             self._reset_dash(state, target, reason=kind)
             self._reset_attack_ramp(state, target, reason=kind)
@@ -5331,7 +5508,13 @@ class BattleEngine:
         direction: tuple[int, int] | None = None,
         excluded_structure_uid: int | None = None,
     ) -> None:
-        if distance <= 0 or target.kind in {"tower", "building"} or not target.alive or target.hp <= 0:
+        if (
+            distance <= 0
+            or target.kind in {"tower", "building"}
+            or target.dash_remaining_us > 0
+            or not target.alive
+            or target.hp <= 0
+        ):
             return
         origin_x, origin_y = target.x_mtile, target.y_mtile
         if direction is None:
@@ -5731,6 +5914,9 @@ class BattleEngine:
                 )
         death_rage = definition.mechanics.get("death_rage")
         if death_rage is not None:
+            rage_definition = self.ruleset.card("rage")
+            rage_damage = int(rage_definition.damage or 0)
+            rage_crown_damage = int(rage_definition.crown_tower_damage or 0)
             self._create_area_effect(
                 state,
                 owner=entity.owner,
@@ -5739,8 +5925,8 @@ class BattleEngine:
                 x_mtile=entity.x_mtile,
                 y_mtile=entity.y_mtile,
                 default_radius=int(death_rage.get("radius_mtile") or 0),
-                default_damage=0,
-                default_crown_damage=0,
+                default_damage=rage_damage,
+                default_crown_damage=rage_crown_damage,
                 default_status=None,
                 default_knockback=0,
                 raw_effect={
@@ -5748,8 +5934,8 @@ class BattleEngine:
                     "duration_anchor": "creation",
                     "tick_interval_us": int(death_rage["tick_interval_us"]),
                     "radius_mtile": int(death_rage["radius_mtile"]),
-                    "damage_per_tick": 0,
-                    "crown_damage_per_tick": 0,
+                    "damage_per_tick": rage_damage,
+                    "crown_damage_per_tick": rage_crown_damage,
                     "targets": ["air", "ground", "building", "crown_tower"],
                     "friendly_status": {
                         "kind": "rage",
@@ -5759,8 +5945,8 @@ class BattleEngine:
                         "linger_us": 0,
                     },
                     "friendly_targets": list(death_rage["targets"]),
-                    "damage_schedule": [0],
-                    "crown_damage_schedule": [0],
+                    "damage_schedule": [rage_damage],
+                    "crown_damage_schedule": [rage_crown_damage],
                 },
             )
             self._emit(
@@ -6017,7 +6203,13 @@ class BattleEngine:
         range_mtile = definition.range_mtile
         hook = definition.mechanics.get("hook") if source.kind != "tower" else None
         if hook is not None:
-            range_mtile = int(hook.get("hook_range_mtile") or range_mtile or 0)
+            distance = self._edge_distance(source, target)
+            melee_range = int(definition.range_mtile or 0)
+            hook_range = int(hook.get("hook_range_mtile") or melee_range)
+            min_hook_range = int(hook.get("min_hook_range_mtile") or 0)
+            if distance <= melee_range:
+                return True
+            return min_hook_range <= distance <= hook_range
         if source.charge_active and definition.mechanics.get("charge_range_mtile") is not None:
             range_mtile = int(definition.mechanics["charge_range_mtile"])
         if range_mtile is None:
@@ -6093,9 +6285,10 @@ class BattleEngine:
     def _reset_dash(self, state: BattleState, entity: EntityState, *, reason: str) -> None:
         """Cancel a pending Bandit-style dash impact."""
 
-        if not entity.dash_attack_active:
+        if not entity.dash_attack_active and entity.dash_remaining_us == 0:
             return
         entity.dash_attack_active = False
+        entity.dash_remaining_us = 0
         self._emit(
             state,
             "dash_reset",
@@ -6359,6 +6552,7 @@ class BattleEngine:
                 entity.navigation_goal_y_mtile,
                 entity.navigation_cursor,
                 entity.attack_charge_distance_mtile,
+                entity.dash_remaining_us,
                 entity.ramp_elapsed_us,
                 entity.ramp_stage,
                 entity.carried_offset_x_mtile,
@@ -6372,6 +6566,18 @@ class BattleEngine:
             )
             if any(type(value) is not int for value in integer_fields):
                 raise ValueError("entity fixed-point fields must be integers")
+            if (
+                entity.last_reflection_source_uid is not None
+                and type(entity.last_reflection_source_uid) is not int
+            ):
+                raise ValueError("last reflection source UID must be an integer or None")
+            if (
+                entity.last_reflection_attack_instance_id is not None
+                and type(entity.last_reflection_attack_instance_id) is not int
+            ):
+                raise ValueError(
+                    "last reflection attack instance ID must be an integer or None"
+                )
             if entity.lifetime_remaining_us is not None and type(entity.lifetime_remaining_us) is not int:
                 raise ValueError("entity lifetime must be an integer or None")
             if entity.charge_remaining_us is not None and type(entity.charge_remaining_us) is not int:
@@ -6459,6 +6665,7 @@ class BattleEngine:
                 or entity.attack_cooldown_us < 0
                 or entity.attack_load_remaining_us < 0
                 or entity.windup_remaining_us < 0
+                or entity.dash_remaining_us < 0
             ):
                 raise ValueError("entity clock cannot be negative")
             if (
@@ -6624,6 +6831,11 @@ class BattleEngine:
             ):
                 if coordinate is not None and type(coordinate) is not int:
                     raise ValueError("projectile previous coordinates must be integers or None")
+            if (
+                projectile.attack_instance_id is not None
+                and type(projectile.attack_instance_id) is not int
+            ):
+                raise ValueError("projectile attack instance ID must be an integer or None")
             if any(type(value) is not int or value <= 0 for value in projectile.chain_target_uids):
                 raise ValueError("projectile chain targets must be positive integer UIDs")
             if (
