@@ -656,10 +656,11 @@ class SimulatorEnv:
                 if action.player != viewer:
                     raise ValueError("sim action player does not match sequence position")
                 sim_actions.append(action)
-        for offset in range(self.decision_interval_ticks):
-            self.engine.step(state, sim_actions if offset == 0 else ())
-            if state.terminal:
-                break
+        if not self._try_quiescent_wait(state, sim_actions):
+            for offset in range(self.decision_interval_ticks):
+                self.engine.step(state, sim_actions if offset == 0 else ())
+                if state.terminal:
+                    break
         rewards = self._rewards(before, state)
         new_events = state.events[event_start:]
         info: dict[str, object] = {
@@ -677,6 +678,7 @@ class SimulatorEnv:
             if self.include_replay_hashes:
                 info["state_hash"] = state.state_hash()
                 info["event_log_hash"] = state.event_log_hash()
+                info["replay_hash"] = state.replay_hash()
             info["events"] = tuple(event.to_dict() for event in new_events)
             if self.include_authoritative_state:
                 info["authoritative_state"] = state.to_primitive(include_events=False)
@@ -686,6 +688,189 @@ class SimulatorEnv:
             state.terminal_reason == "runner_tick_limit",
             info,
         )
+
+    def _try_quiescent_wait(
+        self,
+        state: BattleState,
+        actions: Sequence[SimAction],
+    ) -> bool:
+        """Fast-forward a completely idle arena without changing semantics.
+
+        A fresh/evaluation lane commonly spends many decisions before either
+        actor deploys a card.  In that state the engine's 50 physics ticks are
+        all empty scans over the same six towers; only elixir, card-cycle
+        timers, and the match clock can change.  This path batches those
+        integer updates and delegates the one tick at a phase/terminal
+        boundary to the reference engine so event ordering and tiebreak
+        semantics remain canonical.
+
+        The guard is intentionally conservative.  Strict validation, a
+        partially loaded hand, any active non-tower body/projectile/effect, or
+        any tower-side timer falls back to the ordinary tick loop.
+        """
+
+        if self.engine.validate_every_tick or any(
+            not isinstance(action, WaitAction) for action in actions
+        ):
+            return False
+        if any(projectile.alive for projectile in state.projectiles.values()):
+            return False
+        if any(effect.alive for effect in state.effects.values()):
+            return False
+        for entity in state.entities.values():
+            if entity.kind != "tower":
+                if entity.alive:
+                    return False
+                continue
+            if not entity.alive or entity.hp <= 0:
+                return False
+            if (
+                entity.target_uid is not None
+                or entity.pending_target_uid is not None
+                or entity.attack_cooldown_us
+                or entity.attack_load_remaining_us
+                or entity.windup_remaining_us
+                or entity.secondary_attack_cooldown_us
+                or entity.secondary_windup_remaining_us
+                or entity.secondary_pending_target_uid is not None
+                or entity.secondary_attack_time_remainder
+                or entity.spawn_cooldown_us
+                or entity.spawn_time_remainder
+                or entity.spawner_active
+                or entity.deploy_remaining_us
+                or entity.lifetime_remaining_us is not None
+                or entity.lifetime_decay_remainder
+                or entity.dash_remaining_us
+                or entity.stealth_remaining_us
+                or entity.jump_remaining_us
+                or entity.jump_target_uid is not None
+                or entity.charge_active
+                or entity.charge_remaining_us is not None
+                or entity.attack_charge_active
+                or entity.attack_charge_distance_mtile
+                or entity.dash_attack_active
+                or entity.ramp_elapsed_us
+                or entity.ramp_stage
+                or entity.carried_by_uid is not None
+                or entity.statuses
+            ):
+                return False
+        hand_size = self.engine.ruleset.match.hand_size
+        if any(
+            len(player.hand) != hand_size or player.next_card_cooldown_us != 0
+            for player in state.players
+        ):
+            return False
+
+        remaining = self.decision_interval_ticks
+        tick_us = self.engine.ruleset.tick_us
+        regulation_us = self.engine.ruleset.match.regulation_us
+        total_us = regulation_us + self.engine.ruleset.match.overtime_us
+        while remaining and not state.terminal:
+            if state.phase == "regulation":
+                boundary_us = regulation_us
+            elif state.phase == "overtime":
+                boundary_us = total_us
+            else:
+                return False
+            if state.elapsed_us >= boundary_us:
+                return False
+            ticks_to_boundary = (boundary_us - state.elapsed_us + tick_us - 1) // tick_us
+            if remaining < ticks_to_boundary:
+                self._batch_quiescent_ticks(state, remaining)
+                remaining = 0
+                break
+            # Let the reference scheduler own the final boundary tick.  This
+            # keeps phase-change, tiebreak, and match-ended events byte-exact.
+            skipped = ticks_to_boundary - 1
+            if skipped:
+                self._batch_quiescent_ticks(state, skipped)
+            self.engine.step(state, ())
+            remaining -= ticks_to_boundary
+        return True
+
+    def _batch_quiescent_ticks(self, state: BattleState, ticks: int) -> None:
+        """Apply resource and clock updates for idle ticks in integer batches."""
+
+        if ticks <= 0:
+            return
+        tick_us = self.engine.ruleset.tick_us
+        cursor = state.elapsed_us
+        remaining = ticks
+        regulation_us = self.engine.ruleset.match.regulation_us
+        total_us = regulation_us + self.engine.ruleset.match.overtime_us
+        # These are the only points at which the scheduler's regeneration rate
+        # changes.  The clock itself is advanced below, so no other state is
+        # needed to split a constant-rate segment.
+        rate_boundaries = tuple(
+            sorted(
+                boundary
+                for boundary in (
+                    max(0, regulation_us - 60_000_000),
+                    max(0, total_us - 60_000_000),
+                )
+                if boundary > cursor
+            )
+        )
+        while remaining:
+            interval = self.engine._elixir_interval(cursor)
+            previous_interval = self.engine._elixir_interval(max(0, cursor - tick_us))
+            segment_ticks = remaining
+            if rate_boundaries:
+                boundary = rate_boundaries[0]
+                # A non-aligned boundary changes the rate for the first tick
+                # whose start is at/after it; ceil keeps all earlier starts in
+                # the current segment.
+                segment_ticks = min(
+                    segment_ticks,
+                    max(1, (boundary - cursor + tick_us - 1) // tick_us),
+                )
+            self._batch_quiescent_elixir(
+                state,
+                segment_ticks,
+                interval,
+                previous_interval,
+            )
+            cursor += segment_ticks * tick_us
+            state.elapsed_us = cursor
+            state.tick += segment_ticks
+            remaining -= segment_ticks
+            rate_boundaries = tuple(boundary for boundary in rate_boundaries if boundary > cursor)
+
+    def _batch_quiescent_elixir(
+        self,
+        state: BattleState,
+        ticks: int,
+        interval: int,
+        previous_interval: int,
+    ) -> None:
+        """Match ``_regenerate_elixir`` over a constant-rate tick run."""
+
+        if ticks <= 0:
+            return
+        maximum = self.engine.ruleset.match.max_elixir_milli
+        tick_us = self.engine.ruleset.tick_us
+        for player in state.players:
+            # The reference loop clears remainder before doing anything else
+            # whenever a player is already capped.
+            if player.elixir_milli >= maximum:
+                player.elixir_milli = maximum
+                player.elixir_remainder = 0
+                continue
+            if previous_interval != interval:
+                player.elixir_remainder = (
+                    player.elixir_remainder * interval // previous_interval
+                )
+            gain, remainder = divmod(
+                ticks * tick_us * 1_000 + player.elixir_remainder,
+                interval,
+            )
+            if gain >= maximum - player.elixir_milli:
+                player.elixir_milli = maximum
+                player.elixir_remainder = 0
+            else:
+                player.elixir_milli += gain
+                player.elixir_remainder = remainder
 
     def save_state(self) -> dict[str, object]:
         return self._require_state().to_primitive(include_events=True)
@@ -900,6 +1085,47 @@ class VectorSimulatorEnv:
             return self._step_process(actions, v2=True)  # type: ignore[return-value]
         return self._step_packed_process(actions, v2=True)  # type: ignore[return-value]
 
+    def step_v2_for_viewer(
+        self,
+        actions: Sequence[Sequence[PolicyAction | SimAction | None]],
+        *,
+        viewer: int,
+    ) -> tuple[EnvStepV2, ...]:
+        """Advance lanes while materializing only one public V2 view.
+
+        Actor-only rollout/evaluation never consumes the opponent's public
+        tensor.  The ordinary ``step_v2`` contract remains unchanged for
+        callers that need both views; this opt-in path keeps the unused slot as
+        ``None`` and avoids its board/entity/global/mask projection entirely.
+        """
+
+        if type(viewer) is not int or viewer not in (0, 1):
+            raise ValueError("viewer must be an integer in {0, 1}")
+        if len(actions) != len(self.environments):
+            raise ValueError("one two-player action sequence is required per environment")
+        if self.backend == "reference":
+            return tuple(
+                env.step_v2_for_viewer(row, viewer=viewer)
+                for env, row in zip(self.environments, actions, strict=True)
+            )
+        if self.backend == "persistent-process":
+            return self._step_persistent(  # type: ignore[return-value]
+                actions,
+                v2=True,
+                viewer=viewer,
+            )
+        if self.backend == "process":
+            return self._step_process(  # type: ignore[return-value]
+                actions,
+                v2=True,
+                viewer=viewer,
+            )
+        return self._step_packed_process(  # type: ignore[return-value]
+            actions,
+            v2=True,
+            viewer=viewer,
+        )
+
     def _persistent_lane_config(self, environment: SimulatorEnv) -> dict[str, object]:
         """Serialize static lane configuration for a persistent worker."""
 
@@ -1021,6 +1247,7 @@ class VectorSimulatorEnv:
         # so the worker's event hash is incomplete even though state_hash is
         # unchanged (it intentionally excludes events).
         refreshed["event_log_hash"] = state.event_log_hash()
+        refreshed["replay_hash"] = state.replay_hash()
         return refreshed
 
     def _step_persistent(
@@ -1028,6 +1255,7 @@ class VectorSimulatorEnv:
         actions: Sequence[Sequence[PolicyAction | SimAction | None]],
         *,
         v2: bool,
+        viewer: int | None = None,
     ) -> tuple[EnvStep | EnvStepV2, ...]:
         """Advance persistent lanes and install their canonical results."""
 
@@ -1080,15 +1308,23 @@ class VectorSimulatorEnv:
             )
             environment.state = restored_state
             info = self._refresh_worker_info(environment, info)
-            observations = environment.observe_v2() if v2 else environment.observe()
+            restored_fingerprint = _state_sync_fingerprint(restored_state)
+            if v2:
+                if viewer is None:
+                    observations = environment.observe_v2()
+                else:
+                    actor_observation = environment.observe_v2_for_viewer(viewer)
+                    actor_pair: list[object | None] = [None, None]
+                    actor_pair[viewer] = actor_observation
+                    observations = tuple(actor_pair)  # type: ignore[assignment]
+            else:
+                observations = environment.observe()
             environment._persistent_observation_cache = (
-                _state_sync_fingerprint(restored_state),
+                restored_fingerprint,
                 "v2" if v2 else "v1",
                 observations,
             )
-            self._persistent_state_fingerprints[lane] = _state_sync_fingerprint(
-                restored_state
-            )
+            self._persistent_state_fingerprints[lane] = restored_fingerprint
             if v2:
                 output.append(
                     EnvStepV2(
@@ -1116,6 +1352,7 @@ class VectorSimulatorEnv:
         actions: Sequence[Sequence[PolicyAction | SimAction | None]],
         *,
         v2: bool = False,
+        viewer: int | None = None,
     ) -> tuple[EnvStep | EnvStepV2, ...]:
         executor = self._executor
         if executor is None:  # pragma: no cover - constructor invariant
@@ -1162,9 +1399,16 @@ class VectorSimulatorEnv:
             # not serialized through the worker. This keeps the public policy
             # boundary identical to the reference backend.
             if v2:
+                if viewer is None:
+                    observations = environment.observe_v2()
+                else:
+                    actor_observation = environment.observe_v2_for_viewer(viewer)
+                    actor_pair: list[object | None] = [None, None]
+                    actor_pair[viewer] = actor_observation
+                    observations = tuple(actor_pair)  # type: ignore[assignment]
                 output.append(
                     EnvStepV2(
-                        observations=environment.observe_v2(),
+                        observations=observations,
                         rewards=rewards,
                         terminated=terminated,
                         truncated=truncated,
@@ -1188,6 +1432,7 @@ class VectorSimulatorEnv:
         actions: Sequence[Sequence[PolicyAction | SimAction | None]],
         *,
         v2: bool = False,
+        viewer: int | None = None,
     ) -> tuple[EnvStep | EnvStepV2, ...]:
         executor = self._executor
         if executor is None:  # pragma: no cover - constructor invariant
@@ -1226,9 +1471,16 @@ class VectorSimulatorEnv:
             environment.state = restored_state
             info = self._refresh_worker_info(environment, info)
             if v2:
+                if viewer is None:
+                    observations = environment.observe_v2()
+                else:
+                    actor_observation = environment.observe_v2_for_viewer(viewer)
+                    actor_pair: list[object | None] = [None, None]
+                    actor_pair[viewer] = actor_observation
+                    observations = tuple(actor_pair)  # type: ignore[assignment]
                 output.append(
                     EnvStepV2(
-                        observations=environment.observe_v2(),
+                        observations=observations,
                         rewards=rewards,
                         terminated=terminated,
                         truncated=truncated,

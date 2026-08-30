@@ -1258,6 +1258,10 @@ def train_prototype(
     restores the checkpoint's serialized parameter-group values.
     """
 
+    # This is the primary end-to-end training benchmark window.  Start before
+    # validation, ruleset/checkpoint loading, and model construction so the
+    # reported rate cannot silently omit successful-run setup work.
+    started = perf_counter()
     torch = _require_torch()
     if not isinstance(config, PrototypeConfig):
         raise TypeError("config must be a PrototypeConfig")
@@ -1393,7 +1397,6 @@ def train_prototype(
     # HEAD means the simulator changed underneath the experiment and its
     # checkpoint must not be promoted as if it came from one revision.
     run_start_revision = code_revision()
-    started = perf_counter()
     if checkpoint is None:
         learner = _model_and_learner(effective_config)
         resumed_from = None
@@ -1896,14 +1899,19 @@ def train_prototype(
                     "belief_loss_disabled": bool(resume_disable_belief_loss),
                     "optimizer_reset": bool(resume_reset_optimizer),
                 },
-                "wall_seconds": perf_counter() - started,
-                "decisions_per_second": (
-                    (
-                        effective_config.envs
-                        * effective_config.horizon
-                        * effective_config.updates
-                    )
-                    / max(perf_counter() - started, 1e-9)
+                # Filled from one elapsed-time sample after audit, checkpoint
+                # promotion, report construction, and runtime teardown.
+                "wall_seconds": 0.0,
+                "decisions_per_second": 0.0,
+                "throughput_scope": (
+                    "successful train_prototype call from validation and checkpoint/model "
+                    "setup through rollout, GAE/PPO updates, checkpoint save, exploit audit, "
+                    "checkpoint promotion, optional diagnostic-report write, worker/vector "
+                    "teardown, and JSON report validation"
+                ),
+                "throughput_exclusions": (
+                    "caller/CLI stdout serialization and --json-out filesystem write performed "
+                    "after train_prototype returns"
                 ),
                 "warning": (
                     "Prototype training uses a provisional deterministic simulator unless "
@@ -1978,6 +1986,16 @@ def train_prototype(
             vector_environment.close()
         if rollout_farm is not None:
             rollout_farm.close()
+    # Validate the same report shape that the CLI serializes before closing
+    # the benchmark window.  Timing fields use placeholders here to avoid the
+    # self-referential impossibility of timing the serialization of their own
+    # final values.
+    json.dumps(report, allow_nan=False)
+    wall_seconds = perf_counter() - started
+    transitions = int(report["transitions"])
+    decisions_per_second = transitions / max(wall_seconds, 1e-9)
+    report["wall_seconds"] = wall_seconds
+    report["decisions_per_second"] = decisions_per_second
     return report
 
 
@@ -2527,6 +2545,8 @@ def _trace_decision(
         "ppo_clipping_occurred": policy_diagnostics.get("ppo_clipping_occurred"),
         "policy": dict(policy_diagnostics) if policy_diagnostics else None,
     }
+    if "replay_hash" in info:
+        row["replay_hash_after"] = info.get("replay_hash")
     from .diagnostics import classify_decision, tower_damage
 
     row["tower_damage_to_opponent"] = tower_damage(

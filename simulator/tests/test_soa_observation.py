@@ -108,7 +108,101 @@ def test_soa_static_legality_matches_engine_for_policy_cards() -> None:
         deploy_remaining_us=0,
     )
     soa_state.sync(state, lambda card_id: card_id)
-    assert soa_state.legal_action_cells_if_static(state, ruleset, 0) is None
+    for viewer in (0, 1):
+        assert soa_state.legal_action_cells_if_static(
+            state, ruleset, viewer
+        ) == engine.legal_action_cells(state, viewer)
+
+
+def test_soa_static_legality_handles_footprints_and_concealed_buildings() -> None:
+    from simulator.engine import BattleEngine
+    from simulator.ruleset import load_ruleset
+    from simulator.soa import ObservationSoA
+
+    ruleset = load_ruleset("v1")
+    engine = BattleEngine(ruleset, validate_every_tick=False)
+    deck = (
+        "tesla",
+        "cannon",
+        "hog-rider",
+        "musketeer",
+        "skeletons",
+        "ice-golem",
+        "fireball",
+        "log",
+    )
+    state = engine.new_battle((deck, deck), seed=17, shuffle_decks=False)
+    for player in state.players:
+        player.elixir_milli = ruleset.match.max_elixir_milli
+
+    soa_state = ObservationSoA()
+    for viewer in (0, 1):
+        assert soa_state.legal_action_cells_if_static(
+            state, ruleset, viewer
+        ) == engine.legal_action_cells(state, viewer)
+
+    tesla = engine._spawn_single_at(
+        state,
+        ruleset.card("tesla"),
+        owner=1,
+        x_mtile=11_000,
+        y_mtile=10_000,
+        deploy_remaining_us=0,
+    )
+    assert tesla.concealed_active
+    soa_state.sync(state, lambda card_id: card_id)
+    for viewer in (0, 1):
+        assert soa_state.legal_action_cells_if_static(
+            state, ruleset, viewer
+        ) == engine.legal_action_cells(state, viewer)
+
+    tesla.x_mtile = 12_000
+    tesla.y_mtile = 11_000
+    soa_state.sync(state, lambda card_id: card_id)
+    for viewer in (0, 1):
+        assert soa_state.legal_action_cells_if_static(
+            state, ruleset, viewer
+        ) == engine.legal_action_cells(state, viewer)
+
+
+def test_soa_static_legality_cache_is_bounded_for_moving_buildings() -> None:
+    from simulator.engine import BattleEngine
+    from simulator.ruleset import load_ruleset
+    from simulator.soa import ObservationSoA
+
+    ruleset = load_ruleset("v1")
+    engine = BattleEngine(ruleset, validate_every_tick=False)
+    deck = (
+        "cannon",
+        "hog-rider",
+        "musketeer",
+        "skeletons",
+        "ice-golem",
+        "ice-spirit",
+        "fireball",
+        "log",
+    )
+    state = engine.new_battle((deck, deck), seed=19, shuffle_decks=False)
+    for player in state.players:
+        player.elixir_milli = ruleset.match.max_elixir_milli
+    building = engine._spawn_single_at(
+        state,
+        ruleset.card("cannon"),
+        owner=0,
+        x_mtile=3_500,
+        y_mtile=20_500,
+        deploy_remaining_us=0,
+    )
+
+    soa_state = ObservationSoA()
+    for offset in range(ObservationSoA._STATIC_CARD_CELLS_CACHE_SIZE + 8):
+        building.x_mtile = 3_500 + offset
+        soa_state.legal_action_cells_if_static(state, ruleset, offset % 2)
+
+    assert (
+        len(soa_state._static_card_cells_cache)
+        == ObservationSoA._STATIC_CARD_CELLS_CACHE_SIZE
+    )
 
 
 def test_soa_observation_matches_reference_with_dynamic_building() -> None:

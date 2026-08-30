@@ -771,10 +771,28 @@ if TORCH_AVAILABLE:
             *,
             privileged_features: torch.Tensor | None = None,
             include_beliefs: bool = True,
+            compact_entities: bool = True,
         ) -> PolicyEvaluation:
             """Re-run one sequence with explicit initial hidden/reset semantics."""
 
+            if type(compact_entities) is not bool:
+                raise TypeError("compact_entities must be boolean")
             sequence = _move_sequence(sequence, self.device)
+            # Public V2 observations are left-packed: rows after the last
+            # public entity are zero-padded and masked.  The entity encoder is
+            # permutation-invariant (it has no positional embedding), and its
+            # key padding mask already excludes those rows from every valid
+            # query.  Compacting only a *globally* masked tail therefore keeps
+            # the actor computation identical while removing the quadratic
+            # attention work for the usual sparse board.  This is intentionally
+            # done only for zero-dropout PPO re-evaluation; masked rows still
+            # consume dropout RNG in a stochastic model, so retaining them is
+            # required to preserve both semantics and reproducibility there.
+            # Stored trajectories retain the complete contract and hidden/GAE
+            # tensors are never rewritten. Internal callers that received a
+            # pre-compacted batch disable this second scan/synchronization.
+            if compact_entities and self._entity_tail_compaction_enabled():
+                sequence = _compact_entity_tail(sequence)
             actions = _move_actions(actions, self.device)
             action_masks = _move_masks(action_masks, self.device)
             if privileged_features is not None:
@@ -789,10 +807,30 @@ if TORCH_AVAILABLE:
                 action_masks=action_masks,
                 include_beliefs=include_beliefs,
             )
-            log_probs = self.policy.log_prob(output, actions, action_masks)
-            entropy = _joint_entropy(self.policy, output, action_masks)
+            # The joint entropy already needs the three masked factor
+            # distributions. Reuse those log-probabilities to score the
+            # selected action instead of invoking the policy's validation
+            # path a second time. This is numerically the same factorization
+            # for validated trajectory actions and removes one full placement
+            # softmax (576 cells × 4 slots) from every PPO minibatch.
+            log_probs, entropy = _joint_log_prob_and_entropy(
+                self.policy,
+                output,
+                actions,
+                action_masks,
+            )
             values = self._critic_values(output, privileged_features)
             return PolicyEvaluation(output, log_probs, entropy, values)
+
+        def _entity_tail_compaction_enabled(self) -> bool:
+            """Return whether PPO may drop masked rows without changing RNG."""
+
+            # ModelConfig validates ``dropout`` and the policy is the source of
+            # truth for all stochastic encoder settings.  Unknown/custom
+            # policies fail closed so a learner never silently changes a
+            # caller's random-number stream.
+            config = getattr(self.policy, "config", None)
+            return getattr(config, "dropout", None) == 0.0
 
         def rollout_step(
             self,
@@ -903,7 +941,11 @@ if TORCH_AVAILABLE:
             if not TORCH_AVAILABLE:  # pragma: no cover - class is unavailable then
                 _raise_torch_unavailable()
             learner_batch = _as_learner_batch(batch, **kwargs)
-            learner_batch = _move_learner_batch(learner_batch, self.device)
+            learner_batch = _move_learner_batch(
+                learner_batch,
+                self.device,
+                compact_entities=self._entity_tail_compaction_enabled(),
+            )
             trajectory = learner_batch.trajectory
             old_values = trajectory.values
             if old_values is None:
@@ -913,6 +955,7 @@ if TORCH_AVAILABLE:
                         trajectory.actions,
                         trajectory.action_masks,
                         privileged_features=learner_batch.privileged_features,
+                        compact_entities=False,
                     )
                 old_values = evaluation.values.detach()
             else:
@@ -993,6 +1036,16 @@ if TORCH_AVAILABLE:
             minibatches = 0
             optimization_steps = 0
             skipped_steps = 0
+            # Parameters and Adam state are validated once before the update.
+            # ``_update_minibatch`` validates gradients before every optimizer
+            # step and validates parameters/state immediately after each step;
+            # repeating the same pre-step full-model scans for every minibatch
+            # adds synchronizations without covering a new mutation path.
+            parameters = self._optimizer_parameters()
+            if not _parameters_are_finite(parameters):
+                raise FloatingPointError("PPO parameters are already non-finite")
+            if not _optimizer_state_is_finite(self.optimizer):
+                raise FloatingPointError("PPO optimizer state is non-finite before update")
             for _epoch in range(self.config.update_epochs):
                 for minibatch in iter_sequence_minibatches(
                     prepared,
@@ -1033,8 +1086,6 @@ if TORCH_AVAILABLE:
         ) -> dict[str, Any]:
             self.optimizer.zero_grad(set_to_none=True)
             parameters = self._optimizer_parameters()
-            if not _parameters_are_finite(parameters):
-                raise FloatingPointError("PPO parameters are already non-finite")
             trajectory = batch.trajectory
             evaluation = self.evaluate_sequence(
                 trajectory.sequence,
@@ -1042,6 +1093,7 @@ if TORCH_AVAILABLE:
                 trajectory.action_masks,
                 privileged_features=batch.privileged_features,
                 include_beliefs=batch.belief_targets is not None,
+                compact_entities=False,
             )
             behavior_cloning_actions = batch.behavior_cloning_actions
             behavior_cloning_evaluation_log_probs = evaluation.log_probs
@@ -1154,7 +1206,12 @@ if TORCH_AVAILABLE:
             per_head_gradient_norms = (
                 self._gradient_norm_by_head() if diagnostics else {}
             )
-            if not math.isfinite(gradient_norm) or not _gradients_are_finite(parameters):
+            # _gradient_norm validates every floating/complex gradient while
+            # accumulating the norm and returns infinity on any non-finite
+            # value.  Re-scanning the same gradients here adds a device
+            # synchronization to every minibatch without strengthening the
+            # check.
+            if not math.isfinite(gradient_norm):
                 self.optimizer.zero_grad(set_to_none=True)
                 return _skipped_minibatch_metrics()
 
@@ -1163,12 +1220,11 @@ if TORCH_AVAILABLE:
                 for parameter in parameters:
                     if parameter.grad is not None:
                         parameter.grad.mul_(scale)
-            if not _gradients_are_finite(parameters):
-                self.optimizer.zero_grad(set_to_none=True)
-                return _skipped_minibatch_metrics()
-            if not _optimizer_state_is_finite(self.optimizer):
-                raise FloatingPointError("PPO optimizer state is non-finite before step")
-
+            # ``_gradient_norm`` has already validated every floating/complex
+            # gradient.  Clipping multiplies by a finite scalar only, so a
+            # second all-gradient reduction here cannot discover a new
+            # non-finite value; omitting it removes one synchronization per
+            # PPO minibatch while retaining the non-finite-gradient skip path.
             self.optimizer.step()
             if not _parameters_are_finite(parameters) or not _optimizer_state_is_finite(self.optimizer):
                 raise FloatingPointError("PPO optimizer step produced non-finite state")
@@ -1391,6 +1447,53 @@ def _move_sequence(sequence: Any, device: Any) -> Any:
     )
 
 
+def _compact_entity_tail(sequence: Any) -> Any:
+    """Drop entity columns that are masked for every row in a sequence.
+
+    The V2 contract reserves a fixed 128-token tensor, but producers append
+    zero-filled masked rows after the public entities.  The Transformer uses
+    the mask as a key-padding mask and has no entity positional encoding, so a
+    globally masked suffix cannot affect any pooled entity or null-token
+    output.  Keeping at least one column preserves the model's lower bound and
+    handles all-empty observations without a special model call.
+
+    This helper deliberately checks only a suffix.  It never gathers or
+    reorders interior rows, which keeps arbitrary valid/masked patterns safe
+    for callers constructing trajectories directly.  It also leaves the
+    trajectory object unchanged; compaction is an ephemeral forward input.
+    """
+
+    if not TORCH_AVAILABLE:
+        _raise_torch_unavailable()
+    entities = sequence.entities
+    entity_mask = sequence.entity_mask
+    if (
+        not isinstance(entities, torch.Tensor)
+        or not isinstance(entity_mask, torch.Tensor)
+        or entities.ndim != 4
+        or entity_mask.ndim != 3
+        or entities.shape[:3] != entity_mask.shape
+        or entities.shape[2] <= 1
+    ):
+        return sequence
+    # Avoid a host round-trip for the common accelerator path only when the
+    # declared width is already minimal. Otherwise one scalar synchronization
+    # buys a potentially large attention reduction and is amortized over the
+    # full recurrent sequence.
+    present_columns = entity_mask.any(dim=(0, 1))
+    if not bool(present_columns.any().item()):
+        active_count = 1
+    else:
+        active_count = int(present_columns.nonzero(as_tuple=False)[-1].item()) + 1
+    if active_count >= entities.shape[2]:
+        return sequence
+    return replace(
+        sequence,
+        entities=entities[..., :active_count, :],
+        entity_mask=entity_mask[..., :active_count],
+    )
+
+
 def _to_device(value: Any, device: Any, *, dtype: Any | None = None) -> Any:
     """Avoid repeated no-op tensor conversions in one-step rollouts."""
 
@@ -1426,11 +1529,28 @@ def _move_actions(actions: Any, device: Any) -> Any:
     )
 
 
-def _move_learner_batch(batch: LearnerBatch, device: Any) -> LearnerBatch:
+def _move_learner_batch(
+    batch: LearnerBatch,
+    device: Any,
+    *,
+    compact_entities: bool = False,
+) -> LearnerBatch:
+    if type(compact_entities) is not bool:
+        raise TypeError("compact_entities must be boolean")
     trajectory = batch.trajectory
+    # Rollout workers and the reference collector keep the fixed-width public
+    # V2 entity tensor on the host.  A zero-dropout policy may compact before
+    # transfer, but stochastic models must retain every masked row because
+    # dropout consumes random numbers for those rows even though attention
+    # masks exclude them from the pooled representation.
+    compact_sequence = (
+        _compact_entity_tail(trajectory.sequence)
+        if compact_entities
+        else trajectory.sequence
+    )
     moved_trajectory = replace(
         trajectory,
-        sequence=_move_sequence(trajectory.sequence, device),
+        sequence=_move_sequence(compact_sequence, device),
         action_masks=_move_masks(trajectory.action_masks, device),
         actions=_move_actions(trajectory.actions, device),
         rewards=_to_device(trajectory.rewards, device),
@@ -1520,6 +1640,115 @@ def _joint_entropy(policy: Any, output: Any, masks: Any) -> Any:
         card_probabilities * placement_entropy
     ).sum(dim=-1)
     return mode_entropy + play_probability * (card_entropy + conditional_placement_entropy)
+
+
+def _joint_log_prob_and_entropy(
+    policy: Any,
+    output: Any,
+    actions: Any,
+    masks: Any,
+) -> tuple[Any, Any]:
+    """Score actions and entropy from one masked-factor computation.
+
+    PPO needs both the selected joint log-probability and the complete
+    autoregressive entropy.  The public action head exposes these as separate
+    validation paths, and calling both would normalize the 2×4×576 logits
+    twice.  Trajectory actions/masks have already crossed the collector's
+    legality boundary, so this helper performs the same gathers and legality
+    checks while reusing one set of masked log-probabilities. It intentionally
+    stays private to the learner; public callers should continue using
+    ``policy.log_prob`` for its detailed input validation.
+    """
+
+    factors = policy.action_head.masked_log_probs(output.logits, masks)
+    mode = actions.mode.to(dtype=torch.long)
+    if factors.mode.shape[:-1] != mode.shape:
+        raise ValueError("action and logits batch/time dimensions do not match")
+    if masks.prefix_shape != tuple(mode.shape):
+        raise ValueError("action masks and actions batch/time dimensions do not match")
+    if bool(((mode < 0) | (mode > 1)).any().item()):
+        raise ValueError("mode action must be WAIT=0 or PLAY=1")
+    selected_mode_legal = masks.mode.gather(-1, mode.unsqueeze(-1)).squeeze(-1)
+    if not bool(selected_mode_legal.all().item()):
+        raise ValueError("action selected an illegal WAIT/PLAY mode")
+    log_probs = factors.mode.gather(-1, mode.unsqueeze(-1)).squeeze(-1)
+
+    placement_shape = factors.placement.shape
+    placement_logs = factors.placement.reshape(*placement_shape[:-2], -1)
+    entropy = _categorical_entropy(factors.mode)
+    card_entropy = _categorical_entropy(factors.card)
+    placement_entropy = _categorical_entropy(placement_logs)
+    card_probabilities = torch.exp(factors.card)
+    play_probability = torch.exp(factors.mode[..., 1])
+    entropy = entropy + play_probability * (
+        card_entropy
+        + (card_probabilities * placement_entropy).sum(dim=-1)
+    )
+
+    play = mode == policy.action_head.PLAY
+    if not bool(play.any().item()):
+        return log_probs, entropy
+
+    card_indices = actions.card_slot[play].to(dtype=torch.long)
+    if bool(
+        ((card_indices < 0) | (card_indices >= policy.action_head.card_slots))
+        .any()
+        .item()
+    ):
+        raise ValueError("card-slot action is outside the configured card vocabulary")
+    play_card_masks = masks.card[play]
+    selected_card_legal = play_card_masks.gather(
+        -1,
+        card_indices.unsqueeze(-1),
+    ).squeeze(-1)
+    if not bool(selected_card_legal.all().item()):
+        raise ValueError("action selected an illegal card slot")
+    selected_card_log_probs = factors.card[play].gather(
+        -1,
+        card_indices.unsqueeze(-1),
+    ).squeeze(-1)
+
+    row_col = actions.placement[play].to(dtype=torch.long)
+    rows = row_col[:, 0]
+    columns = row_col[:, 1]
+    placement_rows = int(placement_shape[-2])
+    placement_cols = int(placement_shape[-1])
+    if bool(
+        (
+            (rows < 0)
+            | (rows >= placement_rows)
+            | (columns < 0)
+            | (columns >= placement_cols)
+        )
+        .any()
+        .item()
+    ):
+        raise ValueError("placement action is outside the configured grid")
+    sample_indices = rows * placement_cols + columns
+    selected_placement_masks = masks.placement[play].reshape(
+        card_indices.shape[0],
+        policy.action_head.card_slots,
+        -1,
+    )
+    selected_placement_masks = selected_placement_masks[
+        torch.arange(card_indices.shape[0], device=card_indices.device),
+        card_indices,
+    ]
+    selected_placement_legal = selected_placement_masks.gather(
+        -1,
+        sample_indices.unsqueeze(-1),
+    ).squeeze(-1)
+    if not bool(selected_placement_legal.all().item()):
+        raise ValueError("action selected an illegal placement cell")
+    selected_placement_log_probs = placement_logs[play][
+        torch.arange(card_indices.shape[0], device=card_indices.device),
+        card_indices,
+    ].gather(-1, sample_indices.unsqueeze(-1)).squeeze(-1)
+    log_probs = log_probs.clone()
+    log_probs[play] = (
+        log_probs[play] + selected_card_log_probs + selected_placement_log_probs
+    )
+    return log_probs, entropy
 
 
 def _factor_behavior_cloning_loss(

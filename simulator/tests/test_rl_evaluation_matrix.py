@@ -145,6 +145,167 @@ def test_evaluation_reports_terminal_crown_totals() -> None:
     assert summary["crowns_end_matches"] == 2
 
 
+def test_summary_accepts_compact_target_trace_count() -> None:
+    from simulator.rl.evaluation_matrix import MatchResult, _summary
+
+    common_metrics = {
+        "target_plays_by_card": {"hog-rider": 2},
+        "target_rejected_actions": 1,
+        "opponent_rejected_actions": 0,
+        "crowns_end": {"player_0": 1, "player_1": 0},
+    }
+    retained = MatchResult(
+        "win",
+        decisions=4,
+        winner=0,
+        metrics={
+            **common_metrics,
+            "target_play_trace": [{"decision": 0}, {"decision": 2}],
+        },
+    )
+    compact = MatchResult(
+        "win",
+        decisions=4,
+        winner=0,
+        metrics={
+            **common_metrics,
+            "target_play_trace_entries": 2,
+        },
+    )
+
+    assert _summary([compact]) == _summary([retained])
+
+
+def test_summary_play_event_accounting_uses_authoritative_events() -> None:
+    from simulator.rl.evaluation_matrix import _play_event_outcome
+
+    applied = {
+        "events": (
+            {
+                "kind": "card_played",
+                "data": {"player": 0, "card_id": "hog-rider"},
+            },
+        )
+    }
+    rejected = {
+        "events": (
+            {
+                "kind": "action_rejected",
+                "data": {"player": 1, "reason": "insufficient_elixir"},
+            },
+        )
+    }
+
+    assert _play_event_outcome(applied, player=0) == ("hog-rider", True)
+    assert _play_event_outcome(rejected, player=1) == (None, False)
+
+
+def test_summary_only_matrix_skips_per_match_serialization(tmp_path, monkeypatch) -> None:
+    from simulator.rl.evaluation_matrix import (
+        EvaluationMatrixConfig,
+        MatchResult,
+        run_evaluation_matrix,
+    )
+
+    config = EvaluationMatrixConfig(
+        checkpoint=tmp_path / "summary-only.pt",
+        opponent_decks=(_deck("summary-only"),),
+        strategies=("wait",),
+        seeds=(1,),
+        held_out=False,
+        include_match_results=False,
+    )
+
+    def fail_as_dict(_self):
+        raise AssertionError("summary-only evaluation serialized a match row")
+
+    monkeypatch.setattr(MatchResult, "as_dict", fail_as_dict)
+    report = run_evaluation_matrix(
+        config,
+        match_runner=lambda _spec: {
+            "outcome": "win",
+            "decisions": 3,
+            "winner": 0,
+            "metrics": {
+                "target_plays_by_card": {"hog-rider": 2},
+                "target_rejected_actions": 1,
+                "opponent_rejected_actions": 0,
+                "target_play_trace_entries": 2,
+                "crowns_end": {"player_0": 1, "player_1": 0},
+            },
+        },
+    )
+
+    assert "matches" not in report
+    assert report["total"]["target_play_trace_entries"] == 2
+    assert report["matchups"][0]["summary"]["target_play_trace_entries"] == 2
+
+
+def test_replay_hash_mode_retains_every_decision_without_match_rows(tmp_path) -> None:
+    from simulator.rl.evaluation_matrix import (
+        EvaluationMatrixConfig,
+        run_evaluation_matrix,
+    )
+
+    config = EvaluationMatrixConfig(
+        checkpoint=tmp_path / "replay-audit.pt",
+        opponent_decks=(_deck("replay-audit"),),
+        strategies=("wait",),
+        seeds=(7,),
+        held_out=False,
+        include_match_results=False,
+        include_replay_hashes=True,
+    )
+    trace = [
+        {
+            "decision": 0,
+            "mode": "WAIT",
+            "accepted": True,
+            "played_card_id": None,
+            "physics_tick_before": 0,
+            "physics_tick_after": 1,
+            "elapsed_us_before": 0,
+            "elapsed_us_after": 1_000,
+            "terminated": False,
+            "truncated": False,
+            "state_hash_after": "state-0",
+            "event_log_hash_after": "events-0",
+            "replay_hash_after": "replay-0",
+        },
+        {
+            "decision": 1,
+            "mode": "WAIT",
+            "accepted": True,
+            "played_card_id": None,
+            "physics_tick_before": 1,
+            "physics_tick_after": 2,
+            "elapsed_us_before": 1_000,
+            "elapsed_us_after": 2_000,
+            "terminated": False,
+            "truncated": True,
+            "state_hash_after": "state-1",
+            "event_log_hash_after": "events-1",
+            "replay_hash_after": "replay-1",
+        },
+    ]
+
+    report = run_evaluation_matrix(
+        config,
+        match_runner=lambda _spec: {
+            "outcome": "truncated",
+            "decisions": 2,
+            "metrics": {
+                "decision_trace": trace,
+                "target_play_trace_entries": 0,
+            },
+        },
+    )
+
+    assert "matches" not in report
+    assert report["replay_trace"]["episodes"][0]["trace"] == trace
+    assert "trace_action_reconciliation" in report["simulation_exploit_audit"]["checked"]
+
+
 def test_matrix_aggregates_each_deck_strategy_seed_and_is_json_safe() -> None:
     from simulator.rl.evaluation_matrix import (
         EvaluationMatrixConfig,

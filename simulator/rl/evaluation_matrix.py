@@ -782,9 +782,16 @@ def _summary(results: Sequence[MatchResult]) -> dict[str, object]:
         raw_opponent_rejected = metrics.get("opponent_rejected_actions", 0)
         if type(raw_opponent_rejected) is int and raw_opponent_rejected >= 0:
             opponent_rejected_actions += raw_opponent_rejected
-        raw_trace = metrics.get("target_play_trace", ())
-        if isinstance(raw_trace, (list, tuple)):
-            traced_steps += len(raw_trace)
+        raw_trace_entries = metrics.get("target_play_trace_entries")
+        if type(raw_trace_entries) is int and raw_trace_entries >= 0:
+            # Summary-only runners retain this scalar instead of the full
+            # per-play rows.  Prefer it when present so the aggregate remains
+            # byte-for-byte equivalent to a trace-retaining run.
+            traced_steps += raw_trace_entries
+        else:
+            raw_trace = metrics.get("target_play_trace", ())
+            if isinstance(raw_trace, (list, tuple)):
+                traced_steps += len(raw_trace)
         raw_crowns = metrics.get("crowns_end")
         if isinstance(raw_crowns, Mapping):
             values = [raw_crowns.get(player) for player in crown_totals]
@@ -1919,6 +1926,137 @@ def _controller_action(
     return action
 
 
+def _action_mode(action: Any) -> str:
+    """Return the matrix action mode without allocating a trace row."""
+
+    if action is None:
+        return "WAIT"
+    raw_kind = getattr(action, "kind", None)
+    if raw_kind is None:
+        raw_kind = "Play" if (
+            hasattr(action, "card_idx") or hasattr(action, "card_slot")
+        ) else "Wait"
+    kind = str(raw_kind).strip().casefold().replace("_", "-")
+    return "WAIT" if kind in {"wait", "noop", "no-op"} else kind.upper()
+
+
+def _play_event_outcome(
+    info: Mapping[str, object],
+    *,
+    player: int,
+) -> tuple[str | None, bool]:
+    """Return the applied card and acceptance for one requested PLAY.
+
+    Summary-only evaluation needs card/rejection counters, not a full
+    diagnostic decision object.  Read the authoritative action events already
+    exposed by the evaluation environment and avoid all trace-row allocation,
+    classification, and snapshot work.
+    """
+
+    events = info.get("events", ())
+    if not isinstance(events, (list, tuple)):
+        raise EvaluationMatrixError("evaluation info events must be a sequence")
+    rejected = False
+    for event in events:
+        if not isinstance(event, Mapping):
+            continue
+        data = event.get("data")
+        if not isinstance(data, Mapping) or data.get("player") != player:
+            continue
+        if event.get("kind") == "card_played":
+            card_id = data.get("card_id")
+            return (card_id if isinstance(card_id, str) else None), True
+        if event.get("kind") == "action_rejected":
+            rejected = True
+    if rejected:
+        return None, False
+    raise EvaluationMatrixError(
+        "requested PLAY has neither an applied-card nor rejection event"
+    )
+
+
+def _play_state_event_outcome(
+    state: Any,
+    event_start: int,
+    *,
+    player: int,
+) -> tuple[str | None, bool]:
+    """Read one PLAY result directly from the authoritative event objects.
+
+    Compact evaluation deliberately disables ``info['events']`` so the
+    environment does not serialize a nested event mapping on every decision.
+    The simulator still appends the same canonical :class:`SimEvent` objects
+    to its state log; reading that suffix preserves card/rejection accounting
+    without constructing a second representation.  Replay/hash mode keeps
+    using the regular serialized-info path below the explicit audit boundary.
+    """
+
+    events = getattr(state, "events", ())
+    if not isinstance(events, (list, tuple)):
+        raise EvaluationMatrixError("evaluation state events must be a sequence")
+    if type(event_start) is not int or event_start < 0 or event_start > len(events):
+        raise EvaluationMatrixError("evaluation event start is outside the event log")
+    rejected = False
+    for event in events[event_start:]:
+        kind = getattr(event, "kind", None)
+        get_value = getattr(event, "get", None)
+        if not isinstance(kind, str) or not callable(get_value):
+            continue
+        if get_value("player") != player:
+            continue
+        if kind == "card_played":
+            card_id = get_value("card_id")
+            return (card_id if isinstance(card_id, str) else None), True
+        if kind == "action_rejected":
+            rejected = True
+    if rejected:
+        return None, False
+    raise EvaluationMatrixError(
+        "requested PLAY has neither an applied-card nor rejection event"
+    )
+
+
+def _inference_entity_suffix_limit(
+    observations: Sequence[Any],
+    *,
+    entity_count: int,
+) -> int:
+    """Return the largest non-padding entity prefix needed by a batch.
+
+    Public V2 entity rows are UID ordered and zero-padded at the tail.  The
+    actor has no positional encoding over those rows, so slicing every lane
+    to the largest last-true column is numerically equivalent to passing all
+    128 rows while avoiding attention work on a CUDA batch.  Internal masked
+    holes are retained: this helper only removes a shared suffix and never
+    reorders or filters public entities.
+    """
+
+    if type(entity_count) is not int or entity_count < 1:
+        raise EvaluationMatrixError("entity_count must be a positive integer")
+    # NumPy is already part of the pinned V2 observation contract, but keep
+    # this import local so injected runners can use the orchestration module
+    # without importing tensor dependencies at module load time.
+    import numpy as np
+
+    limit = 1
+    for index, observation in enumerate(observations):
+        raw_mask = getattr(observation, "entity_mask", None)
+        if raw_mask is None:
+            raise EvaluationMatrixError(
+                f"actor observation {index} is missing entity_mask"
+            )
+        mask = np.asarray(raw_mask)
+        if mask.ndim != 1 or mask.shape[0] != entity_count:
+            raise EvaluationMatrixError(
+                f"actor observation {index} entity_mask must have shape "
+                f"({entity_count},)"
+            )
+        present = np.flatnonzero(mask)
+        if present.size:
+            limit = max(limit, int(present[-1]) + 1)
+    return min(entity_count, limit)
+
+
 def _evaluation_batch_config(
     stored_config: Any,
     *,
@@ -1957,9 +2095,20 @@ def _evaluation_batch_config(
 
 
 class _CheckpointMatchRunner:
-    """Load one checkpoint once, then execute matrix cells sequentially."""
+    """Load one checkpoint once, then execute matrix cells sequentially.
 
-    def __init__(self, config: EvaluationMatrixConfig) -> None:
+    ``include_match_results`` is kept on the runner because it controls the
+    amount of per-decision bookkeeping needed while a real checkpoint is
+    running.  Replay-hash mode deliberately disables the summary-only fast
+    path even when callers omit match rows from the final report.
+    """
+
+    def __init__(
+        self,
+        config: EvaluationMatrixConfig,
+        *,
+        include_match_results: bool | None = None,
+    ) -> None:
         try:
             from .prototype import load_prototype_checkpoint
         except ImportError:  # pragma: no cover - defensive package layout
@@ -1989,6 +2138,14 @@ class _CheckpointMatchRunner:
         self._player_deck = self._canonical_player_deck(config.player_deck)
         self.domain_randomization = config.domain_randomization
         self.include_replay_hashes = bool(config.include_replay_hashes)
+        if include_match_results is None:
+            include_match_results = config.include_match_results
+        if type(include_match_results) is not bool:
+            raise EvaluationMatrixError("include_match_results must be boolean")
+        self.include_match_results = include_match_results
+        self._summary_only = (
+            not self.include_match_results and not self.include_replay_hashes
+        )
         self._torch = self._require_torch()
         self.learner.policy.eval()
         self.learner.critic.eval()
@@ -2157,6 +2314,8 @@ class _CheckpointMatchRunner:
             raise EvaluationMatrixError(
                 "domain-randomized matrix cells must use sequential evaluation"
             )
+        if self._summary_only:
+            return self._run_compact_batch(specs)
         cap = self._decision_cap(specs[0])
         if any(self._decision_cap(spec) != cap for spec in specs):
             raise EvaluationMatrixError("batched matrix cells must share a decision cap")
@@ -2225,12 +2384,16 @@ class _CheckpointMatchRunner:
         decisions: list[int] = [0] * len(specs)
         target_plays: list[dict[str, int]] = [dict() for _ in specs]
         opponent_plays: list[dict[str, int]] = [dict() for _ in specs]
-        target_play_trace: list[list[dict[str, object]]] = [
-            [] for _ in specs
-        ]
-        opponent_play_trace: list[list[dict[str, object]]] = [
-            [] for _ in specs
-        ]
+        target_play_trace: list[list[dict[str, object]]] | None = (
+            None if self._summary_only else [[] for _ in specs]
+        )
+        opponent_play_trace: list[list[dict[str, object]]] | None = (
+            None if self._summary_only else [[] for _ in specs]
+        )
+        decision_trace: list[list[dict[str, object]]] | None = (
+            [[] for _ in specs] if self.include_replay_hashes else None
+        )
+        target_play_trace_entries: list[int] = [0] * len(specs)
         target_rejected: list[int] = [0] * len(specs)
         opponent_rejected: list[int] = [0] * len(specs)
 
@@ -2238,14 +2401,47 @@ class _CheckpointMatchRunner:
             lane = int(record.lane)
             last_results[lane] = record.result
             decisions[lane] += 1
+            # Matrix results retain only PLAY rows.  A WAIT/WAIT decision has
+            # no action accounting or trace output to contribute, so avoid
+            # constructing the large diagnostic row in the ordinary path.
+            # Replay-hash mode intentionally stays on the complete diagnostic
+            # path even when match rows are omitted from the final report.
+            if (
+                not self.include_replay_hashes
+                and _action_mode(record.target_action) == "WAIT"
+                and _action_mode(record.opponent_action) == "WAIT"
+            ):
+                return
+            if self._summary_only:
+                info = getattr(record.result, "info", {})
+                if not isinstance(info, Mapping):
+                    raise EvaluationMatrixError("evaluation step info must be an object")
+                if _action_mode(record.target_action) == "PLAY":
+                    target_play_trace_entries[lane] += 1
+                    card, accepted = _play_event_outcome(info, player=0)
+                    if accepted and card is not None:
+                        target_plays[lane][card] = target_plays[lane].get(card, 0) + 1
+                    elif not accepted:
+                        target_rejected[lane] += 1
+                if _action_mode(record.opponent_action) == "PLAY":
+                    card, accepted = _play_event_outcome(info, player=1)
+                    if accepted and card is not None:
+                        opponent_plays[lane][card] = opponent_plays[lane].get(card, 0) + 1
+                    elif not accepted:
+                        opponent_rejected[lane] += 1
+                return
             row = _trace_decision(
                 record,
                 target_player=0,
                 include_positions=False,
             )
+            if decision_trace is not None:
+                decision_trace[lane].append(row)
             target_action_kind = row.get("mode")
             if target_action_kind == "PLAY":
-                target_play_trace[lane].append(row)
+                target_play_trace_entries[lane] += 1
+                if target_play_trace is not None:
+                    target_play_trace[lane].append(row)
                 if bool(row.get("accepted")):
                     card = row.get("played_card_id") or row.get("card_id")
                     if isinstance(card, str):
@@ -2254,19 +2450,20 @@ class _CheckpointMatchRunner:
                     target_rejected[lane] += 1
             opponent_action = row.get("opponent_action")
             if isinstance(opponent_action, Mapping) and opponent_action.get("mode") == "PLAY":
-                opponent_play_trace[lane].append(
-                    {
-                        "decision": row.get("decision"),
-                        "physics_tick_before": row.get("physics_tick_before"),
-                        "elapsed_us_before": row.get("elapsed_us_before"),
-                        "card_id": row.get("opponent_card_id"),
-                        "accepted": row.get("opponent_accepted"),
-                        "policy_cell": row.get("opponent_policy_cell"),
-                        "world_cell": row.get("opponent_world_cell"),
-                        "played_world_cell": row.get("opponent_played_world_cell"),
-                        "rejection_reason": row.get("opponent_rejection_reason"),
-                    }
-                )
+                if opponent_play_trace is not None:
+                    opponent_play_trace[lane].append(
+                        {
+                            "decision": row.get("decision"),
+                            "physics_tick_before": row.get("physics_tick_before"),
+                            "elapsed_us_before": row.get("elapsed_us_before"),
+                            "card_id": row.get("opponent_card_id"),
+                            "accepted": row.get("opponent_accepted"),
+                            "policy_cell": row.get("opponent_policy_cell"),
+                            "world_cell": row.get("opponent_world_cell"),
+                            "played_world_cell": row.get("opponent_played_world_cell"),
+                            "rejection_reason": row.get("opponent_rejection_reason"),
+                        }
+                    )
                 if bool(row.get("opponent_accepted")):
                     card = row.get("opponent_card_id")
                     if isinstance(card, str):
@@ -2306,6 +2503,31 @@ class _CheckpointMatchRunner:
             terminal_reason = info.get("terminal_reason")
             if outcome == "truncated" and not isinstance(terminal_reason, str):
                 terminal_reason = "evaluation_cap"
+            metrics: dict[str, object] = {
+                "batched_actor_inference": True,
+                "target_rejected_actions": target_rejected[index],
+                "opponent_rejected_actions": opponent_rejected[index],
+                "target_plays_by_card": target_plays[index],
+                "opponent_plays_by_card": opponent_plays[index],
+                "tower_hp_end": self._tower_snapshot(environments[index]),
+                "crowns_end": self._crown_snapshot(environments[index]),
+                "domain_randomization": None,
+                "troop_positions_end": _troop_positions_by_player(
+                    environments[index].state
+                ),
+            }
+            if self._summary_only:
+                # The aggregate summary needs only the count, not the
+                # potentially large per-play rows.  Replay-hash mode is
+                # excluded from this branch above.
+                metrics["target_play_trace_entries"] = target_play_trace_entries[index]
+            else:
+                if target_play_trace is None or opponent_play_trace is None:  # pragma: no cover - invariant
+                    raise EvaluationMatrixError("matrix trace storage was not initialized")
+                metrics["target_play_trace"] = target_play_trace[index]
+                metrics["opponent_play_trace"] = opponent_play_trace[index]
+            if decision_trace is not None:
+                metrics["decision_trace"] = decision_trace[index]
             results.append(
                 MatchResult(
                     outcome=outcome,
@@ -2313,21 +2535,7 @@ class _CheckpointMatchRunner:
                     return_value=float(returns[index]),
                     winner=winner,
                     terminal_reason=terminal_reason,
-                    metrics={
-                        "batched_actor_inference": True,
-                        "target_rejected_actions": target_rejected[index],
-                        "opponent_rejected_actions": opponent_rejected[index],
-                        "target_plays_by_card": target_plays[index],
-                        "opponent_plays_by_card": opponent_plays[index],
-                        "target_play_trace": target_play_trace[index],
-                        "opponent_play_trace": opponent_play_trace[index],
-                        "tower_hp_end": self._tower_snapshot(environments[index]),
-                        "crowns_end": self._crown_snapshot(environments[index]),
-                        "domain_randomization": None,
-                        "troop_positions_end": _troop_positions_by_player(
-                            environments[index].state
-                        ),
-                    },
+                    metrics=metrics,
                 )
             )
         return results
@@ -2383,6 +2591,328 @@ class _CheckpointMatchRunner:
                 crowns[f"player_{player}"] = value
         return crowns
 
+    def _run_compact_batch(self, specs: Sequence[MatchSpec]) -> list[MatchResult]:
+        """Run a summary-only actor batch without constructing a rollout.
+
+        The regular collector intentionally returns a complete ``B x T``
+        trajectory because PPO needs values, log probabilities, masks, and
+        recurrent checkpoints.  Matrix strength evaluation needs none of
+        those tensors: it needs the same deterministic actor action, the
+        simulator reward/outcome, and a few compact counters.  Keeping this
+        loop here avoids critic/belief work, trajectory stacking, and trace
+        serialization while preserving the collector's public observation and
+        reset-mask calls exactly.
+
+        This path is deliberately limited to compact actor batches.  Retained
+        match rows and replay-hash audits continue through ``run_batch``'s
+        collector path so every requested diagnostic row remains explicit.
+        """
+
+        if not specs:
+            return []
+        if any(spec.policy_mode != "actor" for spec in specs):
+            raise EvaluationMatrixError(
+                "compact batch supports actor policy cells only"
+            )
+        if any(spec.target_player != 0 for spec in specs):
+            raise EvaluationMatrixError(
+                "compact batch currently supports target_player=0 only"
+            )
+        if any(spec.domain_randomization is not None for spec in specs):
+            raise EvaluationMatrixError(
+                "domain-randomized matrix cells must use sequential evaluation"
+            )
+
+        try:
+            from .collector import (
+                _batch_observations,
+                _collector_observations,
+                _collector_observations_from_result,
+                _decode_actions,
+                _frozen_observation,
+                _step_v2_for_collector,
+            )
+        except ImportError:  # pragma: no cover - defensive package layout
+            raise EvaluationMatrixError(
+                "cannot import the compact recurrent evaluation helpers"
+            )
+
+        cap = self._decision_cap(specs[0])
+        if any(self._decision_cap(spec) != cap for spec in specs):
+            raise EvaluationMatrixError(
+                "compact matrix cells must share a decision cap"
+            )
+
+        environments: list[Any] = []
+        controllers: list[Any] = []
+        initial_observations: list[Any] = []
+        for spec in specs:
+            opponent_deck = self._canonical_opponent_deck(spec.opponent_deck)
+            environment = self._SimulatorEnv(
+                engine=self._BattleEngine(self.ruleset, validate_every_tick=False),
+                decision_interval_us=int(self.stored_config.decision_interval_us),
+                reward=self._RewardConfig.terminal_outcome(),
+                # Summary-only accounting reads the authoritative SimEvent
+                # suffix from ``environment.state`` below.  Do not serialize
+                # an ``info['events']`` mapping on every decision.
+                expose_privileged_info=False,
+                include_replay_hashes=False,
+                include_authoritative_state=False,
+            )
+            observations = environment.reset_v2(
+                seed=spec.seed,
+                decks=(tuple(self._player_deck), opponent_deck),
+                shuffle_decks=spec.shuffle_decks,
+            )
+            environments.append(environment)
+            controllers.append(spec.strategy.build(spec.seed))
+            initial_observations.append(observations)
+
+        opponent_uses_public_observation = any(
+            callable(getattr(controller, "choose_public_action", None))
+            for controller in controllers
+        )
+        actor_only_observations = not opponent_uses_public_observation
+
+        def actor_pair(observations: Any) -> tuple[Any, Any]:
+            if not isinstance(observations, Sequence) or len(observations) != 2:
+                raise EvaluationMatrixError(
+                    "compact evaluation observations must contain two viewers"
+                )
+            if actor_only_observations:
+                return (observations[0], None)
+            return (observations[0], observations[1])
+
+        current_observations = [actor_pair(item) for item in initial_observations]
+        hidden = self.learner.initial_rollout_state(len(specs)).hidden
+        reset_mask = self._torch.ones(
+            (len(specs), 1),
+            dtype=self._torch.bool,
+            device=self.learner.device,
+        )
+        frozen_lanes = [False] * len(specs)
+        last_results: list[Any | None] = [None] * len(specs)
+        decisions = [0] * len(specs)
+        total_returns = [0.0] * len(specs)
+        target_plays: list[dict[str, int]] = [dict() for _ in specs]
+        opponent_plays: list[dict[str, int]] = [dict() for _ in specs]
+        target_rejected = [0] * len(specs)
+        opponent_rejected = [0] * len(specs)
+        target_play_trace_entries = [0] * len(specs)
+
+        for _decision in range(cap):
+            actor_observations = [
+                observations[0] for observations in current_observations
+            ]
+            raster, global_features, entities, entity_mask, masks = _batch_observations(
+                actor_observations,
+                device=self.learner.device,
+                inference=True,
+            )
+            with self._torch.inference_mode():
+                entity_limit = _inference_entity_suffix_limit(
+                    actor_observations,
+                    entity_count=int(entities.shape[2]),
+                )
+                if entity_limit < int(entities.shape[2]):
+                    # Keep the lane's full prefix, including any internal
+                    # masked rows.  Only the shared padded suffix is removed;
+                    # the policy's masked attention therefore sees the same
+                    # public entities and produces the same actor stream.
+                    entities = entities[..., :entity_limit, :]
+                    entity_mask = entity_mask[..., :entity_limit]
+                actions, final_hidden = self.learner.policy.act_deterministic(
+                    raster,
+                    global_features,
+                    entities,
+                    entity_mask,
+                    masks,
+                    reset_mask=reset_mask,
+                    hidden=hidden,
+                )
+            hidden = final_hidden.detach()
+            decoded_actions = _decode_actions(actions)
+
+            simulator_actions: list[tuple[Any, Any]] = []
+            opponent_actions: list[Any | None] = [None] * len(specs)
+            event_starts: list[int | None] = [None] * len(specs)
+            for lane, (environment, controller) in enumerate(
+                zip(environments, controllers, strict=True)
+            ):
+                if frozen_lanes[lane]:
+                    simulator_actions.append((None, None))
+                    continue
+                state = getattr(environment, "state", None)
+                if state is None:  # pragma: no cover - environment invariant
+                    raise EvaluationMatrixError(
+                        "compact evaluation environment lost its state"
+                    )
+                event_starts[lane] = len(state.events)
+                opponent_player = 1
+                opponent_action = _controller_action(
+                    controller,
+                    environment.engine,
+                    environment.state,
+                    opponent_player,
+                    public_observation=current_observations[lane][opponent_player],
+                )
+                opponent_actions[lane] = opponent_action
+                simulator_actions.append((decoded_actions[lane], opponent_action))
+
+            results: list[Any | None] = [None] * len(specs)
+            for lane, (environment, actions_for_lane) in enumerate(
+                zip(environments, simulator_actions, strict=True)
+            ):
+                if frozen_lanes[lane]:
+                    continue
+                results[lane] = _step_v2_for_collector(
+                    environment,
+                    actions_for_lane,
+                    target_player=0,
+                    actor_only=actor_only_observations,
+                )
+
+            next_observations: list[tuple[Any, Any]] = []
+            next_reset_values: list[bool] = []
+            for lane, (environment, result) in enumerate(zip(
+                environments,
+                results,
+                strict=True,
+            )):
+                if frozen_lanes[lane]:
+                    # Match the collector's frozen-lane behavior: it asks for
+                    # the terminal public view again, then masks all PLAY
+                    # cells while sibling lanes finish.
+                    frozen_pair = _collector_observations(
+                        environment,
+                        target_player=0,
+                        actor_only=actor_only_observations,
+                    )
+                    next_observations.append(
+                        tuple(
+                            None
+                            if observation is None
+                            else _frozen_observation(observation)
+                            for observation in frozen_pair
+                        )
+                    )
+                    # ``_FrozenStep`` is terminal by design, so the collector
+                    # keeps the reset bit asserted for every padded row.
+                    # Frozen lanes are independent of active lanes, but this
+                    # preserves the exact recurrent collector semantics.
+                    next_reset_values.append(True)
+                    continue
+                if result is None:  # pragma: no cover - active-lane invariant
+                    raise EvaluationMatrixError(
+                        "compact evaluation omitted an active lane result"
+                    )
+                last_results[lane] = result
+                decisions[lane] += 1
+                total_returns[lane] += float(result.rewards[0])
+                state = getattr(environment, "state", None)
+                event_start = event_starts[lane]
+                if state is None or event_start is None:  # pragma: no cover
+                    raise EvaluationMatrixError(
+                        "compact evaluation lost its event accounting state"
+                    )
+                if _action_mode(decoded_actions[lane]) == "PLAY":
+                    target_play_trace_entries[lane] += 1
+                    card, accepted = _play_state_event_outcome(
+                        state,
+                        event_start,
+                        player=0,
+                    )
+                    if accepted and card is not None:
+                        target_plays[lane][card] = target_plays[lane].get(card, 0) + 1
+                    elif not accepted:
+                        target_rejected[lane] += 1
+                if _action_mode(opponent_actions[lane]) == "PLAY":
+                    card, accepted = _play_state_event_outcome(
+                        state,
+                        event_start,
+                        player=1,
+                    )
+                    if accepted and card is not None:
+                        opponent_plays[lane][card] = opponent_plays[lane].get(card, 0) + 1
+                    elif not accepted:
+                        opponent_rejected[lane] += 1
+
+                post_step_observations = _collector_observations_from_result(
+                    result.observations,
+                    environment,
+                    target_player=0,
+                    actor_only=actor_only_observations,
+                )
+                terminated = bool(result.terminated)
+                truncated = bool(result.truncated)
+                if terminated or truncated:
+                    frozen_lanes[lane] = True
+                    post_step_observations = tuple(
+                        None
+                        if observation is None
+                        else _frozen_observation(observation)
+                        for observation in post_step_observations
+                    )
+                next_observations.append(post_step_observations)
+                next_reset_values.append(terminated or truncated)
+
+            current_observations = next_observations
+            reset_mask = self._torch.as_tensor(
+                next_reset_values,
+                dtype=self._torch.bool,
+                device=self.learner.device,
+            ).reshape(-1, 1)
+            if all(frozen_lanes):
+                break
+
+        returns = total_returns
+        results: list[MatchResult] = []
+        for index, spec in enumerate(specs):
+            step = last_results[index]
+            info = getattr(step, "info", {}) if step is not None else {}
+            if not isinstance(info, Mapping):
+                info = {}
+            terminated = bool(getattr(step, "terminated", False))
+            truncated = bool(getattr(step, "truncated", False))
+            winner = info.get("winner")
+            if truncated or not terminated:
+                outcome = "truncated"
+            elif winner == spec.target_player:
+                outcome = "win"
+            elif winner == 1 - spec.target_player:
+                outcome = "loss"
+            else:
+                outcome = "draw"
+            terminal_reason = info.get("terminal_reason")
+            if outcome == "truncated" and not isinstance(terminal_reason, str):
+                terminal_reason = "evaluation_cap"
+            environment = environments[index]
+            metrics: dict[str, object] = {
+                "batched_actor_inference": True,
+                "target_rejected_actions": target_rejected[index],
+                "opponent_rejected_actions": opponent_rejected[index],
+                "target_plays_by_card": target_plays[index],
+                "opponent_plays_by_card": opponent_plays[index],
+                "tower_hp_end": self._tower_snapshot(environment),
+                "crowns_end": self._crown_snapshot(environment),
+                "domain_randomization": None,
+                "troop_positions_end": _troop_positions_by_player(
+                    environment.state
+                ),
+                "target_play_trace_entries": target_play_trace_entries[index],
+            }
+            results.append(
+                MatchResult(
+                    outcome=outcome,
+                    decisions=decisions[index] or cap,
+                    return_value=returns[index],
+                    winner=winner,
+                    terminal_reason=terminal_reason,
+                    metrics=metrics,
+                )
+            )
+        return results
+
     def __call__(self, spec: MatchSpec) -> MatchResult:
         try:
             from .public_counter import (
@@ -2430,9 +2960,57 @@ class _CheckpointMatchRunner:
         opponent_rejected = 0
         target_plays: dict[str, int] = {}
         opponent_plays: dict[str, int] = {}
-        target_play_trace: list[dict[str, object]] = []
-        opponent_play_trace: list[dict[str, object]] = []
+        target_play_trace: list[dict[str, object]] | None = (
+            None if self._summary_only else []
+        )
+        opponent_play_trace: list[dict[str, object]] | None = (
+            None if self._summary_only else []
+        )
+        decision_trace: list[dict[str, object]] | None = (
+            [] if self.include_replay_hashes else None
+        )
+        target_play_trace_entries = 0
         cap = self._decision_cap(spec)
+
+        def finish(
+            *,
+            outcome: str,
+            decisions: int,
+            winner: int | None,
+            terminal_reason: str | None,
+        ) -> MatchResult:
+            metrics: dict[str, object] = {
+                "target_rejected_actions": target_rejected,
+                "opponent_rejected_actions": opponent_rejected,
+                "target_plays_by_card": target_plays,
+                "opponent_plays_by_card": opponent_plays,
+                "tower_hp_end": self._tower_snapshot(environment),
+                "crowns_end": self._crown_snapshot(environment),
+                "domain_randomization": self._variant_snapshot(environment),
+                "troop_positions_end": _troop_positions_by_player(
+                    environment.state
+                ),
+            }
+            if self._summary_only:
+                # The aggregate summary needs only the count, not the
+                # potentially large per-play rows.  Replay-hash mode is
+                # excluded from this branch above.
+                metrics["target_play_trace_entries"] = target_play_trace_entries
+            else:
+                if target_play_trace is None or opponent_play_trace is None:  # pragma: no cover - invariant
+                    raise EvaluationMatrixError("matrix trace storage was not initialized")
+                metrics["target_play_trace"] = target_play_trace
+                metrics["opponent_play_trace"] = opponent_play_trace
+            if decision_trace is not None:
+                metrics["decision_trace"] = decision_trace
+            return MatchResult(
+                outcome=outcome,
+                decisions=decisions,
+                return_value=total_return,
+                winner=winner,
+                terminal_reason=terminal_reason,
+                metrics=metrics,
+            )
 
         for decision in range(cap):
             state_before = environment.state
@@ -2478,50 +3056,85 @@ class _CheckpointMatchRunner:
             step = environment.step_v2(actions)
             total_return += float(step.rewards[spec.target_player])
             info = step.info
-            row = _trace_decision(
-                SimpleNamespace(
-                    decision_index=decision,
-                    target_action=target_action,
-                    opponent_action=opponent_action,
-                    result=step,
-                    state_after=environment.state,
-                    physics_tick_before=physics_tick_before,
-                    elapsed_us_before=elapsed_us_before,
-                    hand_before=hand_before,
-                    elixir_before=elixir_before,
-                ),
-                target_player=spec.target_player,
-                include_positions=False,
+            # Retained matrix results expose only PLAY rows.  Do not build a
+            # diagnostic row for a WAIT/WAIT decision unless replay-hash mode
+            # explicitly requested the complete diagnostic path.
+            skip_trace = (
+                not self.include_replay_hashes
+                and _action_mode(target_action) == "WAIT"
+                and _action_mode(opponent_action) == "WAIT"
             )
-            if row.get("mode") == "PLAY":
-                target_play_trace.append(row)
-                if bool(row.get("accepted")):
-                    card_id = row.get("played_card_id") or row.get("card_id")
-                    if isinstance(card_id, str):
+            if self._summary_only and not skip_trace:
+                if _action_mode(target_action) == "PLAY":
+                    target_play_trace_entries += 1
+                    card_id, accepted = _play_event_outcome(
+                        info,
+                        player=spec.target_player,
+                    )
+                    if accepted and card_id is not None:
                         target_plays[card_id] = target_plays.get(card_id, 0) + 1
-                else:
-                    target_rejected += 1
-            opponent_row = row.get("opponent_action")
-            if isinstance(opponent_row, Mapping) and opponent_row.get("mode") == "PLAY":
-                opponent_play_trace.append(
-                    {
-                        "decision": row.get("decision"),
-                        "physics_tick_before": row.get("physics_tick_before"),
-                        "elapsed_us_before": row.get("elapsed_us_before"),
-                        "card_id": row.get("opponent_card_id"),
-                        "accepted": row.get("opponent_accepted"),
-                        "policy_cell": row.get("opponent_policy_cell"),
-                        "world_cell": row.get("opponent_world_cell"),
-                        "played_world_cell": row.get("opponent_played_world_cell"),
-                        "rejection_reason": row.get("opponent_rejection_reason"),
-                    }
-                )
-                if bool(row.get("opponent_accepted")):
-                    card_id = row.get("opponent_card_id")
-                    if isinstance(card_id, str):
+                    elif not accepted:
+                        target_rejected += 1
+                if _action_mode(opponent_action) == "PLAY":
+                    card_id, accepted = _play_event_outcome(
+                        info,
+                        player=opponent_player,
+                    )
+                    if accepted and card_id is not None:
                         opponent_plays[card_id] = opponent_plays.get(card_id, 0) + 1
-                else:
-                    opponent_rejected += 1
+                    elif not accepted:
+                        opponent_rejected += 1
+                skip_trace = True
+            if not skip_trace:
+                row = _trace_decision(
+                    SimpleNamespace(
+                        decision_index=decision,
+                        target_action=target_action,
+                        opponent_action=opponent_action,
+                        result=step,
+                        state_after=environment.state,
+                        physics_tick_before=physics_tick_before,
+                        elapsed_us_before=elapsed_us_before,
+                        hand_before=hand_before,
+                        elixir_before=elixir_before,
+                    ),
+                    target_player=spec.target_player,
+                    include_positions=False,
+                )
+                if decision_trace is not None:
+                    decision_trace.append(row)
+                if row.get("mode") == "PLAY":
+                    target_play_trace_entries += 1
+                    if target_play_trace is not None:
+                        target_play_trace.append(row)
+                    if bool(row.get("accepted")):
+                        card_id = row.get("played_card_id") or row.get("card_id")
+                        if isinstance(card_id, str):
+                            target_plays[card_id] = target_plays.get(card_id, 0) + 1
+                    else:
+                        target_rejected += 1
+                opponent_row = row.get("opponent_action")
+                if isinstance(opponent_row, Mapping) and opponent_row.get("mode") == "PLAY":
+                    if opponent_play_trace is not None:
+                        opponent_play_trace.append(
+                            {
+                                "decision": row.get("decision"),
+                                "physics_tick_before": row.get("physics_tick_before"),
+                                "elapsed_us_before": row.get("elapsed_us_before"),
+                                "card_id": row.get("opponent_card_id"),
+                                "accepted": row.get("opponent_accepted"),
+                                "policy_cell": row.get("opponent_policy_cell"),
+                                "world_cell": row.get("opponent_world_cell"),
+                                "played_world_cell": row.get("opponent_played_world_cell"),
+                                "rejection_reason": row.get("opponent_rejection_reason"),
+                            }
+                        )
+                    if bool(row.get("opponent_accepted")):
+                        card_id = row.get("opponent_card_id")
+                        if isinstance(card_id, str):
+                            opponent_plays[card_id] = opponent_plays.get(card_id, 0) + 1
+                    else:
+                        opponent_rejected += 1
             reset = False
             observations = step.observations
             if step.terminated or step.truncated:
@@ -2534,47 +3147,18 @@ class _CheckpointMatchRunner:
                     outcome = "loss"
                 else:
                     outcome = "draw"
-                return MatchResult(
+                return finish(
                     outcome=outcome,
                     decisions=decision + 1,
-                    return_value=total_return,
                     winner=winner,
                     terminal_reason=info.get("terminal_reason"),
-                    metrics={
-                        "target_rejected_actions": target_rejected,
-                        "opponent_rejected_actions": opponent_rejected,
-                        "target_plays_by_card": target_plays,
-                        "opponent_plays_by_card": opponent_plays,
-                        "target_play_trace": target_play_trace,
-                        "opponent_play_trace": opponent_play_trace,
-                        "tower_hp_end": self._tower_snapshot(environment),
-                        "crowns_end": self._crown_snapshot(environment),
-                        "domain_randomization": self._variant_snapshot(environment),
-                        "troop_positions_end": _troop_positions_by_player(
-                            environment.state
-                        ),
-                    },
                 )
 
-        return MatchResult(
+        return finish(
             outcome="truncated",
             decisions=cap,
-            return_value=total_return,
+            winner=None,
             terminal_reason="evaluation_cap",
-            metrics={
-                "target_rejected_actions": target_rejected,
-                "opponent_rejected_actions": opponent_rejected,
-                "target_plays_by_card": target_plays,
-                "opponent_plays_by_card": opponent_plays,
-                "target_play_trace": target_play_trace,
-                "opponent_play_trace": opponent_play_trace,
-                "tower_hp_end": self._tower_snapshot(environment),
-                "crowns_end": self._crown_snapshot(environment),
-                "domain_randomization": self._variant_snapshot(environment),
-                "troop_positions_end": _troop_positions_by_player(
-                    environment.state
-                ),
-            },
         )
 
 
@@ -2608,7 +3192,10 @@ def run_evaluation_matrix(
     runner_metadata: dict[str, object]
     default_runner: _CheckpointMatchRunner | None = None
     if match_runner is None:
-        default_runner = _CheckpointMatchRunner(config)
+        default_runner = _CheckpointMatchRunner(
+            config,
+            include_match_results=config.include_match_results,
+        )
         runner = default_runner
         runner_metadata = default_runner.metadata_report()
     else:
@@ -2617,6 +3204,7 @@ def run_evaluation_matrix(
     runner_setup_seconds = perf_counter() - runner_setup_started
 
     rows: list[dict[str, object]] = []
+    replay_episodes: list[dict[str, object]] = []
     result_groups: dict[tuple[str, str], list[MatchResult]] = {
         (deck.deck_id, strategy.strategy_id): []
         for deck in config.opponent_decks
@@ -2649,22 +3237,39 @@ def run_evaluation_matrix(
             raw_result,
             target_player=config.target_player,
         )
-        # Force conversion now so a custom runner cannot cause a partially
-        # JSON-safe report to escape this API.
-        result.as_dict()
         result_groups[(spec.opponent_deck.deck_id, spec.strategy.strategy_id)].append(result)
         completed += 1
-        row = {
-            "matrix_index": completed - 1,
-            **spec.as_dict(),
-            "outcome": result.outcome,
-            "decisions": result.decisions,
-            "return": float(result.return_value),
-            "winner": result.winner,
-            "terminal_reason": result.terminal_reason,
-            "metrics": _json_safe(dict(result.metrics)),
-        }
-        rows.append(_json_safe(row))
+        if config.include_replay_hashes:
+            raw_trace = result.metrics.get("decision_trace")
+            if not isinstance(raw_trace, list) or len(raw_trace) != result.decisions:
+                raise EvaluationMatrixError(
+                    "replay-hash evaluation requires one diagnostic row per decision"
+                )
+            replay_episodes.append(
+                {
+                    "cell_id": spec.cell_id,
+                    "seed": spec.seed,
+                    "decisions": result.decisions,
+                    "trace": _json_safe(raw_trace),
+                }
+            )
+        if config.include_match_results:
+            # Summary-only reports intentionally avoid constructing and
+            # retaining one JSON row per match.  The matchup summaries below
+            # are sufficient for aggregate reporting and quality gates.
+            # Force conversion only when these per-match rows are requested.
+            result.as_dict()
+            row = {
+                "matrix_index": completed - 1,
+                **spec.as_dict(),
+                "outcome": result.outcome,
+                "decisions": result.decisions,
+                "return": float(result.return_value),
+                "winner": result.winner,
+                "terminal_reason": result.terminal_reason,
+                "metrics": _json_safe(dict(result.metrics)),
+            }
+            rows.append(_json_safe(row))
         if progress_callback is not None:
             progress_callback(completed, config.match_count, spec, result)
 
@@ -2753,8 +3358,6 @@ def run_evaluation_matrix(
 
     total_results = [result for results in result_groups.values() for result in results]
     total_summary = _summary(total_results)
-    wall_seconds = perf_counter() - started
-    finished_at_utc = _utc_timestamp()
     checkpoint_fingerprint = _file_fingerprint(config.checkpoint)
     config_fingerprint = _json_fingerprint(config.as_dict())
     selected_compositions = {
@@ -2822,19 +3425,29 @@ def run_evaluation_matrix(
         },
         "timing": {
             "started_at_utc": started_at_utc,
-            "finished_at_utc": finished_at_utc,
-            "wall_seconds": wall_seconds,
+            "finished_at_utc": None,
+            "wall_seconds": 0.0,
             "runner_setup_seconds": runner_setup_seconds,
             "match_execution_seconds": execution_seconds,
+            "reporting_seconds": 0.0,
             "execution_mode": execution_mode,
             "batch_count": batch_count,
-            "matches_per_second": (
+            "match_execution_matches_per_second": (
                 config.match_count / execution_seconds if execution_seconds else 0.0
             ),
-            "decisions_per_second": (
+            "match_execution_decisions_per_second": (
                 total_summary["decisions_total"] / execution_seconds
                 if execution_seconds
                 else 0.0
+            ),
+            # Filled after metrics, exploit audit, and JSON validation.  This
+            # is the primary end-to-end throughput metric; the execution-only
+            # rates above remain diagnostic breakdowns.
+            "matches_per_second": 0.0,
+            "decisions_per_second": 0.0,
+            "throughput_scope": (
+                "runner setup, checkpoint load, complete matches, metric and "
+                "audit construction, JSON validation"
             ),
             "includes_progress_callback": progress_callback is not None,
         },
@@ -2847,9 +3460,16 @@ def run_evaluation_matrix(
     }
     if config.include_match_results:
         report["matches"] = rows
+    replay_trace: dict[str, object] | None = None
+    if config.include_replay_hashes:
+        replay_trace = {"episodes": replay_episodes}
+        report["replay_trace"] = replay_trace
     from .exploit_audit import audit_simulation_report
 
-    report["simulation_exploit_audit"] = audit_simulation_report(report)
+    report["simulation_exploit_audit"] = audit_simulation_report(
+        report,
+        trace=replay_trace,
+    )
     report["quality_gate"] = _evaluation_quality_gate(
         report,
         report["simulation_exploit_audit"],
@@ -2859,6 +3479,22 @@ def run_evaluation_matrix(
         json.dumps(report, allow_nan=False)
     except (TypeError, ValueError) as error:  # pragma: no cover - guarded above
         raise EvaluationMatrixError("evaluation matrix report is not JSON-safe") from error
+    wall_seconds = perf_counter() - started
+    timing = report["timing"]
+    if not isinstance(timing, dict):  # pragma: no cover - report invariant
+        raise EvaluationMatrixError("evaluation timing row is invalid")
+    timing["finished_at_utc"] = _utc_timestamp()
+    timing["wall_seconds"] = wall_seconds
+    timing["reporting_seconds"] = max(
+        0.0,
+        wall_seconds - runner_setup_seconds - execution_seconds,
+    )
+    timing["matches_per_second"] = (
+        config.match_count / wall_seconds if wall_seconds else 0.0
+    )
+    timing["decisions_per_second"] = (
+        total_summary["decisions_total"] / wall_seconds if wall_seconds else 0.0
+    )
     return report
 
 

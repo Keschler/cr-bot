@@ -193,6 +193,245 @@ def test_sequence_minibatches_preserve_rows_and_hidden_snapshots() -> None:
 
 
 @requires_torch
+def test_compact_entity_tail_handles_empty_sparse_and_interior_masks() -> None:
+    from rl.learner import _compact_entity_tail
+
+    config = _model_config()
+    sequence = _trajectory(config, batch=2, time=3).sequence
+
+    empty = replace(
+        sequence,
+        entity_mask=torch.zeros_like(sequence.entity_mask),
+    )
+    compact_empty = _compact_entity_tail(empty)
+    assert compact_empty.entities.shape[2] == 1
+    assert not bool(compact_empty.entity_mask.any().item())
+
+    sparse_mask = torch.zeros_like(sequence.entity_mask)
+    sparse_mask[..., :2] = True
+    sparse = replace(sequence, entity_mask=sparse_mask)
+    compact_sparse = _compact_entity_tail(sparse)
+    assert compact_sparse.entities.shape[2] == 2
+    torch.testing.assert_close(compact_sparse.entity_mask, sparse_mask[..., :2])
+
+    interior_mask = torch.zeros_like(sequence.entity_mask)
+    interior_mask[..., :3] = True
+    interior_mask[..., 1] = False
+    interior = replace(sequence, entity_mask=interior_mask)
+    compact_interior = _compact_entity_tail(interior)
+    assert compact_interior.entities.shape[2] == 3
+    torch.testing.assert_close(compact_interior.entity_mask, interior_mask[..., :3])
+    torch.testing.assert_close(compact_interior.entities, sequence.entities[..., :3, :])
+
+
+@requires_torch
+def test_compact_entity_tail_preserves_policy_logprob_and_gradients() -> None:
+    from rl.learner import (
+        _compact_entity_tail,
+        _joint_entropy,
+        _joint_log_prob_and_entropy,
+    )
+    from rl.model import RecurrentHybridPolicy
+    from rl.trajectory import ActionBatch, ActionMasks
+
+    config = _model_config()
+    trajectory = _trajectory(config, batch=2, time=3)
+    sequence = trajectory.sequence
+    mask = torch.zeros_like(sequence.entity_mask)
+    mask[..., :3] = True
+    mask[..., 1] = False
+    sequence = replace(sequence, entity_mask=mask)
+    compact = _compact_entity_tail(sequence)
+    action_masks = ActionMasks(
+        mode=torch.ones(2, 3, 2, dtype=torch.bool),
+        card=torch.ones(2, 3, config.card_slots, dtype=torch.bool),
+        placement=torch.zeros(
+            2,
+            3,
+            config.card_slots,
+            config.placement_rows,
+            config.placement_cols,
+            dtype=torch.bool,
+        ),
+    )
+    action_masks.placement[..., 1, 2] = True
+    actions = ActionBatch(
+        mode=torch.ones(2, 3, dtype=torch.long),
+        card_slot=torch.zeros(2, 3, dtype=torch.long),
+        placement=torch.tensor([1, 2], dtype=torch.long).expand(2, 3, 2).clone(),
+    )
+    full_policy = RecurrentHybridPolicy(config)
+    compact_policy = RecurrentHybridPolicy(config)
+    compact_policy.load_state_dict(full_policy.state_dict())
+    full_policy.train()
+    compact_policy.train()
+
+    full = full_policy(
+        sequence.raster,
+        sequence.global_features,
+        sequence.entities,
+        sequence.entity_mask,
+        reset_mask=sequence.reset_mask,
+        action_masks=action_masks,
+    )
+    reduced = compact_policy(
+        compact.raster,
+        compact.global_features,
+        compact.entities,
+        compact.entity_mask,
+        reset_mask=compact.reset_mask,
+        action_masks=action_masks,
+    )
+    for actual, expected in (
+        (reduced.encoded_features, full.encoded_features),
+        (reduced.recurrent_features, full.recurrent_features),
+        (reduced.mode_logits, full.mode_logits),
+        (reduced.card_logits, full.card_logits),
+        (reduced.placement_logits, full.placement_logits),
+    ):
+        torch.testing.assert_close(actual, expected, rtol=1e-5, atol=1e-6)
+    full_log_prob = full_policy.log_prob(
+        full,
+        actions,
+        action_masks,
+    )
+    reduced_log_prob = compact_policy.log_prob(
+        reduced,
+        actions,
+        action_masks,
+    )
+    torch.testing.assert_close(reduced_log_prob, full_log_prob, rtol=1e-5, atol=1e-6)
+    full_joint_log_prob, full_joint_entropy = _joint_log_prob_and_entropy(
+        full_policy,
+        full,
+        actions,
+        action_masks,
+    )
+    reduced_joint_log_prob, reduced_joint_entropy = _joint_log_prob_and_entropy(
+        compact_policy,
+        reduced,
+        actions,
+        action_masks,
+    )
+    torch.testing.assert_close(full_joint_log_prob, full_log_prob)
+    torch.testing.assert_close(reduced_joint_log_prob, reduced_log_prob)
+    torch.testing.assert_close(
+        full_joint_entropy,
+        _joint_entropy(full_policy, full, action_masks),
+    )
+    torch.testing.assert_close(
+        reduced_joint_entropy,
+        _joint_entropy(compact_policy, reduced, action_masks),
+    )
+
+    full_loss = (
+        full.mode_logits.square().mean()
+        + full.card_logits.square().mean()
+        + full.placement_logits.square().mean()
+    )
+    reduced_loss = (
+        reduced.mode_logits.square().mean()
+        + reduced.card_logits.square().mean()
+        + reduced.placement_logits.square().mean()
+    )
+    full_loss.backward()
+    reduced_loss.backward()
+    full_gradients = dict(full_policy.named_parameters())
+    reduced_gradients = dict(compact_policy.named_parameters())
+    assert full_gradients.keys() == reduced_gradients.keys()
+    for name in full_gradients:
+        actual = reduced_gradients[name].grad
+        expected = full_gradients[name].grad
+        if expected is None:
+            assert actual is None
+        else:
+            assert actual is not None
+            torch.testing.assert_close(actual, expected, rtol=1e-4, atol=1e-6)
+
+
+@requires_torch
+def test_dropout_policy_keeps_entity_tail_for_reproducible_evaluation(monkeypatch) -> None:
+    from rl.learner import LearnerConfig, RecurrentPPOLearner, _joint_entropy
+    from rl.model import RecurrentHybridPolicy
+
+    config = replace(_model_config(), dropout=0.2)
+    policy = RecurrentHybridPolicy(config)
+    learner = RecurrentPPOLearner(
+        policy,
+        config=LearnerConfig(
+            update_epochs=1,
+            sequence_minibatch_size=2,
+            shuffle_sequences=False,
+        ),
+    )
+    trajectory = _trajectory(config, batch=2, time=3)
+    mask = torch.zeros_like(trajectory.sequence.entity_mask)
+    mask[..., :2] = True
+    trajectory = replace(
+        trajectory,
+        sequence=replace(trajectory.sequence, entity_mask=mask),
+    )
+
+    # The transfer path must not discard stochastic masked rows before the
+    # learner has a chance to evaluate the policy.
+    prepared = learner.prepare_batch(trajectory)
+    assert (
+        prepared.trajectory.sequence.entities.shape[2]
+        == trajectory.sequence.entities.shape[2]
+    )
+
+    captured: dict[str, torch.Tensor] = {}
+    original_forward = policy.forward
+
+    def capture_forward(*args, **kwargs):
+        captured["entities"] = args[2]
+        return original_forward(*args, **kwargs)
+
+    monkeypatch.setattr(policy, "forward", capture_forward)
+    torch.manual_seed(17)
+    optimized = learner.evaluate_sequence(
+        trajectory.sequence,
+        trajectory.actions,
+        trajectory.action_masks,
+        include_beliefs=False,
+    )
+    assert captured["entities"].shape[2] == trajectory.sequence.entities.shape[2]
+
+    # With the same RNG state, the guarded learner path must be identical to a
+    # direct full-width policy call, including dropout masks and all outputs.
+    monkeypatch.setattr(policy, "forward", original_forward)
+    torch.manual_seed(17)
+    reference = policy(
+        trajectory.sequence.raster,
+        trajectory.sequence.global_features,
+        trajectory.sequence.entities,
+        trajectory.sequence.entity_mask,
+        reset_mask=trajectory.sequence.reset_mask,
+        hidden=trajectory.sequence.initial_hidden,
+        action_masks=trajectory.action_masks,
+        include_beliefs=False,
+    )
+    for actual, expected in (
+        (optimized.output.encoded_features, reference.encoded_features),
+        (optimized.output.recurrent_features, reference.recurrent_features),
+        (optimized.output.mode_logits, reference.mode_logits),
+        (optimized.output.card_logits, reference.card_logits),
+        (optimized.output.placement_logits, reference.placement_logits),
+    ):
+        torch.testing.assert_close(actual, expected, rtol=0.0, atol=0.0)
+    reference_values = learner._critic_values(reference, None)
+    torch.testing.assert_close(optimized.values, reference_values, rtol=0.0, atol=0.0)
+    torch.testing.assert_close(
+        optimized.log_probs,
+        policy.log_prob(reference, trajectory.actions, trajectory.action_masks),
+    )
+    torch.testing.assert_close(
+        optimized.entropy,
+        _joint_entropy(policy, reference, trajectory.action_masks),
+    )
+
+
+@requires_torch
 def test_privileged_recurrent_update_belief_loss_and_checkpoint_round_trip(tmp_path) -> None:
     from rl.learner import BeliefTargets, LearnerBatch, LearnerConfig, RecurrentPPOLearner
     from rl.model import PrivilegedCritic, RecurrentHybridPolicy

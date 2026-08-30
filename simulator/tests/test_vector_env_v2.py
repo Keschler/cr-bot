@@ -131,3 +131,93 @@ def test_prototype_cli_accepts_process_backend() -> None:
     config = PrototypeConfig(env_backend=args.env_backend, env_workers=args.env_workers)
     assert config.env_backend == "process"
     assert config.env_workers == 3
+
+
+def test_quiescent_wait_fast_forward_matches_reference_across_match_clock() -> None:
+    """Batched idle ticks must retain state, events, and public observations."""
+
+    from simulator.engine import BattleEngine
+    from simulator.env import SimulatorEnv
+    from simulator.ruleset import load_ruleset
+
+    ruleset = load_ruleset("v1")
+    optimized = SimulatorEnv(engine=BattleEngine(ruleset, validate_every_tick=False))
+    reference = SimulatorEnv(engine=BattleEngine(ruleset, validate_every_tick=False))
+    optimized.reset(seed=61, shuffle_decks=False)
+    reference.reset(seed=61, shuffle_decks=False)
+    # Disable only the optimization on the oracle; both engines otherwise use
+    # the same no-validation training configuration.
+    reference._try_quiescent_wait = lambda state, actions: False
+
+    for _ in range(1_205):
+        if reference.state is not None and reference.state.terminal:
+            break
+        expected = reference.step((None, None))
+        actual = optimized.step((None, None))
+        assert actual.rewards == expected.rewards
+        assert actual.terminated == expected.terminated
+        assert actual.truncated == expected.truncated
+        assert actual.info == expected.info
+        assert optimized.state is not None and reference.state is not None
+        assert optimized.state.state_hash() == reference.state.state_hash()
+        assert optimized.state.event_log_hash() == reference.state.event_log_hash()
+        for expected_observation, actual_observation in zip(
+            expected.observations,
+            actual.observations,
+            strict=True,
+        ):
+            np.testing.assert_array_equal(actual_observation.board, expected_observation.board)
+            np.testing.assert_array_equal(
+                actual_observation.global_vector,
+                expected_observation.global_vector,
+            )
+            np.testing.assert_array_equal(
+                actual_observation.spatial_masks,
+                expected_observation.spatial_masks,
+            )
+            np.testing.assert_array_equal(
+                actual_observation.legal_play,
+                expected_observation.legal_play,
+            )
+
+    assert optimized.state is not None and optimized.state.terminal
+    assert reference.state is not None and reference.state.terminal
+
+
+def test_vector_single_view_step_skips_unused_public_projection() -> None:
+    """Actor-only vector stepping keeps the other observation slot empty."""
+
+    from simulator.env import SimulatorEnv, VectorSimulatorEnv
+
+    full = VectorSimulatorEnv((SimulatorEnv(), SimulatorEnv()))
+    actor_only = VectorSimulatorEnv((SimulatorEnv(), SimulatorEnv()))
+    try:
+        full.reset_v2((71, 72))
+        actor_only.reset_v2((71, 72))
+        expected = full.step_v2(((None, None), (None, None)))
+        actual = actor_only.step_v2_for_viewer(
+            ((None, None), (None, None)),
+            viewer=0,
+        )
+        for expected_step, actual_step in zip(expected, actual, strict=True):
+            assert actual_step.observations[1] is None
+            expected_observation = expected_step.observations[0]
+            actual_observation = actual_step.observations[0]
+            assert expected_observation is not None
+            assert actual_observation is not None
+            np.testing.assert_array_equal(actual_observation.board, expected_observation.board)
+            np.testing.assert_array_equal(
+                actual_observation.global_vector,
+                expected_observation.global_vector,
+            )
+            np.testing.assert_array_equal(
+                actual_observation.entity_tokens,
+                expected_observation.entity_tokens,
+            )
+            np.testing.assert_array_equal(
+                actual_observation.legal_play,
+                expected_observation.legal_play,
+            )
+    finally:
+        full.close()
+        actor_only.close()

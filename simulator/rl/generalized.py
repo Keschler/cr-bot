@@ -42,6 +42,7 @@ import json
 from math import isfinite
 from pathlib import Path
 import sys
+from time import perf_counter
 from typing import Any, Callable, Mapping, Sequence
 
 from .evaluation_matrix import (
@@ -1021,6 +1022,7 @@ def train_generalized(
 ) -> dict[str, object]:
     """Train across sampled deck/controller scenarios and save one checkpoint."""
 
+    started = perf_counter()
     if not isinstance(config, GeneralizedTrainingConfig):
         raise TypeError("config must be a GeneralizedTrainingConfig")
     if progress_callback is not None and not callable(progress_callback):
@@ -1423,6 +1425,35 @@ def train_generalized(
     from .exploit_audit import audit_simulation_report
 
     report["simulation_exploit_audit"] = audit_simulation_report(report)
+    # Exercise the same report serialization used by the CLI before closing
+    # the primary benchmark window.  The returned timing therefore covers
+    # orchestration, rollout, PPO updates, checkpoint promotion, metrics,
+    # exploit audit, and JSON report construction.
+    json.dumps(report, allow_nan=False)
+    wall_seconds = perf_counter() - started
+    decisions_per_second = (
+        total_transitions / wall_seconds if wall_seconds else 0.0
+    )
+    segment_wall_seconds = sum(
+        float(stage.get("wall_seconds", 0.0))
+        for stage in stage_reports
+        if isinstance(stage.get("wall_seconds"), (int, float))
+    )
+    report["wall_seconds"] = wall_seconds
+    report["decisions_per_second"] = decisions_per_second
+    report["timing"] = {
+        "wall_seconds": wall_seconds,
+        "decisions_per_second": decisions_per_second,
+        "segment_reported_wall_seconds": segment_wall_seconds,
+        "reporting_and_orchestration_seconds": max(
+            0.0,
+            wall_seconds - segment_wall_seconds,
+        ),
+        "throughput_scope": (
+            "scenario orchestration, rollout, GAE/PPO updates, checkpoint "
+            "promotion, metrics, exploit audit, JSON report construction"
+        ),
+    }
     return report
 
 

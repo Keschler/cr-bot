@@ -60,10 +60,12 @@ from cr_bot.features.channels import (
     STATIC_CHANNELS,
 )
 from cr_bot.features.global_features import (
+    CARD_COUNT,
     encode_hand_cards,
     encode_next_card,
     encode_seen_enemy_cards,
     build_global_vector,
+    one_hot_card,
 )
 
 from .actions import PlayCardAction, SimAction, UseAbilityAction, WaitAction
@@ -336,6 +338,7 @@ class ObservationMemory:
     _processed_event_revision: int | None = field(default=None, repr=False)
     _processed_event_list: object | None = field(default=None, repr=False)
     _processed_event_mutation_revision: int | None = field(default=None, repr=False)
+    _processed_event_count: int = field(default=0, repr=False)
 
     def __post_init__(self) -> None:
         _validate_viewer(self.viewer)
@@ -361,6 +364,7 @@ class ObservationMemory:
         self._processed_event_revision = None
         self._processed_event_list = None
         self._processed_event_mutation_revision = None
+        self._processed_event_count = 0
 
     def update(self, state: BattleState, ruleset: Ruleset) -> None:
         """Consume previously unseen public events through ``state.elapsed_us``."""
@@ -405,10 +409,36 @@ class ObservationMemory:
             # incremental suffix path below.
             self.reset(ruleset, battle_seed=state.seed)
 
-        new_events = sorted(
-            (event for event in state.events if event.sequence > self.last_event_sequence),
-            key=lambda event: (event.tick, event.sequence),
-        )
+        # Engine histories are append-only and sequence ordered.  The common
+        # path can therefore consume an event suffix directly instead of
+        # scanning and sorting the complete replay log on every observation.
+        # Persistent/process transports may replace the list object while
+        # retaining the complete prefix; use a small binary search for that
+        # case.  History rewrites retain the defensive full sort below.
+        if history_rewritten:
+            new_events = sorted(
+                (
+                    event
+                    for event in state.events
+                    if event.sequence > self.last_event_sequence
+                ),
+                key=lambda event: (event.tick, event.sequence),
+            )
+        elif (
+            self._processed_event_list is state.events
+            and self._processed_event_count <= len(state.events)
+        ):
+            new_events = state.events[self._processed_event_count :]
+        else:
+            low = 0
+            high = len(state.events)
+            while low < high:
+                middle = (low + high) // 2
+                if state.events[middle].sequence <= self.last_event_sequence:
+                    low = middle + 1
+                else:
+                    high = middle
+            new_events = state.events[low:]
         for event in new_events:
             # Engine events are emitted during tick ``t`` after that tick's
             # resource update. Their public boundary is therefore the end of
@@ -437,6 +467,7 @@ class ObservationMemory:
         self._processed_event_mutation_revision = (
             mutation_revision if type(mutation_revision) is int else None
         )
+        self._processed_event_count = len(state.events)
 
     def _advance_elixir(self, target_elapsed_us: int, ruleset: Ruleset) -> None:
         if target_elapsed_us <= self.last_elapsed_us:
@@ -771,12 +802,15 @@ def _supports_runtime_projection(ruleset: Ruleset) -> bool:
 
 
 def _build_soa_board(soa_state: ObservationSoA, viewer: int) -> np.ndarray:
+    cached = soa_state.board_snapshot(viewer)
+    if cached is not None:
+        return cached
     board = np.zeros(BOARD_SHAPE, dtype=np.float32)
     static_count = len(STATIC_CHANNELS)
     board[:static_count] = _SOA_STATIC_BOARD
     dynamic = board[static_count:]
 
-    _, tower_alive = soa_state.viewer_towers(viewer)
+    _, tower_alive = soa_state.viewer_towers_view(viewer)
     own_tower_mask = dynamic[DYNAMIC_CHANNEL_IDX["own_alive_tower_mask"]]
     enemy_tower_mask = dynamic[DYNAMIC_CHANNEL_IDX["enemy_alive_tower_mask"]]
     # The legacy rasterizer always exposes king tower sites; the alive flag
@@ -830,16 +864,26 @@ def _build_soa_board(soa_state: ObservationSoA, viewer: int) -> np.ndarray:
             col,
             float(soa_state.threat[index]),
         )
-    return np.ascontiguousarray(board, dtype=np.float32)
+    return soa_state.cache_board(viewer, board)
 
 
 def _splat_soa(channel: np.ndarray, row: int, col: int, value: float) -> None:
-    for drow in range(-1, 2):
-        for dcol in range(-1, 2):
-            target_row = row + drow
-            target_col = col + dcol
-            if 0 <= target_row < GRID_ROWS and 0 <= target_col < GRID_COLS:
-                channel[target_row, target_col] += value * KERNEL_3X3[drow + 1, dcol + 1]
+    # Slice the fixed 3x3 kernel in one NumPy operation.  The clipped slice
+    # has the same row-major order as the old scalar loop, so overlapping
+    # entities still accumulate in deterministic UID order while avoiding
+    # nine Python-level bounds checks per entity.
+    row_start = max(0, row - 1)
+    row_end = min(GRID_ROWS, row + 2)
+    col_start = max(0, col - 1)
+    col_end = min(GRID_COLS, col + 2)
+    kernel_row_start = row_start - row + 1
+    kernel_row_end = kernel_row_start + (row_end - row_start)
+    kernel_col_start = col_start - col + 1
+    kernel_col_end = kernel_col_start + (col_end - col_start)
+    channel[row_start:row_end, col_start:col_end] += value * KERNEL_3X3[
+        kernel_row_start:kernel_row_end,
+        kernel_col_start:kernel_col_end,
+    ]
 
 
 def _build_soa_spatial_masks(
@@ -849,7 +893,7 @@ def _build_soa_spatial_masks(
     soa_state: ObservationSoA,
 ) -> np.ndarray:
     masks = np.zeros(ACTION_MASK_SHAPE, dtype=bool)
-    _, tower_alive = soa_state.viewer_towers(viewer)
+    _, tower_alive = soa_state.viewer_towers_view(viewer)
     for slot, card_name in enumerate(state.players[viewer].hand[:4]):
         policy_name = policy_card_name(card_name)
         if policy_name is None:
@@ -874,7 +918,7 @@ def _build_soa_global_vector(
     allow_unrepresented_hand: bool,
 ) -> np.ndarray:
     own = state.players[viewer]
-    tower_hp, tower_alive = soa_state.viewer_towers(viewer)
+    tower_hp, tower_alive = soa_state.viewer_towers_view(viewer)
     regulation_us = ruleset.match.regulation_us
     total_duration_us = regulation_us + ruleset.match.overtime_us
     total_remaining_s = max(
@@ -926,17 +970,55 @@ def _build_soa_global_vector(
             if name in CARD_METADATA and isinstance(CARD_METADATA[name].get("id"), int)
         }
     )
-    return np.ascontiguousarray(
-        np.concatenate(
-            [
-                global_scalars,
-                encode_hand_cards(hand),
-                encode_next_card(next_card),
-                encode_seen_enemy_cards(seen_ids),
-            ]
-        ).astype(np.float32),
-        dtype=np.float32,
-    )
+    # The feature-stack helpers each allocate and then concatenate several
+    # one-hot vectors.  The contract is fixed-width, so fill one output row
+    # directly and reuse immutable card encodings from bounded caches.  This
+    # preserves the exact feature ordering/dtype while removing a handful of
+    # temporary arrays from every viewer projection.
+    vector = np.empty(GLOBAL_VECTOR_SHAPE, dtype=np.float32)
+    scalar_width = len(GLOBAL_SCALAR_FEATURES)
+    vector[:scalar_width] = global_scalars
+    hand_offset = scalar_width
+    hand_width = 4 * CARD_COUNT
+    vector[hand_offset : hand_offset + hand_width] = _cached_hand_encoding(tuple(hand))
+    next_offset = hand_offset + hand_width
+    vector[next_offset : next_offset + CARD_COUNT] = _cached_one_hot_card(next_card)
+    seen_offset = next_offset + CARD_COUNT
+    vector[seen_offset : seen_offset + CARD_COUNT] = _cached_seen_encoding(tuple(seen_ids))
+    return vector
+
+
+@lru_cache(maxsize=512)
+def _cached_one_hot_card(card_name: str) -> np.ndarray:
+    """Return one immutable card row for the fixed global-vector ABI."""
+
+    encoded = np.ascontiguousarray(one_hot_card(card_name), dtype=np.float32)
+    encoded.setflags(write=False)
+    return encoded
+
+
+@lru_cache(maxsize=512)
+def _cached_hand_encoding(hand: tuple[str, ...]) -> np.ndarray:
+    """Return the four-slot hand block without per-slot concatenation."""
+
+    padded = hand + ("",) * max(0, 4 - len(hand))
+    encoded = np.empty(4 * CARD_COUNT, dtype=np.float32)
+    for slot in range(4):
+        start = slot * CARD_COUNT
+        encoded[start : start + CARD_COUNT] = _cached_one_hot_card(padded[slot])
+    encoded.setflags(write=False)
+    return encoded
+
+
+@lru_cache(maxsize=512)
+def _cached_seen_encoding(seen_ids: tuple[int, ...]) -> np.ndarray:
+    """Return the immutable seen-card block for one sorted ID tuple."""
+
+    encoded = np.zeros(CARD_COUNT, dtype=np.float32)
+    for card_id in seen_ids:
+        encoded[card_id] = 1.0
+    encoded.setflags(write=False)
+    return encoded
 
 
 def battle_state_to_observed_game_state(

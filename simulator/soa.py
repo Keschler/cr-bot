@@ -16,6 +16,7 @@ observation path and provide a stable SoA layout for later batched stepping.
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from collections.abc import Callable
 from functools import lru_cache
 
@@ -131,16 +132,18 @@ def _blocked_cells(
     return frozenset(blocked)
 
 
-@lru_cache(maxsize=4)
-def _building_cells(player: int) -> tuple[tuple[int, int], ...]:
+@lru_cache(maxsize=8)
+def _building_cells(player: int, size: int) -> tuple[tuple[int, int], ...]:
     allowed = _BASIC_DEPLOY_CELLS[player]
+    low = -(size // 2)
+    high = size - size // 2
     return tuple(
         (col, row)
         for col, row in _POLICY_GRID_CELLS
         if all(
             (col + dcol, row + drow) in allowed
-            for drow in range(-1, 2)
-            for dcol in range(-1, 2)
+            for drow in range(low, high)
+            for dcol in range(low, high)
         )
     )
 
@@ -215,6 +218,8 @@ class ObservationSoA:
     copied: it is not part of the current public policy observation.
     """
 
+    _STATIC_CARD_CELLS_CACHE_SIZE = 64
+
     def __init__(self, capacity: int = 32) -> None:
         if type(capacity) is not int or capacity <= 0:
             raise ValueError("capacity must be a positive integer")
@@ -238,10 +243,17 @@ class ObservationSoA:
         # left/king/right; the viewer transform is applied during projection.
         self.tower_hp = np.zeros((2, 3), dtype=np.int64)
         self.tower_alive = np.zeros((2, 3), dtype=bool)
-        self._static_card_cells_cache: dict[
+        # Viewer one is a rotate-180 view of the same canonical tower rows.
+        # Returning a view here avoids allocating two small arrays for every
+        # policy projection while keeping ``viewer_towers`` below's historical
+        # copy semantics for external callers.
+        self._board_signature: tuple[object, ...] = ()
+        self._board_cache_signature: tuple[object, ...] | None = None
+        self._board_cache: list[np.ndarray | None] = [None, None]
+        self._static_card_cells_cache: OrderedDict[
             tuple[str, int, str, tuple[tuple[int, int, int], ...]],
             tuple[tuple[int, int], ...],
-        ] = {}
+        ] = OrderedDict()
 
     def _grow(self, required: int) -> None:
         if required <= self._capacity:
@@ -286,6 +298,7 @@ class ObservationSoA:
         self.is_air[: self.count] = False
         self.tower_hp.fill(0)
         self.tower_alive.fill(False)
+        board_entities: list[tuple[int, int, int, int, float, float]] = []
 
         for index, uid in enumerate(entity_uids):
             entity = state.entities[uid]
@@ -330,6 +343,26 @@ class ObservationSoA:
             self.threat[index] = self.hp_fraction[index] * threat_weight
             self.is_air[index] = _is_air_card(card_name)
             self.renderable[index] = True
+            board_entities.append(
+                (
+                    int(self.owners[index]),
+                    int(self.cell_cols[index]),
+                    int(self.cell_rows[index]),
+                    int(self.is_air[index]),
+                    float(self.hp_fraction[index]),
+                    float(self.threat[index]),
+                )
+            )
+
+        # Board tensors do not contain tower HP, time, hand state, or private
+        # status fields.  Keep a compact content signature so repeated idle
+        # observations can share an immutable board snapshot.  UID order is
+        # retained in ``board_entities`` to preserve floating-point splat
+        # accumulation order for overlapping units.
+        self._board_signature = (
+            tuple(bool(value) for value in self.tower_alive.reshape(-1)),
+            tuple(board_entities),
+        )
 
     @staticmethod
     def _tower_site(role: str | None, card_id: str, x_mtile: int) -> int:
@@ -340,19 +373,56 @@ class ObservationSoA:
     def viewer_towers(self, viewer: int) -> tuple[np.ndarray, np.ndarray]:
         """Return tower HP/alive arrays in the viewer's left/king/right order."""
 
+        hp, alive = self.viewer_towers_view(viewer)
+        # Preserve the old method's independent, writable return arrays.  The
+        # observation hot path uses ``viewer_towers_view`` explicitly.
+        return hp.copy(), alive.copy()
+
+    def viewer_towers_view(self, viewer: int) -> tuple[np.ndarray, np.ndarray]:
+        """Return zero-copy tower arrays in viewer-relative order.
+
+        Canonical rows are owner 0/1 and canonical columns are left/king/right.
+        Mirroring both axes gives viewer 1 exactly the same relative ordering
+        as the legacy adapter without materializing temporary arrays.
+        """
+
         if viewer not in (0, 1):
             raise ValueError("viewer must be 0 or 1")
-        hp = np.zeros((2, 3), dtype=np.int64)
-        alive = np.zeros((2, 3), dtype=bool)
-        for owner in (0, 1):
-            relative_team = 0 if owner == viewer else 1
-            for canonical_site in (0, 1, 2):
-                viewed_site = canonical_site
-                if viewer == 1 and canonical_site != 1:
-                    viewed_site = 2 - canonical_site
-                hp[relative_team, viewed_site] = self.tower_hp[owner, canonical_site]
-                alive[relative_team, viewed_site] = self.tower_alive[owner, canonical_site]
-        return hp, alive
+        if viewer == 0:
+            return self.tower_hp, self.tower_alive
+        return self.tower_hp[::-1, ::-1], self.tower_alive[::-1, ::-1]
+
+    def board_snapshot(self, viewer: int) -> np.ndarray | None:
+        """Return a cached immutable board view when content is unchanged."""
+
+        if viewer not in (0, 1):
+            raise ValueError("viewer must be 0 or 1")
+        if self._board_cache_signature != self._board_signature:
+            self._board_cache_signature = self._board_signature
+            self._board_cache = [None, None]
+        cached = self._board_cache[viewer]
+        return None if cached is None else cached.view()
+
+    def cache_board(self, viewer: int, board: np.ndarray) -> np.ndarray:
+        """Retain one board tensor and return a non-owning immutable view."""
+
+        if viewer not in (0, 1):
+            raise ValueError("viewer must be 0 or 1")
+        if board.shape != (21, GRID_ROWS, GRID_COLS) or board.dtype != np.dtype(np.float32):
+            raise ValueError("board tensor has an unexpected shape or dtype")
+        board = np.ascontiguousarray(board, dtype=np.float32)
+        board.setflags(write=False)
+        if self._board_cache_signature != self._board_signature:
+            self._board_cache_signature = self._board_signature
+            self._board_cache = [None, None]
+        self._board_cache[viewer] = board
+        return board.view()
+
+    @property
+    def board_signature(self) -> tuple[object, ...]:
+        """Return the current content signature for board snapshot caching."""
+
+        return self._board_signature
 
     def legal_action_cells_if_static(
         self,
@@ -363,11 +433,10 @@ class ObservationSoA:
         """Return exact legality for the common static-territory case.
 
         The authoritative engine still owns the general legality function.
-        This path is used only when every Princess/King Tower is alive and no
-        live building has been deployed, so territory and obstacles are fixed
-        apart from the card/deck/elixir columns.  A ``None`` result asks the
-        caller to use the engine for states with dynamic pockets or building
-        obstacles.
+        This path is used only when every Princess/King Tower is alive, so
+        territory is fixed.  Tower and building obstacles are folded into a
+        bounded cache key.  A ``None`` result asks the caller to use the
+        engine for states with dynamic deployment pockets.
         """
 
         if type(player) is not int or player not in (0, 1):
@@ -392,7 +461,16 @@ class ObservationSoA:
                     )
                 )
             elif entity.kind == "building" and entity.alive and entity.hp > 0:
-                return None
+                definition = ruleset.cards.get(entity.card_id)
+                if definition is None:
+                    return None
+                obstacles.append(
+                    (
+                        entity.x_mtile,
+                        entity.y_mtile,
+                        int(definition.collision_radius_mtile or 0),
+                    )
+                )
 
         player_state = state.players[player]
         previous = player_state.last_played_card_id
@@ -423,14 +501,17 @@ class ObservationSoA:
                 placement_card.card_id,
                 obstacle_key,
             )
-            candidates = self._static_card_cells_cache.get(cache_key)
-            if candidates is None:
+            try:
+                candidates = self._static_card_cells_cache.pop(cache_key)
+            except KeyError:
                 candidates = self._build_static_card_cells(
                     placement_card,
                     player,
                     obstacle_key,
                 )
-                self._static_card_cells_cache[cache_key] = candidates
+            self._static_card_cells_cache[cache_key] = candidates
+            if len(self._static_card_cells_cache) > self._STATIC_CARD_CELLS_CACHE_SIZE:
+                self._static_card_cells_cache.popitem(last=False)
             legal_by_slot.append(candidates)
 
         while len(legal_by_slot) < 4:
@@ -466,7 +547,8 @@ class ObservationSoA:
         if placement == "miner_anywhere":
             candidates = _GROUND_CELLS
         elif card.kind == "building":
-            candidates = _building_cells(player)
+            footprint_size = int(card.mechanics.get("building_footprint_size") or 3)
+            candidates = _building_cells(player, footprint_size)
         else:
             candidates = _BASIC_DEPLOY_CANDIDATES[player]
 

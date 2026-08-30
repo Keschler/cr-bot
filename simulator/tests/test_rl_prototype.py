@@ -221,6 +221,15 @@ def test_recurrent_prototype_train_resume_and_evaluate(tmp_path) -> None:
     assert first["final_update"] == 1
     assert progress_updates == [(1, 2)]
     assert first_path.exists()
+    assert first["wall_seconds"] > 0.0
+    assert first["decisions_per_second"] == pytest.approx(
+        first["transitions"] / first["wall_seconds"],
+        rel=0.0,
+        abs=1e-12,
+    )
+    assert "checkpoint promotion" in first["throughput_scope"]
+    assert "JSON report validation" in first["throughput_scope"]
+    assert "--json-out" in first["throughput_exclusions"]
 
     trace_path = tmp_path / "evaluation-trace.json"
     evaluation = evaluate_prototype(

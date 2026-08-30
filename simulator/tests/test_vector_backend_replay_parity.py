@@ -159,8 +159,10 @@ def test_replay_hashes_are_optional_without_removing_public_events() -> None:
     assert hashed_step.truncated == un_hashed_step.truncated
     assert "state_hash" in hashed_step.info
     assert "event_log_hash" in hashed_step.info
+    assert hashed_step.info["replay_hash"] == hashed.state.replay_hash()
     assert "state_hash" not in un_hashed_step.info
     assert "event_log_hash" not in un_hashed_step.info
+    assert "replay_hash" not in un_hashed_step.info
     assert "events" in un_hashed_step.info
 
 
