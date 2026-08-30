@@ -17,7 +17,7 @@ a controlled probe when the action boundary or causal behavior matters.
 
 ## Current status
 
-- Latest validated implementation revision: `c683272991f02f16fd437dc620e4b285e73201bf`;
+- Latest validated implementation revision: `942d97afee397b1915a67ffc04d1ecd2915409b1`;
   its tracked worktree was clean and its ruleset hash is
   `sha256:0ac958abe2f8e90e7eaf882f23c1dec5b8ebd968cf630cd1d657961e0f2e169b`.
 - `rulesets/v1.json` contains the 109-card opponent roster but remains
@@ -25,9 +25,9 @@ a controlled probe when the action boundary or causal behavior matters.
 - Generated coverage is deterministic and executable: a fresh strict run of
   1,181 cases passed execution, repeated hashes, complete roster coverage, and
   behavioral obligations (`1,181/1,181`, two repeats, 12 workers).
-- The focused RL/vector suite is green (`160 passed, 39 skipped`, including
-  backend replay parity). The default non-audio/non-mining suite is
-  `435 passed, 8 failed, 41 skipped`; all eight failures require unavailable
+- The post-commit mechanics/RL/vector gate is green (`85 passed, 18 skipped`,
+  including backend replay parity). The default non-audio/non-mining suite is
+  `437 passed, 8 failed, 41 skipped`; all eight failures require unavailable
   card-image assets. Roster completeness is clean, but all 109 cards remain
   provisional (`fidelity_ready: 0`), and strict source reconciliation still
   has 17 unresolved fields.
@@ -56,8 +56,9 @@ a controlled probe when the action boundary or causal behavior matters.
 - The actual end-to-end trainer baseline is 590 decisions/s on the RTX 2050,
   measured over 12,288 decisions in 20.83 seconds with 48 lanes, eight
   persistent rollout workers, four PPO updates, and overlapping collection.
-  This is the accepted working speed for now; it is an end-to-end trainer
-  measurement, not an actor-only benchmark.
+  This remains the accepted historical working baseline. A fresh direct-path
+  smoke on revision `942d97a` measured 264.9 decisions/s over the same 12,288
+  decisions; its revision guard and simulator-exploit audit were clean.
 - The current action contract has `WAIT`/`PLAY`, card slot, and placement but
   no learned wait-duration head; `WAIT` advances the fixed simulator decision
   interval. The proposed timing head remains a future architecture change.

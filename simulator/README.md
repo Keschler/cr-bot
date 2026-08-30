@@ -291,10 +291,11 @@ Training and evaluation artifacts include the Git `code_revision` used to
 produce them, plus whether tracked source was dirty.
 
 The latest validated implementation revision is
-`c683272991f02f16fd437dc620e4b285e73201bf`.
-Its provisional smoke checkpoint passed the revision guard and exploit audit;
-the six-match held-out smoke completed 6/6 with zero rejected actions and a
-structural quality gate pass, but scored 0–6 and is not strength evidence.
+`942d97afee397b1915a67ffc04d1ecd2915409b1`.
+The earlier `c683272` provisional checkpoint passed its revision guard and
+exploit audit; its six-match held-out smoke completed 6/6 with zero rejected
+actions and a structural quality gate pass, but scored 0–6. It is historical
+plumbing evidence, not current strength evidence after the simulator fix.
 
 The retained six-deck held-out smoke audit is six archetype variants × one
 strategy × one seed. The `deterministic-cycle` archetype is deliberately absent
@@ -535,9 +536,12 @@ The current benchmark host measured approximately:
 The historical accelerated-host actor result clears the historical simulator
 rate. On the current CPU host, the actor is about 1.44k decisions/s versus
 3.06k simulator steps/s, so CPU parity remains an open performance gate. The
-current end-to-end trainer baseline is 590 decisions/s, measured over 12,288
+retained end-to-end trainer baseline is 590 decisions/s, measured over 12,288
 decisions in 20.83 seconds with four PPO updates, persistent rollout workers,
-and overlapping collection. This is the accepted working speed for now. The
+and overlapping collection. This remains the accepted historical working
+speed for now. A fresh direct-path smoke on revision `942d97a` measured 264.9
+decisions/s over 12,288 decisions; its revision guard and simulator-exploit
+audit were clean. The
 deployment path avoids belief heads and distribution normalization, resolves
 `WAIT` before card/placement decoding, uses a channels-last raster, removes
 masked entity tails, and caps CPU intra-op parallelism at eight threads. The
