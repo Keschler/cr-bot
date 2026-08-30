@@ -17,17 +17,20 @@ a controlled probe when the action boundary or causal behavior matters.
 
 ## Current status
 
+- Latest sealed simulator revision: `babfa1da4cc1b87bfef8e3eef25ede2d19f3d954`;
+  its tracked worktree is clean and its ruleset hash is
+  `sha256:0ac958abe2f8e90e7eaf882f23c1dec5b8ebd968cf630cd1d657961e0f2e169b`.
 - `rulesets/v1.json` contains the 109-card opponent roster but remains
   `training_ready: false`.
 - Generated coverage is deterministic and executable: a fresh strict run of
   1,181 cases passed execution, repeated hashes, complete roster coverage, and
   behavioral obligations (`1,181/1,181`, two repeats, 12 workers).
-- The focused RL/vector suite is green (`163 passed`, including backend replay
-  parity). The default non-audio/non-mining suite is `462 passed, 9 failed`;
-  all nine failures require unavailable card-image assets or the absent KataCR
-  submodule. Roster completeness is clean, but all 109 cards remain provisional
-  (`fidelity_ready: 0`), and strict source reconciliation still has 17
-  unresolved fields.
+- The focused RL/vector suite is green (`160 passed, 39 skipped`, including
+  backend replay parity). The default non-audio/non-mining suite is
+  `428 passed, 8 failed, 41 skipped`; all eight failures require unavailable
+  card-image assets. Roster completeness is clean, but all 109 cards remain
+  provisional (`fidelity_ready: 0`), and strict source reconciliation still
+  has 17 unresolved fields.
 - Phase-0 physical-lab software is implemented, but physical evidence is
   intentionally deferred for the current RL-first execution path. No
   connected run has yet satisfied the evidence/readiness gates.
@@ -315,6 +318,12 @@ The fixed deterministic-cycle regression is 8 wins, 0 losses, 0 draws,
 goal. The matrix records `actor_controls_actions=true` for neural actor runs;
 `tower_hp_before`, `tower_hp_after`, and `tower_hp_end` have different
 per-decision versus terminal/cap-time meanings. The prototype `--trace-out` contains every decision; `troop_positions_end` and `tower_hp_end` are only terminal/cap-time snapshots. A finite `all_wins=true` result is not a universal-win claim.
+
+The latest revision-pinned provisional PPO smoke promoted a checkpoint after
+1,024 actor-controlled transitions with a stable revision guard and clean
+simulator-exploit audit. Its six-match held-out smoke completed 6/6 with zero
+rejected target actions and a passing structural quality gate, but scored 0–6;
+this is plumbing evidence, not policy-strength evidence.
 
 ## Simulator requirements
 

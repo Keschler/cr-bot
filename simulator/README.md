@@ -290,6 +290,11 @@ PYTHONPATH=.:..:../src \
 Training and evaluation artifacts include the Git `code_revision` used to
 produce them, plus whether tracked source was dirty.
 
+The latest sealed revision is `babfa1da4cc1b87bfef8e3eef25ede2d19f3d954`.
+Its provisional smoke checkpoint passed the revision guard and exploit audit;
+the six-match held-out smoke completed 6/6 with zero rejected actions and a
+structural quality gate pass, but scored 0–6 and is not strength evidence.
+
 The retained six-deck held-out smoke audit is six archetype variants × one
 strategy × one seed. The `deterministic-cycle` archetype is deliberately absent
 because its template is the fixed learner deck; evaluate that fixed regression
