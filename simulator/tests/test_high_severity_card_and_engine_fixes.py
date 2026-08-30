@@ -101,6 +101,37 @@ def test_high_severity_card_overlays_are_in_the_runtime_ruleset() -> None:
     )
 
 
+def test_hunter_close_range_fan_lands_more_pellets_than_long_range_fan() -> None:
+    def damage_at_distance(distance: int) -> int:
+        engine, state = _state()
+        hunter = _entity(state, "hunter", 0, 9_000, 15_000)
+        target = _entity(
+            state,
+            "giant",
+            1,
+            9_000 + distance,
+            15_000,
+            hp=10_000,
+        )
+        hunter.pending_target_uid = target.uid
+
+        engine._resolve_attack(state, hunter)
+        projectiles = list(state.projectiles.values())
+        assert len(projectiles) == 10
+        for projectile in projectiles:
+            projectile.x_mtile = projectile.target_x_mtile
+            projectile.y_mtile = projectile.target_y_mtile
+            engine._impact_projectile(state, projectile)
+        return 10_000 - target.hp
+
+    pellet_damage = int(RULESET.card("hunter").damage or 0)
+    close_damage = damage_at_distance(500)
+    far_damage = damage_at_distance(3_500)
+
+    assert close_damage == pellet_damage * 10
+    assert 0 < far_damage < close_damage
+
+
 def test_goblin_barrel_has_no_impact_damage_but_spawns_three_goblins() -> None:
     engine, state = _state()
     tower = engine._tower(state, 1, "king")

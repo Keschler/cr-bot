@@ -329,6 +329,23 @@ def test_tiebreak_with_equal_lowest_towers_is_a_draw_without_destruction() -> No
     assert engine._tower(state, 1, "left").alive
 
 
+def test_tiebreak_caps_crowns_when_equal_lowest_towers_fall_together() -> None:
+    engine, state = _state()
+    state.phase = "overtime"
+    state.players[0].crowns = 2
+    engine._tower(state, 1, "left").hp = 1_500
+    engine._tower(state, 1, "right").hp = 1_500
+
+    engine._resolve_tiebreak(state)
+
+    assert state.terminal
+    assert state.winner == 0
+    assert state.players[0].crowns == 3
+    assert not engine._tower(state, 1, "left").alive
+    assert not engine._tower(state, 1, "right").alive
+    engine.validate_state(state)
+
+
 def test_diagonal_one_unit_overlap_makes_separation_progress() -> None:
     engine, state = _state()
     left = _entity(state, "knight", 0, 9_000, 18_000)

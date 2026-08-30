@@ -3464,8 +3464,20 @@ class BattleEngine:
             base_distance = max(1, distance_mtile(source.x_mtile, source.y_mtile, target.x_mtile, target.y_mtile))
             perp_x, perp_y = -base_dy, base_dx
             if projectile_count > 1:
+                # Hunter's spread is an angular fan: the same cone occupies
+                # less world space at close range and more at long range.
+                # Fixed world-space offsets made every target receive the
+                # same pellet count regardless of distance, removing the
+                # card's defining close-range damage behavior.
+                spread_reference = max(1, int(definition.range_mtile or base_distance))
+                spread_distance = min(base_distance, spread_reference)
                 pellet_offsets = tuple(
-                    (pellet_spread * (2 * index - (projectile_count - 1)) // (projectile_count - 1))
+                    (
+                        pellet_spread
+                        * spread_distance
+                        * (2 * index - (projectile_count - 1))
+                        // ((projectile_count - 1) * spread_reference)
+                    )
                     for index in range(projectile_count)
                 )
             else:
@@ -5892,7 +5904,7 @@ class BattleEngine:
 
         for tower in destroyed:
             opponent = state.players[1 - tower.owner]
-            opponent.crowns += 1
+            opponent.crowns = min(3, opponent.crowns + 1)
             self._activate_king(state, tower.owner, "tiebreak_tower_destroyed")
         self._end_match(state, 1 - target.owner, "tiebreak_lowest_hp")
 
