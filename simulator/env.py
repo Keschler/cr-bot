@@ -757,7 +757,7 @@ class VectorSimulatorEnv:
         self._persistent_state_fingerprints: list[tuple[int, str] | None] = [
             None
             if environment.state is None
-            else (id(environment.state), environment.state.replay_hash())
+            else (id(environment.state), environment.state.state_hash())
             for environment in self.environments
         ]
         if backend == "persistent-process":
@@ -936,7 +936,7 @@ class VectorSimulatorEnv:
                 fingerprint = (
                     None
                     if state is None
-                    else (id(state), state.replay_hash())
+                    else (id(state), state.state_hash())
                 )
                 if fingerprint == self._persistent_state_fingerprints[global_lane]:
                     continue
@@ -961,7 +961,7 @@ class VectorSimulatorEnv:
                     self._persistent_state_fingerprints[global_lane] = (
                         None
                         if state is None
-                        else (id(state), state.replay_hash())
+                        else (id(state), state.state_hash())
                     )
 
     @staticmethod
@@ -1025,10 +1025,17 @@ class VectorSimulatorEnv:
             raw_state, rewards, terminated, truncated, info = row
             if not isinstance(raw_state, dict):
                 raise RuntimeError("persistent worker returned an invalid state")
-            restored_state = battle_state_from_primitive(raw_state)
             environment = self.environments[lane]
-            previous_events = list(environment._require_state().events)
-            restored_state.events = previous_events + restored_state.events
+            restored_state = battle_state_from_primitive(raw_state)
+            previous_events = environment._require_state().events
+            # Persistent workers return only the current-step event suffix.
+            # Reuse the parent's list when no event was emitted so observation
+            # memory can take its O(1) append-only path.
+            restored_state.events = (
+                previous_events + restored_state.events
+                if restored_state.events
+                else previous_events
+            )
             environment.state = restored_state
             info = self._refresh_worker_info(environment, info)
             observations = environment.observe_v2() if v2 else environment.observe()
@@ -1038,7 +1045,7 @@ class VectorSimulatorEnv:
                 observations,
             )
             self._persistent_state_fingerprints[lane] = (
-                id(restored_state), restored_state.replay_hash()
+                id(restored_state), restored_state.state_hash()
             )
             if v2:
                 output.append(
@@ -1099,9 +1106,13 @@ class VectorSimulatorEnv:
         output: list[EnvStep | EnvStepV2] = []
         for environment, result in zip(self.environments, results, strict=True):
             raw_state, rewards, terminated, truncated, info = result
-            previous_events = list(environment._require_state().events)
+            previous_events = environment._require_state().events
             restored_state = battle_state_from_primitive(raw_state)
-            restored_state.events = previous_events + restored_state.events
+            restored_state.events = (
+                previous_events + restored_state.events
+                if restored_state.events
+                else previous_events
+            )
             environment.state = restored_state
             info = self._refresh_worker_info(environment, info)
             # Observation memory belongs to the parent lane and is deliberately
@@ -1161,7 +1172,14 @@ class VectorSimulatorEnv:
         output: list[EnvStep | EnvStepV2] = []
         for environment, result in zip(self.environments, results, strict=True):
             packed_state, rewards, terminated, truncated, info = result
-            environment.state = unpack_state(packed_state)
+            previous_state = environment._require_state()
+            restored_state = unpack_state(packed_state)
+            # Packed transport carries the complete event history.  When no
+            # event was emitted, preserve the parent's list identity so the
+            # observation memory does not treat an unchanged log as a rewrite.
+            if restored_state.event_sequence == previous_state.event_sequence:
+                restored_state.events = previous_state.events
+            environment.state = restored_state
             info = self._refresh_worker_info(environment, info)
             if v2:
                 output.append(

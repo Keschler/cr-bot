@@ -1077,11 +1077,22 @@ class BattleEngine:
 
     def _regenerate_elixir(self, state: BattleState) -> None:
         interval = self._elixir_interval(state.elapsed_us)
+        previous_interval = self._elixir_interval(
+            max(0, state.elapsed_us - self.ruleset.tick_us)
+        )
         for player in state.players:
             if player.elixir_milli >= self.ruleset.match.max_elixir_milli:
                 player.elixir_milli = self.ruleset.match.max_elixir_milli
                 player.elixir_remainder = 0
                 continue
+            if previous_interval != interval:
+                # The remainder is a fraction of the old regeneration period,
+                # not an absolute time.  Rescale it at 2x/3x transitions so
+                # the in-flight fractional elixir is conserved instead of
+                # granting or losing up to one milli-elixir at each boundary.
+                player.elixir_remainder = (
+                    player.elixir_remainder * interval // previous_interval
+                )
             numerator = self.ruleset.tick_us * ELIXIR_SCALE + player.elixir_remainder
             gain, player.elixir_remainder = divmod(numerator, interval)
             player.elixir_milli = min(self.ruleset.match.max_elixir_milli, player.elixir_milli + gain)
@@ -2150,6 +2161,10 @@ class BattleEngine:
             target = state  # type: ignore[assignment]
             state = None  # type: ignore[assignment]
         definition = self.ruleset.cards.get(target.card_id)
+        if target.carried_by_uid is not None:
+            # Goblin Giant's backpack Spear Goblins attack independently but
+            # are not independent target bodies until the carrier dies.
+            return False
         if target.concealed_active:
             return False
         if target.stealth_active or (
@@ -4845,6 +4860,11 @@ class BattleEngine:
         *,
         allowed_targets: tuple[str, ...] | None = None,
     ) -> bool:
+        if target.carried_by_uid is not None:
+            # Attached carrier payloads are sheltered from direct and area
+            # impacts.  They become ordinary spell targets only after the
+            # carrier release transition.
+            return False
         if target.concealed_active and card_id not in {"earthquake", "freeze"}:
             return False
         if allowed_targets is not None or card_id in self.ruleset.cards:
@@ -5784,8 +5804,12 @@ class BattleEngine:
             opponent = state.players[1 - tower.owner]
             if tower.role == "king":
                 opponent.crowns = 3
-            else:
-                opponent.crowns += 1
+            elif tower.owner not in king_deaths:
+                # A same-batch Princess Tower death is subsumed by that
+                # owner's three-crown King Tower loss.  A Princess Tower on
+                # the opposite side still awards its legitimate crown in a
+                # rare simultaneous cross-side resolution.
+                opponent.crowns = min(3, opponent.crowns + 1)
                 self._activate_king(state, tower.owner, "princess_tower_destroyed")
         if len(king_deaths) == 2:
             self._collapse_remaining_crown_towers(state, king_deaths)

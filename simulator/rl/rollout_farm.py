@@ -90,6 +90,11 @@ class _SharedRolloutStorage:
             "truncated": ((batch, horizon), np.bool_),
             "old_log_probs": ((batch, horizon), np.float32),
             "values": ((batch, horizon), np.float32),
+            # A rollout may contain nonterminal truncations.  Keep explicit
+            # per-transition successor values in the transport rather than
+            # accidentally substituting the reset episode's first value.
+            "next_values": ((batch, horizon), np.float32),
+            "next_values_present": ((batch,), np.bool_),
             "bootstrap_values": ((batch,), np.float32),
         }
         if bool(config.use_privileged_critic):
@@ -223,7 +228,19 @@ def _copy_batch_to_shared(
     copy_field("truncated", trajectory.truncated)
     copy_field("old_log_probs", trajectory.old_log_probs)
     copy_field("values", trajectory.values)
-    copy_field("bootstrap_values", batch.bootstrap_values)
+    if batch.next_values is not None:
+        copy_field("next_values", batch.next_values)
+        storage.arrays["next_values_present"][start:end] = True
+        bootstrap_values = batch.next_values[:, -1]
+    else:
+        storage.arrays["next_values"][start:end] = 0.0
+        storage.arrays["next_values_present"][start:end] = False
+        if batch.bootstrap_values is None:
+            raise RolloutFarmError(
+                "rollout batch omitted both next_values and bootstrap_values"
+            )
+        bootstrap_values = batch.bootstrap_values
+    copy_field("bootstrap_values", bootstrap_values)
 
     if batch.privileged_features is not None:
         copy_field("privileged_features", batch.privileged_features)
@@ -484,6 +501,8 @@ def _combine_batches(batches: Sequence[Any]) -> Any:
 
     if not batches:
         raise RolloutFarmError("rollout farm returned no learner batches")
+    import torch
+
     from .learner import BeliefTargets, LearnerBatch
     from .trajectory import ActionBatch, ActionMasks, RecurrentSequence, TrajectoryBatch
 
@@ -555,19 +574,40 @@ def _combine_batches(batches: Sequence[Any]) -> Any:
                 dim=0,
             ),
         )
+    next_value_batches = [item.next_values for item in batches]
+    if any(value is not None for value in next_value_batches):
+        explicit_next_values = []
+        for item in batches:
+            if item.next_values is not None:
+                explicit_next_values.append(item.next_values)
+                continue
+            if item.bootstrap_values is None:
+                raise RolloutFarmError(
+                    "rollout worker omitted successor values at a mixed batch boundary"
+                )
+            values = item.trajectory.values
+            fallback = torch.zeros_like(values)
+            if values.shape[1] > 1:
+                fallback[:, :-1] = values[:, 1:]
+            fallback[:, -1] = item.bootstrap_values
+            explicit_next_values.append(fallback)
+        combined_next_values = _cat(explicit_next_values, dim=0)
+        combined_bootstrap_values = None
+    else:
+        combined_next_values = None
+        combined_bootstrap_values = (
+            _cat([item.bootstrap_values for item in batches], dim=0)
+            if all(item.bootstrap_values is not None for item in batches)
+            else None
+        )
     return LearnerBatch(
         trajectory=trajectory,
         privileged_features=_cat_optional(
             [item.privileged_features for item in batches], dim=0
         ),
         belief_targets=belief_targets,
-        next_values=_cat_optional([item.next_values for item in batches], dim=0),
-        bootstrap_values=_cat(
-            [item.bootstrap_values for item in batches],
-            dim=0,
-        )
-        if all(item.bootstrap_values is not None for item in batches)
-        else None,
+        next_values=combined_next_values,
+        bootstrap_values=combined_bootstrap_values,
         behavior_cloning_log_probs=_cat_optional(
             [item.behavior_cloning_log_probs for item in batches], dim=0
         ),
@@ -639,6 +679,22 @@ def _batch_from_shared(storage: _SharedRolloutStorage, config: Any) -> Any:
             enemy_hand=tensor("belief_enemy_hand"),
             enemy_next_card=tensor("belief_enemy_next_card"),
         )
+    next_values_present = storage.arrays["next_values_present"]
+    if bool(next_values_present.any()):
+        values = tensor("values")
+        fallback = torch.zeros_like(values)
+        if values.shape[1] > 1:
+            fallback[:, :-1] = values[:, 1:]
+        fallback[:, -1] = tensor("bootstrap_values")
+        next_values = torch.where(
+            torch.from_numpy(next_values_present).reshape(-1, 1),
+            tensor("next_values"),
+            fallback,
+        )
+        bootstrap_values = None
+    else:
+        next_values = None
+        bootstrap_values = tensor("bootstrap_values")
     return LearnerBatch(
         trajectory=trajectory,
         privileged_features=(
@@ -647,7 +703,8 @@ def _batch_from_shared(storage: _SharedRolloutStorage, config: Any) -> Any:
             else None
         ),
         belief_targets=belief_targets,
-        bootstrap_values=tensor("bootstrap_values"),
+        next_values=next_values,
+        bootstrap_values=bootstrap_values,
     )
 
 

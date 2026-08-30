@@ -32,3 +32,25 @@ def test_rollout_shared_memory_attach_supports_python312_signature(
 
     assert isinstance(handle, LegacySharedMemory)
     assert unregistered == [("/rollout-segment", "shared_memory")]
+
+
+def test_rollout_shared_memory_schema_preserves_successor_values() -> None:
+    import simulator.rl.rollout_farm as rollout_farm
+
+    config = SimpleNamespace(
+        envs=2,
+        horizon=3,
+        gru_hidden_dim=4,
+        gru_layers=1,
+        use_privileged_critic=False,
+        collect_belief_targets=False,
+    )
+    storage = rollout_farm._SharedRolloutStorage.create(config)
+    try:
+        assert "next_values" in storage.arrays
+        assert storage.arrays["next_values"].shape == (2, 3)
+        assert "next_values_present" in storage.arrays
+        assert storage.arrays["next_values_present"].shape == (2,)
+        assert "bootstrap_values" in storage.arrays
+    finally:
+        storage.close(unlink=True)

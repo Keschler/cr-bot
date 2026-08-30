@@ -1535,11 +1535,24 @@ def train_prototype(
                         ),
                     }
                 )
+                farm_learner_batch = farm_batch.learner_batch
+                farm_bootstrap_values = farm_learner_batch.bootstrap_values
+                if farm_bootstrap_values is None:
+                    if farm_learner_batch.next_values is None:
+                        raise RuntimeError(
+                            "rollout farm returned no successor values for PPO"
+                        )
+                    # The farm transports explicit successor values for
+                    # nonterminal truncations.  RolloutResult keeps its
+                    # historical final-value field, so derive that view at
+                    # the boundary without losing the per-transition data
+                    # carried by LearnerBatch.
+                    farm_bootstrap_values = farm_learner_batch.next_values[:, -1]
                 result = RolloutResult(
-                    learner_batch=farm_batch.learner_batch,
+                    learner_batch=farm_learner_batch,
                     final_observations=(),
                     next_rollout_state=None,
-                    bootstrap_values=farm_batch.learner_batch.bootstrap_values,
+                    bootstrap_values=farm_bootstrap_values,
                     stats=farm_batch.stats,
                     next_reset_mask=None,
                     episode_counts=farm_batch.episode_counts,

@@ -233,22 +233,6 @@ def _normalize_soa_tower_hp(values: np.ndarray) -> tuple[float, float, float]:
     )
 
 
-def _event_prefix_hash(state: BattleState, max_sequence: int) -> str:
-    """Hash the public event history already consumed by observation memory."""
-
-    encoded = json.dumps(
-        [
-            event.to_dict()
-            for event in state.events
-            if event.sequence <= max_sequence
-        ],
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-    ).encode("ascii")
-    return hashlib.sha256(encoded).hexdigest()
-
-
 LegalityCallback = Callable[[BattleState, PlayCardAction], bool]
 LegalActionCellsCallback = Callable[
     [BattleState, int], tuple[tuple[tuple[int, int], ...], ...]
@@ -327,7 +311,13 @@ class ObservationMemory:
     _opponent_elixir_milli: Fraction = field(default_factory=Fraction, repr=False)
     _initialized: bool = field(default=False, repr=False)
     _battle_seed: int | None = field(default=None, repr=False)
-    _processed_event_prefix_hash: str | None = field(default=None, repr=False)
+    # ``event_sequence`` is the authoritative append revision: every event
+    # emitted by the engine increments it.  The list identity catches the
+    # exceptional case where a caller replaces an already-consumed history
+    # without advancing that revision (for example state restore/rewrite).
+    # This avoids reserializing the complete event log on every observation.
+    _processed_event_revision: int | None = field(default=None, repr=False)
+    _processed_event_list_id: int | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         _validate_viewer(self.viewer)
@@ -350,7 +340,8 @@ class ObservationMemory:
         self._opponent_elixir_milli = Fraction(ruleset.match.initial_elixir_milli, 1)
         self._initialized = True
         self._battle_seed = battle_seed
-        self._processed_event_prefix_hash = None
+        self._processed_event_revision = None
+        self._processed_event_list_id = None
 
     def update(self, state: BattleState, ruleset: Ruleset) -> None:
         """Consume previously unseen public events through ``state.elapsed_us``."""
@@ -367,15 +358,18 @@ class ObservationMemory:
         ):
             self.reset(ruleset, battle_seed=state.seed)
         elif (
-            self._processed_event_prefix_hash is not None
-            and self._processed_event_prefix_hash
-            != _event_prefix_hash(state, self.last_event_sequence)
+            self._processed_event_revision is not None
+            and self._processed_event_list_id is not None
+            and state.event_sequence == self._processed_event_revision
+            and id(state.events) != self._processed_event_list_id
         ):
             # A restored or externally synchronized state may replace an
             # already-consumed event at the same sequence number.  Sequence
-            # monotonicity alone cannot detect that rewrite; replay the
+            # monotonicity alone cannot detect that rewrite.  Replay the
             # authoritative public history so card memory and elixir belief do
-            # not silently describe a different episode.
+            # not silently describe a different episode.  Normal append-only
+            # transport changes both the sequence revision and list identity,
+            # so it takes the incremental suffix path below.
             self.reset(ruleset, battle_seed=state.seed)
 
         new_events = sorted(
@@ -404,10 +398,8 @@ class ObservationMemory:
             self.last_event_sequence = max(self.last_event_sequence, event.sequence)
 
         self._advance_elixir(state.elapsed_us, ruleset)
-        self._processed_event_prefix_hash = _event_prefix_hash(
-            state,
-            self.last_event_sequence,
-        )
+        self._processed_event_revision = state.event_sequence
+        self._processed_event_list_id = id(state.events)
 
     def _advance_elixir(self, target_elapsed_us: int, ruleset: Ruleset) -> None:
         if target_elapsed_us <= self.last_elapsed_us:

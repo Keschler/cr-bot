@@ -216,3 +216,20 @@ def test_finished_regulation_state_does_not_report_active_overtime(use_soa: bool
         soa_state=ObservationSoA() if use_soa else None,
     )
     assert v2.global_vector[overtime_index] == pytest.approx(0.0)
+
+
+def test_observation_memory_append_path_does_not_hash_event_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import simulator.observation as observation_module
+
+    engine, state = _state()
+    memory = ObservationMemory(viewer=0)
+    memory.update(state, RULESET)
+
+    def fail_if_hashed(*_args, **_kwargs):
+        raise AssertionError("incremental observation update hashed the event log")
+
+    monkeypatch.setattr(observation_module.hashlib, "sha256", fail_if_hashed)
+    engine._emit(state, "audit_marker")
+    memory.update(state, RULESET)

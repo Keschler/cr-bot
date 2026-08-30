@@ -244,3 +244,35 @@ def test_persistent_backend_syncs_in_place_parent_mutations(
     finally:
         reference.close()
         persistent.close()
+
+
+def test_persistent_backend_fingerprint_does_not_hash_event_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_get_context = multiprocessing.get_context
+
+    def fork_context(method: str | None = None):
+        if method in {"forkserver", "spawn"}:
+            method = "fork"
+        return real_get_context(method)
+
+    monkeypatch.setattr(multiprocessing, "get_context", fork_context)
+
+    from simulator.env import SimulatorEnv, VectorSimulatorEnv
+    from simulator.state import BattleState
+
+    def fail_if_hashed(_state):
+        raise AssertionError("persistent sync hashed the complete event log")
+
+    monkeypatch.setattr(BattleState, "replay_hash", fail_if_hashed)
+    vector = VectorSimulatorEnv(
+        (SimulatorEnv(),),
+        backend="persistent-process",
+        workers=1,
+    )
+    try:
+        vector.reset((815,))
+        vector.step(((None, None),))
+        vector.step(((None, None),))
+    finally:
+        vector.close()

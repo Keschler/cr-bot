@@ -114,6 +114,64 @@ def test_goblin_giant_main_targets_buildings_while_spear_children_target_air() -
     assert air_target.alive
 
 
+def test_goblin_giant_backpack_children_are_sheltered_until_release() -> None:
+    engine, state = _state()
+    engine._spawn_card_entities(state, 0, RULESET.card("goblin-giant"), (9, 15))
+    giant = next(
+        entity
+        for entity in state.entities.values()
+        if entity.card_id == "goblin-giant"
+    )
+    children = [
+        entity
+        for entity in state.entities.values()
+        if entity.carried_by_uid == giant.uid
+    ]
+    assert len(children) == 2
+    child = children[0]
+    child.deploy_remaining_us = 0
+    hp_before = child.hp
+
+    assert not engine._targetable_for_acquisition(state, child)
+    engine._impact_area(
+        state,
+        owner=1,
+        source_uid=None,
+        source_card_id="test-spell",
+        x=child.x_mtile,
+        y=child.y_mtile,
+        damage=999_999,
+        crown_damage=999_999,
+        radius=1,
+        status=None,
+        knockback=0,
+        primary_target_uid=None,
+        allowed_targets=("ground",),
+    )
+    assert child.hp == hp_before
+
+    giant.alive = False
+    engine._release_carried_children(state, giant)
+    assert child.carried_by_uid is None
+    assert engine._targetable_for_acquisition(state, child)
+    engine._impact_area(
+        state,
+        owner=1,
+        source_uid=None,
+        source_card_id="test-spell",
+        x=child.x_mtile,
+        y=child.y_mtile,
+        damage=1,
+        crown_damage=1,
+        radius=1,
+        status=None,
+        knockback=0,
+        primary_target_uid=None,
+        allowed_targets=("ground",),
+    )
+    assert child.hp == hp_before - 1
+
+
 def test_mega_knight_can_start_a_jump_on_a_crown_tower() -> None:
     engine, state = _state()
     knight = _entity(state, "mega-knight", 0, 3_500, 10_500)
@@ -185,6 +243,35 @@ def test_king_tower_destruction_collapses_remaining_crown_towers() -> None:
         for event in state.events
     ) == 3
     engine.validate_state(state)
+
+
+def test_simultaneous_king_and_princess_destruction_caps_crowns() -> None:
+    engine, state = _state()
+    for tower in engine._towers_for(state, 1):
+        tower.hp = 0
+
+    destroyed = engine._resolve_deaths(state)
+    engine._resolve_tower_outcomes(state, destroyed)
+
+    assert state.terminal
+    assert state.winner == 0
+    assert state.players[0].crowns == 3
+    engine.validate_state(state)
+
+
+def test_elixir_remainder_is_rescaled_at_double_elixir_transition() -> None:
+    engine, state = _state()
+    player = state.players[0]
+    player.elixir_milli = 0
+    player.elixir_remainder = 2_700_000
+    state.elapsed_us = RULESET.match.regulation_us - 60 * 1_000_000
+
+    engine._regenerate_elixir(state)
+
+    # The in-flight 2.7m/2.8m normal-elixir fraction becomes 1.35m/1.4m
+    # before the boundary tick, yielding 36 milli-elixir and 950k remainder.
+    assert player.elixir_milli == 36
+    assert player.elixir_remainder == 950_000
 
 
 def test_tiebreak_destroys_lowest_tower_and_clears_combatants() -> None:
