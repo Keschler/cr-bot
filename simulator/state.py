@@ -305,6 +305,79 @@ class PlayerState:
     last_played_card_id: str | None = None
 
 
+class EventHistory(list[SimEvent]):
+    """Append-only event transport with an O(1) mutation revision.
+
+    The authoritative engine only appends events, but restore and validation
+    tooling can replace or edit a retained history in place.  Tracking those
+    edits lets consumers detect a rewrite without hashing the complete log on
+    every observation or persistent-worker synchronization.
+    """
+
+    __slots__ = ("mutation_revision",)
+
+    def __init__(self, values: object = ()) -> None:
+        super().__init__(values)  # type: ignore[arg-type]
+        self.mutation_revision = 0
+
+    def append(self, value: SimEvent) -> None:
+        list.append(self, value)
+        self.mutation_revision += 1
+
+    def extend(self, values: object) -> None:
+        additions = list(values)  # type: ignore[arg-type]
+        if not additions:
+            return
+        list.extend(self, additions)
+        self.mutation_revision += 1
+
+    def insert(self, index: int, value: SimEvent) -> None:
+        list.insert(self, index, value)
+        self.mutation_revision += 1
+
+    def __setitem__(self, key: int | slice, value: object) -> None:
+        if isinstance(key, slice):
+            value = list(value)  # type: ignore[arg-type]
+        list.__setitem__(self, key, value)  # type: ignore[index]
+        self.mutation_revision += 1
+
+    def __delitem__(self, key: int | slice) -> None:
+        list.__delitem__(self, key)
+        self.mutation_revision += 1
+
+    def clear(self) -> None:
+        if not self:
+            return
+        list.clear(self)
+        self.mutation_revision += 1
+
+    def pop(self, index: int = -1) -> SimEvent:
+        value = list.pop(self, index)
+        self.mutation_revision += 1
+        return value
+
+    def remove(self, value: SimEvent) -> None:
+        list.remove(self, value)
+        self.mutation_revision += 1
+
+    def reverse(self) -> None:
+        list.reverse(self)
+        self.mutation_revision += 1
+
+    def sort(self, *, key: Any = None, reverse: bool = False) -> None:
+        list.sort(self, key=key, reverse=reverse)
+        self.mutation_revision += 1
+
+    def __iadd__(self, values: object) -> "EventHistory":
+        self.extend(values)
+        return self
+
+    def __imul__(self, multiplier: int) -> "EventHistory":
+        list.__imul__(self, multiplier)
+        self.mutation_revision += 1
+        return self
+
+
 @dataclass(slots=True)
 class BattleState:
     schema_version: int
@@ -325,10 +398,15 @@ class BattleState:
     terminal: bool = False
     terminal_reason: str | None = None
     event_sequence: int = 0
-    events: list[SimEvent] = field(default_factory=list)
+    events: EventHistory = field(default_factory=EventHistory)
     # Appended after the original default fields to preserve positional
     # construction compatibility for serialized/research fixtures.
     effects: dict[int, AreaEffectState] = field(default_factory=dict)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        if name == "events" and not isinstance(value, EventHistory):
+            value = EventHistory(value)
+        object.__setattr__(self, name, value)
 
     def to_primitive(self, *, include_events: bool = False) -> dict[str, Any]:
         entities = [asdict(self.entities[uid]) for uid in sorted(self.entities)]

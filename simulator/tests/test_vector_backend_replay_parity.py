@@ -258,7 +258,11 @@ def test_persistent_backend_fingerprint_does_not_hash_event_history(
 
     monkeypatch.setattr(multiprocessing, "get_context", fork_context)
 
-    from simulator.env import SimulatorEnv, VectorSimulatorEnv
+    from simulator.env import (
+        SimulatorEnv,
+        VectorSimulatorEnv,
+        _state_sync_fingerprint,
+    )
     from simulator.state import BattleState
 
     def fail_if_hashed(_state):
@@ -273,6 +277,11 @@ def test_persistent_backend_fingerprint_does_not_hash_event_history(
     try:
         vector.reset((815,))
         vector.step(((None, None),))
+        state = vector.environments[0].state
+        assert state is not None
+        before = _state_sync_fingerprint(state)
+        state.events[:] = list(state.events)
+        assert _state_sync_fingerprint(state) != before
         vector.step(((None, None),))
     finally:
         vector.close()

@@ -35,6 +35,20 @@ if TYPE_CHECKING:
     from .observation_v2 import PolicyObservationV2
 
 
+def _state_sync_fingerprint(state: BattleState) -> tuple[int, str, int, int]:
+    """Return an O(1)-event-history fingerprint for persistent workers."""
+
+    mutation_revision = getattr(state.events, "mutation_revision", 0)
+    if type(mutation_revision) is not int:
+        mutation_revision = 0
+    return (
+        id(state),
+        state.state_hash(),
+        id(state.events),
+        mutation_revision,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class RewardConfig:
     version: str = "tower-damage-crowns-v1"
@@ -754,10 +768,10 @@ class VectorSimulatorEnv:
         self._persistent_connections: list[Any] = []
         self._persistent_processes: list[Any] = []
         self._persistent_groups: list[tuple[int, ...]] = []
-        self._persistent_state_fingerprints: list[tuple[int, str] | None] = [
+        self._persistent_state_fingerprints: list[tuple[int, str, int, int] | None] = [
             None
             if environment.state is None
-            else (id(environment.state), environment.state.state_hash())
+            else _state_sync_fingerprint(environment.state)
             for environment in self.environments
         ]
         if backend == "persistent-process":
@@ -933,11 +947,7 @@ class VectorSimulatorEnv:
             for local_lane, global_lane in enumerate(group):
                 environment = self.environments[global_lane]
                 state = environment.state
-                fingerprint = (
-                    None
-                    if state is None
-                    else (id(state), state.state_hash())
-                )
+                fingerprint = None if state is None else _state_sync_fingerprint(state)
                 if fingerprint == self._persistent_state_fingerprints[global_lane]:
                     continue
                 if state is None:
@@ -959,9 +969,7 @@ class VectorSimulatorEnv:
                     global_lane = group[local_lane]
                     state = self.environments[global_lane].state
                     self._persistent_state_fingerprints[global_lane] = (
-                        None
-                        if state is None
-                        else (id(state), state.state_hash())
+                        None if state is None else _state_sync_fingerprint(state)
                     )
 
     @staticmethod
@@ -1044,8 +1052,8 @@ class VectorSimulatorEnv:
                 "v2" if v2 else "v1",
                 observations,
             )
-            self._persistent_state_fingerprints[lane] = (
-                id(restored_state), restored_state.state_hash()
+            self._persistent_state_fingerprints[lane] = _state_sync_fingerprint(
+                restored_state
             )
             if v2:
                 output.append(

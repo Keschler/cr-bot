@@ -118,7 +118,7 @@ def test_public_elixir_memory_uses_effective_cost_and_bonus_events() -> None:
     memory = ObservationMemory(viewer=0)
     memory.reset(RULESET, battle_seed=state.seed)
     state.players[1].elixir_milli = 5_000
-    state.events = [
+    state.events[:] = [
         SimEvent.create(
             0,
             1,
@@ -153,7 +153,7 @@ def test_public_memory_replays_when_a_processed_event_is_rewritten() -> None:
         shuffle_decks=False,
     )
     state.elapsed_us = RULESET.tick_us
-    state.events = [
+    state.events[:] = [
         SimEvent.create(
             0,
             1,
@@ -169,7 +169,7 @@ def test_public_memory_replays_when_a_processed_event_is_rewritten() -> None:
     first_estimate = memory.opponent_elixir_milli_est
     assert memory.seen_opponent_cards == ["fireball"]
 
-    state.events = [
+    state.events[:] = [
         SimEvent.create(
             0,
             1,

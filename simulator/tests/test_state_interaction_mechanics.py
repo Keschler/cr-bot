@@ -259,6 +259,19 @@ def test_simultaneous_king_and_princess_destruction_caps_crowns() -> None:
     engine.validate_state(state)
 
 
+def test_terminal_tower_destruction_accounts_for_the_completed_physics_tick() -> None:
+    engine, state = _state()
+    king = engine._tower(state, 1, "king")
+    king.hp = 0
+
+    engine.step(state)
+
+    assert state.terminal
+    assert state.tick == 1
+    assert state.elapsed_us == RULESET.tick_us
+    engine.validate_state(state)
+
+
 def test_elixir_remainder_is_rescaled_at_double_elixir_transition() -> None:
     engine, state = _state()
     player = state.players[0]

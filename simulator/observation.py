@@ -312,12 +312,13 @@ class ObservationMemory:
     _initialized: bool = field(default=False, repr=False)
     _battle_seed: int | None = field(default=None, repr=False)
     # ``event_sequence`` is the authoritative append revision: every event
-    # emitted by the engine increments it.  The list identity catches the
-    # exceptional case where a caller replaces an already-consumed history
-    # without advancing that revision (for example state restore/rewrite).
-    # This avoids reserializing the complete event log on every observation.
+    # emitted by the engine increments it.  The retained list and its O(1)
+    # mutation revision catch the exceptional case where a caller rewrites an
+    # already-consumed history without advancing that public sequence.  This
+    # avoids reserializing the complete event log on every observation.
     _processed_event_revision: int | None = field(default=None, repr=False)
-    _processed_event_list_id: int | None = field(default=None, repr=False)
+    _processed_event_list: object | None = field(default=None, repr=False)
+    _processed_event_mutation_revision: int | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         _validate_viewer(self.viewer)
@@ -341,7 +342,8 @@ class ObservationMemory:
         self._initialized = True
         self._battle_seed = battle_seed
         self._processed_event_revision = None
-        self._processed_event_list_id = None
+        self._processed_event_list = None
+        self._processed_event_mutation_revision = None
 
     def update(self, state: BattleState, ruleset: Ruleset) -> None:
         """Consume previously unseen public events through ``state.elapsed_us``."""
@@ -357,19 +359,33 @@ class ObservationMemory:
             or state.event_sequence < self.last_event_sequence
         ):
             self.reset(ruleset, battle_seed=state.seed)
+            history_rewritten = False
         elif (
             self._processed_event_revision is not None
-            and self._processed_event_list_id is not None
-            and state.event_sequence == self._processed_event_revision
-            and id(state.events) != self._processed_event_list_id
+            and self._processed_event_list is not None
         ):
+            current_mutation_revision = getattr(state.events, "mutation_revision", None)
+            history_rewritten = (
+                state.event_sequence == self._processed_event_revision
+                and (
+                    state.events is not self._processed_event_list
+                    or (
+                        self._processed_event_mutation_revision is not None
+                        and current_mutation_revision
+                        != self._processed_event_mutation_revision
+                    )
+                )
+            )
+        else:
+            history_rewritten = False
+        if history_rewritten:
             # A restored or externally synchronized state may replace an
             # already-consumed event at the same sequence number.  Sequence
             # monotonicity alone cannot detect that rewrite.  Replay the
             # authoritative public history so card memory and elixir belief do
             # not silently describe a different episode.  Normal append-only
-            # transport changes both the sequence revision and list identity,
-            # so it takes the incremental suffix path below.
+            # transport changes the sequence revision, so it takes the
+            # incremental suffix path below.
             self.reset(ruleset, battle_seed=state.seed)
 
         new_events = sorted(
@@ -399,7 +415,11 @@ class ObservationMemory:
 
         self._advance_elixir(state.elapsed_us, ruleset)
         self._processed_event_revision = state.event_sequence
-        self._processed_event_list_id = id(state.events)
+        self._processed_event_list = state.events
+        mutation_revision = getattr(state.events, "mutation_revision", None)
+        self._processed_event_mutation_revision = (
+            mutation_revision if type(mutation_revision) is int else None
+        )
 
     def _advance_elixir(self, target_elapsed_us: int, ruleset: Ruleset) -> None:
         if target_elapsed_us <= self.last_elapsed_us:

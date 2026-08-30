@@ -5837,6 +5837,11 @@ class BattleEngine:
 
     def _advance_match_clock(self, state: BattleState) -> None:
         if state.terminal:
+            # Combat resolution may have ended the match earlier in this
+            # physics tick.  ``step`` still advances the tick counter below,
+            # so account for the completed interval here as well; otherwise
+            # terminal states report tick N+1 with the elapsed time of tick N.
+            state.elapsed_us += self.ruleset.tick_us
             return
         state.elapsed_us += self.ruleset.tick_us
         regulation = self.ruleset.match.regulation_us
