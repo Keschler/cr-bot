@@ -64,6 +64,8 @@ BASE_HOG_CYCLE_DECK = PLAYER_DECK
 ENGINE_VERSION = "reference-0.36.0"
 _SEED_MASK = (1 << 64) - 1
 _SLOW_STATUS_KINDS = frozenset({"slow", "freeze", "poison-slow", "earthquake-slow"})
+_CARD_CYCLE_COOLDOWN_SINGLE_US = 2_000_000
+_CARD_CYCLE_COOLDOWN_ACCELERATED_US = 1_000_000
 
 
 # The policy action grid is fixed by the observation contract.  Keeping its
@@ -291,6 +293,7 @@ class BattleEngine:
         self._verify_state_ruleset(state)
         event_start = len(state.events)
         self._regenerate_elixir(state)
+        self._advance_card_cycle(state)
         self.apply_actions(state, actions)
         self._advance_deployments(state)
         self._advance_area_effects(state)
@@ -619,9 +622,13 @@ class BattleEngine:
         effective_cost = self._effective_card_cost(player, card)
         player.elixir_milli -= effective_cost
         used = player.hand.pop(action.card_slot)
-        next_card = player.draw_pile.pop(0)
-        player.hand.append(next_card)
         player.draw_pile.append(used)
+        # The first card in the queue is ready only when its loading timer has
+        # expired.  A rapid second/third play therefore leaves an empty hand
+        # slot until the existing Next card finishes loading.
+        if player.next_card_cooldown_us == 0 and player.draw_pile:
+            player.hand.append(player.draw_pile.pop(0))
+            player.next_card_cooldown_us = self._card_cycle_cooldown_us(state)
         player.cards_played += 1
         opponent_seen = state.players[1 - action.player].seen_enemy_cards
         if card_id not in opponent_seen:
@@ -679,6 +686,31 @@ class BattleEngine:
             return card.elixir_milli
         previous = self.ruleset.card(player.last_played_card_id)
         return min(self.ruleset.match.max_elixir_milli, previous.elixir_milli + 1_000)
+
+    def _card_cycle_cooldown_us(self, state: BattleState) -> int:
+        """Return the hand-loading delay for a newly exposed Next card."""
+
+        if self._elixir_interval(state.elapsed_us) != self.ruleset.match.normal_elixir_interval_us:
+            return _CARD_CYCLE_COOLDOWN_ACCELERATED_US
+        return _CARD_CYCLE_COOLDOWN_SINGLE_US
+
+    def _advance_card_cycle(self, state: BattleState) -> None:
+        """Advance each player's Next-card loading timer by one physics tick."""
+
+        dt = self.ruleset.tick_us
+        hand_size = self.ruleset.match.hand_size
+        for player in state.players:
+            if player.next_card_cooldown_us > 0:
+                player.next_card_cooldown_us = max(
+                    0, player.next_card_cooldown_us - dt
+                )
+            if (
+                player.next_card_cooldown_us == 0
+                and len(player.hand) < hand_size
+                and player.draw_pile
+            ):
+                player.hand.append(player.draw_pile.pop(0))
+                player.next_card_cooldown_us = self._card_cycle_cooldown_us(state)
 
     def _spawn_card_entities(
         self,
@@ -6632,8 +6664,10 @@ class BattleEngine:
                 raise ValueError("elixir outside ruleset bounds")
             if type(player.elixir_remainder) is not int or player.elixir_remainder < 0:
                 raise ValueError("elixir remainder must be a non-negative integer")
-            if len(player.hand) != self.ruleset.match.hand_size:
+            if not 0 <= len(player.hand) <= self.ruleset.match.hand_size:
                 raise ValueError("invalid hand size")
+            if type(player.next_card_cooldown_us) is not int or player.next_card_cooldown_us < 0:
+                raise ValueError("next-card cooldown must be a non-negative integer")
             if type(player.crowns) is not int or not (0 <= player.crowns <= 3):
                 raise ValueError("invalid crown count")
             if type(player.king_active) is not bool:

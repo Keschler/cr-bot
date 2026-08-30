@@ -322,6 +322,10 @@ class PlayerState:
     cards_played: int = 0
     seen_enemy_cards: list[str] = field(default_factory=list)
     last_played_card_id: str | None = None
+    # The visible Next card can be temporarily held out of the playable hand
+    # after rapid plays.  Zero means the card is ready to replace the next
+    # played card; a positive value is the remaining hand-loading cooldown.
+    next_card_cooldown_us: int = 0
 
 
 class EventHistory(list[SimEvent]):
@@ -499,6 +503,10 @@ def battle_state_from_primitive(raw: dict[str, Any]) -> BattleState:
             ),
             seen_enemy_cards=list(row.get("seen_enemy_cards", [])),
             last_played_card_id=row.get("last_played_card_id"),
+            next_card_cooldown_us=_required_int(
+                row.get("next_card_cooldown_us", 0),
+                "player.next_card_cooldown_us",
+            ),
         )
         for row in raw["players"]
     ]

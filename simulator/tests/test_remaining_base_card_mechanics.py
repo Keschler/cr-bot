@@ -136,6 +136,32 @@ def test_mirror_and_elixir_collector_are_excluded_from_opening_hand() -> None:
     assert sorted(state.players[0].hand + state.players[0].draw_pile) == sorted(deck)
 
 
+def test_rapid_card_plays_respect_next_card_loading_cooldown() -> None:
+    engine, state = _state()
+    player = state.players[0]
+    player.elixir_milli = 10_000
+
+    first_cell = engine.legal_action_cells(state, 0)[0][0]
+    engine.step(state, [PlayCardAction(0, 0, first_cell)])
+    assert player.hand == ["cannon", "musketeer", "skeletons", "ice-golem"]
+    assert player.next_card_cooldown_us == 2_000_000
+
+    second_cell = engine.legal_action_cells(state, 0)[0][0]
+    engine.step(state, [PlayCardAction(0, 0, second_cell)])
+    assert player.hand == ["musketeer", "skeletons", "ice-golem"]
+    assert player.next_card_cooldown_us == 1_950_000
+    assert player.draw_pile[0] == "ice-spirit"
+
+    for _ in range(38):
+        engine.step(state)
+    assert player.hand == ["musketeer", "skeletons", "ice-golem"]
+    assert player.next_card_cooldown_us == 50_000
+
+    engine.step(state)
+    assert player.hand == ["musketeer", "skeletons", "ice-golem", "ice-spirit"]
+    assert player.next_card_cooldown_us == 2_000_000
+
+
 def test_elixir_collector_death_grants_final_elixir_and_uses_current_cadence() -> None:
     engine, state = _state()
     collector_definition = RULESET.card("elixir-collector")
