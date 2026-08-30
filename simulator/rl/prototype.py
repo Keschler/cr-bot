@@ -29,6 +29,7 @@ results.
 from __future__ import annotations
 
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, Future
+from collections import Counter
 from copy import deepcopy
 from dataclasses import asdict, dataclass, fields
 import argparse
@@ -110,6 +111,9 @@ class PrototypeConfig:
     # runtime supports it.  This is an opt-in kernel/scheduling optimization;
     # it does not alter the model topology or actor observation contract.
     compile_policy: bool = False
+    # Full training traces are opt-in because they serialize authoritative
+    # snapshots and model alternatives at every decision.
+    diagnostic_trace_out: str | None = None
 
     # Optimizer and long-horizon objective.
     learning_rate: float = 3e-4
@@ -201,6 +205,13 @@ class PrototypeConfig:
         ):
             if type(getattr(self, name)) is not bool:
                 raise PrototypeConfigurationError(f"{name} must be boolean")
+        if self.diagnostic_trace_out is not None and (
+            not isinstance(self.diagnostic_trace_out, (str, Path))
+            or not str(self.diagnostic_trace_out).strip()
+        ):
+            raise PrototypeConfigurationError(
+                "diagnostic_trace_out must be a non-empty path or None"
+            )
         if self.opponent not in {"scripted", "deterministic-cycle"}:
             raise PrototypeConfigurationError(
                 "opponent must be 'scripted' or 'deterministic-cycle'"
@@ -939,6 +950,7 @@ def _make_collector(
     actor_only_observations: bool = False,
     opponent_action: Callable[[Any, Any, int], Any | None] | None = None,
     batch_step: Callable[[Sequence[Sequence[Any | None]]], Sequence[Any]] | None = None,
+    diagnostics: bool = False,
 ) -> Any:
     from .collector import CollectorConfig, RecurrentRolloutCollector
 
@@ -963,6 +975,7 @@ def _make_collector(
             ),
             stop_on_episode_end=stop,
             freeze_completed_lanes=freeze_completed_lanes,
+            diagnostics=diagnostics,
         ),
         opponent_action=_opponent_callback() if opponent_action is None else opponent_action,
         expert_action=expert_action,
@@ -1352,6 +1365,11 @@ def train_prototype(
         raise PrototypeConfigurationError(
             "overlap_rollouts requires the rollout-process backend"
         )
+    if effective_config.diagnostic_trace_out is not None and effective_config.env_backend == "rollout-process":
+        raise PrototypeConfigurationError(
+            "diagnostic_trace_out requires the reference/vector collector; "
+            "rollout-process does not transport per-decision model diagnostics"
+        )
     # Pin the simulator revision for this complete rollout/update sequence.
     # The checkout may remain dirty during development, but a new committed
     # HEAD means the simulator changed underneath the experiment and its
@@ -1439,6 +1457,10 @@ def train_prototype(
     pending_rollout: Future[Any] | None = None
     try:
         update_rows: list[dict[str, object]] = []
+        diagnostic_trace_rows: list[dict[str, object]] = []
+        diagnostic_update_rows: list[dict[str, object]] = []
+        diagnostic_enabled = effective_config.diagnostic_trace_out is not None
+        previous_diagnostic_distributions: dict[str, Mapping[str, object]] | None = None
         rollout_farm_timing: list[dict[str, object]] = []
         aggregate = {name: 0 for name in ("completed_matches", "wins", "draws", "losses", "truncated_matches")}
         starting_update = int(learner.update_count)
@@ -1481,7 +1503,20 @@ def train_prototype(
                     lane_decks=lane_decks,
                     opponent_action=opponent_action,
                     batch_step=batch_step,
+                    diagnostics=diagnostic_enabled,
                 )
+            current_diagnostic_rows: list[dict[str, object]] = []
+
+            def diagnostic_decision_callback(record: Any) -> None:
+                row = _trace_decision(
+                    record,
+                    target_player=effective_config.target_player,
+                    include_positions=True,
+                )
+                row["update"] = int(learner.update_count + 1)
+                row["local_update"] = local_update + 1
+                row["lane"] = int(record.lane)
+                current_diagnostic_rows.append(row)
             rollout_started = perf_counter()
             rollout_progress = None
             if progress_step_callback is not None:
@@ -1577,16 +1612,137 @@ def train_prototype(
                     reset_mask=rollout_reset_mask,
                     episode_counts=episode_counts,
                     step_callback=rollout_progress,
+                    decision_callback=(
+                        diagnostic_decision_callback if diagnostic_enabled else None
+                    ),
                 )
             rollout_wall_seconds = perf_counter() - rollout_started
             rollout_state = result.next_rollout_state
             rollout_reset_mask = result.next_reset_mask
             episode_counts = result.episode_counts
             update_started = perf_counter()
-            metrics = learner.update(
-                result.learner_batch,
-                sequence_length=effective_config.sequence_length,
+            prepared_batch = (
+                learner.prepare_batch(result.learner_batch)
+                if diagnostic_enabled
+                else result.learner_batch
             )
+            diagnostic_update: dict[str, object] = {}
+            if diagnostic_enabled:
+                from .diagnostics import explained_variance, ppo_ratio_diagnostics
+
+                trajectory = prepared_batch.trajectory
+                advantages = trajectory.advantages.detach()
+                returns_tensor = trajectory.returns.detach()
+                values_tensor = trajectory.values.detach()
+                for row in current_diagnostic_rows:
+                    lane = int(row.get("lane", 0))
+                    timestep = int(row.get("decision", 0))
+                    if lane >= advantages.shape[0] or timestep >= advantages.shape[1]:
+                        continue
+                    row["return"] = float(returns_tensor[lane, timestep].cpu().item())
+                    row["advantage"] = float(advantages[lane, timestep].cpu().item())
+                    row["critic_value_prediction"] = float(values_tensor[lane, timestep].cpu().item())
+                    policy_row = row.get("policy")
+                    if isinstance(policy_row, Mapping):
+                        policy_copy = dict(policy_row)
+                        policy_copy["return"] = row["return"]
+                        policy_copy["advantage"] = row["advantage"]
+                        policy_copy["critic_value_prediction"] = row["critic_value_prediction"]
+                        row["policy"] = policy_copy
+                diagnostic_update.update(
+                    {
+                        "advantage_distribution": {
+                            "mean": float(advantages.mean().cpu().item()),
+                            "std": float(advantages.std(unbiased=False).cpu().item()),
+                            "min": float(advantages.min().cpu().item()),
+                            "max": float(advantages.max().cpu().item()),
+                            "positive_fraction": float((advantages > 0).float().mean().cpu().item()),
+                        },
+                        "return_distribution": {
+                            "mean": float(returns_tensor.mean().cpu().item()),
+                            "std": float(returns_tensor.std(unbiased=False).cpu().item()),
+                            "min": float(returns_tensor.min().cpu().item()),
+                            "max": float(returns_tensor.max().cpu().item()),
+                        },
+                        "explained_variance": explained_variance(values_tensor, returns_tensor),
+                        "teacher_disagreement_rate": (
+                            sum(row.get("actor_teacher_agreement") is False for row in current_diagnostic_rows)
+                            / max(1, sum(row.get("actor_teacher_agreement") is not None for row in current_diagnostic_rows))
+                        ),
+                        "factor_entropy": {
+                            "mode": _mean_trace_metric(current_diagnostic_rows, "mode"),
+                            "card": _mean_trace_metric(current_diagnostic_rows, "card"),
+                            "placement_selected_card": _mean_trace_metric(current_diagnostic_rows, "placement_selected_card"),
+                            "joint": _mean_trace_metric(current_diagnostic_rows, "joint"),
+                        },
+                    }
+                )
+                action_distribution = {
+                    "actor": _trace_action_distribution(
+                        current_diagnostic_rows,
+                        "actor_action",
+                    ),
+                    "teacher": _trace_action_distribution(
+                        current_diagnostic_rows,
+                        "strategic_teacher_action",
+                    ),
+                }
+                diagnostic_update["action_distribution"] = action_distribution
+                diagnostic_update["action_distribution_delta"] = {
+                    stream: _trace_action_distribution_delta(
+                        None
+                        if previous_diagnostic_distributions is None
+                        else previous_diagnostic_distributions.get(stream),
+                        distribution,
+                    )
+                    for stream, distribution in action_distribution.items()
+                }
+                previous_diagnostic_distributions = action_distribution
+            metrics = learner.update(
+                prepared_batch,
+                sequence_length=effective_config.sequence_length,
+                diagnostics=diagnostic_enabled,
+            )
+            if diagnostic_enabled:
+                from .diagnostics import ppo_ratio_diagnostics
+
+                trajectory = prepared_batch.trajectory
+                with torch.inference_mode():
+                    post_update = learner.evaluate_sequence(
+                        trajectory.sequence,
+                        trajectory.actions,
+                        trajectory.action_masks,
+                        privileged_features=prepared_batch.privileged_features,
+                    )
+                ratios, clipped = ppo_ratio_diagnostics(
+                    trajectory.old_log_probs,
+                    post_update.log_probs,
+                    trajectory.advantages,
+                    learner.config.clip_epsilon,
+                )
+                diagnostic_update["post_update_ratio_distribution"] = {
+                    "mean": float(ratios.mean().cpu().item()),
+                    "std": float(ratios.std(unbiased=False).cpu().item()),
+                    "min": float(ratios.min().cpu().item()),
+                    "max": float(ratios.max().cpu().item()),
+                    "clip_fraction": float(clipped.float().mean().cpu().item()),
+                }
+                for row in current_diagnostic_rows:
+                    lane = int(row.get("lane", 0))
+                    timestep = int(row.get("decision", 0))
+                    if lane >= ratios.shape[0] or timestep >= ratios.shape[1]:
+                        continue
+                    row["ppo_probability_ratio"] = float(ratios[lane, timestep].cpu().item())
+                    row["ppo_clipping_occurred"] = bool(clipped[lane, timestep].cpu().item())
+                    policy_row = row.get("policy")
+                    if isinstance(policy_row, Mapping):
+                        policy_copy = dict(policy_row)
+                        policy_copy["ppo_probability_ratio"] = row["ppo_probability_ratio"]
+                        policy_copy["ppo_clipping_occurred"] = row["ppo_clipping_occurred"]
+                        row["policy"] = policy_copy
+                diagnostic_trace_rows.extend(current_diagnostic_rows)
+                diagnostic_update["decisions"] = len(current_diagnostic_rows)
+                diagnostic_update["per_head_gradient_norms"] = dict(metrics.per_head_gradient_norms)
             update_wall_seconds = perf_counter() - update_started
             if metrics.skipped_steps:
                 raise PrototypeConfigurationError(
@@ -1614,8 +1770,17 @@ def train_prototype(
                         "rollout_wall_seconds": rollout_wall_seconds,
                         "learner_update_wall_seconds": update_wall_seconds,
                     },
+                    **({"diagnostics": diagnostic_update} if diagnostic_enabled else {}),
                 }
             )
+            if diagnostic_enabled:
+                diagnostic_update_rows.append(
+                    {
+                        "update": int(metrics.update_index),
+                        **diagnostic_update,
+                        "metrics": metrics.as_dict(),
+                    }
+                )
             if progress_callback is not None:
                 progress_callback(
                     local_update + 1,
@@ -1666,6 +1831,12 @@ def train_prototype(
                     ),
                 },
                 "update_rows": update_rows,
+                "training_diagnostics": diagnostic_update_rows,
+                "diagnostic_trace_out": (
+                    None
+                    if effective_config.diagnostic_trace_out is None
+                    else str(effective_config.diagnostic_trace_out)
+                ),
                 "rollout_farm_timing": rollout_farm_timing,
                 "policy_compile": policy_compile,
                 "overlap_rollouts": bool(effective_config.overlap_rollouts),
@@ -1752,6 +1923,26 @@ def train_prototype(
                     "status": "promoted",
                     "destination": str(destination),
                 }
+            if diagnostic_enabled:
+                diagnostic_path = Path(effective_config.diagnostic_trace_out)  # type: ignore[arg-type]
+                _write_json(
+                    diagnostic_path,
+                    {
+                        "kind": "recurrent_public_ppo_prototype_training_trace",
+                        "trace_schema_version": 1,
+                        "checkpoint": str(destination),
+                        "code_revision": report["code_revision"],
+                        "ruleset_id": ruleset.ruleset_id,
+                        "ruleset_hash": ruleset.content_hash,
+                        "actor_controls_actions": report["actor_controls_actions"],
+                        "actor_privileged_inputs": False,
+                        "critic_privileged_inputs": report["critic_privileged_inputs"],
+                        "updates": diagnostic_update_rows,
+                        "decisions": diagnostic_trace_rows,
+                        "warning": "state snapshots are privileged diagnostic data and are never actor inputs",
+                    },
+                )
+                report["diagnostic_trace_out"] = str(diagnostic_path)
         finally:
             # A candidate is either promoted, renamed to quarantine, or safely
             # removed after an unexpected save/audit error.  In particular,
@@ -1985,6 +2176,17 @@ def _trace_decision(
     reconciliation.
     """
 
+    from .diagnostics import state_snapshot
+
+    # The collector's snapshot is authoritative for diagnostic runs.  The
+    # explicit argument remains a compatibility fallback for the older trace
+    # caller that owns its own before-state copy.
+    diagnostic_state_before = getattr(record, "state_before", None)
+    if diagnostic_state_before is None:
+        diagnostic_state_before = state_before
+    policy_diagnostics = getattr(record, "policy_diagnostics", None)
+    if not isinstance(policy_diagnostics, Mapping):
+        policy_diagnostics = {}
     action = _trace_action(record.target_action, player=target_player)
     opponent = _trace_action(record.opponent_action, player=1 - target_player)
     info = getattr(record.result, "info", {})
@@ -2048,6 +2250,9 @@ def _trace_decision(
     authoritative_state = info.get("authoritative_state")
     if authoritative_state is None:
         authoritative_state = record.state_after
+    diagnostic_enabled = bool(policy_diagnostics) or diagnostic_state_before is not None or include_positions
+    snapshot_before = state_snapshot(diagnostic_state_before) if diagnostic_enabled else None
+    snapshot_after = state_snapshot(authoritative_state) if diagnostic_enabled else None
     target_after = _state_player(authoritative_state, target_player)
     hand_after = _state_field(target_after, "hand", ())
     if not isinstance(hand_after, (tuple, list)):
@@ -2055,13 +2260,70 @@ def _trace_decision(
     elixir_after = _state_field(target_after, "elixir_milli")
     target_played = isinstance(played_target, Mapping)
     opponent_played = isinstance(played_opponent, Mapping)
-    target_accepted = (
-        action.get("mode") == "WAIT"
-        or target_played
+    def inferred_play_status(
+        requested: Mapping[str, object],
+        *,
+        played: bool,
+        hand_before: Sequence[object],
+        hand_after: Sequence[object],
+        elixir_before: object,
+        elixir_after_value: object,
+    ) -> bool | None:
+        """Infer application when the environment did not transport events.
+
+        Training environments intentionally keep the event stream out of the
+        actor-facing result.  The previous trace treated every such play as
+        rejected even when the authoritative state had consumed the card.
+        Prefer an explicit event, then use the state transition as the
+        diagnostic fallback.  ``None`` means that neither source was
+        available; it is not an invalid-action finding.
+        """
+
+        if requested.get("mode") == "WAIT":
+            return True
+        if requested.get("mode") != "PLAY":
+            return None
+        if played:
+            return True
+        if list(hand_before) != list(hand_after):
+            return True
+        if type(elixir_before) is int and type(elixir_after_value) is int:
+            # A legal play spends elixir.  Do not call a pure regeneration
+            # step a play when the simulator did not expose a post-state.
+            if int(elixir_after_value) < int(elixir_before):
+                return True
+            return False
+        return None
+
+    target_accepted = inferred_play_status(
+        action,
+        played=target_played,
+        hand_before=record.hand_before,
+        hand_after=hand_after,
+        elixir_before=record.elixir_before,
+        elixir_after_value=elixir_after,
     )
-    opponent_accepted = (
-        opponent.get("mode") == "WAIT"
-        or opponent_played
+    opponent_player_after = _state_player(authoritative_state, 1 - target_player)
+    opponent_hand_after = _state_field(opponent_player_after, "hand", ())
+    if not isinstance(opponent_hand_after, (tuple, list)):
+        opponent_hand_after = ()
+    opponent_accepted = inferred_play_status(
+        opponent,
+        played=opponent_played,
+        hand_before=(
+            _state_field(
+                _state_player(diagnostic_state_before, 1 - target_player),
+                "hand",
+                (),
+            )
+            or ()
+        ),
+        hand_after=opponent_hand_after,
+        elixir_before=_state_field(
+            _state_player(diagnostic_state_before, 1 - target_player),
+            "elixir_milli",
+        ),
+        elixir_after_value=_state_field(opponent_player_after, "elixir_milli"),
     )
 
     def event_cell(event_data: object) -> list[int] | None:
@@ -2100,10 +2362,10 @@ def _trace_decision(
         "elixir_milli_after": (
             int(elixir_after) if type(elixir_after) is int else None
         ),
-        "tower_hp_before": _tower_hp_snapshot(state_before) if include_positions else None,
+        "tower_hp_before": _tower_hp_snapshot(diagnostic_state_before) if include_positions else None,
         "tower_hp_after": _tower_hp_snapshot(authoritative_state),
         "troop_positions_before": (
-            _troop_locations(state_before) if include_positions else None
+            _troop_locations(diagnostic_state_before) if include_positions else None
         ),
         "troop_positions_after": (
             _troop_locations(authoritative_state) if include_positions else None
@@ -2118,7 +2380,13 @@ def _trace_decision(
         "opponent_world_cell": opponent.get("world_cell"),
         "opponent_played_world_cell": event_cell(played_opponent),
         "accepted": target_accepted,
-        "action_status": "accepted" if target_accepted else "rejected",
+        "action_status": (
+            "accepted"
+            if target_accepted is True
+            else "rejected"
+            if target_accepted is False
+            else "unknown"
+        ),
         "rejection_reason": (
             rejected_target.get("reason")
             if isinstance(rejected_target, Mapping)
@@ -2138,8 +2406,151 @@ def _trace_decision(
         "winner": info.get("winner"),
         "terminal_reason": info.get("terminal_reason"),
         "action_events": events,
+        # These fields are populated only by the explicit diagnostic path.
+        # ``state_before``/``state_after`` are privileged debugging snapshots;
+        # they are never actor inputs.
+        "target_player": target_player,
+        "state_before": snapshot_before,
+        "state_after": snapshot_after,
+        "legal_action_mask": policy_diagnostics.get("legal_action_mask"),
+        "actor_action": policy_diagnostics.get("actor_action"),
+        "executed_action": policy_diagnostics.get("executed_action"),
+        "chosen_action_probability": policy_diagnostics.get("chosen_action_probability"),
+        "chosen_action_log_probability": policy_diagnostics.get("chosen_action_log_probability"),
+        "top_mode_alternatives": policy_diagnostics.get("top_mode_alternatives", []),
+        "top_card_alternatives": policy_diagnostics.get("top_card_alternatives", []),
+        "top_placement_alternatives": policy_diagnostics.get("top_placement_alternatives", []),
+        "top_alternative_actions": policy_diagnostics.get("top_alternative_actions", []),
+        "factor_entropy": policy_diagnostics.get("factor_entropy"),
+        "strategic_teacher_action": (
+            policy_diagnostics.get("strategic_teacher_action")
+            if policy_diagnostics.get("strategic_teacher_action") is not None
+            else _trace_action(getattr(record, "teacher_action", None), player=target_player)
+            if getattr(record, "teacher_action", None) is not None
+            else None
+        ),
+        "actor_teacher_agreement": policy_diagnostics.get("actor_teacher_agreement"),
+        "critic_value_prediction": policy_diagnostics.get("critic_value_prediction"),
+        "old_log_probability": policy_diagnostics.get("old_log_probability"),
+        "return": policy_diagnostics.get("return"),
+        "advantage": policy_diagnostics.get("advantage"),
+        "ppo_probability_ratio": policy_diagnostics.get("ppo_probability_ratio"),
+        "ppo_clipping_occurred": policy_diagnostics.get("ppo_clipping_occurred"),
+        "policy": dict(policy_diagnostics) if policy_diagnostics else None,
     }
+    from .diagnostics import classify_decision, tower_damage
+
+    row["tower_damage_to_opponent"] = tower_damage(
+        snapshot_before,
+        snapshot_after,
+        player=1 - target_player,
+    )
+    row["tower_damage_to_self"] = tower_damage(
+        snapshot_before,
+        snapshot_after,
+        player=target_player,
+    )
+    row["suspicious_categories"] = classify_decision(row)
     return row
+
+
+def _mean_trace_metric(rows: Sequence[Mapping[str, object]], key: str) -> float | None:
+    """Average one factor entropy across diagnostic decision rows."""
+
+    values: list[float] = []
+    for row in rows:
+        entropy = row.get("factor_entropy")
+        if not isinstance(entropy, Mapping):
+            policy = row.get("policy")
+            entropy = policy.get("factor_entropy") if isinstance(policy, Mapping) else None
+        value = entropy.get(key) if isinstance(entropy, Mapping) else None
+        if isinstance(value, (int, float)) and isfinite(float(value)):
+            values.append(float(value))
+    return sum(values) / len(values) if values else None
+
+
+def _trace_action_distribution(
+    rows: Sequence[Mapping[str, object]],
+    action_key: str,
+) -> dict[str, object]:
+    """Summarize selected actions for one update's actor or teacher stream."""
+
+    modes: Counter[str] = Counter()
+    cards: Counter[str] = Counter()
+    placements: Counter[str] = Counter()
+    total = 0
+    for row in rows:
+        action = row.get(action_key)
+        if not isinstance(action, Mapping):
+            continue
+        mode = action.get("mode")
+        if not isinstance(mode, str):
+            continue
+        total += 1
+        modes[mode] += 1
+        if mode != "PLAY":
+            continue
+        slot = action.get("card_slot")
+        hand = row.get("hand_before")
+        card_id = (
+            hand[slot]
+            if isinstance(hand, (list, tuple))
+            and type(slot) is int
+            and 0 <= slot < len(hand)
+            and isinstance(hand[slot], str)
+            else None
+        )
+        card_key = card_id if card_id is not None else f"slot:{slot}"
+        cards[card_key] += 1
+        cell = action.get("world_cell")
+        if isinstance(cell, (list, tuple)) and len(cell) == 2:
+            if all(type(value) is int for value in cell):
+                placements[f"{cell[0]},{cell[1]}"] += 1
+
+    def probabilities(counter: Counter[str]) -> dict[str, float]:
+        denominator = max(1, total)
+        return {
+            key: counter[key] / denominator
+            for key in sorted(counter)
+        }
+
+    return {
+        "total": total,
+        "mode_counts": dict(sorted(modes.items())),
+        "mode_probabilities": probabilities(modes),
+        "card_counts": dict(sorted(cards.items())),
+        "card_probabilities": probabilities(cards),
+        "top_placement_counts": dict(
+            sorted(placements.items(), key=lambda item: (-item[1], item[0]))[:20]
+        ),
+    }
+
+
+def _trace_action_distribution_delta(
+    previous: Mapping[str, object] | None,
+    current: Mapping[str, object],
+) -> dict[str, dict[str, float]] | None:
+    """Return probability changes against the preceding diagnostic update."""
+
+    if previous is None:
+        return None
+
+    def delta(field: str) -> dict[str, float]:
+        old = previous.get(field, {})
+        new = current.get(field, {})
+        old_map = old if isinstance(old, Mapping) else {}
+        new_map = new if isinstance(new, Mapping) else {}
+        keys = sorted(set(old_map) | set(new_map))
+        return {
+            str(key): float(new_map.get(key, 0.0)) - float(old_map.get(key, 0.0))
+            for key in keys
+            if float(new_map.get(key, 0.0)) != float(old_map.get(key, 0.0))
+        }
+
+    return {
+        "mode_probability_delta": delta("mode_probabilities"),
+        "card_probability_delta": delta("card_probabilities"),
+    }
 
 
 def _update_trace_action_summary(
@@ -2161,7 +2572,7 @@ def _update_trace_action_summary(
     requested = summary.setdefault("requested_plays_by_card", {})
     if isinstance(requested, dict) and isinstance(requested_card, str):
         requested[requested_card] = int(requested.get(requested_card, 0)) + 1
-    if not bool(row.get("accepted")):
+    if row.get("accepted") is False:
         summary["rejected_actions"] = int(summary.get("rejected_actions", 0)) + 1
         return
 
@@ -2654,6 +3065,7 @@ def evaluate_prototype(
     trace_enabled = trace_out is not None
     trace_episodes: list[dict[str, object]] = []
     episode_results: list[dict[str, object]] = []
+    failure_category_counts: dict[str, int] = {}
     _deck = _simulator_modules()[-1]
     # The actor already supports a batch dimension.  Eight lanes amortize the
     # recurrent policy call without changing simulator physics or action timing.
@@ -2743,9 +3155,18 @@ def evaluate_prototype(
                 deterministic=True,
                 stop=True,
                 freeze_completed_lanes=True,
-                expert_action=_evaluation_action_callback(policy_mode),
+                # In actor trace mode the strategic controller is a label-only
+                # reference.  The execution probability stays zero, so the
+                # neural actor still controls every environment action.
+                expert_action=(
+                    _evaluation_action_callback("strategic-counter")
+                    if trace_enabled and policy_mode == "actor"
+                    else _evaluation_action_callback(policy_mode)
+                ),
                 expert_execution_probability=(
-                    1.0
+                    0.0
+                    if trace_enabled and policy_mode == "actor"
+                    else 1.0
                     if policy_mode in {
                         "public-counter",
                         "strategic-counter",
@@ -2754,6 +3175,7 @@ def evaluate_prototype(
                     else None
                 ),
                 batch_step=batch_step,
+                diagnostics=trace_enabled,
             )
             result = collector.collect(
                 environments,
@@ -2790,6 +3212,75 @@ def evaluate_prototype(
             else:
                 truncated += 1
             decisions = decision_counts[lane] or result.trajectory.time_steps
+            if trace_enabled:
+                from .diagnostics import annotate_trace
+
+                annotated_rows, categories = annotate_trace(
+                    episode_rows[lane],
+                    target_player=config.target_player,
+                )
+                # Evaluation has no PPO batch, so expose a clearly labelled
+                # Monte-Carlo return-to-go and value residual instead of
+                # pretending that evaluation generated a GAE target.
+                discount = float(stored_config.gamma)
+                return_to_go = 0.0
+                for row in reversed(annotated_rows):
+                    return_to_go = float(row.get("reward", 0.0)) + discount * return_to_go
+                    row["return"] = return_to_go
+                    value = row.get("critic_value_prediction")
+                    row["advantage"] = (
+                        return_to_go - float(value)
+                        if isinstance(value, (int, float))
+                        else None
+                    )
+                    row["advantage_kind"] = "monte_carlo_return_to_go_minus_critic"
+                    row["ppo_probability_ratio"] = None
+                    row["ppo_clipping_occurred"] = None
+                    policy_row = row.get("policy")
+                    if isinstance(policy_row, Mapping):
+                        policy_copy = dict(policy_row)
+                        policy_copy["return"] = row["return"]
+                        policy_copy["advantage"] = row["advantage"]
+                        policy_copy["advantage_kind"] = row["advantage_kind"]
+                        policy_copy["ppo_probability_ratio"] = None
+                        policy_copy["ppo_clipping_occurred"] = None
+                        row["policy"] = policy_copy
+                episode_rows[lane] = annotated_rows
+                for category, count in categories.items():
+                    failure_category_counts[category] = failure_category_counts.get(category, 0) + count
+                scored_rows: list[dict[str, object]] = []
+                for row in annotated_rows:
+                    categories_for_row = row.get("suspicious_categories", ())
+                    if not categories_for_row:
+                        continue
+                    score = (
+                        1000.0 * float(row.get("tower_damage_to_self", 0))
+                        + 10.0 * float(
+                            row.get("tower_damage_to_opponent", 0) == 0
+                            and row.get("mode") == "PLAY"
+                        )
+                        + float(len(categories_for_row))
+                    )
+                    scored_rows.append(
+                        {
+                            "decision": row.get("decision"),
+                            "score": score,
+                            "categories": categories_for_row,
+                            "action": row.get("executed_action"),
+                            "teacher_action": row.get("strategic_teacher_action"),
+                            "tower_damage_to_self": row.get("tower_damage_to_self", 0),
+                            "tower_damage_to_opponent": row.get("tower_damage_to_opponent", 0),
+                            "advantage": row.get("advantage"),
+                        }
+                    )
+                scored = sorted(
+                    scored_rows,
+                    key=lambda item: (float(item["score"]), -int(item["decision"])),
+                    reverse=True,
+                )
+            else:
+                scored = []
+                categories = {}
             state_after = (
                 lane_info.get("authoritative_state")
                 if lane_info.get("authoritative_state") is not None
@@ -2817,6 +3308,11 @@ def evaluate_prototype(
                 "tower_hp_end": _tower_hp_snapshot(state_after),
                 "troop_positions_end": _troop_locations(state_after),
                 "action_summary": action_summaries[lane],
+                "failure_categories": categories,
+                "loss_report": {
+                    "ranking": "immediate self tower damage, no opponent damage, then diagnostic category count",
+                    "top_decisions": scored[:12],
+                },
             }
             episode_results.append(episode_report)
             if trace_enabled:
@@ -2879,6 +3375,7 @@ def evaluate_prototype(
         "batch_size": evaluation_batch_size,
         "parallel_episodes": False,
         "episode_results": episode_results,
+        "failure_categories": dict(sorted(failure_category_counts.items())),
         "warning": metadata.get("evaluation_warning"),
     }
     if trace_enabled:
@@ -2888,6 +3385,7 @@ def evaluate_prototype(
             {
                 "kind": "recurrent_public_ppo_prototype_evaluation_trace",
                 "trace_schema_version": 2,
+                "diagnostic_schema_version": 1,
                 "checkpoint": str(checkpoint),
                 "code_revision": code_revision(),
                 "checkpoint_format": metadata["checkpoint_format"],
@@ -2920,7 +3418,15 @@ def evaluate_prototype(
                     "played_world_cell": "accepted card_played event [column,row]",
                     "accepted": "WAIT or matching card_played event",
                 },
+                "decision_diagnostics": {
+                    "probabilities": "masked actor distributions; top alternatives are complete actions",
+                    "teacher": "strategic-counter label only; actor_controls_actions remains true",
+                    "returns": "evaluation rows use Monte-Carlo return-to-go minus critic, not GAE",
+                    "ppo": "not applicable in evaluation; training traces contain post-update ratios/clipping",
+                    "failure_categories": "evidence-labelled heuristics, not gameplay rules",
+                },
                 "episodes": trace_episodes,
+                "aggregate_failure_categories": dict(sorted(failure_category_counts.items())),
                 "warning": metadata.get("evaluation_warning"),
             },
         )
@@ -3043,6 +3549,14 @@ def _parser() -> argparse.ArgumentParser:
         "--checkpoint-out",
         type=Path,
         default=Path("outputs/simulator/training/recurrent-prototype.pt"),
+    )
+    train.add_argument(
+        "--diagnostic-trace-out",
+        type=Path,
+        help=(
+            "write every training decision, model alternative, GAE target, "
+            "PPO ratio, and per-head update statistics as JSON"
+        ),
     )
     train.add_argument(
         "--device",
@@ -3330,6 +3844,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 env_workers=args.env_workers,
                 overlap_rollouts=args.overlap_rollouts,
                 compile_policy=args.compile_policy,
+                diagnostic_trace_out=(
+                    None if args.diagnostic_trace_out is None else str(args.diagnostic_trace_out)
+                ),
                 shuffle_decks=not args.no_shuffle,
                 use_privileged_critic=not args.no_privileged_critic,
                 collect_belief_targets=not args.no_belief_targets,

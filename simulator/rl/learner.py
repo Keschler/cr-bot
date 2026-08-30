@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import copy
 import math
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterator, Mapping, Sequence
 
@@ -394,6 +394,12 @@ class UpdateMetrics:
     clip_fraction: float
     gradient_norm: float
     skipped_steps: int = 0
+    behavior_cloning_loss: float = 0.0
+    factor_behavior_cloning_loss: float = 0.0
+    effective_factor_behavior_cloning_coef: float = 0.0
+    # Raw pre-clipping gradient norms grouped by actor head/encoder.  Empty in
+    # ordinary runs so the hot path and old report shape remain unchanged.
+    per_head_gradient_norms: Mapping[str, float] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, float | int]:
         return {
@@ -410,6 +416,10 @@ class UpdateMetrics:
             "clip_fraction": self.clip_fraction,
             "gradient_norm": self.gradient_norm,
             "skipped_steps": self.skipped_steps,
+            "behavior_cloning_loss": self.behavior_cloning_loss,
+            "factor_behavior_cloning_loss": self.factor_behavior_cloning_loss,
+            "effective_factor_behavior_cloning_coef": self.effective_factor_behavior_cloning_coef,
+            "per_head_gradient_norms": dict(self.per_head_gradient_norms),
         }
 
 
@@ -938,8 +948,12 @@ if TORCH_AVAILABLE:
             behavior_cloning_actions: ActionBatch | None = None,
             behavior_cloning_weights: torch.Tensor | None = None,
             sequence_length: int | None = None,
+            diagnostics: bool = False,
         ) -> UpdateMetrics:
             """Run configured PPO epochs over recurrent sequence minibatches."""
+
+            if type(diagnostics) is not bool:
+                raise TypeError("diagnostics must be boolean")
 
             prepared = self.prepare_batch(
                 batch,
@@ -962,7 +976,11 @@ if TORCH_AVAILABLE:
                 "approx_kl": 0.0,
                 "clip_fraction": 0.0,
                 "gradient_norm": 0.0,
+                "behavior_cloning_loss": 0.0,
+                "factor_behavior_cloning_loss": 0.0,
+                "effective_factor_behavior_cloning_coef": 0.0,
             }
+            head_sums: dict[str, float] = {}
             minibatches = 0
             optimization_steps = 0
             skipped_steps = 0
@@ -973,12 +991,15 @@ if TORCH_AVAILABLE:
                     shuffle=self.config.shuffle_sequences,
                     sequence_length=sequence_length,
                 ):
-                    metrics = self._update_minibatch(minibatch)
+                    metrics = self._update_minibatch(minibatch, diagnostics=diagnostics)
                     minibatches += 1
                     optimization_steps += int(metrics.pop("_optimization_step", 0.0))
                     skipped_steps += int(metrics.pop("_skipped_step", 0.0))
                     for name in sums:
                         sums[name] += metrics[name]
+                    if diagnostics:
+                        for name, value in metrics.get("_per_head_gradient_norms", {}).items():
+                            head_sums[name] = head_sums.get(name, 0.0) + float(value)
             if minibatches < 1:
                 raise ValueError("PPO update produced no sequence minibatches")
             self.update_count += 1
@@ -989,10 +1010,18 @@ if TORCH_AVAILABLE:
                 minibatches=minibatches,
                 optimization_steps=optimization_steps,
                 skipped_steps=skipped_steps,
+                per_head_gradient_norms={
+                    name: value * scale for name, value in sorted(head_sums.items())
+                },
                 **{name: value * scale for name, value in sums.items()},
             )
 
-        def _update_minibatch(self, batch: LearnerBatch) -> dict[str, float]:
+        def _update_minibatch(
+            self,
+            batch: LearnerBatch,
+            *,
+            diagnostics: bool = False,
+        ) -> dict[str, Any]:
             self.optimizer.zero_grad(set_to_none=True)
             parameters = self._optimizer_parameters()
             if not _parameters_are_finite(parameters):
@@ -1044,14 +1073,26 @@ if TORCH_AVAILABLE:
                     else batch.behavior_cloning_weights.to(self.device),
                     config=self.config.objective_config(),
                 )
-                factor_bc_loss = _factor_behavior_cloning_loss(
-                    self.policy,
-                    evaluation.output,
-                    trajectory,
-                    batch.behavior_cloning_weights,
-                    actions=behavior_cloning_actions,
+                factor_bc_loss = (
+                    _factor_behavior_cloning_loss(
+                        self.policy,
+                        evaluation.output,
+                        trajectory,
+                        batch.behavior_cloning_weights,
+                        actions=behavior_cloning_actions,
+                    )
+                    if self.config.imitation_only or diagnostics
+                    else evaluation.output.recurrent_features.new_zeros(())
                 )
                 belief_loss = _belief_loss(evaluation.output, batch.belief_targets)
+                # The factorized loss was introduced for supervised warm-starts.
+                # In mixed actor-controlled PPO it class-balances the rare PLAY
+                # labels and can move the mode/card/placement heads far more than
+                # the outcome objective.  Keep measuring it in diagnostics, but
+                # apply it only during the explicitly supervised phase.
+                effective_factor_bc_coef = (
+                    self.config.bc_factor_coef if self.config.imitation_only else 0.0
+                )
                 if self.config.imitation_only:
                     # Expert-guided rollouts contain teacher actions, not the
                     # actor's sampled actions.  During a warm-start phase the
@@ -1062,12 +1103,12 @@ if TORCH_AVAILABLE:
                     # default for self-improvement after the warm start.
                     total_loss = (
                         self.config.bc_coef * objective.behavior_cloning_loss
-                        + self.config.bc_factor_coef * factor_bc_loss
+                        + effective_factor_bc_coef * factor_bc_loss
                     )
                 else:
                     total_loss = (
                         objective.total_loss
-                        + self.config.bc_factor_coef * factor_bc_loss
+                        + effective_factor_bc_coef * factor_bc_loss
                         + self.config.belief_coef * belief_loss
                     )
                 _require_finite_tensor("PPO total loss", total_loss)
@@ -1086,6 +1127,9 @@ if TORCH_AVAILABLE:
 
             total_loss.backward()
             gradient_norm = _gradient_norm(parameters)
+            per_head_gradient_norms = (
+                self._gradient_norm_by_head() if diagnostics else {}
+            )
             if not math.isfinite(gradient_norm) or not _gradients_are_finite(parameters):
                 self.optimizer.zero_grad(set_to_none=True)
                 return _skipped_minibatch_metrics()
@@ -1110,12 +1154,53 @@ if TORCH_AVAILABLE:
                 "value_loss": float(objective.value_loss.detach().cpu().item()),
                 "entropy": float(objective.entropy.detach().cpu().item()),
                 "belief_loss": float(belief_loss.detach().cpu().item()),
+                "behavior_cloning_loss": float(
+                    objective.behavior_cloning_loss.detach().cpu().item()
+                ),
+                "factor_behavior_cloning_loss": float(
+                    factor_bc_loss.detach().cpu().item()
+                ),
+                "effective_factor_behavior_cloning_coef": float(
+                    effective_factor_bc_coef
+                ),
                 "approx_kl": float(objective.approx_kl.detach().cpu().item()),
                 "clip_fraction": float(objective.clip_fraction.detach().cpu().item()),
                 "gradient_norm": gradient_norm,
                 "_optimization_step": 1.0,
                 "_skipped_step": 0.0,
+                "_per_head_gradient_norms": per_head_gradient_norms,
             }
+
+        def _gradient_norm_by_head(self) -> dict[str, float]:
+            """Return raw gradient norms partitioned by the causal model head."""
+
+            grouped: dict[str, float] = {}
+            modules = (
+                ("actor", self.policy.named_parameters()),
+                ("critic", self.critic.named_parameters()),
+            )
+            for module_kind, named_parameters in modules:
+                for name, parameter in named_parameters:
+                    if parameter.grad is None:
+                        continue
+                    lower = name.casefold()
+                    if module_kind == "critic":
+                        group = "critic"
+                    elif "placement" in lower or "spatial" in lower:
+                        group = "placement"
+                    elif "card" in lower or "hand" in lower:
+                        group = "card"
+                    elif "mode" in lower:
+                        group = "mode"
+                    elif "core" in lower or "gru" in lower or "recurrent" in lower:
+                        group = "recurrent"
+                    elif "encoder" in lower:
+                        group = "encoder"
+                    else:
+                        group = "other_actor"
+                    norm = float(parameter.grad.detach().float().norm(2).cpu().item())
+                    grouped[group] = grouped.get(group, 0.0) + norm * norm
+            return {name: math.sqrt(value) for name, value in grouped.items()}
 
         def _optimizer_parameters(self) -> list[nn.Parameter]:
             parameters: list[nn.Parameter] = []
@@ -1521,6 +1606,9 @@ def _skipped_minibatch_metrics() -> dict[str, float]:
         "value_loss": 0.0,
         "entropy": 0.0,
         "belief_loss": 0.0,
+        "behavior_cloning_loss": 0.0,
+        "factor_behavior_cloning_loss": 0.0,
+        "effective_factor_behavior_cloning_coef": 0.0,
         "approx_kl": 0.0,
         "clip_fraction": 0.0,
         "gradient_norm": 0.0,

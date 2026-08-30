@@ -877,6 +877,26 @@ def _segment_config(
     )
 
 
+def _segment_diagnostic_trace_path(
+    path: str | Path | None,
+    *,
+    segment_index: int,
+    segment_count: int,
+) -> str | None:
+    """Give each generalized segment its own complete decision trace."""
+
+    if path is None:
+        return None
+    if segment_count <= 1:
+        return str(path)
+    destination = Path(path)
+    suffix = destination.suffix or ".json"
+    stem = destination.name[: -len(destination.suffix)] if destination.suffix else destination.name
+    return str(
+        destination.with_name(f"{stem}.segment-{segment_index}{suffix}")
+    )
+
+
 def _update_payoff_book_from_segment(
     payoff_book: LeaguePayoffBook,
     report: Mapping[str, object],
@@ -1147,6 +1167,14 @@ def train_generalized(
                 config.potential_reward_anneal_segments
             ),
         )
+        segment_config = replace(
+            segment_config,
+            diagnostic_trace_out=_segment_diagnostic_trace_path(
+                config.prototype_config.diagnostic_trace_out,
+                segment_index=segment_index,
+                segment_count=config.segments,
+            ),
+        )
         transition_offset = local_segment_index * transitions_per_segment
 
         def segment_progress(
@@ -1379,6 +1407,11 @@ def train_generalized(
         "scenario_schedule": stage_scenarios,
         "opponent_assignments": stage_opponent_assignments,
         "segment_reports": stage_reports,
+        "diagnostic_trace_paths": [
+            report.get("diagnostic_trace_out")
+            for report in stage_reports
+            if report.get("diagnostic_trace_out") is not None
+        ],
         "warning": (
             "The generalized run uses the provisional simulator ruleset unless "
             "the selected ruleset reports training_ready=true."
@@ -2081,6 +2114,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     train.add_argument("--checkpoint", type=Path)
     train.add_argument("--checkpoint-out", type=Path, default=Path("outputs/simulator/training/generalized-recurrent-prototype.pt"))
+    train.add_argument(
+        "--diagnostic-trace-out",
+        type=Path,
+        help="write full decision-level training diagnostics for each segment",
+    )
     train.add_argument("--allow-provisional", action="store_true")
     train.add_argument("--no-regression", action="store_true")
     train.add_argument(
@@ -2381,6 +2419,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 env_workers=args.env_workers,
                 overlap_rollouts=args.overlap_rollouts,
                 compile_policy=args.compile_policy,
+                diagnostic_trace_out=(
+                    None if args.diagnostic_trace_out is None else str(args.diagnostic_trace_out)
+                ),
                 learning_rate=args.learning_rate,
                 update_epochs=args.update_epochs,
                 sequence_minibatch_size=args.sequence_minibatch_size,

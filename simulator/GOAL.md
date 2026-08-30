@@ -155,6 +155,37 @@ learned. Fixed counter trees and teachers may be opponents, regression
 baselines, or short-lived auxiliary-training data, but they must not execute
 the learner's actions in ordinary PPO.
 
+## PPO regression diagnosis gate
+
+Do not respond to a PPO regression with blind hyperparameter tuning. Diagnostic
+training traces must record the public state, units/positions, hand, elixir,
+towers, legal mask, actor action and alternatives, label-only teacher action,
+agreement, critic value, return/advantage, PPO ratio/clipping, and per-update
+KL, entropy, clip fraction, value/policy loss, explained variance, advantage
+distribution, gradient norms, per-head gradients, action distributions, and
+teacher/head entropies. `rl.diagnose` compares the last good, regressed, and
+recovery checkpoints on identical state streams/seeds and reports concrete
+category and consequence evidence. The actor remains the environment action
+source, and every run is subject to the simulator-exploit audit.
+
+The current `cd22` evidence identifies the verified failure as the
+class-balanced factor behavior-cloning auxiliary loss destabilizing
+mixed-PPO mode/card/placement updates. The same defensive stream changed from
+311 bad-vs-good decisions with the term enabled to 8 with it disabled. The
+smallest fix is therefore to apply that auxiliary loss only in explicit
+`imitation_only` warm-starts; mixed PPO records but does not apply its raw
+factor loss. This fixes the diagnosed decision failure, not overall policy
+strength. Resume larger training only after the identical held-out decision
+check and exploit audit are clean.
+
+The first repaired continuation (segments 33–34, 4,096 actor decisions) was
+clean and actor-controlled. On the exact defensive comparison it reduced the
+bad checkpoint's 311 divergent decisions to 5, with zero additional
+follow-on self-tower damage; the identical six-cell held-out matrix still
+scored 0/6, so this is not a strength promotion. Update 130 also showed value
+loss 0.0149 and explained variance 0.082, which requires continued
+monitoring rather than a convergence claim.
+
 ## Actor architecture
 
 The active public actor is factorized and recurrent:

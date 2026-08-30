@@ -232,6 +232,50 @@ The current action contract has no learned wait-duration head: `WAIT` advances
 the fixed simulator decision interval. Adding learned timing remains a future
 behavior-changing architecture step.
 
+### PPO regression diagnosis
+
+Use `--diagnostic-trace-out` during training to retain every decision's
+public state, hand/elixir/towers, unit positions, legal mask, actor action and
+alternatives, teacher label/agreement, critic value, return/advantage, and PPO
+ratio/clipping flag. Generalized runs write one trace per segment. Compare
+checkpoints on the exact same state stream with:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 \
+PYTHONPATH=.:..:../src \
+../capture/.venv-train/bin/python -m rl.diagnose \
+  --good outputs/simulator/training/known-good.pt \
+  --bad outputs/simulator/training/regressed.pt \
+  --recovery outputs/simulator/training/recovery.pt \
+  --archetypes defensive-cycle --strategies deterministic-cycle \
+  --seeds 10000 --max-decisions 1200 --lookahead-decisions 8 \
+  --json-out outputs/simulator/training/ppo-diagnosis.json
+```
+
+The comparator reports per-match suspects, action/head failure categories,
+one-step state differences, approximate follow-on consequences, and aggregate
+update statistics. The actor remains in control; the teacher is label-only.
+Every training/evaluation report also runs the simulator-exploit audit.
+
+The current `cd22` reproduction identified a concrete PPO failure: the
+class-balanced factor behavior-cloning auxiliary loss was applied during
+mixed actor-controlled PPO. At the collapse update it raised the KL/clip
+movement and drove premature `PLAY`/mode-head decisions in threat states. On
+the same defensive state stream, the factor-enabled reproduction had 311
+bad-vs-good action divergences; disabling only that auxiliary term reduced it
+to 8. The fix keeps the factor loss for explicit `--imitation-only`
+warm-starts, but its effective coefficient is zero in mixed PPO and is
+recorded in update metrics. This is a decision-level stability fix, not a
+claim that the resulting policy is strong; larger PPO training must resume
+from the repaired path and be re-evaluated on held-out seeds.
+
+The first repaired continuation covered segments 33–34 (4,096 actor
+decisions), passed the exploit/revision gates, and reduced the exact defensive
+comparison to 5 divergent decisions with no additional follow-on self-tower
+damage. The six-cell held-out result remained 0/6, so the checkpoint is not a
+strength promotion; update 130's value loss `0.0149` and explained variance
+`0.082` also warrant continued monitoring.
+
 The runnable neural prototype is in [rl/prototype.py](rl/prototype.py).
 The generalized runner adds curriculum sampling, held-out provenance,
 historical checkpoints, and PFSP bookkeeping:

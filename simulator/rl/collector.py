@@ -18,6 +18,7 @@ the returned :class:`~rl.learner.LearnerBatch`.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from copy import deepcopy
 import math
 from typing import Any, Callable, Mapping, Sequence
 
@@ -82,6 +83,10 @@ class CollectorConfig:
     expert_execution_probability: float = 0.0
     stop_on_episode_end: bool = False
     freeze_completed_lanes: bool = False
+    # Full model/simulator decision records are opt-in because serializing
+    # logits and authoritative snapshots is intentionally much slower than a
+    # normal rollout.  It has no effect on actor inputs or action execution.
+    diagnostics: bool = False
 
     def __post_init__(self) -> None:
         if type(self.horizon) is not int or self.horizon <= 0:
@@ -108,6 +113,8 @@ class CollectorConfig:
             raise TypeError("stop_on_episode_end must be boolean")
         if type(self.freeze_completed_lanes) is not bool:
             raise TypeError("freeze_completed_lanes must be boolean")
+        if type(self.diagnostics) is not bool:
+            raise TypeError("diagnostics must be boolean")
         if self.decks is not None:
             if len(self.decks) != 2 or any(len(deck) != 8 for deck in self.decks):
                 raise ValueError("decks must contain two eight-card decks")
@@ -231,6 +238,12 @@ class RolloutDecision:
     elapsed_us_before: int | None
     hand_before: tuple[str, ...]
     elixir_before: int | None
+    # The remaining fields are JSON-shaped, CPU-side diagnostics.  Keeping
+    # them optional preserves the cheap callback contract for existing users.
+    state_before: Any | None = None
+    action_masks: Mapping[str, Any] | None = None
+    policy_diagnostics: Mapping[str, Any] | None = None
+    teacher_action: Any | None = None
 
 
 PrivilegedFeatureFn = Callable[[Any, int], Sequence[float]]
@@ -508,13 +521,19 @@ if TORCH_AVAILABLE:
                         deterministic=self.config.deterministic,
                         include_beliefs=False,
                         inference=self.config.actor_only_observations,
-                        fast_sampling=self.expert_action is None,
+                        # Diagnostics need every card-placement branch so the
+                        # trace can report meaningful alternatives.  The
+                        # normal actor path retains the fast sampler.
+                        fast_sampling=(
+                            self.expert_action is None and not self.config.diagnostics
+                        ),
                     )
                 rollout_state = step.next_state
                 # Decode the sampled action before selecting the executed
                 # action. The expert path still needs the sampled action for
                 # frozen lanes, where the simulator state is no longer live.
                 decoded_actions = _decode_actions(step.actions)
+                teacher_actions_raw: list[Any | None] = [None] * batch_size
                 if self.expert_action is None:
                     stored_actions = step.actions
                     stored_log_probs = step.log_probs
@@ -538,6 +557,7 @@ if TORCH_AVAILABLE:
                         )
                         if expert_action is None:
                             raise ValueError("expert_action must return an action, not None")
+                        teacher_actions_raw[lane] = expert_action
                         expert_actions.append(expert_action)
                         executed_actions.append(
                             expert_action
@@ -576,6 +596,25 @@ if TORCH_AVAILABLE:
                             device=self.learner.device,
                         )
                     )
+                policy_diagnostics: list[Mapping[str, Any] | None] = [None] * batch_size
+                if self.config.diagnostics:
+                    from .diagnostics import build_policy_diagnostics
+
+                    for lane in range(batch_size):
+                        if frozen_lanes[lane]:
+                            continue
+                        policy_diagnostics[lane] = build_policy_diagnostics(
+                            self.learner.policy,
+                            step.output,
+                            masks,
+                            stored_actions,
+                            lane=lane,
+                            time=0,
+                            teacher_action=teacher_actions_raw[lane],
+                            actor_actions=step.actions,
+                            critic_value=step.values,
+                            old_log_prob=stored_log_probs,
+                        )
                 action_steps.append(
                     ActionBatch(
                         mode=stored_actions.mode[:, 0],
@@ -593,7 +632,9 @@ if TORCH_AVAILABLE:
                 # device again.
                 simulator_actions = []
                 opponent_actions: list[Any | None] = []
-                decision_snapshots: list[tuple[int | None, int | None, tuple[str, ...], int | None]] = []
+                decision_snapshots: list[
+                    tuple[int | None, int | None, tuple[str, ...], int | None, Any | None]
+                ] = []
                 for lane, environment in enumerate(environments):
                     target_action = decoded_actions[lane]
                     if decision_callback is not None:
@@ -614,6 +655,7 @@ if TORCH_AVAILABLE:
                                     if player_state is not None
                                     else None
                                 ),
+                                deepcopy(state) if self.config.diagnostics else None,
                             )
                         )
                     if frozen_lanes[lane]:
@@ -729,6 +771,14 @@ if TORCH_AVAILABLE:
                                 elapsed_us_before=snapshot[1],
                                 hand_before=snapshot[2],
                                 elixir_before=snapshot[3],
+                                state_before=snapshot[4],
+                                action_masks=(
+                                    None
+                                    if policy_diagnostics[lane] is None
+                                    else policy_diagnostics[lane].get("legal_action_mask")
+                                ),
+                                policy_diagnostics=policy_diagnostics[lane],
+                                teacher_action=teacher_actions_raw[lane],
                             )
                         )
 

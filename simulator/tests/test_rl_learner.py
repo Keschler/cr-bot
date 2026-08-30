@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import importlib
 import math
 
@@ -243,6 +244,111 @@ def test_privileged_recurrent_update_belief_loss_and_checkpoint_round_trip(tmp_p
     path = tmp_path / "learner.pt"
     learner.save_checkpoint(path)
     assert path.exists()
+
+
+@requires_torch
+def test_factor_behavior_cloning_is_not_applied_to_mixed_ppo() -> None:
+    from rl.learner import LearnerBatch, LearnerConfig, RecurrentPPOLearner
+    from rl.model import RecurrentHybridPolicy
+    from rl.trajectory import ActionBatch, ActionMasks
+
+    config = _model_config()
+    trajectory = _trajectory(config, batch=1, time=2)
+    trajectory = replace(
+        trajectory,
+        action_masks=ActionMasks(
+            mode=torch.ones_like(trajectory.action_masks.mode),
+            card=torch.ones_like(trajectory.action_masks.card),
+            placement=torch.ones_like(trajectory.action_masks.placement),
+        ),
+        actions=ActionBatch(
+            mode=torch.ones_like(trajectory.actions.mode),
+            card_slot=torch.zeros_like(trajectory.actions.card_slot),
+            placement=torch.zeros_like(trajectory.actions.placement),
+        ),
+    )
+    teacher_weights = torch.ones_like(trajectory.rewards)
+    batch = LearnerBatch(
+        trajectory=trajectory,
+        behavior_cloning_actions=trajectory.actions,
+        behavior_cloning_weights=teacher_weights,
+    )
+
+    torch.manual_seed(1234)
+    mixed = RecurrentPPOLearner(
+        RecurrentHybridPolicy(config),
+        config=LearnerConfig(
+            update_epochs=1,
+            sequence_minibatch_size=1,
+            shuffle_sequences=False,
+            bc_factor_coef=0.5,
+        ),
+    )
+    torch.manual_seed(1234)
+    reference = RecurrentPPOLearner(
+        RecurrentHybridPolicy(config),
+        config=LearnerConfig(
+            update_epochs=1,
+            sequence_minibatch_size=1,
+            shuffle_sequences=False,
+            bc_factor_coef=0.0,
+        ),
+    )
+
+    mixed_metrics = mixed.update(batch, diagnostics=True)
+    reference_metrics = reference.update(batch, diagnostics=True)
+
+    assert mixed_metrics.effective_factor_behavior_cloning_coef == 0.0
+    assert mixed_metrics.factor_behavior_cloning_loss > 0.0
+    assert mixed_metrics.total_loss == pytest.approx(reference_metrics.total_loss)
+    for mixed_parameter, reference_parameter in zip(
+        mixed.policy.parameters(), reference.policy.parameters(), strict=True
+    ):
+        torch.testing.assert_close(mixed_parameter, reference_parameter)
+
+
+@requires_torch
+def test_factor_behavior_cloning_remains_available_for_imitation_only() -> None:
+    from rl.learner import LearnerBatch, LearnerConfig, RecurrentPPOLearner
+    from rl.model import RecurrentHybridPolicy
+    from rl.trajectory import ActionBatch, ActionMasks
+
+    config = _model_config()
+    trajectory = _trajectory(config, batch=1, time=2)
+    trajectory = replace(
+        trajectory,
+        action_masks=ActionMasks(
+            mode=torch.ones_like(trajectory.action_masks.mode),
+            card=torch.ones_like(trajectory.action_masks.card),
+            placement=torch.ones_like(trajectory.action_masks.placement),
+        ),
+        actions=ActionBatch(
+            mode=torch.ones_like(trajectory.actions.mode),
+            card_slot=torch.zeros_like(trajectory.actions.card_slot),
+            placement=torch.zeros_like(trajectory.actions.placement),
+        ),
+    )
+    learner = RecurrentPPOLearner(
+        RecurrentHybridPolicy(config),
+        config=LearnerConfig(
+            update_epochs=1,
+            sequence_minibatch_size=1,
+            shuffle_sequences=False,
+            bc_factor_coef=0.5,
+            imitation_only=True,
+        ),
+    )
+    metrics = learner.update(
+        LearnerBatch(
+            trajectory=trajectory,
+            behavior_cloning_actions=trajectory.actions,
+            behavior_cloning_weights=torch.ones_like(trajectory.rewards),
+        ),
+        diagnostics=True,
+    )
+
+    assert metrics.effective_factor_behavior_cloning_coef == pytest.approx(0.5)
+    assert metrics.factor_behavior_cloning_loss > 0.0
 
 
 @requires_torch

@@ -328,6 +328,80 @@ def test_recurrent_prototype_train_resume_and_evaluate(tmp_path) -> None:
 
 
 @requires_torch
+def test_training_diagnostics_capture_decisions_and_update_statistics(tmp_path) -> None:
+    from rl.prototype import PrototypeConfig, train_prototype
+
+    trace_path = tmp_path / "training-trace.json"
+    config = PrototypeConfig(
+        envs=1,
+        horizon=2,
+        updates=1,
+        decision_interval_us=1_000_000,
+        seed=47,
+        shuffle_decks=False,
+        update_epochs=1,
+        sequence_minibatch_size=1,
+        model_dim=8,
+        encoder_dim=8,
+        transformer_heads=2,
+        transformer_layers=1,
+        transformer_ff_dim=16,
+        gru_hidden_dim=8,
+        use_privileged_critic=False,
+        collect_belief_targets=False,
+        behavior_cloning_factor_coef=0.25,
+        diagnostic_trace_out=trace_path,
+        allow_provisional=True,
+    )
+
+    report = train_prototype(
+        config,
+        checkpoint_out=tmp_path / "diagnostic.pt",
+        expert_guidance=True,
+    )
+
+    assert report["actor_controls_actions"] is True
+    assert report["training_diagnostics"]
+    trace = json.loads(trace_path.read_text(encoding="utf-8"))
+    assert trace["kind"] == "recurrent_public_ppo_prototype_training_trace"
+    assert trace["actor_controls_actions"] is True
+    assert len(trace["decisions"]) == 2
+    decision = trace["decisions"][0]
+    for field in (
+        "elapsed_us_before",
+        "hand_before",
+        "elixir_milli_before",
+        "tower_hp_before",
+        "troop_positions_before",
+        "legal_action_mask",
+        "actor_action",
+        "chosen_action_probability",
+        "top_alternative_actions",
+        "strategic_teacher_action",
+        "actor_teacher_agreement",
+        "critic_value_prediction",
+        "return",
+        "advantage",
+        "ppo_probability_ratio",
+        "ppo_clipping_occurred",
+    ):
+        assert field in decision
+    update = trace["updates"][0]
+    for field in (
+        "advantage_distribution",
+        "explained_variance",
+        "factor_entropy",
+        "action_distribution",
+        "action_distribution_delta",
+        "post_update_ratio_distribution",
+        "per_head_gradient_norms",
+    ):
+        assert field in update
+    assert update["metrics"]["factor_behavior_cloning_loss"] is not None
+    assert update["metrics"]["effective_factor_behavior_cloning_coef"] == 0.0
+
+
+@requires_torch
 def test_flagged_training_candidate_is_quarantined_without_overwriting_destination(
     monkeypatch,
     tmp_path,
