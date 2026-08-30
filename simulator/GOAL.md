@@ -38,7 +38,8 @@ a controlled probe when the action boundary or causal behavior matters.
 - The policy is a provisional research harness, not an any-deck player. The
   retained checkpoints under `outputs/training/` were produced on stale
   `cd22` ruleset/revision hashes and must not be used as current evidence. The
-  current engine is `reference-0.37.0`; new runs must be revision-pinned.
+  current engine `reference-0.37.0` is used for new runs, which must be
+  revision-pinned.
 - On revision `87f9630`, batch-16 CUDA inference measured 4.69k actor-only
   decisions/s and 3.77k full actor-selection decisions/s on the RTX 2050.
   The same workload on CPU measured 0.84k actor-only and 0.74k full
@@ -49,17 +50,23 @@ a controlled probe when the action boundary or causal behavior matters.
   16 lanes. All optimized runs matched the reference state-hash sequence;
   backend replay/event parity is covered by the regression suite. Packed
   process is correct but currently a throughput outlier.
-- The retained end-to-end trainer baseline is 590 decisions/s on the RTX 2050
-  from the earlier revision-pinned benchmark. The current bounded CUDA smoke
-  is not comparable: it completed 2,048 actor-controlled transitions with a
-  clean revision/exploit audit, but no complete matches, so it is plumbing
-  evidence rather than a strength claim.
+- The retained historical trainer baseline is 590 decisions/s on the RTX 2050
+  with 48 lanes, eight rollout workers, and overlap. The current memory-bounded
+  two-lane PPO path measures 96.4 decisions/s end-to-end over 1,536 transitions
+  (98.0 best repeat); current batched matrix evaluation measures 377 decisions/s
+  over 4,753 decisions. Normal evaluation skips replay-hash serialization;
+  `rl.generalized evaluate --replay-hashes` enables it for differential audits.
+  These are throughput results, not strength claims.
 - The current action contract has `WAIT`/`PLAY`, card slot, and placement but
   no learned wait-duration head; `WAIT` advances the fixed simulator decision
   interval. The proposed timing head remains a future architecture change.
 
 These results establish plumbing and performance, not game strength or
 sim-to-real fidelity.
+
+The previously recorded generalized actor and reports are generated local
+artifacts; they are retained only for provenance and are not current strength
+evidence. They do not establish the mission's any-deck capability.
 
 ## Current execution priority
 
@@ -398,14 +405,15 @@ deterministic seeding, and asynchronous reset while producing identical
 canonical state and public-event hashes on the parity corpus.
 
 The neural fast path is above the historical simulator benchmark on an RTX
-2050 (about 3.61k actor-only and 2.69k full actor-selection decisions/s versus
-about 1.54k simulator steps/s at batch 16). On the current CPU host it reaches
-about 1.44k actor-only decisions/s versus about 3.06k simulator steps/s, so
-CPU parity is not yet met. Continue profiling dense swarms, projectile-heavy
-states, and observation construction. The deployment-only decoding/layout
-changes preserve the PPO forward path and exact selected-action parity on the
-regression workload. The preferred large-self-play target is 5k–10k simulator
-environment steps/s.
+2050 (about 4.69k actor-only and 3.77k full actor-selection decisions/s at
+batch 16). On the current CPU host it reaches about 0.84k actor-only and
+0.74k full decisions/s versus about 1.63k simulator steps/s, so CPU parity is
+not yet met. The bounded trainer remains physics-bound; rollout-process and
+larger-lane variants are benchmarked separately and are not enabled by
+default when they trade memory or behavior-policy freshness. The
+deployment-only decoding/layout changes preserve the PPO forward path and
+exact selected-action parity on the regression workload. The preferred
+large-self-play target is 5k–10k simulator environment steps/s.
 The vector backend regression also checks state, event-log, and replay hashes
 across consecutive card-play steps with privileged info disabled; both process
 transports pass that parity check.

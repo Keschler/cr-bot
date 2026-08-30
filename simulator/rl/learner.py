@@ -809,6 +809,7 @@ if TORCH_AVAILABLE:
             include_beliefs: bool = True,
             inference: bool = False,
             fast_sampling: bool = False,
+            retain_output: bool = True,
         ) -> RolloutStep:
             """Run one recurrent policy step and return a detached next state.
 
@@ -822,6 +823,8 @@ if TORCH_AVAILABLE:
                 raise TypeError("inference must be boolean")
             if type(fast_sampling) is not bool:
                 raise TypeError("fast_sampling must be boolean")
+            if type(retain_output) is not bool:
+                raise TypeError("retain_output must be boolean")
             raster = _add_step_time(raster, expected_ndim=4, name="raster")
             global_features = _add_step_time(global_features, expected_ndim=2, name="global_features")
             entities = _add_step_time(entities, expected_ndim=3, name="entities")
@@ -835,34 +838,40 @@ if TORCH_AVAILABLE:
                 reset_mask = reset_mask.reshape(-1, 1)
             if reset_mask.shape != (raster.shape[0], 1):
                 raise ValueError("reset_mask must have shape [batch] or [batch, 1]")
-            reset_mask = reset_mask.to(device=self.device, dtype=torch.bool)
+            reset_mask = _to_device(reset_mask, self.device, dtype=torch.bool)
             if privileged_features is not None:
                 privileged_features = _add_step_time(
                     privileged_features,
                     expected_ndim=2,
                     name="privileged_features",
                 )
-            model_masks = _move_masks(action_masks, self.device)
-            policy_inputs = (
-                raster.to(self.device),
-                global_features.to(self.device),
-                entities.to(self.device),
-                entity_mask.to(self.device, dtype=torch.bool),
+            model_masks = (
+                action_masks
+                if _masks_on_device(action_masks, self.device)
+                else _move_masks(action_masks, self.device)
             )
+            policy_inputs = (
+                _to_device(raster, self.device),
+                _to_device(global_features, self.device),
+                _to_device(entities, self.device),
+                _to_device(entity_mask, self.device, dtype=torch.bool),
+            )
+            hidden = _to_device(state.hidden, self.device)
             if fast_sampling and not deterministic:
                 output, actions, log_probs, entropy = self.policy.rollout_sample(
                     *policy_inputs,
                     model_masks,
                     reset_mask=reset_mask,
-                    hidden=state.hidden.to(self.device),
+                    hidden=hidden,
                     include_beliefs=include_beliefs,
                     inference=inference,
+                    return_logits=retain_output,
                 )
             else:
                 output = self.policy(
                     *policy_inputs,
                     reset_mask=reset_mask,
-                    hidden=state.hidden.to(self.device),
+                    hidden=hidden,
                     action_masks=model_masks,
                     include_beliefs=include_beliefs,
                     inference=inference,
@@ -1111,7 +1120,18 @@ if TORCH_AVAILABLE:
                         + effective_factor_bc_coef * factor_bc_loss
                         + self.config.belief_coef * belief_loss
                     )
-                _require_finite_tensor("PPO total loss", total_loss)
+                finite_values = (
+                    total_loss,
+                    objective.policy_loss,
+                    objective.value_loss,
+                    objective.entropy,
+                    factor_bc_loss,
+                    belief_loss,
+                    objective.approx_kl,
+                    objective.clip_fraction,
+                )
+                if not bool(torch.isfinite(torch.stack(finite_values)).all().item()):
+                    raise FloatingPointError("PPO loss metrics are non-finite")
                 for name, value in (
                     ("PPO policy loss", objective.policy_loss),
                     ("PPO value loss", objective.value_loss),
@@ -1121,7 +1141,11 @@ if TORCH_AVAILABLE:
                     ("PPO approximate KL", objective.approx_kl),
                     ("PPO clip fraction", objective.clip_fraction),
                 ):
-                    _require_finite_tensor(name, value)
+                    # The values were checked together above. Keep the loop
+                    # for the named validation contract and make this a
+                    # no-op for already-validated scalar tensors.
+                    if value.ndim != 0:  # pragma: no cover - objective invariant
+                        _require_finite_tensor(name, value)
             except FloatingPointError:
                 return _skipped_minibatch_metrics()
 
@@ -1148,23 +1172,32 @@ if TORCH_AVAILABLE:
             self.optimizer.step()
             if not _parameters_are_finite(parameters) or not _optimizer_state_is_finite(self.optimizer):
                 raise FloatingPointError("PPO optimizer step produced non-finite state")
+            metric_values = torch.stack(
+                (
+                    total_loss,
+                    objective.policy_loss,
+                    objective.value_loss,
+                    objective.entropy,
+                    belief_loss,
+                    objective.behavior_cloning_loss,
+                    factor_bc_loss,
+                    objective.approx_kl,
+                    objective.clip_fraction,
+                )
+            ).detach().cpu().tolist()
             return {
-                "total_loss": float(total_loss.detach().cpu().item()),
-                "policy_loss": float(objective.policy_loss.detach().cpu().item()),
-                "value_loss": float(objective.value_loss.detach().cpu().item()),
-                "entropy": float(objective.entropy.detach().cpu().item()),
-                "belief_loss": float(belief_loss.detach().cpu().item()),
-                "behavior_cloning_loss": float(
-                    objective.behavior_cloning_loss.detach().cpu().item()
-                ),
-                "factor_behavior_cloning_loss": float(
-                    factor_bc_loss.detach().cpu().item()
-                ),
+                "total_loss": float(metric_values[0]),
+                "policy_loss": float(metric_values[1]),
+                "value_loss": float(metric_values[2]),
+                "entropy": float(metric_values[3]),
+                "belief_loss": float(metric_values[4]),
+                "behavior_cloning_loss": float(metric_values[5]),
+                "factor_behavior_cloning_loss": float(metric_values[6]),
                 "effective_factor_behavior_cloning_coef": float(
                     effective_factor_bc_coef
                 ),
-                "approx_kl": float(objective.approx_kl.detach().cpu().item()),
-                "clip_fraction": float(objective.clip_fraction.detach().cpu().item()),
+                "approx_kl": float(metric_values[7]),
+                "clip_fraction": float(metric_values[8]),
                 "gradient_norm": gradient_norm,
                 "_optimization_step": 1.0,
                 "_skipped_step": 0.0,
@@ -1218,8 +1251,9 @@ if TORCH_AVAILABLE:
                     raise ValueError(
                         "privileged_features are required by the configured privileged critic"
                     )
-                privileged_features = privileged_features.to(
-                    device=self.device,
+                privileged_features = _to_device(
+                    privileged_features,
+                    self.device,
                     dtype=output.recurrent_features.dtype,
                 )
                 values = self.critic(output.recurrent_features, privileged_features)
@@ -1343,33 +1377,52 @@ def _move_sequence(sequence: Any, device: Any) -> Any:
         _raise_torch_unavailable()
     return replace(
         sequence,
-        raster=sequence.raster.to(device),
-        global_features=sequence.global_features.to(device),
-        entities=sequence.entities.to(device),
-        entity_mask=sequence.entity_mask.to(device),
-        reset_mask=sequence.reset_mask.to(device),
+        raster=_to_device(sequence.raster, device),
+        global_features=_to_device(sequence.global_features, device),
+        entities=_to_device(sequence.entities, device),
+        entity_mask=_to_device(sequence.entity_mask, device),
+        reset_mask=_to_device(sequence.reset_mask, device),
         hidden_states=None
         if sequence.hidden_states is None
-        else sequence.hidden_states.to(device),
+        else _to_device(sequence.hidden_states, device),
         initial_hidden=None
         if sequence.initial_hidden is None
-        else sequence.initial_hidden.to(device),
+        else _to_device(sequence.initial_hidden, device),
+    )
+
+
+def _to_device(value: Any, device: Any, *, dtype: Any | None = None) -> Any:
+    """Avoid repeated no-op tensor conversions in one-step rollouts."""
+
+    if not isinstance(value, torch.Tensor):
+        raise TypeError("value must be a torch.Tensor")
+    if value.device == device and (dtype is None or value.dtype == dtype):
+        return value
+    if dtype is None:
+        return value.to(device=device)
+    return value.to(device=device, dtype=dtype)
+
+
+def _masks_on_device(masks: Any, device: Any) -> bool:
+    return all(
+        isinstance(value, torch.Tensor) and value.device == device
+        for value in (masks.mode, masks.card, masks.placement)
     )
 
 
 def _move_masks(masks: Any, device: Any) -> Any:
     return ActionMasks(
-        mode=masks.mode.to(device),
-        card=masks.card.to(device),
-        placement=masks.placement.to(device),
+        mode=_to_device(masks.mode, device),
+        card=_to_device(masks.card, device),
+        placement=_to_device(masks.placement, device),
     )
 
 
 def _move_actions(actions: Any, device: Any) -> Any:
     return ActionBatch(
-        mode=actions.mode.to(device),
-        card_slot=actions.card_slot.to(device),
-        placement=actions.placement.to(device),
+        mode=_to_device(actions.mode, device),
+        card_slot=_to_device(actions.card_slot, device),
+        placement=_to_device(actions.placement, device),
     )
 
 
@@ -1380,42 +1433,52 @@ def _move_learner_batch(batch: LearnerBatch, device: Any) -> LearnerBatch:
         sequence=_move_sequence(trajectory.sequence, device),
         action_masks=_move_masks(trajectory.action_masks, device),
         actions=_move_actions(trajectory.actions, device),
-        rewards=trajectory.rewards.to(device),
-        terminated=trajectory.terminated.to(device),
-        truncated=trajectory.truncated.to(device),
-        old_log_probs=trajectory.old_log_probs.to(device),
-        values=None if trajectory.values is None else trajectory.values.to(device),
-        advantages=None if trajectory.advantages is None else trajectory.advantages.to(device),
-        returns=None if trajectory.returns is None else trajectory.returns.to(device),
+        rewards=_to_device(trajectory.rewards, device),
+        terminated=_to_device(trajectory.terminated, device),
+        truncated=_to_device(trajectory.truncated, device),
+        old_log_probs=_to_device(trajectory.old_log_probs, device),
+        values=None if trajectory.values is None else _to_device(trajectory.values, device),
+        advantages=None
+        if trajectory.advantages is None
+        else _to_device(trajectory.advantages, device),
+        returns=None if trajectory.returns is None else _to_device(trajectory.returns, device),
     )
     targets = batch.belief_targets
     moved_targets = None
     if targets is not None:
         moved_targets = BeliefTargets(
-            enemy_elixir=None if targets.enemy_elixir is None else targets.enemy_elixir.to(device),
-            enemy_hand=None if targets.enemy_hand is None else targets.enemy_hand.to(device),
-            enemy_next_card=None if targets.enemy_next_card is None else targets.enemy_next_card.to(device),
+            enemy_elixir=None
+            if targets.enemy_elixir is None
+            else _to_device(targets.enemy_elixir, device),
+            enemy_hand=None
+            if targets.enemy_hand is None
+            else _to_device(targets.enemy_hand, device),
+            enemy_next_card=None
+            if targets.enemy_next_card is None
+            else _to_device(targets.enemy_next_card, device),
         )
     return replace(
         batch,
         trajectory=moved_trajectory,
         privileged_features=None
         if batch.privileged_features is None
-        else batch.privileged_features.to(device),
+        else _to_device(batch.privileged_features, device),
         belief_targets=moved_targets,
-        next_values=None if batch.next_values is None else batch.next_values.to(device),
+        next_values=None
+        if batch.next_values is None
+        else _to_device(batch.next_values, device),
         bootstrap_values=None
         if batch.bootstrap_values is None
-        else batch.bootstrap_values.to(device),
+        else _to_device(batch.bootstrap_values, device),
         behavior_cloning_log_probs=None
         if batch.behavior_cloning_log_probs is None
-        else batch.behavior_cloning_log_probs.to(device),
+        else _to_device(batch.behavior_cloning_log_probs, device),
         behavior_cloning_actions=None
         if batch.behavior_cloning_actions is None
         else _move_actions(batch.behavior_cloning_actions, device),
         behavior_cloning_weights=None
         if batch.behavior_cloning_weights is None
-        else batch.behavior_cloning_weights.to(device),
+        else _to_device(batch.behavior_cloning_weights, device),
     )
 
 
@@ -1635,43 +1698,88 @@ def _module_state_is_finite(module: Any) -> bool:
     return _nested_tensors_are_finite(module.state_dict())
 
 
+def _collect_floating_tensors(value: Any, output: list[Any]) -> None:
+    """Collect floating tensors for one batched finite-value reduction."""
+
+    if isinstance(value, torch.Tensor):
+        if value.is_floating_point() or value.is_complex():
+            output.append(value)
+        return
+    if isinstance(value, Mapping):
+        for item in value.values():
+            _collect_floating_tensors(item, output)
+        return
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            _collect_floating_tensors(item, output)
+
+
+def _floating_tensors_are_finite(tensors: Sequence[Any]) -> bool:
+    """Check many tensors with one boolean reduction/synchronization."""
+
+    if not tensors:
+        return True
+    device = tensors[0].device
+    flags = [torch.isfinite(tensor.detach()).all() for tensor in tensors]
+    if any(flag.device != device for flag in flags):
+        flags = [flag.to(device=device) for flag in flags]
+    return bool(torch.stack(flags).all().item())
+
+
 def _optimizer_state_is_finite(optimizer: Any) -> bool:
-    return _nested_tensors_are_finite(optimizer.state_dict())
+    tensors: list[Any] = []
+    _collect_floating_tensors(optimizer.state_dict(), tensors)
+    return _floating_tensors_are_finite(tensors)
 
 
 def _parameters_are_finite(parameters: Sequence[Any]) -> bool:
-    return all(
-        parameter is not None
-        and (not parameter.is_floating_point() or bool(torch.isfinite(parameter.detach()).all().item()))
-        for parameter in parameters
-    )
+    tensors: list[Any] = []
+    for parameter in parameters:
+        if parameter is None:
+            return False
+        if parameter.is_floating_point() or parameter.is_complex():
+            tensors.append(parameter)
+    return _floating_tensors_are_finite(tensors)
 
 
 def _gradients_are_finite(parameters: Sequence[Any]) -> bool:
-    return all(
-        parameter.grad is None
-        or (not parameter.grad.is_floating_point())
-        or bool(torch.isfinite(parameter.grad.detach()).all().item())
-        for parameter in parameters
-    )
+    tensors: list[Any] = []
+    for parameter in parameters:
+        gradient = parameter.grad
+        if gradient is not None and (
+            gradient.is_floating_point() or gradient.is_complex()
+        ):
+            tensors.append(gradient)
+    return _floating_tensors_are_finite(tensors)
 
 
 def _gradient_norm(parameters: Sequence[Any]) -> float:
-    squared = 0.0
+    squared = None
+    finite_flags: list[Any] = []
     for parameter in parameters:
         if parameter.grad is not None:
             gradient = parameter.grad.detach()
-            if not _gradients_are_finite((parameter,)):
-                return math.inf
+            if not (gradient.is_floating_point() or gradient.is_complex()):
+                continue
+            finite_flags.append(torch.isfinite(gradient).all())
             # Accumulate in float64 so a finite collection of large float32
             # gradients cannot overflow before clipping is applied.
-            contribution = float(
-                gradient.to(dtype=torch.float64).square().sum().cpu().item()
-            )
-            squared += contribution
-            if not math.isfinite(squared):
-                return math.inf
-    return math.sqrt(squared)
+            contribution = gradient.to(dtype=torch.float64).square().sum()
+            squared = contribution if squared is None else squared + contribution
+    if finite_flags:
+        device = finite_flags[0].device
+        if any(flag.device != device for flag in finite_flags):
+            finite_flags = [flag.to(device=device) for flag in finite_flags]
+        if not bool(torch.stack(finite_flags).all().item()):
+            return math.inf
+    total = (
+        0.0
+        if squared is None
+        else float(squared.detach().cpu().item())
+    )
+    if not math.isfinite(total):
+        return math.inf
+    return math.sqrt(total)
 
 
 def _optimizer_to_device(optimizer: Any, device: Any) -> None:

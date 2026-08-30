@@ -137,6 +137,7 @@ def _parallel_env_step_worker(
         bool,
         bool,
         bool,
+        bool,
         dict[str, object],
         Sequence[PolicyAction | SimAction | None],
     ],
@@ -160,6 +161,7 @@ def _parallel_env_step_worker(
         expose_privileged_info,
         include_authoritative_state,
         validate_every_tick,
+        include_replay_hashes,
         raw_state,
         actions,
     ) = payload
@@ -178,6 +180,7 @@ def _parallel_env_step_worker(
         ),
         expose_privileged_info=expose_privileged_info,
         include_authoritative_state=include_authoritative_state,
+        include_replay_hashes=include_replay_hashes,
     )
     state = battle_state_from_primitive(raw_state)
     engine.validate_state(state)
@@ -209,6 +212,7 @@ def _packed_parallel_env_step_worker(
         bool,
         bool,
         bool,
+        bool,
         bytes,
         Sequence[PolicyAction | SimAction | None],
     ],
@@ -232,6 +236,7 @@ def _packed_parallel_env_step_worker(
         expose_privileged_info,
         include_authoritative_state,
         validate_every_tick,
+        include_replay_hashes,
         packed_state,
         actions,
     ) = payload
@@ -250,6 +255,7 @@ def _packed_parallel_env_step_worker(
         ),
         expose_privileged_info=expose_privileged_info,
         include_authoritative_state=include_authoritative_state,
+        include_replay_hashes=include_replay_hashes,
     )
     state = unpack_state(packed_state)
     engine.validate_state(state)
@@ -308,6 +314,9 @@ def _persistent_env_worker(
                 expose_privileged_info=bool(raw_config.get("expose_privileged_info", False)),
                 include_authoritative_state=bool(
                     raw_config.get("include_authoritative_state", True)
+                ),
+                include_replay_hashes=bool(
+                    raw_config.get("include_replay_hashes", True)
                 ),
             )
             raw_state = raw_config.get("initial_state")
@@ -408,6 +417,7 @@ class SimulatorEnv:
         reward: RewardConfig = RewardConfig(),
         expose_privileged_info: bool = False,
         include_authoritative_state: bool = True,
+        include_replay_hashes: bool = True,
     ) -> None:
         # Full invariant validation remains available through an explicitly
         # supplied strict engine and the audit CLI. Per-tick schema walks are
@@ -420,7 +430,10 @@ class SimulatorEnv:
         self.expose_privileged_info = expose_privileged_info
         if type(include_authoritative_state) is not bool:
             raise TypeError("include_authoritative_state must be boolean")
+        if type(include_replay_hashes) is not bool:
+            raise TypeError("include_replay_hashes must be boolean")
         self.include_authoritative_state = include_authoritative_state
+        self.include_replay_hashes = include_replay_hashes
         self.state: BattleState | None = None
         self._memories = (ObservationMemory(0), ObservationMemory(1))
         self._observation_soa = ObservationSoA()
@@ -468,11 +481,12 @@ class SimulatorEnv:
     def observe(self) -> tuple[PolicyObservationV1, PolicyObservationV1]:
         state = self._require_state()
         cached = self._persistent_observation_cache
-        fingerprint = _state_sync_fingerprint(state)
-        if cached is not None and cached[0] == fingerprint and cached[1] == "v1":
-            observations = cached[2]
-            if isinstance(observations, tuple) and len(observations) == 2:
-                return observations  # type: ignore[return-value]
+        if cached is not None:
+            fingerprint = _state_sync_fingerprint(state)
+            if cached[0] == fingerprint and cached[1] == "v1":
+                observations = cached[2]
+                if isinstance(observations, tuple) and len(observations) == 2:
+                    return observations  # type: ignore[return-value]
         return tuple(
             build_policy_observation(
                 state,
@@ -499,11 +513,12 @@ class SimulatorEnv:
 
         state = self._require_state()
         cached = self._persistent_observation_cache
-        fingerprint = _state_sync_fingerprint(state)
-        if cached is not None and cached[0] == fingerprint and cached[1] == "v2":
-            observations = cached[2]
-            if isinstance(observations, tuple) and len(observations) == 2:
-                return observations  # type: ignore[return-value]
+        if cached is not None:
+            fingerprint = _state_sync_fingerprint(state)
+            if cached[0] == fingerprint and cached[1] == "v2":
+                observations = cached[2]
+                if isinstance(observations, tuple) and len(observations) == 2:
+                    return observations  # type: ignore[return-value]
         observations = tuple(
             build_policy_observation_v2(
                 state,
@@ -527,13 +542,14 @@ class SimulatorEnv:
 
         state = self._require_state()
         cached = self._persistent_observation_cache
-        fingerprint = _state_sync_fingerprint(state)
-        if cached is not None and cached[0] == fingerprint and cached[1] == "v2":
-            observations = cached[2]
-            if isinstance(observations, tuple) and len(observations) == 2:
-                observation = observations[viewer]
-                if observation is not None:
-                    return observation  # type: ignore[return-value]
+        if cached is not None:
+            fingerprint = _state_sync_fingerprint(state)
+            if cached[0] == fingerprint and cached[1] == "v2":
+                observations = cached[2]
+                if isinstance(observations, tuple) and len(observations) == 2:
+                    observation = observations[viewer]
+                    if observation is not None:
+                        return observation  # type: ignore[return-value]
         return build_policy_observation_v2(
             state,
             self.engine.ruleset,
@@ -658,8 +674,9 @@ class SimulatorEnv:
             "terminal_reason": state.terminal_reason,
         }
         if self.expose_privileged_info:
-            info["state_hash"] = state.state_hash()
-            info["event_log_hash"] = state.event_log_hash()
+            if self.include_replay_hashes:
+                info["state_hash"] = state.state_hash()
+                info["event_log_hash"] = state.event_log_hash()
             info["events"] = tuple(event.to_dict() for event in new_events)
             if self.include_authoritative_state:
                 info["authoritative_state"] = state.to_primitive(include_events=False)
@@ -895,6 +912,7 @@ class VectorSimulatorEnv:
             "reward": environment.reward_config.as_dict(),
             "expose_privileged_info": environment.expose_privileged_info,
             "include_authoritative_state": environment.include_authoritative_state,
+            "include_replay_hashes": environment.include_replay_hashes,
             "validate_every_tick": environment.engine.validate_every_tick,
             "initial_state": (
                 None if state is None else state.to_primitive(include_events=True)
@@ -994,7 +1012,7 @@ class VectorSimulatorEnv:
     ) -> dict[str, object]:
         """Recompute hashes after the parent restores accumulated events."""
 
-        if not environment.expose_privileged_info:
+        if not environment.expose_privileged_info or not environment.include_replay_hashes:
             return info
         refreshed = dict(info)
         state = environment._require_state()
@@ -1117,6 +1135,7 @@ class VectorSimulatorEnv:
                     environment.expose_privileged_info,
                     environment.include_authoritative_state,
                     environment.engine.validate_every_tick,
+                    environment.include_replay_hashes,
                     # Event history is retained by the parent lane. The
                     # worker needs the event sequence counter, but only its
                     # current-step events need to cross the return boundary;
@@ -1188,6 +1207,7 @@ class VectorSimulatorEnv:
                     environment.expose_privileged_info,
                     environment.include_authoritative_state,
                     environment.engine.validate_every_tick,
+                    environment.include_replay_hashes,
                     pack_state(state).to_bytes(),
                     tuple(row),
                 )

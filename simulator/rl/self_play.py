@@ -219,6 +219,7 @@ def build_self_play_matrix_config(
     max_decisions: int | None = None,
     batch_size: int = 1,
     include_match_results: bool = True,
+    include_replay_hashes: bool = False,
     shuffle_decks: bool = True,
     target_player: int = 0,
 ) -> Any:
@@ -275,6 +276,7 @@ def build_self_play_matrix_config(
         device=device,
         shuffle_decks=shuffle_decks,
         include_match_results=include_match_results,
+        include_replay_hashes=include_replay_hashes,
         held_out=False,
         batch_size=batch_size,
     )
@@ -290,6 +292,7 @@ def build_side_balanced_self_play_matrix_configs(
     max_decisions: int | None = None,
     batch_size: int = 1,
     include_match_results: bool = True,
+    include_replay_hashes: bool = False,
     shuffle_decks: bool = True,
 ) -> tuple["EvaluationMatrixConfig", "EvaluationMatrixConfig"]:
     """Build matched self-play configs for both target-player assignments.
@@ -316,6 +319,7 @@ def build_side_balanced_self_play_matrix_configs(
         max_decisions=max_decisions,
         batch_size=batch_size,
         include_match_results=include_match_results,
+        include_replay_hashes=include_replay_hashes,
         shuffle_decks=shuffle_decks,
         target_player=0,
     )
@@ -328,6 +332,7 @@ def build_side_balanced_self_play_matrix_configs(
         max_decisions=max_decisions,
         batch_size=batch_size,
         include_match_results=include_match_results,
+        include_replay_hashes=include_replay_hashes,
         shuffle_decks=shuffle_decks,
         target_player=1,
     )
@@ -346,6 +351,7 @@ def evaluate_against_checkpoints(
     max_decisions: int | None = None,
     batch_size: int = 1,
     include_match_results: bool = True,
+    include_replay_hashes: bool = False,
     shuffle_decks: bool = True,
 ) -> dict[str, object]:
     """Evaluate a current checkpoint against frozen actor checkpoints."""
@@ -360,6 +366,7 @@ def evaluate_against_checkpoints(
         max_decisions=max_decisions,
         batch_size=batch_size,
         include_match_results=include_match_results,
+        include_replay_hashes=include_replay_hashes,
         shuffle_decks=shuffle_decks,
     )
     return run_evaluation_matrix(config)

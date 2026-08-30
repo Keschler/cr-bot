@@ -509,6 +509,7 @@ def _make_environment(
     player_deck: tuple[str, ...] | None = None,
     opponent_deck: tuple[str, ...] | None = None,
     expose_privileged_info: bool = False,
+    include_replay_hashes: bool = True,
 ) -> Any:
     (
         BattleEngine,
@@ -527,6 +528,7 @@ def _make_environment(
         reward=_reward_config_for(config),
         # The public actor path must remain independent of info diagnostics.
         expose_privileged_info=expose_privileged_info,
+        include_replay_hashes=include_replay_hashes,
         include_authoritative_state=not expose_privileged_info,
     )
     if any(
@@ -948,6 +950,7 @@ def _make_collector(
     lane_decks: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] | None = None,
     lane_offset: int = 0,
     actor_only_observations: bool = False,
+    fast_deterministic: bool = False,
     opponent_action: Callable[[Any, Any, int], Any | None] | None = None,
     batch_step: Callable[[Sequence[Sequence[Any | None]]], Sequence[Any]] | None = None,
     diagnostics: bool = False,
@@ -968,6 +971,7 @@ def _make_collector(
             collect_belief_targets=config.collect_belief_targets,
             actor_only_observations=actor_only_observations,
             deterministic=deterministic,
+            fast_deterministic=fast_deterministic,
             expert_execution_probability=(
                 config.expert_execution_probability
                 if expert_execution_probability is None
@@ -1243,6 +1247,7 @@ def train_prototype(
     opponent_decks: Sequence[Sequence[str]] | None = None,
     opponent_action: Callable[[Any, Any, int], Any | None] | None = None,
     rollout_opponent_specs: Sequence[tuple[str, int]] | None = None,
+    opponent_uses_public_observation: bool | None = None,
 ) -> dict[str, object]:
     """Run recurrent PPO updates and save one complete prototype artifact.
 
@@ -1260,6 +1265,10 @@ def train_prototype(
         raise TypeError("expert_guidance must be boolean")
     if expert_action_callback is not None and not callable(expert_action_callback):
         raise TypeError("expert_action_callback must be callable when provided")
+    if opponent_uses_public_observation is not None and type(
+        opponent_uses_public_observation
+    ) is not bool:
+        raise TypeError("opponent_uses_public_observation must be boolean or None")
     if expert_guidance and not (
         config.behavior_cloning_coef > 0.0
         or config.behavior_cloning_factor_coef > 0.0
@@ -1370,6 +1379,15 @@ def train_prototype(
             "diagnostic_trace_out requires the reference/vector collector; "
             "rollout-process does not transport per-decision model diagnostics"
         )
+    # The built-in and generalized simulator-side controllers consume the
+    # authoritative state, not the opponent's public observation.  Keeping
+    # the old two-view behavior as the default for a caller-supplied callback
+    # preserves the public callback contract; generalized training passes the
+    # explicit value when it knows whether a frozen public actor is assigned.
+    if opponent_uses_public_observation is None:
+        resolved_opponent_uses_public_observation = opponent_action is not None
+    else:
+        resolved_opponent_uses_public_observation = opponent_uses_public_observation
     # Pin the simulator revision for this complete rollout/update sequence.
     # The checkout may remain dirty during development, but a new committed
     # HEAD means the simulator changed underneath the experiment and its
@@ -1503,6 +1521,7 @@ def train_prototype(
                     lane_decks=lane_decks,
                     opponent_action=opponent_action,
                     batch_step=batch_step,
+                    actor_only_observations=not resolved_opponent_uses_public_observation,
                     diagnostics=diagnostic_enabled,
                 )
             current_diagnostic_rows: list[dict[str, object]] = []
@@ -1857,6 +1876,9 @@ def train_prototype(
                 "player_deck": list(resolved_player_deck),
                 "opponent_decks": [list(deck) for deck in resolved_opponent_decks],
                 "custom_opponent_policy": opponent_action is not None,
+                "opponent_uses_public_observation": bool(
+                    resolved_opponent_uses_public_observation
+                ),
                 "rollout_opponent_specs": (
                     None
                     if rollout_opponent_specs is None
@@ -2869,6 +2891,7 @@ def _evaluate_public_counter_fast(
             ruleset,
             episode,
             expose_privileged_info=True,
+            include_replay_hashes=False,
         )
         observations = environment.observe_v2()
         counter = controller_type()
@@ -3163,6 +3186,7 @@ def evaluate_prototype(
                 # modes makes card/placement counts auditable even without a
                 # full trace file.
                 expose_privileged_info=True,
+                include_replay_hashes=trace_enabled,
             )
             for episode in episode_ids
         ]
@@ -3242,6 +3266,11 @@ def evaluate_prototype(
                     else None
                 ),
                 batch_step=batch_step,
+                # The evaluation opponent is the simulator-side deterministic
+                # controller.  It receives authoritative state through the
+                # callback and does not need the unused public view.
+                actor_only_observations=True,
+                fast_deterministic=(policy_mode == "actor" and not trace_enabled),
                 diagnostics=trace_enabled,
             )
             result = collector.collect(

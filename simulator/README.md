@@ -296,6 +296,10 @@ PYTHONPATH=.:..:../src \
   --episodes 1 --policy actor --device auto
 ```
 
+Normal evaluation uses the fast actor-only path. Add `--replay-hashes` to
+`rl.generalized evaluate` when a differential replay audit needs per-decision
+state and event-log hashes; that audit mode is intentionally slower.
+
 The generalized runner supports explicit public-feature switches including
 `--explicit-hand-features`, `--direct-public-action-features`,
 `--direct-public-card-features`, `--contextual-public-card-features`,
@@ -307,6 +311,10 @@ Historical/self-play training can be side-balanced by running matched
 generalized segments with `--target-player 0` and `--target-player 1`. The
 trainer changes only world deck ordering, keeps the public actor contract
 unchanged, and records `target_player`, `actor_player`, and `opponent_player`.
+The self-play matrix uses the fixed prototype player as its learner-side deck;
+checkpoint opponents are separate frozen policies.
+Self-play reports use `held_out=false`; they are training/control evidence,
+not held-out strength evidence.
 
 ### Generalized opponent training and held-out evaluation
 
@@ -400,6 +408,12 @@ full decision tracing, and a clean exploit audit. It completed no matches, so
 it is plumbing evidence rather than a strength result. Older checkpoints and
 evaluation tables are revision-stale and must not be used as current policy
 evidence.
+
+For provenance only, the older reports recorded `8 wins, 0 losses, 0 draws, 0 truncated`
+on the fixed regression, `1 win, 5 losses, 0 draws, 0 truncated` on the six
+held-out archetype variants, and `1 win, 35 losses, 0 draws, 0 truncated` on
+the broader six-archetype matrix. These historical numbers are not current
+strength evidence.
 
 ## RL phases
 
@@ -569,19 +583,21 @@ The current benchmark host measured approximately:
 | Actor-only deterministic fast path, batch 16, CPU | 0.84k decisions/s |
 | Actor-only deterministic fast path, batch 16, RTX 2050 | 4.69k decisions/s |
 | Full actor selection, batch 16, RTX 2050 | 3.77k decisions/s |
-| Actual trainer end-to-end, RTX 2050, 48 lanes, 8 rollout workers | 590 decisions/s |
+| Historical end-to-end trainer, RTX 2050, 48 lanes, 8 rollout workers | 590 decisions/s |
+| Current memory-bounded PPO, RTX 2050, 2 lanes, 1,536 transitions | 96.4 decisions/s |
+| Current batched matrix evaluation, RTX 2050, 8 lanes, hashes off | 377 decisions/s |
 
 On the current host, full CPU actor selection is about 0.74k decisions/s versus
 1.63k simulator steps/s, so CPU parity remains an open performance gate. The
 current vector transports measured 878.2 process, 45.9 packed-process, and
 624.5 persistent-process steps/s; all matched the reference state-hash
-sequence. The retained end-to-end trainer baseline is 590 decisions/s,
-measured over 12,288 decisions in 20.83 seconds with four PPO updates,
-persistent rollout workers, and overlapping collection. This remains the
-accepted historical working speed for now. A current bounded CUDA smoke
-completed 2,048 actor-controlled transitions with a clean revision guard and
-simulator-exploit audit but no complete matches, so it is not a strength
-result. The
+sequence. The 590 decisions/s figure is an accepted historical benchmark, not
+the current two-lane memory-bounded configuration. The current bounded CUDA
+run measured 96.4 decisions/s end-to-end over 1,536 transitions (the best
+repeat was 98.0 decisions/s); it retains the complete PPO update and is the
+training comparison to use for this constrained setup. Current batched matrix
+evaluation measured 377 decisions/s over 4,753 decisions, with identical
+actions, outcomes, and summaries to the pre-optimization eight-seed run. The
 deployment path avoids belief heads and distribution normalization, resolves
 `WAIT` before card/placement decoding, uses a channels-last raster, removes
 masked entity tails, and caps CPU intra-op parallelism at eight threads. The
@@ -590,9 +606,11 @@ and prepare the raster layout at the observation boundary. Dense CPU entity
 batches use a sequence-first Transformer layout; padded batches retain the
 existing path, repeated empty-entity lanes reuse a version-checked null
 encoding, and padded lanes compact raw entities before projection. The
-PPO/reference forward path and selected-action parity are unchanged. The
-vector-backend regression checks state, event-log, and replay hashes for both
-process transports across consecutive steps with privileged info disabled.
+PPO/reference forward path and selected-action parity are unchanged. Normal
+evaluation skips the per-decision serialization needed only for replay hashes;
+`--replay-hashes` restores that audit evidence. The vector-backend regression
+checks state, event-log, and replay hashes for both process transports across
+consecutive steps with privileged info disabled.
 
 ## Automation and current limits
 

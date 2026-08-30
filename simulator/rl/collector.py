@@ -35,6 +35,7 @@ if TORCH_AVAILABLE:
             LearnerBatch,
             RecurrentPPOLearner,
             RecurrentRolloutState,
+            RolloutStep,
         )
         from .trajectory import ActionBatch, ActionMasks, RecurrentSequence, TrajectoryBatch
     except TorchUnavailableError as exc:  # pragma: no cover - defensive path
@@ -46,6 +47,7 @@ else:
     LearnerBatch = Any  # type: ignore[misc,assignment]
     RecurrentPPOLearner = Any  # type: ignore[misc,assignment]
     RecurrentRolloutState = Any  # type: ignore[misc,assignment]
+    RolloutStep = Any  # type: ignore[misc,assignment]
     ActionBatch = Any  # type: ignore[misc,assignment]
     ActionMasks = Any  # type: ignore[misc,assignment]
     RecurrentSequence = Any  # type: ignore[misc,assignment]
@@ -78,6 +80,10 @@ class CollectorConfig:
     collect_belief_targets: bool = False
     actor_only_observations: bool = False
     deterministic: bool = False
+    # Evaluation can use the deployment-equivalent deterministic actor while
+    # retaining the ordinary trajectory wrapper for shared result handling.
+    # It skips critic/log-probability work that is unused outside PPO.
+    fast_deterministic: bool = False
     # A teacher may provide labels when explicitly configured, but regular
     # PPO must execute the actor's sampled action by default.
     expert_execution_probability: float = 0.0
@@ -103,6 +109,8 @@ class CollectorConfig:
             raise TypeError("actor_only_observations must be boolean")
         if type(self.deterministic) is not bool:
             raise TypeError("deterministic must be boolean")
+        if type(self.fast_deterministic) is not bool:
+            raise TypeError("fast_deterministic must be boolean")
         if (
             isinstance(self.expert_execution_probability, bool)
             or not math.isfinite(float(self.expert_execution_probability))
@@ -494,40 +502,75 @@ if TORCH_AVAILABLE:
                 card_masks.append(masks.card[:, 0])
                 placement_masks.append(masks.placement[:, 0])
 
-                privileged = self._privileged_batch(environments, target_player)
-                if privileged is not None:
-                    privileged_steps.append(privileged[:, 0])
-                belief = self._belief_batch(environments, target_player)
-                if belief is not None:
-                    belief_elixir_steps.append(belief[0])
-                    belief_hand_steps.append(belief[1])
-                    belief_next_steps.append(belief[2])
+                privileged = None
+                if not self.config.fast_deterministic:
+                    privileged = self._privileged_batch(environments, target_player)
+                    if privileged is not None:
+                        privileged_steps.append(privileged[:, 0])
+                    belief = self._belief_batch(environments, target_player)
+                    if belief is not None:
+                        belief_elixir_steps.append(belief[0])
+                        belief_hand_steps.append(belief[1])
+                        belief_next_steps.append(belief[2])
 
                 # Rollout collection is inference, not a differentiable
                 # optimization pass.  Keeping these graphs alive across a
                 # long match needlessly multiplies memory use and can make a
                 # first prototype look like it is leaking state between
-                # updates.
+                # updates.  Deterministic evaluation has an even smaller
+                # deployment-equivalent path: it needs only actions and the
+                # recurrent hidden state, not PPO's critic or distributions.
                 with torch.inference_mode():
-                    step = self.learner.rollout_step(
-                        rollout_state,
-                        raster[:, 0],
-                        global_features[:, 0],
-                        entities[:, 0],
-                        entity_mask[:, 0],
-                        masks,
-                        reset_mask=reset_before_step,
-                        privileged_features=privileged,
-                        deterministic=self.config.deterministic,
-                        include_beliefs=False,
-                        inference=self.config.actor_only_observations,
-                        # Diagnostics need every card-placement branch so the
-                        # trace can report meaningful alternatives.  The
-                        # normal actor path retains the fast sampler.
-                        fast_sampling=(
-                            self.expert_action is None and not self.config.diagnostics
-                        ),
-                    )
+                    if self.config.fast_deterministic:
+                        rollout_state = rollout_state.detach()
+                        actions, final_hidden = self.learner.policy.act_deterministic(
+                            raster,
+                            global_features,
+                            entities,
+                            entity_mask,
+                            masks,
+                            reset_mask=reset_before_step.reshape(-1, 1),
+                            hidden=rollout_state.hidden,
+                        )
+                        step = RolloutStep(
+                            actions=actions,
+                            log_probs=actions.mode.new_zeros(
+                                actions.mode.shape,
+                                dtype=raster.dtype,
+                            ),
+                            entropy=actions.mode.new_zeros(
+                                actions.mode.shape,
+                                dtype=raster.dtype,
+                            ),
+                            values=raster[:, 0, 0, 0].new_zeros(
+                                (batch_size, 1)
+                            ),
+                            output=None,
+                            next_state=RecurrentRolloutState(final_hidden.detach()),
+                        )
+                    else:
+                        step = self.learner.rollout_step(
+                            rollout_state,
+                            raster[:, 0],
+                            global_features[:, 0],
+                            entities[:, 0],
+                            entity_mask[:, 0],
+                            masks,
+                            reset_mask=reset_before_step,
+                            privileged_features=privileged,
+                            deterministic=self.config.deterministic,
+                            include_beliefs=False,
+                            inference=self.config.actor_only_observations,
+                            # Diagnostics need every card-placement branch so the
+                            # trace can report meaningful alternatives.  The
+                            # normal actor path retains the fast sampler.
+                            fast_sampling=(
+                                self.expert_action is None and not self.config.diagnostics
+                            ),
+                            retain_output=(
+                                self.expert_action is not None or self.config.diagnostics
+                            ),
+                        )
                 rollout_state = step.next_state
                 # Decode the sampled action before selecting the executed
                 # action. The expert path still needs the sampled action for
@@ -1075,6 +1118,15 @@ if TORCH_AVAILABLE:
             reset_mask: Any,
             last_done: Any,
         ) -> tuple[Any, RecurrentRolloutState]:
+            if self.config.fast_deterministic:
+                return (
+                    torch.zeros(
+                        len(environments),
+                        dtype=torch.float32,
+                        device=self.learner.device,
+                    ),
+                    rollout_state.detach(),
+                )
             # A terminal simulator snapshot intentionally has no legal PLAY
             # cells and may also disable WAIT. Mixed-lane collection still
             # evaluates one batched value row for a sibling lane, so replace

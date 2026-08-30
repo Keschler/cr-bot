@@ -1214,6 +1214,9 @@ def train_generalized(
             opponent_decks=tuple(scenario.deck.cards for scenario in scenarios),
             opponent_action=opponent_action,
             rollout_opponent_specs=rollout_opponent_specs,
+            opponent_uses_public_observation=any(
+                checkpoint is not None for checkpoint in checkpoint_assignments
+            ),
             expert_guidance=config.expert_guidance,
             expert_action_callback=expert_action,
         )
@@ -1853,6 +1856,7 @@ def build_heldout_matrix_config(
     max_decisions: int | None = None,
     batch_size: int = 8,
     include_match_results: bool = True,
+    include_replay_hashes: bool = False,
     shuffle_decks: bool = True,
     training_report: str | Path | None = None,
 ) -> EvaluationMatrixConfig:
@@ -1932,6 +1936,7 @@ def build_heldout_matrix_config(
         batch_size=batch_size,
         shuffle_decks=shuffle_decks,
         include_match_results=include_match_results,
+        include_replay_hashes=include_replay_hashes,
         held_out=held_out,
         held_out_source=training_report,
         excluded_deck_compositions=tuple(
@@ -1960,6 +1965,7 @@ def evaluate_heldout_matrix(
     max_decisions: int | None = None,
     batch_size: int = 8,
     include_match_results: bool = True,
+    include_replay_hashes: bool = False,
     shuffle_decks: bool = True,
     training_report: str | Path | None = None,
     progress_callback: Callable[[int, int, MatchSpec, MatchResult], None] | None = None,
@@ -1976,6 +1982,7 @@ def evaluate_heldout_matrix(
         max_decisions=max_decisions,
         batch_size=batch_size,
         include_match_results=include_match_results,
+        include_replay_hashes=include_replay_hashes,
         shuffle_decks=shuffle_decks,
         training_report=training_report,
     )
@@ -2358,6 +2365,14 @@ def _parser() -> argparse.ArgumentParser:
         default="deterministic-cycle,aggressive-pressure,defensive-cycle,beatdown,siege-bait,random-legal",
     )
     evaluate.add_argument("--no-match-results", action="store_true")
+    evaluate.add_argument(
+        "--replay-hashes",
+        action="store_true",
+        help=(
+            "include per-decision state/event replay hashes; this is a slow "
+            "differential-audit mode and is off for normal evaluation"
+        ),
+    )
     evaluate.add_argument("--no-shuffle", action="store_true")
     evaluate.add_argument(
         "--training-report",
@@ -2517,6 +2532,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     max_decisions=args.max_decisions,
                     batch_size=args.batch_size,
                     include_match_results=not args.no_match_results,
+                    include_replay_hashes=args.replay_hashes,
                     shuffle_decks=not args.no_shuffle,
                 )
             else:
@@ -2532,6 +2548,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     max_decisions=args.max_decisions,
                     batch_size=args.batch_size,
                     include_match_results=not args.no_match_results,
+                    include_replay_hashes=args.replay_hashes,
                     shuffle_decks=not args.no_shuffle,
                     training_report=args.training_report,
                 )

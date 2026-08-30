@@ -85,6 +85,12 @@ def test_matrix_config_normalizes_inputs_and_counts_cells() -> None:
     assert config.domain_randomization.profile_id == "eval-interface"
     assert config.as_dict()["domain_randomization"]["action_latency_max_steps"] == 2
 
+    audit_config = EvaluationMatrixConfig.from_mapping(
+        {**config.as_dict(), "include_replay_hashes": True}
+    )
+    assert audit_config.include_replay_hashes is True
+    assert audit_config.as_dict()["include_replay_hashes"] is True
+
 
 def test_evaluation_batch_config_drops_incompatible_training_chunking() -> None:
     from simulator.rl.evaluation_matrix import _evaluation_batch_config

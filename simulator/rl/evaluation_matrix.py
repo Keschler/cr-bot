@@ -414,6 +414,11 @@ class EvaluationMatrixConfig:
     device: str | None = "auto"
     shuffle_decks: bool = True
     include_match_results: bool = True
+    # Replay hashes require serializing the authoritative state and complete
+    # event history on every decision. They are needed for differential replay
+    # audits, but ordinary strength evaluation can use the same state/actions
+    # without that cost.
+    include_replay_hashes: bool = False
     held_out: bool = True
     batch_size: int = 8
     held_out_source: str | Path | None = None
@@ -487,6 +492,8 @@ class EvaluationMatrixConfig:
             raise EvaluationMatrixError("shuffle_decks must be boolean")
         if type(self.include_match_results) is not bool:
             raise EvaluationMatrixError("include_match_results must be boolean")
+        if type(self.include_replay_hashes) is not bool:
+            raise EvaluationMatrixError("include_replay_hashes must be boolean")
         if type(self.held_out) is not bool:
             raise EvaluationMatrixError("held_out must be boolean")
         _integer(self.batch_size, "batch_size", minimum=1)
@@ -549,6 +556,7 @@ class EvaluationMatrixConfig:
             device=raw.get("device", "auto"),
             shuffle_decks=raw.get("shuffle_decks", True),
             include_match_results=raw.get("include_match_results", True),
+            include_replay_hashes=raw.get("include_replay_hashes", False),
             held_out=raw.get("held_out", True),
             batch_size=raw.get("batch_size", 8),
             held_out_source=raw.get("held_out_source"),
@@ -569,6 +577,7 @@ class EvaluationMatrixConfig:
             "device": self.device,
             "shuffle_decks": self.shuffle_decks,
             "include_match_results": self.include_match_results,
+            "include_replay_hashes": self.include_replay_hashes,
             "held_out": self.held_out,
             "batch_size": self.batch_size,
             "held_out_source": (
@@ -1979,6 +1988,7 @@ class _CheckpointMatchRunner:
         self.ruleset = load_ruleset(self.stored_config.ruleset_id)
         self._player_deck = self._canonical_player_deck(config.player_deck)
         self.domain_randomization = config.domain_randomization
+        self.include_replay_hashes = bool(config.include_replay_hashes)
         self._torch = self._require_torch()
         self.learner.policy.eval()
         self.learner.critic.eval()
@@ -2002,6 +2012,7 @@ class _CheckpointMatchRunner:
             "ruleset_hash": self.ruleset.content_hash,
             "actor_privileged_inputs": False,
             "critic_privileged_inputs": bool(self.learner.uses_privileged_critic),
+            "include_replay_hashes": self.include_replay_hashes,
             "domain_randomization": (
                 None
                 if self.domain_randomization is None
@@ -2062,6 +2073,7 @@ class _CheckpointMatchRunner:
             decision_interval_us=int(self.stored_config.decision_interval_us),
             reward=self._RewardConfig.terminal_outcome(),
             expose_privileged_info=True,
+            include_replay_hashes=self.include_replay_hashes,
             include_authoritative_state=False,
         )
         if spec.domain_randomization is None:
@@ -2169,6 +2181,7 @@ class _CheckpointMatchRunner:
                 # not enter the actor's V2 tensors, so enabling them here
                 # keeps batched matrix rows as auditable as sequential rows.
                 expose_privileged_info=True,
+                include_replay_hashes=self.include_replay_hashes,
                 include_authoritative_state=False,
             )
             environment.reset_v2(
@@ -2178,6 +2191,15 @@ class _CheckpointMatchRunner:
             )
             environments.append(environment)
             controllers.append(spec.strategy.build(spec.seed))
+
+        # Built-in simulator-side controllers use the authoritative state
+        # passed to ``choose_action``.  Only frozen public-policy opponents
+        # need the second public observation view; avoiding it is safe because
+        # it cannot change the actor's observation or simulator action stream.
+        opponent_uses_public_observation = any(
+            callable(getattr(controller, "choose_public_action", None))
+            for controller in controllers
+        )
 
         environment_ids = {id(environment): index for index, environment in enumerate(environments)}
 
@@ -2259,6 +2281,8 @@ class _CheckpointMatchRunner:
             stop=True,
             freeze_completed_lanes=True,
             opponent_action=opponent_action,
+            actor_only_observations=not opponent_uses_public_observation,
+            fast_deterministic=True,
         )
         rollout = collector.collect(environments, decision_callback=on_decision)
         returns = rollout.trajectory.rewards.detach().sum(dim=1).cpu().tolist()
@@ -2850,6 +2874,7 @@ def evaluate_checkpoint_matrix(
     device: str | None = "auto",
     shuffle_decks: bool = True,
     include_match_results: bool = True,
+    include_replay_hashes: bool = False,
     held_out: bool = True,
     batch_size: int = 8,
     held_out_source: str | Path | None = None,
@@ -2872,6 +2897,7 @@ def evaluate_checkpoint_matrix(
         device=device,
         shuffle_decks=shuffle_decks,
         include_match_results=include_match_results,
+        include_replay_hashes=include_replay_hashes,
         held_out=held_out,
         batch_size=batch_size,
         held_out_source=held_out_source,

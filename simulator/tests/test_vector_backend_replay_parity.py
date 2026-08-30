@@ -120,6 +120,7 @@ def test_worker_payload_honors_hidden_authoritative_state(packed: bool) -> None:
         True,
         False,
         environment.engine.validate_every_tick,
+        True,
     )
     if packed:
         result = _packed_parallel_env_step_worker(
@@ -133,6 +134,34 @@ def test_worker_payload_honors_hidden_authoritative_state(packed: bool) -> None:
     assert "state_hash" in info
     assert "event_log_hash" in info
     assert "authoritative_state" not in info
+
+
+def test_replay_hashes_are_optional_without_removing_public_events() -> None:
+    from simulator.env import SimulatorEnv
+
+    hashed = SimulatorEnv(
+        expose_privileged_info=True,
+        include_authoritative_state=False,
+        include_replay_hashes=True,
+    )
+    unhashed = SimulatorEnv(
+        expose_privileged_info=True,
+        include_authoritative_state=False,
+        include_replay_hashes=False,
+    )
+    hashed.reset(seed=815)
+    unhashed.reset(seed=815)
+    hashed_step = hashed.step((None, None))
+    un_hashed_step = unhashed.step((None, None))
+
+    assert hashed_step.rewards == un_hashed_step.rewards
+    assert hashed_step.terminated == un_hashed_step.terminated
+    assert hashed_step.truncated == un_hashed_step.truncated
+    assert "state_hash" in hashed_step.info
+    assert "event_log_hash" in hashed_step.info
+    assert "state_hash" not in un_hashed_step.info
+    assert "event_log_hash" not in un_hashed_step.info
+    assert "events" in un_hashed_step.info
 
 
 def test_simulator_observation_cache_is_contract_specific_and_invalidated_on_step() -> None:

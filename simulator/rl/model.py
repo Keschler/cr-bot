@@ -206,7 +206,12 @@ class OpponentBeliefLogits:
 class RecurrentPolicyOutput:
     """Intermediate tensors useful to rollout collectors and diagnostics."""
 
-    logits: AutoregressiveLogits
+    # Actor-controlled rollout collection can request only actions/log-probs
+    # and recurrent features.  In that path the critic does not need the
+    # sparse full-card placement logits, so keeping them optional avoids a
+    # large allocation and scatter on every decision.  The normal forward
+    # and diagnostic paths still always populate them.
+    logits: AutoregressiveLogits | None
     encoded_features: torch.Tensor
     recurrent_features: torch.Tensor
     final_hidden: torch.Tensor
@@ -218,14 +223,20 @@ class RecurrentPolicyOutput:
 
     @property
     def mode_logits(self) -> torch.Tensor:
+        if self.logits is None:
+            raise RuntimeError("rollout output did not retain action logits")
         return self.logits.mode
 
     @property
     def card_logits(self) -> torch.Tensor:
+        if self.logits is None:
+            raise RuntimeError("rollout output did not retain action logits")
         return self.logits.card
 
     @property
     def placement_logits(self) -> torch.Tensor:
+        if self.logits is None:
+            raise RuntimeError("rollout output did not retain action logits")
         return self.logits.placement
 
 
@@ -1330,7 +1341,9 @@ class MaskedAutoregressivePolicy(nn.Module):
         public_features: torch.Tensor | None,
         public_action_masks: ActionMasks,
         spatial_features: torch.Tensor | None,
-    ) -> tuple[ActionBatch, torch.Tensor, torch.Tensor, AutoregressiveLogits]:
+        *,
+        return_logits: bool = True,
+    ) -> tuple[ActionBatch, torch.Tensor, torch.Tensor, AutoregressiveLogits | None]:
         """Sample a rollout action without decoding unused placements.
 
         The hierarchical sampling order is deliberately identical to
@@ -1341,6 +1354,8 @@ class MaskedAutoregressivePolicy(nn.Module):
         """
 
         _require_floating("recurrent features", recurrent_features, ndim=3)
+        if type(return_logits) is not bool:
+            raise TypeError("return_logits must be boolean")
         if public_action_masks.prefix_shape != tuple(recurrent_features.shape[:2]):
             raise ValueError("action masks must share recurrent batch/time dimensions")
         if public_action_masks.card_slots != self.card_slots:
@@ -1367,20 +1382,28 @@ class MaskedAutoregressivePolicy(nn.Module):
         joint_log_probs = mode_distribution.log_prob(mode)
         entropy = mode_distribution.entropy()
 
-        card_logits = torch.zeros(
-            (*mode.shape, self.card_slots),
-            dtype=recurrent_features.dtype,
-            device=recurrent_features.device,
+        card_logits = (
+            torch.zeros(
+                (*mode.shape, self.card_slots),
+                dtype=recurrent_features.dtype,
+                device=recurrent_features.device,
+            )
+            if return_logits
+            else None
         )
-        placement_logits = torch.zeros(
-            (
-                *mode.shape,
-                self.card_slots,
-                self.placement_rows,
-                self.placement_cols,
-            ),
-            dtype=recurrent_features.dtype,
-            device=recurrent_features.device,
+        placement_logits = (
+            torch.zeros(
+                (
+                    *mode.shape,
+                    self.card_slots,
+                    self.placement_rows,
+                    self.placement_cols,
+                ),
+                dtype=recurrent_features.dtype,
+                device=recurrent_features.device,
+            )
+            if return_logits
+            else None
         )
 
         play = mode == self.PLAY
@@ -1417,7 +1440,8 @@ class MaskedAutoregressivePolicy(nn.Module):
             joint_log_probs[play] += card_distribution.log_prob(selected_cards)
             entropy = entropy.clone()
             entropy[play] += card_distribution.entropy()
-            card_logits[play] = play_card_logits
+            if card_logits is not None:
+                card_logits[play] = play_card_logits
 
             selected_context = play_card_context.gather(
                 1,
@@ -1467,24 +1491,27 @@ class MaskedAutoregressivePolicy(nn.Module):
             joint_log_probs[play] += placement_distribution.log_prob(selected_cells)
             entropy[play] += placement_distribution.entropy()
 
-            selected_rows = placement_logits[play]
-            selected_rows.scatter_(
-                1,
-                selected_cards.reshape(-1, 1, 1, 1).expand(
-                    -1,
+            if placement_logits is not None:
+                selected_rows = placement_logits[play]
+                selected_rows.scatter_(
                     1,
-                    self.placement_rows,
-                    self.placement_cols,
-                ),
-                selected_placement_logits.unsqueeze(1),
-            )
-            placement_logits[play] = selected_rows
+                    selected_cards.reshape(-1, 1, 1, 1).expand(
+                        -1,
+                        1,
+                        self.placement_rows,
+                        self.placement_cols,
+                    ),
+                    selected_placement_logits.unsqueeze(1),
+                )
+                placement_logits[play] = selected_rows
 
         return (
             ActionBatch(mode=mode, card_slot=card_slot, placement=placement),
             joint_log_probs,
             entropy,
-            AutoregressiveLogits(mode_logits, card_logits, placement_logits),
+            None
+            if card_logits is None or placement_logits is None
+            else AutoregressiveLogits(mode_logits, card_logits, placement_logits),
         )
 
     def deterministic_action_fast(
@@ -1899,6 +1926,7 @@ class RecurrentHybridPolicy(nn.Module):
         hidden: torch.Tensor | None = None,
         include_beliefs: bool = False,
         inference: bool = False,
+        return_logits: bool = True,
     ) -> tuple[RecurrentPolicyOutput, ActionBatch, torch.Tensor, torch.Tensor]:
         """Run the actor-controlled stochastic rollout path.
 
@@ -1913,6 +1941,8 @@ class RecurrentHybridPolicy(nn.Module):
             raise TypeError("include_beliefs must be boolean")
         if type(inference) is not bool:
             raise TypeError("inference must be boolean")
+        if type(return_logits) is not bool:
+            raise TypeError("return_logits must be boolean")
         (
             encoded_features,
             spatial_features,
@@ -1934,6 +1964,7 @@ class RecurrentHybridPolicy(nn.Module):
             global_features,
             action_masks,
             spatial_features,
+            return_logits=return_logits,
         )
         belief_logits = self.belief_heads(recurrent_features) if include_beliefs else None
         output = RecurrentPolicyOutput(
