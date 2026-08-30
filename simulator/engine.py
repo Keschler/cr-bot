@@ -61,7 +61,9 @@ BASE_HOG_CYCLE_DECK = PLAYER_DECK
 # phase/fuse entities, and structure-safe navigation) are part of this engine
 # identity.  Replays and mined evidence must never be silently interpreted by
 # a newer algorithm.
-ENGINE_VERSION = "reference-0.32.0"
+ENGINE_VERSION = "reference-0.33.0"
+_SEED_MASK = (1 << 64) - 1
+_SLOW_STATUS_KINDS = frozenset({"slow", "freeze", "poison-slow", "earthquake-slow"})
 
 
 # The policy action grid is fixed by the observation contract.  Keeping its
@@ -193,7 +195,10 @@ class BattleEngine:
         source_decks = tuple(decks or (BASE_HOG_CYCLE_DECK, BASE_HOG_CYCLE_DECK))
         if len(source_decks) != 2:
             raise ValueError("a battle requires exactly two decks")
-        rng = DeterministicRng(seed & ((1 << 64) - 1))
+        if type(seed) is not int:
+            raise TypeError("seed must be an integer")
+        canonical_seed = seed & _SEED_MASK
+        rng = DeterministicRng(canonical_seed)
         players: list[PlayerState] = []
         for raw_deck in source_decks:
             deck = [self.ruleset.resolve_card_id(card) for card in raw_deck]
@@ -228,7 +233,7 @@ class BattleEngine:
             engine_version=ENGINE_VERSION,
             ruleset_id=self.ruleset.ruleset_id,
             ruleset_hash=self.ruleset.content_hash,
-            seed=seed,
+            seed=canonical_seed,
             rng_state=rng.state,
             tick=0,
             elapsed_us=0,
@@ -258,7 +263,7 @@ class BattleEngine:
         self._emit(
             state,
             "match_started",
-            seed=seed,
+            seed=canonical_seed,
             engine_version=ENGINE_VERSION,
             ruleset_id=self.ruleset.ruleset_id,
         )
@@ -6356,7 +6361,7 @@ class BattleEngine:
         slow = [
             status.magnitude_permille
             for status in entity.statuses
-            if status.kind in {"slow", "freeze"}
+            if status.kind in _SLOW_STATUS_KINDS
         ]
         rage = [status.magnitude_permille for status in entity.statuses if status.kind == "rage"]
         result = min(slow, default=PERMILLE)
@@ -6381,7 +6386,7 @@ class BattleEngine:
                 else status.magnitude_permille
             )
             for status in entity.statuses
-            if status.kind in {"slow", "freeze"}
+            if status.kind in _SLOW_STATUS_KINDS
         ]
         rage = [status.magnitude_permille for status in entity.statuses if status.kind == "rage"]
         result = min(slow, default=PERMILLE)

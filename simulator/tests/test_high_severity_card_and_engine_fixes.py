@@ -48,6 +48,35 @@ def _entity(
     return entity
 
 
+def test_seed_aliases_have_one_canonical_replay_identity() -> None:
+    engine = BattleEngine(RULESET)
+    low = engine.new_battle(
+        decks=(PLAYER_DECK, PLAYER_DECK), seed=0, shuffle_decks=True
+    )
+    aliased = engine.new_battle(
+        decks=(PLAYER_DECK, PLAYER_DECK), seed=1 << 64, shuffle_decks=True
+    )
+
+    assert low.seed == aliased.seed == 0
+    assert low.state_hash() == aliased.state_hash()
+    assert low.event_log_hash() == aliased.event_log_hash()
+    assert low.replay_hash() == aliased.replay_hash()
+
+
+def test_poison_and_earthquake_slow_statuses_change_movement_only() -> None:
+    expected = {"poison": 850, "earthquake": 500}
+    for card_id, movement_multiplier in expected.items():
+        engine, state = _state()
+        target = _entity(state, "giant", 1, 9_000, 15_000)
+        status = RULESET.card(card_id).mechanics["persistent_effect"]["status"]
+
+        engine._apply_status(state, target, status)
+
+        assert target.statuses[-1].kind == f"{card_id}-slow"
+        assert engine._speed_multiplier(target) == movement_multiplier
+        assert engine._hit_speed_multiplier(target) == 1_000
+
+
 def test_high_severity_card_overlays_are_in_the_runtime_ruleset() -> None:
     expected_projectiles = {
         "arrows": (22_000, True),

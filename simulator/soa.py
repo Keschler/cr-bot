@@ -172,6 +172,35 @@ def _threat_weight(card_name: str) -> float:
     return min(dps / 1_000.0, 5.0)
 
 
+def _ruleset_threat_weight(
+    card_id: str,
+    card_name: str,
+    ruleset: Ruleset,
+) -> float:
+    """Return threat from the active card definition, with legacy fallback.
+
+    The external vision metadata is a Level-16 catalog.  Simulator
+    observations must instead use the loaded ruleset's damage and attack
+    cadence, otherwise a policy sees a threat value for a different level.
+    Minimal fake rulesets used by adapter tests do not carry those fields, so
+    they retain the metadata-compatible behavior.
+    """
+
+    cards = getattr(ruleset, "cards", None)
+    definition = cards.get(card_id) if hasattr(cards, "get") else None
+    damage = getattr(definition, "damage", None)
+    attack_interval_us = getattr(definition, "attack_interval_us", None)
+    if (
+        type(damage) not in (int, float)
+        or type(attack_interval_us) not in (int, float)
+        or damage <= 0
+        or attack_interval_us <= 0
+    ):
+        return _threat_weight(card_name)
+    dps = float(damage) * 1_000_000.0 / float(attack_interval_us)
+    return min(dps / 1_000.0, 5.0)
+
+
 @lru_cache(maxsize=512)
 def _is_air_card(card_name: str) -> bool:
     return bool(CARD_METADATA[card_name].get("is_air"))
@@ -242,7 +271,12 @@ class ObservationSoA:
         self.card_names.extend([None] * (capacity - self._capacity))
         self._capacity = capacity
 
-    def sync(self, state: BattleState, feature_card_name: FeatureCardName) -> None:
+    def sync(
+        self,
+        state: BattleState,
+        feature_card_name: FeatureCardName,
+        ruleset: Ruleset | None = None,
+    ) -> None:
         """Refresh columns from one authoritative state in stable UID order."""
 
         entity_uids = sorted(state.entities)
@@ -288,7 +322,12 @@ class ObservationSoA:
                 if entity.max_hp <= 0
                 else min(1.0, max(0.0, entity.hp / entity.max_hp))
             )
-            self.threat[index] = self.hp_fraction[index] * _threat_weight(card_name)
+            threat_weight = (
+                _ruleset_threat_weight(entity.card_id, card_name, ruleset)
+                if ruleset is not None
+                else _threat_weight(card_name)
+            )
+            self.threat[index] = self.hp_fraction[index] * threat_weight
             self.is_air[index] = _is_air_card(card_name)
             self.renderable[index] = True
 

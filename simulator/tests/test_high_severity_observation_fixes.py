@@ -189,6 +189,40 @@ def test_elixir_collector_has_finite_zero_threat_observations(use_soa: bool) -> 
 
 
 @pytest.mark.parametrize("use_soa", [False, True])
+def test_observation_uses_active_level11_tower_caps_and_threat_cadence(
+    use_soa: bool,
+) -> None:
+    engine, state = _state()
+    _spawn(engine, state, "hog-rider", 1, 9_000, 15_000)
+    observation = build_policy_observation(
+        state,
+        RULESET,
+        viewer=0,
+        memory=ObservationMemory(viewer=0),
+        soa_state=ObservationSoA() if use_soa else None,
+    )
+
+    tower_indices = [
+        GLOBAL_SCALAR_FEATURES.index(name)
+        for name in (
+            "tower_hp_self_left",
+            "tower_hp_self_king",
+            "tower_hp_self_right",
+            "tower_hp_enemy_left",
+            "tower_hp_enemy_king",
+            "tower_hp_enemy_right",
+        )
+    ]
+    np.testing.assert_array_equal(observation.global_vector[tower_indices], 1.0)
+
+    expected_threat = 317 * 1_000_000 / 1_600_000 / 1_000
+    assert _dynamic_channel(observation, "enemy_threat_mass").sum() == pytest.approx(
+        expected_threat,
+        rel=1e-6,
+    )
+
+
+@pytest.mark.parametrize("use_soa", [False, True])
 def test_finished_regulation_state_does_not_report_active_overtime(use_soa: bool) -> None:
     engine, state = _state()
     state.elapsed_us = RULESET.match.regulation_us

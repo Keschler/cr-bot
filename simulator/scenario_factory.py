@@ -521,10 +521,15 @@ def _generated_support_plan(
         ) and "musketeer" in ruleset.cards
         if card_id == "cannon" and mechanic == "projectile_speed":
             # Cannon only attacks ground troops.  A second Cannon is therefore
-            # not a valid target fixture; keep the target a Musketeer.
+            # not a valid target fixture; keep the target a Musketeer.  Deploy
+            # the tested Cannon first and keep the target at row 18: row 17 is
+            # close enough for the opposing Princess Tower to kill the target
+            # before Cannon's first loaded shot, while row 18 remains inside
+            # Cannon's authored acquisition range.
             support_card = "musketeer"
             support_slot = player_deck.index(support_card)
-            support_cell = (3, 17)
+            support_cell = (3, 18)
+            main_tick = 400
         elif card_id == "ice-spirit" and mechanic == "projectile_speed":
             # Ice Spirit's projectile is the jump/contact attack.  It needs a
             # troop to jump onto; a building-only fixture leaves the attack
@@ -586,7 +591,7 @@ def _generated_support_plan(
         # using the fixed player deck (no privileged entity injection).
         support_tick = (
             520
-            if use_cannon
+            if use_cannon or (card_id == "cannon" and mechanic == "projectile_speed")
             else 470
             if mechanic in {"jump_landing", "deployment_effect", "knockback"}
             else 400

@@ -427,7 +427,9 @@ class SimulatorEnv:
         # A persistent vector worker can build the next public snapshot while
         # it advances physics.  The cache is private and only used when the
         # parent state is the exact state associated with that snapshot.
-        self._persistent_observation_cache: tuple[int, str, object] | None = None
+        self._persistent_observation_cache: tuple[
+            tuple[int, str, int, int], str, object
+        ] | None = None
 
     def reset(
         self,
@@ -466,7 +468,8 @@ class SimulatorEnv:
     def observe(self) -> tuple[PolicyObservationV1, PolicyObservationV1]:
         state = self._require_state()
         cached = self._persistent_observation_cache
-        if cached is not None and cached[0] == id(state) and cached[1] == "v1":
+        fingerprint = _state_sync_fingerprint(state)
+        if cached is not None and cached[0] == fingerprint and cached[1] == "v1":
             observations = cached[2]
             if isinstance(observations, tuple) and len(observations) == 2:
                 return observations  # type: ignore[return-value]
@@ -496,7 +499,8 @@ class SimulatorEnv:
 
         state = self._require_state()
         cached = self._persistent_observation_cache
-        if cached is not None and cached[0] == id(state) and cached[1] == "v2":
+        fingerprint = _state_sync_fingerprint(state)
+        if cached is not None and cached[0] == fingerprint and cached[1] == "v2":
             observations = cached[2]
             if isinstance(observations, tuple) and len(observations) == 2:
                 return observations  # type: ignore[return-value]
@@ -523,7 +527,8 @@ class SimulatorEnv:
 
         state = self._require_state()
         cached = self._persistent_observation_cache
-        if cached is not None and cached[0] == id(state) and cached[1] == "v2":
+        fingerprint = _state_sync_fingerprint(state)
+        if cached is not None and cached[0] == fingerprint and cached[1] == "v2":
             observations = cached[2]
             if isinstance(observations, tuple) and len(observations) == 2:
                 observation = observations[viewer]
@@ -1048,7 +1053,7 @@ class VectorSimulatorEnv:
             info = self._refresh_worker_info(environment, info)
             observations = environment.observe_v2() if v2 else environment.observe()
             environment._persistent_observation_cache = (
-                id(restored_state),
+                _state_sync_fingerprint(restored_state),
                 "v2" if v2 else "v1",
                 observations,
             )

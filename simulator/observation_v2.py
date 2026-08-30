@@ -42,6 +42,7 @@ from .observation import (
     ACTION_MASK_SHAPE,
     BOARD_SHAPE,
     GLOBAL_VECTOR_SHAPE,
+    OBSERVATION_SCHEMA_VERSION,
     PINNED_OBSERVATION_CONTRACT_HASH,
     PolicyObservationV1,
 )
@@ -108,7 +109,7 @@ def observation_v2_contract_manifest() -> dict[str, object]:
     return {
         "schema_version": OBSERVATION_V2_SCHEMA_VERSION,
         "parent": {
-            "schema_version": "vision-v1-exact-1",
+            "schema_version": OBSERVATION_SCHEMA_VERSION,
             "contract_hash": PINNED_OBSERVATION_CONTRACT_HASH,
         },
         "tensors": {

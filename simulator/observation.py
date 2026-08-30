@@ -84,7 +84,7 @@ from .state import BattleState, EntityState
 
 
 VISION_V1_EXACT: Final = "vision_v1_exact"
-OBSERVATION_SCHEMA_VERSION: Final = "vision-v1-exact-1"
+OBSERVATION_SCHEMA_VERSION: Final = "vision-v1-exact-2"
 BOARD_SHAPE: Final = (21, GRID_ROWS, GRID_COLS)
 GLOBAL_VECTOR_SHAPE: Final = (768,)
 ACTION_MASK_SHAPE: Final = (4, GRID_ROWS, GRID_COLS)
@@ -151,8 +151,13 @@ def observation_contract_manifest() -> dict[str, object]:
         "normalizers": {
             "max_elixir": MAX_ELIXIR,
             "total_match_seconds": TOTAL_MATCH_SECONDS,
-            "princess_tower_hp": PRINCESS_TOWER_HP,
-            "king_tower_hp": FEATURE_MAX_KING_TOWER_HP,
+            # The simulator's fixed runtime ruleset is Level 11.  The
+            # imported cr_bot feature builders use Level-16 tower caps, so
+            # these values are part of this simulator-owned contract.
+            "princess_tower_hp": 3_052,
+            "king_tower_hp": 4_824,
+            "tower_hp_source": "simulator.rulesets.v1",
+            "threat_weight_source": "active-ruleset-damage-over-attack-interval",
         },
         "action_grid": {
             "columns": ACTION_GRID.cols,
@@ -180,7 +185,7 @@ def calculate_observation_contract_hash() -> str:
 
 
 PINNED_OBSERVATION_CONTRACT_HASH: Final = (
-    "sha256:fa42f20ddce8a6d9d5ee2089e415d610834ba324d2fc8195dc618b556f206d79"
+    "sha256:c9a9d0455d9ef70707051153c88348c26c533bb7479d37e83eb947041aa793ec"
 )
 
 
@@ -224,12 +229,24 @@ def _clip_unit(value: float) -> float:
     return min(1.0, max(0.0, float(value)))
 
 
-def _normalize_soa_tower_hp(values: np.ndarray) -> tuple[float, float, float]:
+def _normalize_soa_tower_hp(
+    values: np.ndarray,
+    ruleset: Ruleset | None = None,
+) -> tuple[float, float, float]:
     left, king, right = (int(value) for value in values)
+    towers = getattr(ruleset, "towers", None) if ruleset is not None else None
+    princess = towers.get("princess-tower") if hasattr(towers, "get") else None
+    king_tower = towers.get("king-tower") if hasattr(towers, "get") else None
+    princess_hp = getattr(princess, "hitpoints", None)
+    king_hp = getattr(king_tower, "hitpoints", None)
+    if type(princess_hp) is not int or princess_hp <= 0:
+        princess_hp = PRINCESS_TOWER_HP
+    if type(king_hp) is not int or king_hp <= 0:
+        king_hp = int(FEATURE_MAX_KING_TOWER_HP)
     return (
-        _clip_unit(left / PRINCESS_TOWER_HP),
-        _clip_unit(king / FEATURE_MAX_KING_TOWER_HP),
-        _clip_unit(right / PRINCESS_TOWER_HP),
+        _clip_unit(left / princess_hp),
+        _clip_unit(king / king_hp),
+        _clip_unit(right / princess_hp),
     )
 
 
@@ -574,17 +591,33 @@ def build_policy_observation(
         memory=memory,
         allow_unrepresented_hand=allow_unrepresented_hand,
     )
-    if _requires_null_safe_board(observed):
+    if _supports_runtime_projection(ruleset):
+        # The imported feature stack is a Level-16 snapshot.  Use the local
+        # projection whenever an authoritative ruleset is available so board
+        # threat and global tower HP describe the same runtime as physics.
+        runtime_soa = ObservationSoA()
+        runtime_soa.sync(state, _feature_card_name, ruleset)
+        board = np.ascontiguousarray(_build_soa_board(runtime_soa, viewer), dtype=np.float32)
+        global_vector = _build_soa_global_vector(
+            state,
+            ruleset,
+            viewer=viewer,
+            memory=memory,
+            soa_state=runtime_soa,
+            allow_unrepresented_hand=allow_unrepresented_hand,
+        )
+    elif _requires_null_safe_board(observed):
         # The external rasterizer assumes every card has an attack cadence.
-        # Keep its ordinary output byte-compatible, but use the simulator-local
-        # SoA renderer for passive/resource cards whose threat is zero by
-        # definition (for example Elixir Collector).
+        # Keep its ordinary output byte-compatible for minimal adapter test
+        # doubles, but use the simulator-local renderer for passive/resource
+        # cards whose threat is zero by definition.
         safe_soa = ObservationSoA()
         safe_soa.sync(state, _feature_card_name)
         board = np.ascontiguousarray(_build_soa_board(safe_soa, viewer), dtype=np.float32)
+        global_vector = np.ascontiguousarray(build_global_vector(observed), dtype=np.float32)
     else:
         board = np.ascontiguousarray(build_board(observed, _ARENA_PX), dtype=np.float32)
-    global_vector = np.ascontiguousarray(build_global_vector(observed), dtype=np.float32)
+        global_vector = np.ascontiguousarray(build_global_vector(observed), dtype=np.float32)
     spatial_masks = _build_spatial_masks(observed)
     if legal_action_cells_callback is not None:
         legal_play = _build_legal_play_from_cells(
@@ -636,7 +669,7 @@ def _build_policy_observation_soa(
     """
 
     if not soa_already_synced:
-        soa_state.sync(state, _feature_card_name)
+        soa_state.sync(state, _feature_card_name, ruleset)
     board = _build_soa_board(soa_state, viewer)
     global_vector = _build_soa_global_vector(
         state,
@@ -721,6 +754,20 @@ def _requires_null_safe_board(observed: GameState) -> bool:
         ):
             return True
     return False
+
+
+def _supports_runtime_projection(ruleset: Ruleset) -> bool:
+    """Whether ``ruleset`` has the fields needed for active feature values."""
+
+    cards = getattr(ruleset, "cards", None)
+    towers = getattr(ruleset, "towers", None)
+    return (
+        hasattr(cards, "get")
+        and hasattr(towers, "get")
+        and cards.get("hog-rider") is not None
+        and towers.get("princess-tower") is not None
+        and towers.get("king-tower") is not None
+    )
 
 
 def _build_soa_board(soa_state: ObservationSoA, viewer: int) -> np.ndarray:
@@ -851,8 +898,8 @@ def _build_soa_global_vector(
     global_scalars[9] = float(tower_alive[1, 2])
     global_scalars[10] = float(not tower_alive[1, 0])
     global_scalars[11] = float(not tower_alive[1, 2])
-    own_left, own_king, own_right = _normalize_soa_tower_hp(tower_hp[0])
-    enemy_left, enemy_king, enemy_right = _normalize_soa_tower_hp(tower_hp[1])
+    own_left, own_king, own_right = _normalize_soa_tower_hp(tower_hp[0], ruleset)
+    enemy_left, enemy_king, enemy_right = _normalize_soa_tower_hp(tower_hp[1], ruleset)
     global_scalars[12:15] = (own_left, own_king, own_right)
     global_scalars[15:18] = (enemy_left, enemy_king, enemy_right)
 

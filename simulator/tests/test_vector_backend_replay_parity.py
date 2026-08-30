@@ -136,7 +136,7 @@ def test_worker_payload_honors_hidden_authoritative_state(packed: bool) -> None:
 
 
 def test_simulator_observation_cache_is_contract_specific_and_invalidated_on_step() -> None:
-    from simulator.env import SimulatorEnv
+    from simulator.env import SimulatorEnv, _state_sync_fingerprint
 
     environment = SimulatorEnv()
     environment.reset(seed=812)
@@ -144,15 +144,20 @@ def test_simulator_observation_cache_is_contract_specific_and_invalidated_on_ste
     assert state is not None
 
     v1 = environment.observe()
-    environment._persistent_observation_cache = (id(state), "v1", v1)
+    environment._persistent_observation_cache = (_state_sync_fingerprint(state), "v1", v1)
     assert environment.observe() is v1
 
+    state.players[0].elixir_milli = 0
+    refreshed = environment.observe()
+    assert refreshed is not v1
+    assert refreshed[0].global_vector[0] == 0.0
+
     v2 = environment.observe_v2()
-    environment._persistent_observation_cache = (id(state), "v2", v2)
+    environment._persistent_observation_cache = (_state_sync_fingerprint(state), "v2", v2)
     assert environment.observe_v2() is v2
     assert environment.observe() is not v2
 
-    environment._persistent_observation_cache = (id(state), "v1", v1)
+    environment._persistent_observation_cache = (_state_sync_fingerprint(state), "v1", v1)
     step = environment.step((None, None))
     assert step.observations is not v1
 
