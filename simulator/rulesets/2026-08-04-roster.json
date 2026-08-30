@@ -11611,16 +11611,14 @@
         "persistent_effect": {
           "crown_damage_per_tick": 0,
           "crown_damage_schedule": [
-            14,
-            13
+            27
           ],
           "damage_per_tick": 0,
           "damage_schedule": [
-            42,
-            42
+            84
           ],
           "duration_anchor": "creation",
-          "duration_us": 1100000,
+          "duration_us": 1050000,
           "pull_to_center_mtile": 1000,
           "radius_mtile": 5500,
           "targets": [
@@ -11628,7 +11626,7 @@
             "ground",
             "crown_tower"
           ],
-          "tick_interval_us": 500000
+          "tick_interval_us": 550000
         },
         "piercing": false,
         "placement_class": "spell_anywhere",
@@ -11653,7 +11651,9 @@
           "local-card-metadata-2026-08-14"
         ],
         "generated_mechanics": [
-          "local-card-metadata-2026-08-14"
+          "local-card-metadata-2026-08-14",
+          "official-april-2025-tornado-damage",
+          "clash-wiki-tornado-interval-2026-08-30"
         ],
         "identity": [
           "local-card-metadata-2026-08-14"
@@ -12483,7 +12483,7 @@
       ]
     }
   },
-  "content_hash": "sha256:96f939895390640f3ff510654cd3b4afcddca0a9cc71eee254c6f5d27c953b84",
+  "content_hash": "sha256:61c2b1932e6cd5e314f5d342ee57ae01788a3f8c300561b350588039418f001d",
   "interaction_set": [
     "archers",
     "arrows",
@@ -12787,6 +12787,16 @@
       "sha256": null,
       "url": "https://clashroyale.fandom.com/wiki/Royal_Recruits"
     },
+    "clash-wiki-tornado-interval-2026-08-30": {
+      "confidence_tier": "B",
+      "kind": "current-card-mechanics-reference",
+      "lineage": "Current Clash Royale Wiki Tornado page",
+      "note": "Current reference reports a 1.05-second field and 0.55-second damage/pull interval; exact pull force and collision edge behavior remain provisional.",
+      "published_at": null,
+      "retrieved_at": "2026-08-30",
+      "sha256": null,
+      "url": "https://clashroyale.fandom.com/wiki/Tornado"
+    },
     "community-mega-knight-jump-2026-08-30": {
       "confidence_tier": "B",
       "kind": "community-mechanic-cross-check",
@@ -13074,6 +13084,16 @@
       "note": "Goblins and Goblin Gang first-hit changes, including the explicit exception for Goblins spawned by other cards.",
       "published_at": "2025-04-09",
       "retrieved_at": "2026-08-29",
+      "sha256": null,
+      "url": "https://supercell.com/en/games/clashroyale/blog/release-notes/april-balance-changes/"
+    },
+    "official-april-2025-tornado-damage": {
+      "confidence_tier": "A",
+      "kind": "official-patch-note",
+      "lineage": "Supercell April 2025 balance changes",
+      "note": "Official balance note changed Tornado damage from 84x2 to 84, so the current field has one damaging pulse rather than two positive damage events.",
+      "published_at": "2025-04-09",
+      "retrieved_at": "2026-08-30",
       "sha256": null,
       "url": "https://supercell.com/en/games/clashroyale/blog/release-notes/april-balance-changes/"
     },

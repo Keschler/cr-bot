@@ -42,6 +42,8 @@ ARENA_GEOMETRY_SOURCE_ID = "crforge-arena-geometry-2026-08-30"
 TESLA_FOOTPRINT_SOURCE_ID = "statsroyale-tesla-footprint-2026-08-30"
 MEGA_KNIGHT_JUMP_SOURCE_ID = "community-mega-knight-jump-2026-08-30"
 PHOENIX_EGG_MECHANICS_SOURCE_ID = "supercell-phoenix-egg-mechanics-2026-08-30"
+TORNADO_DAMAGE_SOURCE_ID = "official-april-2025-tornado-damage"
+TORNADO_INTERVAL_SOURCE_ID = "clash-wiki-tornado-interval-2026-08-30"
 SIGHT_RANGE_SOURCE_ID = "aesdragon-hidden-sight-ranges-2026-08-30"
 CURSED_HOG_SIGHT_SOURCE_ID = "clash-wiki-cursed-hog-sight-2026-08-30"
 ROYAL_RECRUITS_FORMATION_SOURCE_ID = "clash-wiki-royal-recruits-formation-2026-08-30"
@@ -935,21 +937,20 @@ PERSISTENT_EFFECT_DEFINITIONS: Mapping[str, Mapping[str, Any]] = {
         "crown_damage_by_target_count": {"1": 97, "2-4": 51, "5+": 35},
     },
     "tornado": {
-        # DeckShop's current Level-11 page reports a 1.1 s field with damage
-        # every 0.5 s.  The two positive pulses are split from the displayed
-        # per-second total so integer damage remains deterministic.  The
-        # third pulse keeps the pull active through the final 0.1 s of field
-        # lifetime but carries no additional damage; exact game pulse timing
-        # and pull force remain an explicit video-fit target.
-        "duration_us": 1_100_000,
+        # The April 2025 balance note changed Tornado from two 84-damage
+        # pulses to one 84-damage pulse.  The current mechanic reference puts
+        # the pull refresh interval at 0.55 s and the field lifetime at 1.05
+        # s.  The field therefore keeps a damage-free refresh pulse at 0.55 s
+        # while retaining the pull through the rest of its lifetime.
+        "duration_us": 1_050_000,
         "duration_anchor": "creation",
-        "tick_interval_us": 500_000,
+        "tick_interval_us": 550_000,
         "radius_mtile": 5_500,
         "targets": ["air", "ground", "crown_tower"],
         "damage_per_tick": 0,
         "crown_damage_per_tick": 0,
-        "damage_schedule": [42, 42],
-        "crown_damage_schedule": [14, 13],
+        "damage_schedule": [84],
+        "crown_damage_schedule": [27],
         "pull_to_center_mtile": 1_000,
     },
     "rage": {
@@ -2838,6 +2839,17 @@ def build_roster_ruleset_raw(base_raw: Mapping[str, Any] | None = None) -> dict[
             if GOBLIN_BRAWLER_SOURCE_ID not in generated:
                 generated.append(GOBLIN_BRAWLER_SOURCE_ID)
             cards[card_id]["provenance"] = provenance
+        if card_id == "tornado":
+            cards[card_id] = deepcopy(cards[card_id])
+            provenance = {
+                str(key): list(value) if isinstance(value, (list, tuple)) else [str(value)]
+                for key, value in dict(cards[card_id].get("provenance", {})).items()
+            }
+            generated = provenance.setdefault("generated_mechanics", [])
+            for source_id in (TORNADO_DAMAGE_SOURCE_ID, TORNADO_INTERVAL_SOURCE_ID):
+                if source_id not in generated:
+                    generated.append(source_id)
+            cards[card_id]["provenance"] = provenance
         # Official field overrides must also reach hand-curated base rows.
         # The fixed base artifact contains player cards such as Ice Golem;
         # applying overrides only inside ``_generated_card`` silently leaves
@@ -3135,6 +3147,26 @@ def build_roster_ruleset_raw(base_raw: Mapping[str, Any] | None = None) -> dict[
             "sha256": None,
             "lineage": "Supercell March 2026 update, StatsRoyale Phoenix page, and current mechanic tests",
             "note": "The current official update explicitly fixes Tornado to pull Phoenix Egg; current card references cross-check that the egg is not an ordinary building for Crown-Tower targeting, troop spell damage, Clone, and Rage behavior.",
+        },
+        TORNADO_DAMAGE_SOURCE_ID: {
+            "confidence_tier": "A",
+            "kind": "official-patch-note",
+            "url": "https://supercell.com/en/games/clashroyale/blog/release-notes/april-balance-changes/",
+            "retrieved_at": "2026-08-30",
+            "published_at": "2025-04-09",
+            "sha256": None,
+            "lineage": "Supercell April 2025 balance changes",
+            "note": "Official balance note changed Tornado damage from 84x2 to 84, so the current field has one damaging pulse rather than two positive damage events.",
+        },
+        TORNADO_INTERVAL_SOURCE_ID: {
+            "confidence_tier": "B",
+            "kind": "current-card-mechanics-reference",
+            "url": "https://clashroyale.fandom.com/wiki/Tornado",
+            "retrieved_at": "2026-08-30",
+            "published_at": None,
+            "sha256": None,
+            "lineage": "Current Clash Royale Wiki Tornado page",
+            "note": "Current reference reports a 1.05-second field and 0.55-second damage/pull interval; exact pull force and collision edge behavior remain provisional.",
         },
         SIGHT_RANGE_SOURCE_ID: {
             "confidence_tier": "B",

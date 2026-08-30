@@ -293,7 +293,7 @@ class AreaEffectState:
     # Optional per-pulse damage schedules.  Tuples are canonical in the
     # authoritative state; JSON round-trips normalize lists back to tuples.
     # A schedule may end before the area lifetime (for example Tornado keeps
-    # its pull active during a short final tail after its two damage pulses).
+    # its pull active during a short final tail after its one damage pulse).
     damage_schedule: tuple[int, ...] = ()
     crown_damage_schedule: tuple[int, ...] = ()
     # Optional friendly aura component (Rage is the first consumer).  The

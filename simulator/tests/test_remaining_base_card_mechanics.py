@@ -357,6 +357,46 @@ def test_graveyard_uses_a_deterministic_noncentral_spawn_pattern() -> None:
     assert (9_000, 15_000) not in first
 
 
+def test_tornado_has_one_damage_pulse_and_a_pull_only_tail() -> None:
+    engine, state = _state()
+    target = _entity(state, "giant", 1, 9_000, 15_000)
+    card = RULESET.card("tornado")
+    before_hp = target.hp
+
+    engine._create_area_effect(
+        state,
+        owner=0,
+        source_uid=None,
+        source_card_id="tornado",
+        x_mtile=9_000,
+        y_mtile=15_000,
+        default_radius=int(card.area_radius_mtile or 0),
+        default_damage=int(card.damage or 0),
+        default_crown_damage=int(card.crown_tower_damage or 0),
+        default_status=None,
+        default_knockback=0,
+        raw_effect=card.mechanics["persistent_effect"],
+    )
+
+    effect = next(iter(state.effects.values()))
+    assert effect.remaining_us == 1_050_000
+    assert effect.tick_interval_us == 550_000
+    assert target.hp == before_hp - 84
+    assert [event.get("damage") for event in state.events if event.kind == "area_effect_pulse"] == [84]
+
+    # The 0.55-second refresh keeps the pull component alive but must not
+    # create a second positive damage event after the April 2025 nerf.
+    for _ in range(11):
+        engine._advance_area_effects(state)
+    assert target.hp == before_hp - 84
+    assert [event.get("damage") for event in state.events if event.kind == "area_effect_pulse"] == [84, 0]
+
+    for _ in range(10):
+        engine._advance_area_effects(state)
+    assert target.hp == before_hp - 84
+    assert not effect.alive
+
+
 def test_minion_deployment_is_staggered_and_bush_releases_without_parent_damage() -> None:
     engine, state = _state()
     before_uids = set(state.entities)

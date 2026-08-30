@@ -268,7 +268,7 @@ unchanged, and records `target_player`, `actor_player`, and `opponent_player`.
 The generalized runner and evaluation commands below reproduce the recorded
 RL audit. The generated checkpoint and reports are local artifacts and are not
 included in this checkout; rerun training before using those paths. The
-recorded run used engine `reference-0.36.0`.
+recorded run used engine `reference-0.36.0`; the current engine `reference-0.37.0` is used for new runs.
 
 Evaluate the six-deck held-out smoke audit with the same checkpoint, seed,
 strategy, cap, and exclusion report every time:

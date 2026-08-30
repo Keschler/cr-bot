@@ -58,7 +58,7 @@ BASE_HOG_CYCLE_DECK = PLAYER_DECK
 
 # Behavior-changing mechanics are part of the engine identity.  Replays and
 # mined evidence must never be silently interpreted by a newer algorithm.
-ENGINE_VERSION = "reference-0.36.0"
+ENGINE_VERSION = "reference-0.37.0"
 _SEED_MASK = (1 << 64) - 1
 _SLOW_STATUS_KINDS = frozenset({"slow", "freeze", "poison-slow", "earthquake-slow"})
 _CARD_CYCLE_COOLDOWN_SINGLE_US = 2_000_000
