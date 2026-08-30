@@ -59,6 +59,10 @@ a controlled probe when the action boundary or causal behavior matters.
   This remains the accepted historical working baseline. A fresh direct-path
   smoke on revision `942d97a` measured 264.9 decisions/s over the same 12,288
   decisions; its revision guard and simulator-exploit audit were clean.
+- A fresh revision-`942d97a` vector benchmark measured 2,932.9 reference,
+  835.9 process, 42.3 packed-process, and 684.8 persistent-process environment
+  steps/s at 16 lanes. All optimized runs matched the reference state-hash
+  sequence; replay/event parity is covered by the regression suite.
 - The current action contract has `WAIT`/`PLAY`, card slot, and placement but
   no learned wait-duration head; `WAIT` advances the fixed simulator decision
   interval. The proposed timing head remains a future architecture change.

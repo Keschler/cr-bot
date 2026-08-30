@@ -554,6 +554,11 @@ PPO/reference forward path and selected-action parity are unchanged. The
 vector-backend regression checks state, event-log, and replay hashes for both
 process transports across consecutive steps with privileged info disabled.
 
+A fresh revision-`942d97a` vector benchmark measured 2,932.9 reference, 835.9
+process, 42.3 packed-process, and 684.8 persistent-process environment steps/s
+at 16 lanes. Each optimized backend produced the same state-hash sequence as
+the reference; these are revision-specific diagnostic measurements.
+
 ## Automation and current limits
 
 Recommended checks:
