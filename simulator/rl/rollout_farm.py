@@ -63,7 +63,12 @@ class _SharedRolloutStorage:
         self.arrays = dict(arrays)
 
     @classmethod
-    def create(cls, config: Any) -> "_SharedRolloutStorage":
+    def create(
+        cls,
+        config: Any,
+        *,
+        expert_guidance: bool = False,
+    ) -> "_SharedRolloutStorage":
         from multiprocessing.shared_memory import SharedMemory
         import numpy as np
 
@@ -103,6 +108,18 @@ class _SharedRolloutStorage:
             fields["belief_enemy_elixir"] = ((batch, horizon), np.float32)
             fields["belief_enemy_hand"] = ((batch, horizon, 128), np.float32)
             fields["belief_enemy_next_card"] = ((batch, horizon), np.int64)
+        if expert_guidance:
+            # Expert guidance is label-only by default: the worker computes a
+            # training target from authoritative state, while the actor's
+            # sampled action remains the environment action.  Keep the labels
+            # in the same bounded shared-memory segment as the trajectory.
+            fields["behavior_cloning_weights"] = ((batch, horizon), np.float32)
+            fields["behavior_cloning_action_mode"] = ((batch, horizon), np.int64)
+            fields["behavior_cloning_action_card_slot"] = ((batch, horizon), np.int64)
+            fields["behavior_cloning_action_placement"] = (
+                (batch, horizon, 2),
+                np.int64,
+            )
 
         handles: dict[str, Any] = {}
         arrays: dict[str, Any] = {}
@@ -248,6 +265,31 @@ def _copy_batch_to_shared(
         copy_field("belief_enemy_elixir", batch.belief_targets.enemy_elixir)
         copy_field("belief_enemy_hand", batch.belief_targets.enemy_hand)
         copy_field("belief_enemy_next_card", batch.belief_targets.enemy_next_card)
+    if "behavior_cloning_weights" in storage.arrays:
+        if batch.behavior_cloning_weights is None or batch.behavior_cloning_actions is None:
+            raise RolloutFarmError(
+                "rollout batch omitted expert labels in an expert-guided farm"
+            )
+        copy_field("behavior_cloning_weights", batch.behavior_cloning_weights)
+        copy_field(
+            "behavior_cloning_action_mode",
+            batch.behavior_cloning_actions.mode,
+        )
+        copy_field(
+            "behavior_cloning_action_card_slot",
+            batch.behavior_cloning_actions.card_slot,
+        )
+        copy_field(
+            "behavior_cloning_action_placement",
+            batch.behavior_cloning_actions.placement,
+        )
+    elif (
+        batch.behavior_cloning_weights is not None
+        or batch.behavior_cloning_actions is not None
+    ):
+        raise RolloutFarmError(
+            "rollout farm was not configured to transport expert labels"
+        )
 
 
 def _rollout_worker(connection: Any) -> None:
@@ -256,7 +298,7 @@ def _rollout_worker(connection: Any) -> None:
     storages: tuple[_SharedRolloutStorage, ...] = ()
     try:
         command = connection.recv()
-        if not isinstance(command, tuple) or len(command) != 8 or command[0] != "init":
+        if not isinstance(command, tuple) or len(command) != 9 or command[0] != "init":
             raise RolloutFarmError("rollout worker expected an init command")
         (
             _,
@@ -267,6 +309,7 @@ def _rollout_worker(connection: Any) -> None:
             policy_state,
             critic_state,
             storage_descriptor,
+            expert_teacher,
         ) = command
         if not isinstance(raw_config, Mapping):
             raise RolloutFarmError("rollout worker received an invalid config")
@@ -287,6 +330,12 @@ def _rollout_worker(connection: Any) -> None:
             raise RolloutFarmError("rollout worker received invalid shared storage")
         if any(not isinstance(item, Mapping) for item in storage_descriptors):
             raise RolloutFarmError("rollout worker received invalid shared storage descriptors")
+        if expert_teacher is not None and expert_teacher not in {
+            "public-counter",
+            "strategic-counter",
+            "deterministic-counter",
+        }:
+            raise RolloutFarmError("rollout worker received an invalid expert teacher")
 
         storages = tuple(
             _SharedRolloutStorage.attach(item) for item in storage_descriptors
@@ -382,6 +431,20 @@ def _rollout_worker(connection: Any) -> None:
                     )
                 return controller.choose_action(environment.engine, environment.state, player)
 
+        expert_action = None
+        if expert_teacher == "public-counter":
+            from .public_counter import public_counter_action
+
+            expert_action = public_counter_action
+        elif expert_teacher == "strategic-counter":
+            from .public_counter import strategic_counter_action
+
+            expert_action = strategic_counter_action
+        elif expert_teacher == "deterministic-counter":
+            from .expert import deterministic_counter_action
+
+            expert_action = deterministic_counter_action
+
         episode_counts = [0] * len(environments)
         connection.send(("ready",))
 
@@ -429,6 +492,7 @@ def _rollout_worker(connection: Any) -> None:
                 collect_config,
                 lane_decks=tuple(tuple(pair) for pair in lane_decks),
                 opponent_action=opponent_action,
+                expert_action=expert_action,
                 batch_step=None,
                 lane_offset=int(lane_indices[0]),
                 actor_only_observations=True,
@@ -600,6 +664,23 @@ def _combine_batches(batches: Sequence[Any]) -> Any:
             if all(item.bootstrap_values is not None for item in batches)
             else None
         )
+    behavior_cloning_actions = None
+    if any(item.behavior_cloning_actions is not None for item in batches):
+        if not all(item.behavior_cloning_actions is not None for item in batches):
+            raise RolloutFarmError("rollout workers returned inconsistent expert actions")
+        behavior_cloning_actions = ActionBatch(
+            mode=_cat(
+                [item.behavior_cloning_actions.mode for item in batches], dim=0
+            ),
+            card_slot=_cat(
+                [item.behavior_cloning_actions.card_slot for item in batches],
+                dim=0,
+            ),
+            placement=_cat(
+                [item.behavior_cloning_actions.placement for item in batches],
+                dim=0,
+            ),
+        )
     return LearnerBatch(
         trajectory=trajectory,
         privileged_features=_cat_optional(
@@ -611,23 +692,7 @@ def _combine_batches(batches: Sequence[Any]) -> Any:
         behavior_cloning_log_probs=_cat_optional(
             [item.behavior_cloning_log_probs for item in batches], dim=0
         ),
-        behavior_cloning_actions=(
-            ActionBatch(
-                mode=_cat(
-                    [item.behavior_cloning_actions.mode for item in batches], dim=0
-                ),
-                card_slot=_cat(
-                    [item.behavior_cloning_actions.card_slot for item in batches],
-                    dim=0,
-                ),
-                placement=_cat(
-                    [item.behavior_cloning_actions.placement for item in batches],
-                    dim=0,
-                ),
-            )
-            if all(item.behavior_cloning_actions is not None for item in batches)
-            else None
-        ),
+        behavior_cloning_actions=behavior_cloning_actions,
         behavior_cloning_weights=_cat_optional(
             [item.behavior_cloning_weights for item in batches], dim=0
         ),
@@ -695,6 +760,15 @@ def _batch_from_shared(storage: _SharedRolloutStorage, config: Any) -> Any:
     else:
         next_values = None
         bootstrap_values = tensor("bootstrap_values")
+    behavior_cloning_actions = None
+    behavior_cloning_weights = None
+    if "behavior_cloning_weights" in storage.arrays:
+        behavior_cloning_weights = tensor("behavior_cloning_weights")
+        behavior_cloning_actions = ActionBatch(
+            mode=tensor("behavior_cloning_action_mode"),
+            card_slot=tensor("behavior_cloning_action_card_slot"),
+            placement=tensor("behavior_cloning_action_placement"),
+        )
     return LearnerBatch(
         trajectory=trajectory,
         privileged_features=(
@@ -705,6 +779,8 @@ def _batch_from_shared(storage: _SharedRolloutStorage, config: Any) -> Any:
         belief_targets=belief_targets,
         next_values=next_values,
         bootstrap_values=bootstrap_values,
+        behavior_cloning_actions=behavior_cloning_actions,
+        behavior_cloning_weights=behavior_cloning_weights,
     )
 
 
@@ -730,6 +806,7 @@ class RolloutFarm:
         lane_decks: Sequence[tuple[tuple[str, ...], tuple[str, ...]]],
         opponent_specs: Sequence[RolloutOpponentSpec] | None = None,
         *,
+        expert_teacher: str | None = None,
         double_buffer: bool = False,
     ) -> None:
         if len(lane_decks) != int(config.envs):
@@ -757,6 +834,13 @@ class RolloutFarm:
             self.opponent_specs: tuple[RolloutOpponentSpec, ...] = tuple(normalized_specs)
         else:
             self.opponent_specs = None
+        if expert_teacher is not None and expert_teacher not in {
+            "public-counter",
+            "strategic-counter",
+            "deterministic-counter",
+        }:
+            raise RolloutFarmError("expert_teacher must name a supported built-in teacher")
+        self.expert_teacher = expert_teacher
         self.connections: list[Any] = []
         self.processes: list[Any] = []
         self.groups: list[tuple[int, ...]] = []
@@ -765,7 +849,10 @@ class RolloutFarm:
             raise RolloutFarmError("double_buffer must be boolean")
         self.double_buffer = double_buffer
         self.storages = tuple(
-            _SharedRolloutStorage.create(config)
+            _SharedRolloutStorage.create(
+                config,
+                expert_guidance=expert_teacher is not None,
+            )
             for _ in range(2 if double_buffer else 1)
         )
         # Keep the singular attribute for diagnostics and existing callers.
@@ -832,6 +919,7 @@ class RolloutFarm:
                         policy_state,
                         critic_state,
                         tuple(storage.descriptor() for storage in self.storages),
+                        self.expert_teacher,
                     )
                 )
             for connection in self.connections:

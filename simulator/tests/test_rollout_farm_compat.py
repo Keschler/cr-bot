@@ -54,3 +54,27 @@ def test_rollout_shared_memory_schema_preserves_successor_values() -> None:
         assert "bootstrap_values" in storage.arrays
     finally:
         storage.close(unlink=True)
+
+
+def test_rollout_shared_memory_schema_can_transport_expert_labels() -> None:
+    import simulator.rl.rollout_farm as rollout_farm
+
+    config = SimpleNamespace(
+        envs=2,
+        horizon=3,
+        gru_hidden_dim=4,
+        gru_layers=1,
+        use_privileged_critic=False,
+        collect_belief_targets=False,
+    )
+    storage = rollout_farm._SharedRolloutStorage.create(
+        config,
+        expert_guidance=True,
+    )
+    try:
+        assert storage.arrays["behavior_cloning_weights"].shape == (2, 3)
+        assert storage.arrays["behavior_cloning_action_mode"].shape == (2, 3)
+        assert storage.arrays["behavior_cloning_action_card_slot"].shape == (2, 3)
+        assert storage.arrays["behavior_cloning_action_placement"].shape == (2, 3, 2)
+    finally:
+        storage.close(unlink=True)

@@ -1275,11 +1275,16 @@ def train_generalized(
             opponent_decks=tuple(scenario.deck.cards for scenario in scenarios),
             opponent_action=opponent_action,
             rollout_opponent_specs=rollout_opponent_specs,
+            rollout_expert_teacher=(
+                config.expert_teacher if config.expert_guidance else None
+            ),
+            expert_action_callback=(
+                None if segment_config.env_backend == "rollout-process" else expert_action
+            ),
             opponent_uses_public_observation=any(
                 checkpoint is not None for checkpoint in checkpoint_assignments
             ),
             expert_guidance=config.expert_guidance,
-            expert_action_callback=expert_action,
             resume_learning_rate=(
                 config.resume_learning_rate if local_segment_index == 0 else None
             ),

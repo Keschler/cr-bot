@@ -1314,6 +1314,7 @@ def train_prototype(
     resume_reset_optimizer: bool = False,
     expert_guidance: bool = False,
     expert_action_callback: Callable[[Any, Any, int], Any] | None = None,
+    rollout_expert_teacher: str | None = None,
     player_deck: Sequence[str] | None = None,
     opponent_decks: Sequence[Sequence[str]] | None = None,
     opponent_action: Callable[[Any, Any, int], Any | None] | None = None,
@@ -1340,6 +1341,14 @@ def train_prototype(
         raise TypeError("expert_guidance must be boolean")
     if expert_action_callback is not None and not callable(expert_action_callback):
         raise TypeError("expert_action_callback must be callable when provided")
+    if rollout_expert_teacher is not None and rollout_expert_teacher not in {
+        "public-counter",
+        "strategic-counter",
+        "deterministic-counter",
+    }:
+        raise PrototypeConfigurationError(
+            "rollout_expert_teacher must name a supported built-in teacher"
+        )
     if opponent_uses_public_observation is not None and type(
         opponent_uses_public_observation
     ) is not bool:
@@ -1506,9 +1515,10 @@ def train_prototype(
                 "rollout-process uses serialized simulator-side opponent specs; "
                 "use a vector backend for a Python opponent callback"
             )
-        if expert_guidance:
+        if expert_guidance and expert_action_callback is not None:
             raise PrototypeConfigurationError(
-                "rollout-process currently does not support expert guidance"
+                "rollout-process supports only built-in expert teachers; omit "
+                "expert_action_callback"
             )
         from .rollout_farm import RolloutFarm
 
@@ -1517,6 +1527,13 @@ def train_prototype(
             learner,
             lane_decks,
             opponent_specs=rollout_opponent_specs,
+            expert_teacher=(
+                rollout_expert_teacher
+                if rollout_expert_teacher is not None
+                else "deterministic-counter"
+                if expert_guidance
+                else None
+            ),
             double_buffer=effective_config.overlap_rollouts,
         )
         environments: Sequence[Any] = ()
