@@ -87,6 +87,10 @@ class CollectorConfig:
     # A teacher may provide labels when explicitly configured, but regular
     # PPO must execute the actor's sampled action by default.
     expert_execution_probability: float = 0.0
+    # Optional label-quality filter for a public teacher.  It suppresses
+    # labels outside publicly visible threat states while leaving actor
+    # actions and legality masks unchanged.
+    expert_label_on_threat_only: bool = False
     stop_on_episode_end: bool = False
     freeze_completed_lanes: bool = False
     # Full model/simulator decision records are opt-in because serializing
@@ -117,6 +121,8 @@ class CollectorConfig:
             or not 0.0 <= float(self.expert_execution_probability) <= 1.0
         ):
             raise ValueError("expert_execution_probability must be in [0, 1]")
+        if type(self.expert_label_on_threat_only) is not bool:
+            raise TypeError("expert_label_on_threat_only must be boolean")
         if type(self.stop_on_episode_end) is not bool:
             raise TypeError("stop_on_episode_end must be boolean")
         if type(self.freeze_completed_lanes) is not bool:
@@ -608,7 +614,13 @@ if TORCH_AVAILABLE:
                             else decoded_actions[lane]
                         )
                         expert_weights.append(
-                            _expert_action_weight(environment, expert_action, target_player)
+                            _expert_action_weight(
+                                environment,
+                                expert_action,
+                                target_player,
+                                observation=current_observations[lane][target_player],
+                                threat_only=self.config.expert_label_on_threat_only,
+                            )
                         )
                     teacher_actions = _encode_actions(
                         expert_actions,
@@ -1439,7 +1451,14 @@ def _encode_actions(actions: Sequence[Any], *, device: Any) -> Any:
     )
 
 
-def _expert_action_weight(environment: Any, action: Any, player: int) -> float:
+def _expert_action_weight(
+    environment: Any,
+    action: Any,
+    player: int,
+    *,
+    observation: Any | None = None,
+    threat_only: bool = False,
+) -> float:
     """Weight decisive teacher plays without erasing resource-saving waits.
 
     The old ``0.05`` versus ``100`` range made the supervised dataset behave
@@ -1449,6 +1468,18 @@ def _expert_action_weight(environment: Any, action: Any, player: int) -> float:
     Hog masked forever.  These moderate ratios still make a rare Hog label
     visible while preserving the state-dependent WAIT signal.
     """
+
+    if type(threat_only) is not bool:
+        raise TypeError("threat_only must be boolean")
+    if threat_only:
+        if observation is None:
+            raise ValueError("observation is required when threat_only is enabled")
+        try:
+            from .public_counter import public_defensive_threat_observed
+        except ImportError:  # pragma: no cover - top-level ``rl`` imports
+            from simulator.rl.public_counter import public_defensive_threat_observed
+        if not public_defensive_threat_observed(observation):
+            return 0.0
 
     kind = str(getattr(action, "kind", "")).casefold().replace("_", "-")
     if kind in {"wait", "noop", "no-op"} or action.__class__.__name__ == "WaitAction":
@@ -1507,4 +1538,5 @@ __all__ = [
     "RolloutStats",
     "TORCH_AVAILABLE",
     "TorchUnavailableError",
+    "_expert_action_weight",
 ]

@@ -2372,6 +2372,14 @@ def _parser() -> argparse.ArgumentParser:
         help="teacher-action execution probability; lower values enable DAgger states",
     )
     train.add_argument(
+        "--expert-label-on-threat-only",
+        action="store_true",
+        help=(
+            "apply teacher labels only when the public observation shows a "
+            "defensive threat; actor actions remain unchanged"
+        ),
+    )
+    train.add_argument(
         "--deterministic-rollouts",
         action="store_true",
         help=(
@@ -2604,6 +2612,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 gae_lambda=args.gae_lambda,
                 imitation_only=args.imitation_only,
                 expert_execution_probability=args.expert_execution_probability,
+                expert_label_on_threat_only=args.expert_label_on_threat_only,
                 deterministic_rollouts=args.deterministic_rollouts,
                 entropy_coef=args.entropy_coef,
                 dense_reward=args.dense_reward,

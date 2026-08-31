@@ -39,6 +39,57 @@ def test_collector_defaults_to_actor_controlled_rollouts() -> None:
     config = CollectorConfig()
 
     assert config.expert_execution_probability == 0.0
+    assert config.expert_label_on_threat_only is False
+
+
+def test_public_threat_label_gate_uses_only_visible_observation() -> None:
+    from cr_bot.features.channels import GLOBAL_SCALAR_IDX
+    from simulator.observation_v2 import ENTITY_TOKEN_FEATURES, PolicyObservationV2
+    from rl.public_counter import public_defensive_threat_observed
+
+    board = np.zeros((21, 32, 18), dtype=np.float32)
+    global_vector = np.zeros((768,), dtype=np.float32)
+    entity_tokens = np.zeros((128, 32), dtype=np.float32)
+    entity_mask = np.zeros((128,), dtype=bool)
+    legal_play = np.zeros((4, 32, 18), dtype=bool)
+
+    quiet = PolicyObservationV2(
+        board=board,
+        global_vector=global_vector,
+        entity_tokens=entity_tokens,
+        entity_mask=entity_mask,
+        legal_play=legal_play,
+        legal_wait=True,
+    )
+    assert public_defensive_threat_observed(quiet) is False
+
+    feature_index = {name: index for index, name in enumerate(ENTITY_TOKEN_FEATURES)}
+    entity_tokens[0, feature_index["side"]] = 1.0
+    entity_tokens[0, feature_index["y"]] = 0.5
+    entity_tokens[0, feature_index["is_visible"]] = 1.0
+    entity_mask[0] = True
+    crossed = PolicyObservationV2(
+        board=board,
+        global_vector=global_vector,
+        entity_tokens=entity_tokens,
+        entity_mask=entity_mask,
+        legal_play=legal_play,
+        legal_wait=True,
+    )
+    assert public_defensive_threat_observed(crossed) is True
+
+    entity_tokens[0] = 0.0
+    entity_mask[0] = False
+    global_vector[GLOBAL_SCALAR_IDX["tower_hp_self_left"]] = 0.5
+    damaged_tower = PolicyObservationV2(
+        board=board,
+        global_vector=global_vector,
+        entity_tokens=entity_tokens,
+        entity_mask=entity_mask,
+        legal_play=legal_play,
+        legal_wait=True,
+    )
+    assert public_defensive_threat_observed(damaged_tower) is True
 
 
 def test_rollout_stats_can_attribute_terminal_results_to_lanes() -> None:

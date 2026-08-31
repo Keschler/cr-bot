@@ -134,6 +134,10 @@ class PrototypeConfig:
     # an explicit, separately reported bootstrap mode and is never the safe
     # default for a new run.
     expert_execution_probability: float = 0.0
+    # Suppress low-confidence teacher labels outside public threat states.
+    # This is data curation only: it does not alter actor actions, masks, or
+    # simulator behavior.
+    expert_label_on_threat_only: bool = False
     deterministic_rollouts: bool = False
     max_grad_norm: float = 0.5
     placement_max_grad_norm: float | None = None
@@ -205,6 +209,7 @@ class PrototypeConfig:
             "direct_public_slot_card_features",
             "spatial_placement_features",
             "imitation_only",
+            "expert_label_on_threat_only",
             "deterministic_rollouts",
             "overlap_rollouts",
             "compile_policy",
@@ -1001,6 +1006,7 @@ def _make_collector(
                 if expert_execution_probability is None
                 else expert_execution_probability
             ),
+            expert_label_on_threat_only=config.expert_label_on_threat_only,
             stop_on_episode_end=stop,
             freeze_completed_lanes=freeze_completed_lanes,
             diagnostics=diagnostics,
@@ -3988,6 +3994,14 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     train.add_argument(
+        "--expert-label-on-threat-only",
+        action="store_true",
+        help=(
+            "apply teacher labels only when the public observation shows a "
+            "defensive threat; actor actions remain unchanged"
+        ),
+    )
+    train.add_argument(
         "--deterministic-rollouts",
         action="store_true",
         help=(
@@ -4125,6 +4139,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 behavior_cloning_factor_coef=args.bc_factor_coef,
                 imitation_only=args.imitation_only,
                 expert_execution_probability=args.expert_execution_probability,
+                expert_label_on_threat_only=args.expert_label_on_threat_only,
                 deterministic_rollouts=args.deterministic_rollouts,
                 device=args.device,
                 env_backend=args.env_backend,

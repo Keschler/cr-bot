@@ -730,9 +730,31 @@ def strategic_counter_action(environment: Any, observation: Any, player: int) ->
     )
 
 
+def public_defensive_threat_observed(observation: Any) -> bool:
+    """Return whether the public stream contains a defensive threat.
+
+    This is a label-quality gate for teacher-guided training, not an action
+    rule.  It deliberately uses only the same public observation available to
+    the actor.  In particular, it prevents a teacher's generic opening Hog
+    preference from overwriting a useful learner policy while retaining labels
+    for visible crossings, air threats, immediate pressure, and damaged own
+    towers.
+    """
+
+    observation = PublicCounterController._validate_observation(observation)
+    crossed, _lane = PublicCounterController._enemy_pressure(observation)
+    return bool(
+        crossed
+        or PublicCounterController._enemy_has_air_pressure(observation)
+        or PublicCounterController._enemy_immediate_pressure(observation)
+        or StrategicCounterController._critical_own_tower(observation) is not None
+    )
+
+
 __all__ = [
     "PublicCounterController",
     "StrategicCounterController",
     "public_counter_action",
+    "public_defensive_threat_observed",
     "strategic_counter_action",
 ]
