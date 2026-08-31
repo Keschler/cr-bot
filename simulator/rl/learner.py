@@ -1938,6 +1938,7 @@ def _skipped_minibatch_metrics() -> dict[str, float]:
         "behavior_cloning_loss": 0.0,
         "factor_behavior_cloning_loss": 0.0,
         "effective_factor_behavior_cloning_coef": 0.0,
+        "placement_gradient_clip_fraction": 0.0,
         "approx_kl": 0.0,
         "clip_fraction": 0.0,
         "gradient_norm": 0.0,
