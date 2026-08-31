@@ -111,15 +111,20 @@ capture, ingest, and the connected two-phone workflow are documented in
 
 ### Prototype actor on a phone
 
-`run_prototype_live.py` connects the existing `cr_bot` extractor to the
-recurrent public actor in
-`outputs/simulator/training/prototype-fast-current/prototype.pt`. It samples
-one explicitly selected phone with serial-scoped ADB screenshots, converts
-each emitted frame to `PolicyObservationV2`, carries the GRU state forward,
-and records `WAIT`/`PLAY(card_slot, (column, row))` decisions as JSONL:
+The one-file distribution is
+`dist/prototype-live-linux-x86_64`. It contains the Python runtime, CPU
+PyTorch, `cr_bot` visual extraction, KataCR inference, bundled extractor
+assets, the default `prototype-fast-current` checkpoint, and the `adb`/`ffmpeg`
+helpers. Recipients do not need Python, pip, a virtual environment, or Python
+packages. It is a Linux x86-64 CPU executable.
+
+See [RUN_PROTOTYPE_LIVE.md](RUN_PROTOTYPE_LIVE.md) for download, ADB setup,
+checkpoint selection, binary execution, safety gates, and native-build
+instructions.
 
 ```bash
-PYTHONPATH=..:../src ../capture/.venv-train/bin/python run_prototype_live.py \
+./dist/prototype-live-linux-x86_64 \
+  --checkpoint /absolute/path/to/prototype.pt \
   --serial SERIAL \
   --max-frames 20 \
   --jsonl-out outputs/simulator/prototype-live-dry-run.jsonl
@@ -129,21 +134,36 @@ The default is a dry-run, so it never taps the device. A recorded video can
 also be inspected without ADB:
 
 ```bash
-PYTHONPATH=..:../src ../capture/.venv-train/bin/python run_prototype_live.py \
+./dist/prototype-live-linux-x86_64 \
+  --checkpoint /absolute/path/to/prototype.pt \
   --video /path/to/gameplay.mp4 \
   --jsonl-out outputs/simulator/prototype-video-dry-run.jsonl
 ```
 
 Real taps require an explicitly matched calibration, card templates, and both
-confirmation flags. `AutonomousPhone` takes a fresh screenshot and verifies
-the selected card before the calibrated card and arena taps:
+confirmation flags. `AutonomousPhone` takes a recent decoded stream frame and
+verifies the selected card before the calibrated card and arena taps:
 
 ```bash
-PYTHONPATH=..:../src ../capture/.venv-train/bin/python run_prototype_live.py \
+./dist/prototype-live-linux-x86_64 \
+  --checkpoint /absolute/path/to/prototype.pt \
   --serial SERIAL \
   --calibration physical_lab/calibrations/phone-a-candidate.json \
   --execute --confirm-live
 ```
+
+Live serial mode uses a persistent, serial-scoped H.264 `screenrecord` stream
+decoded by the bundled `ffmpeg`; it keeps only the newest frame so CPU
+inference cannot fall behind and act on stale video. The original screenshot
+transport remains available with `--adb-transport screenshot`.
+
+Live mode retains the extractor's original YOLO input size of 896 by default.
+For the faster experimental profile, add `--yolo-image-size 640`; this can
+reduce small-object detection quality and should be validated against gameplay
+before live use. Live mode also caches the successful source screenshot or
+decoded stream frame as the short-lived ADB connectivity proof, avoiding the
+redundant device probe before each tap. The cache interval can be changed with
+`--connection-check-interval-s`.
 
 Use a reviewed calibration artifact and the correct card-template root for a
 real device. Stop the process with `Ctrl-C`; no game force-stop or storage

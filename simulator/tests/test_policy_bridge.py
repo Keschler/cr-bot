@@ -3,13 +3,22 @@ from __future__ import annotations
 from types import SimpleNamespace
 import pytest
 
-from cr_bot.domain.game_state import Action, GameState, HudState, PrincessTowerState
+from cr_bot.domain.game_state import (
+    Action,
+    Detection,
+    GameState,
+    HudState,
+    Match,
+    PrincessTowerState,
+)
+from cr_bot.domain.card_metadata import CARD_METADATA
 from simulator.observation import ACTION_MASK_SHAPE
 from simulator.physical_lab.policy_bridge import (
     PolicyBridgeError,
     dispatch_policy_action,
     observation_from_game_state,
     observation_from_match_step,
+    observation_v2_from_game_state,
     placement_command_from_policy_action,
 )
 
@@ -59,6 +68,87 @@ def test_visual_state_projects_to_the_pinned_policy_contract() -> None:
     assert not observation.legal_play[0, 10, 9]
 
 
+@pytest.mark.parametrize(
+    ("detector_name", "metadata_name"),
+    (("skeleton", "skeletons"), ("bat", "bats")),
+)
+def test_detector_unit_labels_are_normalized_for_v1_and_v2_features(
+    detector_name: str,
+    metadata_name: str,
+) -> None:
+    state = _state()
+    state.enemy_units = [
+        Match(
+            troop=Detection(
+                track_id=7,
+                class_name=detector_name,
+                team="enemy",
+                confidence=0.9,
+                x1=0.45,
+                y1=0.45,
+                x2=0.55,
+                y2=0.55,
+                center_x=0.5,
+                center_y=0.5,
+                estimated_hp=130.0,
+            ),
+            bar=None,
+        )
+    ]
+
+    observation = observation_from_game_state(
+        state,
+        arena_px=(0.0, 0.0, 1.0, 1.0),
+    )
+    v2_observation = observation_v2_from_game_state(
+        state,
+        arena_px=(0.0, 0.0, 1.0, 1.0),
+    )
+
+    assert observation.board.shape == (21, 32, 18)
+    assert v2_observation.entity_mask[0]
+    # The extractor state is not mutated while the feature view uses the
+    # corresponding metadata key.
+    assert state.enemy_units[0].troop.class_name == detector_name
+    max_card_id = max(int(metadata["id"]) for metadata in CARD_METADATA.values())
+    assert v2_observation.entity_tokens[0, 0] == pytest.approx(
+        CARD_METADATA[metadata_name]["id"] / max_card_id
+    )
+
+
+def test_unrepresentable_detector_effect_is_omitted_and_logged(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    state = _state()
+    state.enemy_units = [
+        Match(
+            troop=Detection(
+                track_id=8,
+                class_name="bomb",
+                team="enemy",
+                confidence=0.9,
+                x1=0.45,
+                y1=0.45,
+                x2=0.55,
+                y2=0.55,
+                center_x=0.5,
+                center_y=0.5,
+                estimated_hp=None,
+            ),
+            bar=None,
+        )
+    ]
+
+    with caplog.at_level("WARNING", logger="simulator.physical_lab.policy_bridge"):
+        observation = observation_v2_from_game_state(
+            state,
+            arena_px=(0.0, 0.0, 1.0, 1.0),
+        )
+
+    assert not observation.entity_mask.any()
+    assert "unsupported detector label='bomb'" in caplog.text
+
+
 def test_match_step_helper_skips_non_emitted_frames() -> None:
     assert observation_from_match_step(SimpleNamespace(in_game=False)) is None
     step = SimpleNamespace(
@@ -68,6 +158,22 @@ def test_match_step_helper_skips_non_emitted_frames() -> None:
         analysis=SimpleNamespace(arena_px=(0.0, 0.0, 1.0, 1.0)),
     )
     observation = observation_from_match_step(step)
+    assert observation is not None
+    assert observation.legal_wait is True
+
+
+def test_match_step_keeps_wait_legal_when_timer_ocr_is_missing() -> None:
+    state = _state()
+    state.hud.time_left_s = None  # type: ignore[assignment]
+    step = SimpleNamespace(
+        in_game=True,
+        should_emit=True,
+        game_state=state,
+        analysis=SimpleNamespace(arena_px=(0.0, 0.0, 1.0, 1.0)),
+    )
+
+    observation = observation_from_match_step(step)
+
     assert observation is not None
     assert observation.legal_wait is True
 

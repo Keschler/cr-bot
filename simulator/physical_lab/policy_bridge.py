@@ -19,7 +19,8 @@ it a second time.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+import logging
 from typing import Any, Protocol
 
 import numpy as np
@@ -29,6 +30,7 @@ from cr_bot.domain.game_state import Action as PolicyAction
 from cr_bot.features.action_masks import get_action_mask
 from cr_bot.features.board_rasterizer import build_board
 from cr_bot.features.global_features import build_global_vector
+from cr_bot.trackers.direct_unit_to_card import DIRECT_UNIT_TO_CARD
 
 from ..observation import ACTION_MASK_SHAPE, PolicyObservationV1, policy_card_name
 from ..observation_v2 import PolicyObservationV2
@@ -38,6 +40,117 @@ from .schema import PhysicalLabError
 
 
 _MASK_2D_SHAPE = ACTION_MASK_SHAPE[1:]
+_LOGGER = logging.getLogger(__name__)
+_LOGGED_UNSUPPORTED_VISUAL_LABELS: set[str] = set()
+
+# KataCR reports the detector's unit labels (for example ``skeleton`` and
+# ``hog``), while the feature stack's metadata is keyed by the playable card
+# (``skeletons`` and ``hog-rider``).  Keep this normalization at the visual
+# policy boundary: the extractor's GameState remains untouched, but board and
+# public-token features receive the metadata vocabulary they require.
+_VISUAL_ENTITY_FEATURE_ALIASES: dict[str, str] = {
+    "bat": "bats",
+    "bat-evolution": "bats",
+    "bush-goblin": "goblins",
+    "barbarian": "barbarians",
+    "barbarian-evolution": "barbarians",
+    "cursed-hog": "hog-rider",
+    "elixir-golem-small": "elixir-golem",
+    "elixir-golem-mid": "elixir-golem",
+    "goblin": "goblins",
+    "goblin-brawler": "goblins",
+    "phoenix-egg": "phoenix",
+    "phoenix-small": "phoenix",
+    "golemite": "golem",
+    "elixir-golemite": "elixir-golem",
+    "elixir-blob": "elixir-golem",
+    "lava-pup": "lava-hound",
+    "minion": "minions",
+    "rascal-boy": "barbarians",
+    "rascal-girl": "spear-goblins",
+    "spear-goblin": "spear-goblins",
+    "cannon-cart-building": "cannon-cart",
+}
+
+
+def _visual_feature_card_name(value: object) -> str | None:
+    """Resolve a detector unit label to a card-metadata feature key."""
+
+    if not isinstance(value, str) or not value.strip():
+        return None
+    normalized = value.strip().casefold().replace("_", "-")
+    if normalized in CARD_METADATA:
+        return normalized
+
+    mapped = DIRECT_UNIT_TO_CARD.get(normalized)
+    if mapped is None:
+        mapped = _VISUAL_ENTITY_FEATURE_ALIASES.get(normalized)
+    if isinstance(mapped, str) and mapped in CARD_METADATA:
+        return mapped
+    # Some YOLO labels are transient effects/projectiles (for example
+    # ``bomb`` or ``axe``), not card-backed units.  They cannot contribute a
+    # trustworthy card feature and are omitted by the caller.
+    return None
+
+
+def _canonicalize_visual_match(match: object) -> object | None:
+    """Copy one visual match with a metadata-compatible troop label."""
+
+    troop = getattr(match, "troop", None)
+    raw_name = getattr(troop, "class_name", None)
+    feature_name = _visual_feature_card_name(raw_name)
+    if feature_name is None:
+        label = repr(raw_name)
+        if label not in _LOGGED_UNSUPPORTED_VISUAL_LABELS:
+            _LOGGED_UNSUPPORTED_VISUAL_LABELS.add(label)
+            _LOGGER.warning(
+                "visual feature omitted unsupported detector label=%s "
+                "(team=%s track=%s); no card metadata mapping",
+                label,
+                getattr(troop, "team", None),
+                getattr(troop, "track_id", None),
+            )
+        return None
+    if feature_name == raw_name:
+        return match
+    try:
+        return replace(match, troop=replace(troop, class_name=feature_name))
+    except TypeError:
+        # The production extractor uses the slotted dataclasses.  Preserve
+        # compatibility with light-weight test doubles that are not dataclass
+        # instances; the original value will then fail closed if unsupported.
+        return match
+
+
+def _canonicalize_visual_game_state(game_state: Any) -> Any:
+    """Return a non-mutating metadata-normalized view of a visual state."""
+
+    own_units = getattr(game_state, "own_units", None)
+    enemy_units = getattr(game_state, "enemy_units", None)
+    if not isinstance(own_units, list) or not isinstance(enemy_units, list):
+        return game_state
+    normalized_own = [
+        normalized
+        for match in own_units
+        if (normalized := _canonicalize_visual_match(match)) is not None
+    ]
+    normalized_enemy = [
+        normalized
+        for match in enemy_units
+        if (normalized := _canonicalize_visual_match(match)) is not None
+    ]
+    if normalized_own == own_units and normalized_enemy == enemy_units:
+        return game_state
+    try:
+        return replace(
+            game_state,
+            own_units=normalized_own,
+            enemy_units=normalized_enemy,
+        )
+    except TypeError:
+        # Keep the adapter safe for non-dataclass test doubles.  Real
+        # extractor GameState objects always take the replace path above.
+        return game_state
 
 
 class PolicyBridgeError(PhysicalLabError):
@@ -135,9 +248,10 @@ def observation_from_game_state(
     if not isinstance(raw_hand, (list, tuple)) or len(raw_hand) < 4:
         raise PolicyBridgeError("visual state does not contain four hand cards")
 
+    feature_state = _canonicalize_visual_game_state(game_state)
     try:
-        board = np.ascontiguousarray(build_board(game_state, arena_px), dtype=np.float32)
-        global_vector = np.ascontiguousarray(build_global_vector(game_state), dtype=np.float32)
+        board = np.ascontiguousarray(build_board(feature_state, arena_px), dtype=np.float32)
+        global_vector = np.ascontiguousarray(build_global_vector(feature_state), dtype=np.float32)
     except (KeyError, TypeError, ValueError, AttributeError) as error:
         raise PolicyBridgeError(f"visual state cannot be rasterized safely: {error}") from error
 
@@ -154,7 +268,7 @@ def observation_from_game_state(
             continue
         try:
             spatial_masks[slot] = _bool_mask(
-                get_action_mask(card_name, game_state),
+                get_action_mask(card_name, feature_state),
                 field_name=f"spatial mask for hand slot {slot}",
             )
         except (KeyError, TypeError, ValueError) as error:
@@ -205,7 +319,10 @@ def observation_v2_from_game_state(
         legal_wait=legal_wait,
     )
     try:
-        public_entity_rows = build_public_entity_rows(game_state, viewer=0)
+        public_entity_rows = build_public_entity_rows(
+            _canonicalize_visual_game_state(game_state),
+            viewer=0,
+        )
         return PolicyObservationV2.from_v1(
             observation_v1,
             public_entity_rows=public_entity_rows,
@@ -235,7 +352,14 @@ def observation_from_match_step(step: Any) -> PolicyObservationV1 | None:
     arena_px = getattr(analysis, "arena_px", None)
     if arena_px is None:
         raise PolicyBridgeError("match step does not contain arena calibration bounds")
-    return observation_from_game_state(step.game_state, arena_px=tuple(arena_px))
+    # MatchSession already classified this frame as in-game.  A transient OCR
+    # miss must not make both WAIT and PLAY illegal; waiting is always the safe
+    # action while the match boundary is still active.
+    return observation_from_game_state(
+        step.game_state,
+        arena_px=tuple(arena_px),
+        legal_wait=True,
+    )
 
 
 def observation_v2_from_match_step(step: Any) -> PolicyObservationV2 | None:
@@ -259,6 +383,7 @@ def observation_v2_from_match_step(step: Any) -> PolicyObservationV2 | None:
     return observation_v2_from_game_state(
         step.game_state,
         arena_px=tuple(arena_px),
+        legal_wait=True,
     )
 
 
@@ -266,7 +391,7 @@ def placement_command_from_policy_action(
     action: PolicyAction,
     game_state: Any,
     *,
-    observation: PolicyObservationV1 | None = None,
+    observation: PolicyObservationV1 | PolicyObservationV2 | None = None,
 ) -> PlacementCommand | None:
     """Resolve a policy action to a verified hand card and local grid cell.
 
@@ -315,7 +440,7 @@ def dispatch_policy_action(
     game_state: Any,
     *,
     calibration: Any,
-    observation: PolicyObservationV1 | None = None,
+    observation: PolicyObservationV1 | PolicyObservationV2 | None = None,
     capture: Any = None,
 ) -> tuple[int, Any, Any] | None:
     """Send one validated placement through ``AutonomousPhone``.

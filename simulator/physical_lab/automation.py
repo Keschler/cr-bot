@@ -624,6 +624,32 @@ class CardVision:
         )
         return self._best_in_bounds(image, card_id, bounds)
 
+    def find_hand_card_in_slot(
+        self,
+        frame: Frame,
+        profile: UiProfile,
+        card_id: str,
+        slot: int,
+        *,
+        hand_px: tuple[float, float, float, float],
+    ) -> CardMatch | None:
+        """Match a hand card inside one policy-selected slot."""
+
+        if type(slot) is not int or not 0 <= slot < 4:
+            raise AutomationError("hand card slot must be from 0 through 3")
+        image = self._image(frame)
+        hand_x, hand_y, hand_width, hand_height = hand_px
+        if hand_width <= 0 or hand_height <= 0:
+            raise AutomationError("reviewed hand rectangle must have positive dimensions")
+        slot_width = hand_width / 4.0
+        bounds = (
+            int(round(hand_x + slot * slot_width)),
+            int(round(hand_y)),
+            int(round(hand_x + (slot + 1) * slot_width)),
+            int(round(hand_y + hand_height)),
+        )
+        return self._best_in_bounds(image, card_id, bounds)
+
     def find_card_near(
         self,
         frame: Frame,
@@ -678,7 +704,7 @@ class CardVision:
 
 
 class AutonomousPhone:
-    """ADB UI primitives with screenshot verification and no force-stop."""
+    """ADB UI primitives with frame verification and no force-stop."""
 
     def __init__(
         self,
@@ -687,11 +713,15 @@ class AutonomousPhone:
         vision: CardVision,
         *,
         device_model: str | None = None,
+        action_frame_provider: Callable[[], Frame] | None = None,
     ) -> None:
         self.controller = controller
         self.profile = profile
         self.vision = vision
         self.device_model = None if device_model is None else device_model.strip().lower()
+        if action_frame_provider is not None and not callable(action_frame_provider):
+            raise AutomationError("action_frame_provider must be callable when supplied")
+        self.action_frame_provider = action_frame_provider
 
     def _validate_device_deck_constraints(self, target: Sequence[str]) -> None:
         is_known_samsung = self.device_model in SAMSUNG_HERO_MUSKETEER_MODEL_IDS
@@ -2469,8 +2499,25 @@ class AutonomousPhone:
             raise AutomationError(
                 f"{self.profile.device_label} reviewed battle hand must contain four slots"
             )
-        frame = self.record(capture)
-        match = self.vision.find_hand_card(frame, self.profile, card_id)
+        if self.action_frame_provider is None:
+            frame = self.record(capture)
+        else:
+            frame = self.action_frame_provider()
+            if capture is not None:
+                capture.record_frame(frame)
+        find_hand_card_in_slot = getattr(self.vision, "find_hand_card_in_slot", None)
+        if expected_slot is not None and callable(find_hand_card_in_slot):
+            match = find_hand_card_in_slot(
+                frame,
+                self.profile,
+                card_id,
+                expected_slot,
+                hand_px=calibration.hand_px,
+            )
+        else:
+            # Keep compatibility with reviewed/custom vision adapters that
+            # expose only the original full-hand matcher.
+            match = self.vision.find_hand_card(frame, self.profile, card_id)
         if match is None or match.score < self.vision.threshold:
             raise AutomationError(
                 f"{self.profile.device_label} could not identify {card_id} in the current hand"
@@ -2494,7 +2541,15 @@ class AutonomousPhone:
         placed = self.controller.tap_screen(*calibration.cell_to_pixel(arena_cell))
         if not placed.accepted:
             raise AutomationError(f"{self.profile.device_label} rejected placement for {card_id}")
-        self.record(capture)
+        # The live prototype's next loop iteration takes the next source
+        # screenshot immediately. Keep this extra post-action frame for
+        # evidence capture, but avoid duplicating it in the normal controller
+        # path where no recorder is attached.
+        if capture is not None:
+            if self.action_frame_provider is None:
+                self.record(capture)
+            else:
+                capture.record_frame(self.action_frame_provider())
         return slot, selected, placed
 
 
