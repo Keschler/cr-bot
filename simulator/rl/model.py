@@ -1044,6 +1044,10 @@ class MaskedAutoregressivePolicy(nn.Module):
                 nn.LayerNorm(hidden_dim),
                 nn.Linear(hidden_dim, 1),
             )
+            # Preserve the legacy card policy until this identity-only branch
+            # has learned from supervised labels.
+            nn.init.zeros_(self.public_slot_card_head[-1].weight)
+            nn.init.zeros_(self.public_slot_card_head[-1].bias)
         self.public_mask_head: nn.Module | None = None
         if config.direct_public_mask_features:
             self.public_mask_head = nn.Sequential(

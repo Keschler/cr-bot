@@ -579,6 +579,7 @@ def test_contextual_public_card_head_includes_projected_hand_slots() -> None:
         hand_card_count=3,
         direct_public_card_features=True,
         contextual_public_card_features=True,
+        direct_public_slot_card_features=True,
     )
     config = ModelConfig(**values)
     policy = RecurrentHybridPolicy(config)
@@ -589,6 +590,9 @@ def test_contextual_public_card_head_includes_projected_hand_slots() -> None:
         + config.gru_hidden_dim
         + config.card_slots * config.gru_hidden_dim
     )
+    assert policy.action_head.public_slot_card_head is not None
+    assert torch.count_nonzero(policy.action_head.public_slot_card_head[-1].weight) == 0
+    assert torch.count_nonzero(policy.action_head.public_slot_card_head[-1].bias) == 0
     raster, global_features, entities, entity_mask, reset_mask = _inputs(config)
     output = policy(
         raster,
