@@ -1027,6 +1027,13 @@ class MaskedAutoregressivePolicy(nn.Module):
                 nn.LayerNorm(hidden_dim),
                 nn.Linear(hidden_dim, config.card_slots),
             )
+            # Start this optional public-context branch as a no-op.  The
+            # legacy recurrent/hand card scorer remains the known-good
+            # policy at initialization; training can learn a residual
+            # correction from card identity and public state without
+            # replacing that behavior abruptly.
+            nn.init.zeros_(self.public_card_head[-1].weight)
+            nn.init.zeros_(self.public_card_head[-1].bias)
         self.public_slot_card_head: nn.Module | None = None
         if config.direct_public_slot_card_features:
             self.public_slot_card_head = nn.Sequential(
@@ -1239,8 +1246,11 @@ class MaskedAutoregressivePolicy(nn.Module):
                 )
             # The same separation applies to card identity.  Placement still
             # uses the recurrent/entity stream below, while the explicit
-            # public hand/cost stream owns the card-slot decision.
-            card_logits = self.public_card_head(card_features)
+            # public hand/cost stream supplies a learned residual correction
+            # to the known-good recurrent/hand card decision.  Keeping this
+            # additive makes enabling the optional branch behavior-preserving
+            # at initialization instead of replacing the legacy logits.
+            card_logits = card_logits + self.public_card_head(card_features)
         if self.public_slot_card_head is not None:
             if public_features is None:
                 raise ValueError(

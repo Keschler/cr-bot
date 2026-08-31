@@ -566,6 +566,36 @@ def test_contextual_public_card_head_keeps_entity_context_in_card_selection() ->
 
 
 @requires_torch
+def test_public_card_context_starts_as_behavior_preserving_residual() -> None:
+    from rl import ModelConfig, RecurrentHybridPolicy
+
+    values = {
+        field: getattr(_config(), field)
+        for field in _config().__dataclass_fields__
+    }
+    base_config = ModelConfig(**values)
+    residual_values = dict(values)
+    residual_values.update(
+        direct_public_card_features=True,
+        contextual_public_card_features=True,
+    )
+    residual_config = ModelConfig(**residual_values)
+
+    base = RecurrentHybridPolicy(base_config).eval()
+    residual = RecurrentHybridPolicy(residual_config).eval()
+    residual.load_state_dict(base.state_dict(), strict=False)
+    assert residual.action_head.public_card_head is not None
+    assert torch.count_nonzero(residual.action_head.public_card_head[-1].weight) == 0
+    assert torch.count_nonzero(residual.action_head.public_card_head[-1].bias) == 0
+
+    inputs = _inputs(base_config)
+    with torch.inference_mode():
+        base_output = base(*inputs[:4], reset_mask=inputs[4])
+        residual_output = residual(*inputs[:4], reset_mask=inputs[4])
+    assert torch.equal(residual_output.card_logits, base_output.card_logits)
+
+
+@requires_torch
 def test_action_masks_remove_illegal_card_and_placement_probability() -> None:
     from rl import ActionMasks, MaskedAutoregressivePolicy, ModelConfig
 
