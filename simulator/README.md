@@ -15,22 +15,20 @@ while the actor, training loop, evaluation, and simulator throughput improve.
 This permits provisional experiments only; it does not satisfy the fidelity
 gates or authorize a `training_ready` claim.
 
-The retained best provisional actor is
-`outputs/simulator/training/prototype-fast-current/prototype.pt`. On the
-identical six-cell seeded matrix it completes 6/6 matches and wins 2/6; this
-is prototype evidence, not a held-out strength gate. Failed PPO and imitation
-candidates are not promoted over it. The public strategic teacher scores 4/6,
-but the actor's full decision trace shows a card-selection collapse: the
-baseline almost exclusively cycles Cannon, Ice Golem, Ice Spirit, Log, and
-Skeletons (six Hog plays and no Fireball/Musketeer in the common matrix), while
-the teacher uses those decisive cards. Card-residual, card-head, teacher-forced,
-and actor-controlled DAgger trials scored 0/6 or 1/6, all with clean exploit
-audits, so the 2/6 checkpoint remains active. The diagnosis is understood, but
-no neural fix has yet passed the decision-level gate. The latest
-disagreement-only actor-controlled probe scored 0/6 and raised policy entropy
-from about 0.19 to 1.34; a frozen public-card residual probe stayed at 2/6
-without changing the base mode/placement behavior. Both audits were clean,
-so neither candidate was promoted.
+The best provisional actor is
+`outputs/simulator/training/prototype-public-primary-current/prototype.pt`.
+It uses the public hand/current-state card head as the primary card policy,
+fixing the verified stale recurrent cheap-cycle failure. It scores 4/6 on the
+exact matrix and 16/24 (66.7%) on a paired shuffled-hand matrix, versus 2/24
+(8.3%) for the former baseline. Evaluation is actor-controlled and public-only;
+all candidate quality and simulation-exploit gates pass. The checkpoint's
+`evaluation-exact6.json` and `evaluation-summary.json` contain the sealed
+evidence. This is simulator prototype evidence, not live-game strength.
+
+For the supported strength path, 8x128 GPU training is fastest at about 356
+end-to-end decisions/s (final segment: 346), versus 326 for 4x128 GPU and 160
+for 4x128 CPU. Exact evaluation measures about 323 decisions/s. Multi-batch
+evaluation is memory-safe at batch 6; batch 8 can be killed on the 4 GB GPU.
 
 ## Setup and tests
 

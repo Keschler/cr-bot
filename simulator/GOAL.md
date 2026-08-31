@@ -17,67 +17,37 @@ a controlled probe when the action boundary or causal behavior matters.
 
 ## Current status
 
-- The current source tree contains the guarded PPO/resume implementation; all
-  new artifacts must record its commit after the focused change is committed.
-  The current engine is `reference-0.37.0`; new artifacts record engine `reference-0.37.0`.
-  The current ruleset hash is
-  `sha256:992ead6f14016917b5a108eaa1ca370c10a48b70d6a87ad69c7de50a8b020d7a`.
-- `rulesets/v1.json` contains 124 definitions, including all 109 eligible
-  opponent cards, and remains `training_ready: false`.
-- Generated coverage is deterministic and executable: a fresh strict run of
-  1,182 cases passed execution, repeated hashes, complete roster coverage, and
-  behavioral obligations (`1,182/1,182`, two repeats, per-tick validation,
-  eight workers) on the current committed revision.
-- The simulator subtree non-physical suite is green (`341 passed, 49 skipped`);
-  the ruleset is still provisional, with 19 unresolved data fields and
-  `training_ready: false`.
-- Phase-0 physical-lab software is implemented, but physical evidence is
-  intentionally deferred for the current RL-first execution path. No
-  connected run has yet satisfied the evidence/readiness gates.
-- The policy is a provisional research harness, not an any-deck player. The
-  retained best current prototype is
-  `outputs/simulator/training/prototype-fast-current/prototype.pt`; it is
-  current-ruleset evidence only and is not a strength promotion.
-- The current revision benchmark measured 2,826 reference and 503 process
-  environment steps/s at 16 lanes (100 steps, four process workers). Both
-  process and packed transport runs matched the reference state-hash sequence;
-  the packed transport remains a slow ABI prototype. Backend replay/event
-  parity is covered by the regression suite. The CUDA actor fast-path
-  benchmark remains 4.69k actor-only and 3.77k full decisions/s.
-- The retained historical end-to-end trainer baseline is 590 decisions/s on
-  the RTX 2050 with 48 lanes, eight rollout workers, and overlap. The
-  memory-bounded two-lane PPO path measures 96.4 decisions/s over 1,536
-  transitions, while current batched matrix evaluation is about 377
-  decisions/s. These are throughput results, not strength claims.
-- The current action contract has `WAIT`/`PLAY`, card slot, and placement but
-  no learned wait-duration head; `WAIT` advances the fixed simulator decision
-  interval. The proposed timing head remains a future architecture change.
-- Commit `258175f` adds built-in teacher-label transport to the persistent
-  rollout farm. A 20-segment actor-controlled warm-start measured 88.2
-  end-to-end decisions/s over 20,480 decisions with all audits clean. Its
-  strategic-teacher imitation candidate scored 1/6 on the exact matrix and
-  was quarantined; the retained neural baseline remains 2/6. A deterministic
-  recovery segment reproduced that 2/6 result without changing the concrete
-  decision failures, so it was not promoted.
-- The current exact-state investigation is concrete: the public strategic
-  teacher scores 4/6, while the retained actor scores 2/6 and makes only six
-  Hog plays with no Fireball/Musketeer plays across the common matrix. The
-  teacher makes 26 Hog, 32 Fireball, and 23 Musketeer plays. Card-residual,
-  card-head, teacher-forced, and actor-controlled DAgger candidates scored
-  0/6 or 1/6; the latest disagreement-only actor-controlled probe scored 0/6
-  with entropy rising from about 0.19 to 1.34. A frozen public-card residual
-  probe stayed at 2/6 without moving the base mode/placement behavior. Every
-  completed run was clean for simulator exploitation, so all remain
-  quarantined and the retained checkpoint is unchanged. A threat-stratified
-  follow-up was quarantined after an independent tracked simulator edit
-  changed during collection.
-
-These results establish plumbing and performance, not game strength or
-sim-to-real fidelity.
-
-The previously recorded generalized actor and reports are generated local
-artifacts; they are retained only for provenance and are not current strength
-evidence. They do not establish the mission's any-deck capability.
+- The current supported RL implementation is commit `a3fd43b`. It adds a
+  primary public card-selection path, optional current-encoder action context,
+  corrected actor/teacher agreement diagnostics, and evidence-weighted
+  Fireball labels. Its focused suite passes (`66 passed`).
+- The best provisional actor is
+  `outputs/simulator/training/prototype-public-primary-current/prototype.pt`.
+  It has 117 updates / about 96k distillation decisions and uses the primary
+  public card head at deployment. Evaluation is actor-controlled and
+  public-only; the privileged critic remains training-only.
+- The retained artifact exactly reproduces the verified six-cell trajectory:
+  4 wins / 2 losses, 8–6 crowns, identical card counts and terminal reasons,
+  no rejected actions, and a clean simulation-exploit audit. Its sealed report
+  is beside the checkpoint as `evaluation-exact6.json`.
+- On 24 paired held-out cells with shuffled initial hand order, the candidate
+  scores 16/24 (66.7%, 31–22 crowns) versus 2/24 (8.3%, 2–29 crowns) for the
+  former retained baseline. Cell IDs are identical. All candidate quality and
+  exploit gates pass; the baseline's only report-gate failure is its expected
+  older code revision. See `evaluation-summary.json` beside the checkpoint.
+- Equivalent end-to-end training benchmarks favor 8 GPU lanes: about 356
+  decisions/s for 8x128 GPU, 326 for 4x128 GPU, and 160 for 4x128 CPU. The
+  final 16k-decision segment measured 346 decisions/s. The retained exact
+  matrix evaluates at about 323 decisions/s. Batch 8 is not safe across
+  multiple evaluation batches on the 4 GB GPU; batch 6 in fresh processes is.
+- The historical maximum-throughput trainer remains about 590 decisions/s on
+  48 overlapped lanes. It is a different memory/optimization configuration and
+  is not the strength-validated path above.
+- The engine remains `reference-0.37.0`; ruleset V1 has 124 definitions and
+  hash `sha256:992ead6f14016917b5a108eaa1ca370c10a48b70d6a87ad69c7de50a8b020d7a`,
+  but is still provisional (`training_ready: false`). Physical evidence is
+  intentionally deferred, so neither simulator fidelity nor live-game
+  strength is claimed.
 
 ## Current execution priority
 
@@ -185,14 +155,14 @@ was only `0.001057`, while the raw placement gradient was `0.247` and
 selected-card placement entropy fell `4.367 -> 1.869`. The actor remained the
 environment action source throughout.
 
-The implementation keeps the generalized KL rollback gate at `0.008`, adds a
-targeted placement-gradient cap for evidence-backed retries, and fixes
-generalized resume controls so an explicit learning rate is actually applied
-after Adam state loading. Those controls did not correct the failure: the
-placement cap clipped every tested update but still scored 1/6, and the fresh
-and teacher-executed trials scored 0/6 or 1/6. The retained 2/6 checkpoint
-remains the current prototype. No larger PPO run is promoted until the
-placement-label/state-conditioning failure improves on identical states.
+The follow-up card diagnosis found a second concrete failure: sparse decisive
+card labels plus an additive public-card residual allowed stale recurrent
+cheap-cycle logits to remain in control. Making the public card stream primary
+and increasing Fireball label weight restored broad card use and improved the
+actor from 2/6 to 4/6 on the exact matrix. The supported artifact reproduces
+that behavior and improves the paired shuffled matrix from 2/24 to 16/24.
+This is a distillation result, not evidence that PPO instability is solved;
+future PPO resumes still require the trajectory-level gate above.
 
 ## Actor architecture
 
@@ -205,9 +175,11 @@ The active public actor is factorized and recurrent:
    Transformer entity tokens; `card_embedding` represents the four slot
    positions, not card identities.
 4. Feed the encoded public history to a GRU of approximately 256 units.
-5. Decode masked `WAIT`/`PLAY`, card slot, and card-conditioned placement.
-   `WAIT` currently advances the fixed simulator decision interval; timing is
-   not yet a learned head.
+5. Decode masked `WAIT`/`PLAY`, card slot, and card-conditioned placement. The
+   retained candidate uses the explicit public hand/current-state card head as
+   the primary card policy instead of adding it to stale legacy logits.
+   `WAIT` advances the fixed simulator decision interval; timing is not yet a
+   learned head.
 
 The critic has a separate encoder and may use exact hidden opponent state.
 Belief heads are optional low-weight auxiliaries and must use public actor
