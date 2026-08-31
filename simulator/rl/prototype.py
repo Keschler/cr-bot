@@ -1159,18 +1159,25 @@ def _apply_update_approx_kl_guard(
     max_update_approx_kl: float | None,
     state_before_update: Any,
     starting_update: int,
+    enabled: bool = True,
 ) -> dict[str, object]:
     """Accept or roll back one PPO update using its measured policy movement.
 
     This is deliberately a training-time checkpoint decision. It does not
     inspect or alter an environment action, legality mask, or observation.
     Keeping the operation separate also makes the safety envelope directly
-    testable without running a simulator rollout.
+    testable without running a simulator rollout. Pure behavior-cloning
+    warm-starts opt out: their intentionally large movement from a random
+    policy is not PPO policy drift and must not be rolled back by a PPO KL
+    threshold.
     """
+
+    if type(enabled) is not bool:
+        raise TypeError("enabled must be boolean")
 
     observed_approx_kl = float(metrics.approx_kl)
     guard: dict[str, object] = {
-        "status": "disabled",
+        "status": "disabled" if enabled else "not_applicable",
         "max_approx_kl": (
             None
             if max_update_approx_kl is None
@@ -1181,6 +1188,9 @@ def _apply_update_approx_kl_guard(
         "attempted_update": int(metrics.update_index),
         "accepted_update": int(learner.update_count),
     }
+    if not enabled:
+        guard["reason"] = "imitation_only_update"
+        return guard
     if max_update_approx_kl is None:
         return guard
     if observed_approx_kl > float(max_update_approx_kl):
@@ -1865,6 +1875,7 @@ def train_prototype(
                 max_update_approx_kl=effective_config.max_update_approx_kl,
                 state_before_update=update_state_before_ppo,
                 starting_update=update_start_count,
+                enabled=not effective_config.imitation_only,
             )
             if diagnostic_enabled:
                 diagnostic_update["update_guard"] = update_guard

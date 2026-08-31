@@ -593,6 +593,18 @@ def test_ppo_kl_guard_rolls_back_only_excessive_updates() -> None:
     )
     assert accepted["status"] == "accepted"
 
+    imitation = _apply_update_approx_kl_guard(
+        learner,
+        SimpleNamespace(approx_kl=0.100, update_index=9),
+        max_update_approx_kl=0.008,
+        state_before_update={"update_count": 8},
+        starting_update=8,
+        enabled=False,
+    )
+    assert imitation["status"] == "not_applicable"
+    assert imitation["reason"] == "imitation_only_update"
+    assert learner.loaded_state == {"update_count": 8}
+
 
 def test_sequence_length_is_optional_but_must_tile_the_horizon() -> None:
     from rl.prototype import PrototypeConfig, PrototypeConfigurationError
