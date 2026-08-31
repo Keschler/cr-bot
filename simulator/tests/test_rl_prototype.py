@@ -529,6 +529,48 @@ def test_training_diagnostics_capture_decisions_and_update_statistics(tmp_path) 
 
 
 @requires_torch
+def test_teacher_free_ppo_diagnostics_use_label_only_strategic_reference(tmp_path) -> None:
+    from rl.prototype import PrototypeConfig, train_prototype
+
+    trace_path = tmp_path / "teacher-free-training-trace.json"
+    config = PrototypeConfig(
+        envs=1,
+        horizon=1,
+        updates=1,
+        decision_interval_us=1_000_000,
+        seed=48,
+        shuffle_decks=False,
+        update_epochs=1,
+        sequence_minibatch_size=1,
+        model_dim=8,
+        encoder_dim=8,
+        transformer_heads=2,
+        transformer_layers=1,
+        transformer_ff_dim=16,
+        gru_hidden_dim=8,
+        use_privileged_critic=False,
+        collect_belief_targets=False,
+        diagnostic_trace_out=trace_path,
+        allow_provisional=True,
+    )
+
+    report = train_prototype(
+        config,
+        checkpoint_out=tmp_path / "teacher-free-diagnostic.pt",
+    )
+
+    assert report["expert_guidance"] is False
+    assert report["actor_controls_actions"] is True
+    trace = json.loads(trace_path.read_text(encoding="utf-8"))
+    decision = trace["decisions"][0]
+    assert decision["strategic_teacher_action"] is not None
+    assert isinstance(decision["actor_teacher_agreement"], bool)
+    metrics = trace["updates"][0]["metrics"]
+    assert metrics["factor_behavior_cloning_loss"] == 0.0
+    assert metrics["effective_factor_behavior_cloning_coef"] == 0.0
+
+
+@requires_torch
 def test_flagged_training_candidate_is_quarantined_without_overwriting_destination(
     monkeypatch,
     tmp_path,

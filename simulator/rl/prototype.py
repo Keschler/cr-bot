@@ -1015,6 +1015,7 @@ def _make_collector(
     stop: bool = False,
     freeze_completed_lanes: bool = False,
     expert_action: Callable[[Any, Any, int], Any] | None = None,
+    diagnostic_teacher_action: Callable[[Any, Any, int], Any] | None = None,
     expert_execution_probability: float | None = None,
     lane_decks: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] | None = None,
     lane_offset: int = 0,
@@ -1054,6 +1055,7 @@ def _make_collector(
         ),
         opponent_action=_opponent_callback() if opponent_action is None else opponent_action,
         expert_action=expert_action,
+        diagnostic_teacher_action=diagnostic_teacher_action,
         privileged_feature_fn=(
             _privileged_features if config.use_privileged_critic else None
         ),
@@ -1719,6 +1721,11 @@ def train_prototype(
                     collector_config,
                     deterministic=effective_config.deterministic_rollouts,
                     expert_action=expert_action,
+                    diagnostic_teacher_action=(
+                        _evaluation_action_callback("strategic-counter")
+                        if diagnostic_enabled
+                        else None
+                    ),
                     lane_decks=lane_decks,
                     opponent_action=opponent_action,
                     batch_step=batch_step,
@@ -3535,18 +3542,16 @@ def evaluate_prototype(
                 deterministic=True,
                 stop=True,
                 freeze_completed_lanes=True,
-                # In actor trace mode the strategic controller is a label-only
-                # reference.  The execution probability stays zero, so the
-                # neural actor still controls every environment action.
-                expert_action=(
+                expert_action=_evaluation_action_callback(policy_mode),
+                # In actor trace mode this reference is computed separately
+                # from expert execution and behavior-cloning storage.
+                diagnostic_teacher_action=(
                     _evaluation_action_callback("strategic-counter")
                     if trace_enabled and policy_mode == "actor"
-                    else _evaluation_action_callback(policy_mode)
+                    else None
                 ),
                 expert_execution_probability=(
-                    0.0
-                    if trace_enabled and policy_mode == "actor"
-                    else 1.0
+                    1.0
                     if policy_mode in {
                         "public-counter",
                         "strategic-counter",

@@ -354,6 +354,7 @@ if TORCH_AVAILABLE:
             *,
             opponent_action: OpponentActionFn | None = None,
             expert_action: ExpertActionFn | None = None,
+            diagnostic_teacher_action: ExpertActionFn | None = None,
             privileged_feature_fn: PrivilegedFeatureFn | None = None,
             batch_step: BatchStepFn | None = None,
         ) -> None:
@@ -367,6 +368,13 @@ if TORCH_AVAILABLE:
             if expert_action is not None and not callable(expert_action):
                 raise TypeError("expert_action must be callable when provided")
             self.expert_action = expert_action
+            if diagnostic_teacher_action is not None and not callable(
+                diagnostic_teacher_action
+            ):
+                raise TypeError(
+                    "diagnostic_teacher_action must be callable when provided"
+                )
+            self.diagnostic_teacher_action = diagnostic_teacher_action
             self.privileged_feature_fn = privileged_feature_fn
             if batch_step is not None and not callable(batch_step):
                 raise TypeError("batch_step must be callable when provided")
@@ -611,6 +619,28 @@ if TORCH_AVAILABLE:
                 decoded_actions = _decode_actions(step.actions)
                 teacher_actions_raw: list[Any | None] = [None] * batch_size
                 if self.expert_action is None:
+                    # Ordinary PPO diagnostics retain a public strategic
+                    # reference without creating behavior-cloning tensors or
+                    # changing the actor action. Keeping this separate from
+                    # ``expert_action`` means enabling a trace cannot alter
+                    # the optimization loss.
+                    if (
+                        self.config.diagnostics
+                        and self.diagnostic_teacher_action is not None
+                    ):
+                        for lane, environment in enumerate(environments):
+                            if frozen_lanes[lane]:
+                                continue
+                            teacher_action = self.diagnostic_teacher_action(
+                                environment,
+                                current_observations[lane][target_player],
+                                target_player,
+                            )
+                            if teacher_action is None:
+                                raise ValueError(
+                                    "diagnostic_teacher_action must return an action, not None"
+                                )
+                            teacher_actions_raw[lane] = teacher_action
                     stored_actions = step.actions
                     stored_log_probs = step.log_probs
                 else:
