@@ -555,8 +555,29 @@ def test_prototype_defaults_to_teacher_free_ppo() -> None:
     assert config.behavior_cloning_coef == 0.0
     assert config.behavior_cloning_factor_coef == 0.0
     assert config.behavior_cloning_card_factor_weight == 1.0
+    assert config.primary_public_card_features is False
+    assert config.current_encoded_action_features is False
     assert config.entropy_coef > 0.0
     assert inspect.signature(evaluate_prototype).parameters["policy_mode"].default == "actor"
+
+
+def test_prototype_validates_primary_and_current_action_feature_variants() -> None:
+    from rl.prototype import PrototypeConfig, PrototypeConfigurationError
+
+    with pytest.raises(
+        PrototypeConfigurationError,
+        match="require direct_public_card_features",
+    ):
+        PrototypeConfig(primary_public_card_features=True)
+    with pytest.raises(
+        PrototypeConfigurationError,
+        match="encoder_dim <= gru_hidden_dim",
+    ):
+        PrototypeConfig(
+            encoder_dim=64,
+            gru_hidden_dim=32,
+            current_encoded_action_features=True,
+        )
 
 
 def test_ppo_kl_guard_rolls_back_only_excessive_updates() -> None:

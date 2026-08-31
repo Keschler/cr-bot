@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 try:
@@ -33,6 +35,56 @@ def test_action_equal_accepts_serialized_policy_descriptors() -> None:
         Action(kind="Play", card_idx=2, cell=(3, 17)),
     )
     assert action_equal({"mode": "WAIT"}, Action(kind="Wait"))
+
+
+@pytest.mark.skipif(torch is None, reason="PyTorch is not installed")
+def test_teacher_agreement_compares_actor_not_teacher_executed_action() -> None:
+    from rl import ActionBatch, ActionMasks, MaskedAutoregressivePolicy, ModelConfig
+    from rl.diagnostics import build_policy_diagnostics
+
+    config = ModelConfig(
+        gru_hidden_dim=4,
+        card_slots=2,
+        placement_rows=2,
+        placement_cols=2,
+    )
+    policy = SimpleNamespace(
+        action_head=MaskedAutoregressivePolicy(config.gru_hidden_dim, config)
+    )
+    logits = policy.action_head(torch.zeros(1, 1, config.gru_hidden_dim))
+    masks = ActionMasks(
+        mode=torch.ones(1, 1, 2, dtype=torch.bool),
+        card=torch.ones(1, 1, 2, dtype=torch.bool),
+        placement=torch.ones(1, 1, 2, 2, 2, dtype=torch.bool),
+    )
+    executed = ActionBatch(
+        mode=torch.ones(1, 1, dtype=torch.long),
+        card_slot=torch.ones(1, 1, dtype=torch.long),
+        placement=torch.zeros(1, 1, 2, dtype=torch.long),
+    )
+    actor = ActionBatch(
+        mode=torch.zeros(1, 1, dtype=torch.long),
+        card_slot=torch.zeros(1, 1, dtype=torch.long),
+        placement=torch.zeros(1, 1, 2, dtype=torch.long),
+    )
+
+    row = build_policy_diagnostics(
+        policy,
+        SimpleNamespace(logits=logits),
+        masks,
+        executed,
+        teacher_action={"mode": "PLAY", "card_slot": 1, "world_cell": [0, 0]},
+        actor_actions=actor,
+    )
+
+    assert row["executed_action"] == {
+        "mode": "PLAY",
+        "card_slot": 1,
+        "policy_cell": [0, 0],
+        "world_cell": [0, 0],
+    }
+    assert row["actor_action"] == {"mode": "WAIT"}
+    assert row["actor_teacher_agreement"] is False
 
 
 def test_reference_action_difference_gets_timing_and_threat_context() -> None:

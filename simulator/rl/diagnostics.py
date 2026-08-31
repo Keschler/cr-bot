@@ -371,7 +371,14 @@ def build_policy_diagnostics(
     if actor_actions is not None:
         actor_descriptor = _action_for_index(actor_actions, lane, time)
     executed_descriptor = selected
-    agreement = None if teacher_descriptor is None else action_equal(executed_descriptor, teacher_action)
+    agreement_descriptor = (
+        executed_descriptor if actor_descriptor is None else actor_descriptor
+    )
+    agreement = (
+        None
+        if teacher_descriptor is None
+        else action_equal(agreement_descriptor, teacher_action)
+    )
     value = None if critic_value is None else _finite(critic_value[lane, time] if getattr(critic_value, "ndim", 0) > 1 else critic_value[lane])
     old_lp_value = None if old_log_prob is None else _finite(old_log_prob[lane, time] if getattr(old_log_prob, "ndim", 0) > 1 else old_log_prob[lane])
     ratio_value = None

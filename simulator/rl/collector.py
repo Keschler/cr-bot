@@ -1542,10 +1542,12 @@ def _expert_action_weight(
     if card_id == "hog-rider":
         return 20.0
     if card_id == "fireball":
-        # Fireball is useful but much less common than Hog in the teacher's
-        # traces.  A modest boost keeps the label visible without making a
-        # short imitation run over-select the spell in unrelated states.
-        return 3.0
+        # Fireball labels are as sparse as the decisive defensive-card labels.
+        # A 96k-decision held-out recovery audit still selected no Fireballs
+        # with the old 3x weight; raising this to the same scale as Hog made
+        # the actor reproduce the public teacher's spell states without
+        # over-selecting it (4 plays in the six-cell acceptance matrix).
+        return 20.0
     if card_id == "musketeer":
         # Musketeer is rarer than the cycle cards, but it is the deck's
         # reusable air answer.  Without a little class weight, a balanced

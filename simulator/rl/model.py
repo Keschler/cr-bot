@@ -82,11 +82,20 @@ class ModelConfig:
     # checkpoints while allowing new runs to learn the hand/cost decision
     # without waiting for a recurrent representation to discover it.
     direct_public_card_features: bool = False
+    # Use the direct public card head as the complete card-slot policy instead
+    # of an additive correction to the legacy recurrent scorer.  This keeps a
+    # supervised public-card actor from inheriting stale cheap-cycle logits.
+    primary_public_card_features: bool = False
     # Optional recurrent/entity context for the direct card head.  The plain
     # direct card head sees hand/elixir scalars but cannot distinguish a safe
     # cycle from a defensive state.  Keeping this as a separate switch avoids
     # changing the shape of existing direct-card checkpoints.
     contextual_public_card_features: bool = False
+    # Add the current public encoder output to the GRU state before action
+    # decoding.  The GRU still carries cycle/history information, while the
+    # action factors receive an explicit skip path from current entities and
+    # battlefield features.  No private simulator state enters this path.
+    current_encoded_action_features: bool = False
     # Optional legality context for the mode gate.  The masks are public
     # inputs and already encode the exact affordability/placement boundary;
     # exposing them to a small context head avoids forcing a recurrent core to
@@ -156,8 +165,12 @@ class ModelConfig:
             raise ValueError("direct_public_action_features must be boolean")
         if type(self.direct_public_card_features) is not bool:
             raise ValueError("direct_public_card_features must be boolean")
+        if type(self.primary_public_card_features) is not bool:
+            raise ValueError("primary_public_card_features must be boolean")
         if type(self.contextual_public_card_features) is not bool:
             raise ValueError("contextual_public_card_features must be boolean")
+        if type(self.current_encoded_action_features) is not bool:
+            raise ValueError("current_encoded_action_features must be boolean")
         if type(self.direct_public_mask_features) is not bool:
             raise ValueError("direct_public_mask_features must be boolean")
         if type(self.direct_public_context_features) is not bool:
@@ -169,6 +182,14 @@ class ModelConfig:
         if self.direct_public_slot_card_features and self.hand_feature_offset < 0:
             raise ValueError(
                 "direct_public_slot_card_features require explicit hand features"
+            )
+        if self.primary_public_card_features and not self.direct_public_card_features:
+            raise ValueError(
+                "primary_public_card_features require direct_public_card_features"
+            )
+        if self.current_encoded_action_features and self.encoder_dim > self.gru_hidden_dim:
+            raise ValueError(
+                "current encoded action features require encoder_dim <= gru_hidden_dim"
             )
 
     @property
@@ -1014,6 +1035,9 @@ class MaskedAutoregressivePolicy(nn.Module):
         if config.direct_public_action_features:
             self.public_mode_head = nn.Linear(config.global_dim, 2)
         self.public_card_head: nn.Module | None = None
+        self.primary_public_card_features = bool(
+            config.primary_public_card_features
+        )
         self.contextual_public_card_features = bool(
             config.contextual_public_card_features
         )
@@ -1282,13 +1306,17 @@ class MaskedAutoregressivePolicy(nn.Module):
                 raise ValueError(
                     "public card feature width does not match the configured model"
                 )
-            # The same separation applies to card identity.  Placement still
-            # uses the recurrent/entity stream below, while the explicit
-            # public hand/cost stream supplies a learned residual correction
-            # to the known-good recurrent/hand card decision.  Keeping this
-            # additive makes enabling the optional branch behavior-preserving
-            # at initialization instead of replacing the legacy logits.
-            card_logits = card_logits + self.public_card_head(card_features)
+            public_card_logits = self.public_card_head(card_features)
+            # Distillation evidence showed that a residual branch could learn
+            # the teacher's first card and still fall back to stale recurrent
+            # cheap-cycle logits on subsequent states.  Fresh actors may make
+            # the public card stream primary; legacy checkpoints retain the
+            # behavior-preserving additive path by default.
+            card_logits = (
+                public_card_logits
+                if self.primary_public_card_features
+                else card_logits + public_card_logits
+            )
         if self.public_slot_card_head is not None:
             if public_features is None:
                 raise ValueError(
@@ -1310,9 +1338,13 @@ class MaskedAutoregressivePolicy(nn.Module):
             1, 1, self.card_slots, self.hidden_dim
         )
         if hand_features is not None:
-            card_logits = card_logits + self.hand_card_score(hand_features).squeeze(-1)
+            if not self.primary_public_card_features:
+                card_logits = card_logits + self.hand_card_score(hand_features).squeeze(-1)
             card_context = card_context + hand_features
-            if self.contextual_hand_card_score is not None:
+            if (
+                self.contextual_hand_card_score is not None
+                and not self.primary_public_card_features
+            ):
                 recurrent_per_slot = recurrent_features.unsqueeze(-2).expand_as(hand_features)
                 contextual_hand = torch.cat(
                     (recurrent_per_slot, hand_features),
@@ -1878,6 +1910,25 @@ class RecurrentHybridPolicy(nn.Module):
     ) -> torch.Tensor:
         return self.core.initial_state(batch_size, device=device, dtype=dtype)
 
+    def _action_features(
+        self,
+        encoded_features: torch.Tensor,
+        recurrent_features: torch.Tensor,
+    ) -> torch.Tensor:
+        """Return the public current-state/history representation for actions."""
+
+        if not self.config.current_encoded_action_features:
+            return recurrent_features
+        current_width = int(encoded_features.shape[-1])
+        recurrent_width = int(recurrent_features.shape[-1])
+        if current_width > recurrent_width:  # pragma: no cover - config invariant
+            raise RuntimeError("encoded current-state features exceed the GRU width")
+        current_features = F.pad(
+            encoded_features,
+            (0, recurrent_width - current_width),
+        )
+        return recurrent_features + current_features
+
     def _encode_recurrent_features(
         self,
         raster: torch.Tensor,
@@ -1908,6 +1959,10 @@ class RecurrentHybridPolicy(nn.Module):
             encoded_features,
             hidden=hidden,
             reset_mask=reset_mask,
+        )
+        recurrent_features = self._action_features(
+            encoded_features,
+            recurrent_features,
         )
         if hand_features is not None:
             if self.hand_action_projection is None:  # pragma: no cover - constructor invariant
@@ -2071,6 +2126,10 @@ class RecurrentHybridPolicy(nn.Module):
             encoded_features,
             hidden=hidden,
             reset_mask=reset_mask,
+        )
+        recurrent_features = self._action_features(
+            encoded_features,
+            recurrent_features,
         )
         if hand_features is not None:
             if self.hand_action_projection is None:  # pragma: no cover - constructor invariant

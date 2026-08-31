@@ -164,7 +164,9 @@ class PrototypeConfig:
     explicit_hand_features: bool = False
     direct_public_action_features: bool = False
     direct_public_card_features: bool = False
+    primary_public_card_features: bool = False
     contextual_public_card_features: bool = False
+    current_encoded_action_features: bool = False
     direct_public_mask_features: bool = False
     direct_public_context_features: bool = False
     direct_public_slot_card_features: bool = False
@@ -211,7 +213,9 @@ class PrototypeConfig:
             "explicit_hand_features",
             "direct_public_action_features",
             "direct_public_card_features",
+            "primary_public_card_features",
             "contextual_public_card_features",
+            "current_encoded_action_features",
             "direct_public_mask_features",
             "direct_public_context_features",
             "direct_public_slot_card_features",
@@ -320,6 +324,14 @@ class PrototypeConfig:
             raise PrototypeConfigurationError(
                 "model_dim must be divisible by transformer_heads"
             )
+        if self.primary_public_card_features and not self.direct_public_card_features:
+            raise PrototypeConfigurationError(
+                "primary_public_card_features require direct_public_card_features"
+            )
+        if self.current_encoded_action_features and self.encoder_dim > self.gru_hidden_dim:
+            raise PrototypeConfigurationError(
+                "current encoded action features require encoder_dim <= gru_hidden_dim"
+            )
         _nonnegative_int("decision_interval_jitter_ticks", self.decision_interval_jitter_ticks)
         _nonnegative_int("action_latency_max_steps", self.action_latency_max_steps)
         if (
@@ -422,7 +434,9 @@ def _model_and_learner(config: PrototypeConfig) -> Any:
         hand_card_count=(CARD_COUNT if config.explicit_hand_features else 0),
         direct_public_action_features=config.direct_public_action_features,
         direct_public_card_features=config.direct_public_card_features,
+        primary_public_card_features=config.primary_public_card_features,
         contextual_public_card_features=config.contextual_public_card_features,
+        current_encoded_action_features=config.current_encoded_action_features,
         direct_public_mask_features=config.direct_public_mask_features,
         direct_public_context_features=config.direct_public_context_features,
         direct_public_slot_card_features=config.direct_public_slot_card_features,
@@ -841,7 +855,9 @@ def _architecture_config(config: PrototypeConfig) -> tuple[object, ...]:
         config.explicit_hand_features,
         config.direct_public_action_features,
         config.direct_public_card_features,
+        config.primary_public_card_features,
         config.contextual_public_card_features,
+        config.current_encoded_action_features,
         config.direct_public_mask_features,
         config.direct_public_context_features,
         config.direct_public_slot_card_features,
@@ -3970,12 +3986,22 @@ def _parser() -> argparse.ArgumentParser:
         help="feed public global elixir/hand features directly to card-slot selection",
     )
     train.add_argument(
+        "--primary-public-card-features",
+        action="store_true",
+        help="use the direct public card head as the primary card-slot policy",
+    )
+    train.add_argument(
         "--contextual-public-card-features",
         action="store_true",
         help=(
             "include recurrent public-entity context in the direct card-slot head "
             "for state-dependent defense/pressure choices"
         ),
+    )
+    train.add_argument(
+        "--current-encoded-action-features",
+        action="store_true",
+        help="add current public encoder features to GRU history for action decoding",
     )
     train.add_argument(
         "--direct-public-mask-features",
@@ -4206,7 +4232,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 entity_observation_noise_std=args.entity_observation_noise_std,
                 direct_public_action_features=args.direct_public_action_features,
                 direct_public_card_features=args.direct_public_card_features,
+                primary_public_card_features=args.primary_public_card_features,
                 contextual_public_card_features=args.contextual_public_card_features,
+                current_encoded_action_features=args.current_encoded_action_features,
                 direct_public_mask_features=args.direct_public_mask_features,
                 direct_public_context_features=args.direct_public_context_features,
                 direct_public_slot_card_features=args.direct_public_slot_card_features,

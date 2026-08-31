@@ -671,6 +671,83 @@ def test_public_card_context_starts_as_behavior_preserving_residual() -> None:
 
 
 @requires_torch
+def test_primary_public_card_head_replaces_legacy_card_logits() -> None:
+    from rl import MaskedAutoregressivePolicy, ModelConfig
+
+    values = {
+        field: getattr(_config(), field)
+        for field in _config().__dataclass_fields__
+    }
+    values.update(
+        direct_public_card_features=True,
+        primary_public_card_features=True,
+    )
+    config = ModelConfig(**values)
+    head = MaskedAutoregressivePolicy(config.gru_hidden_dim, config)
+    assert head.public_card_head is not None
+    with torch.no_grad():
+        head.card_head.weight.zero_()
+        head.card_head.bias.fill_(100.0)
+        head.public_card_head[-1].weight.zero_()
+        head.public_card_head[-1].bias.copy_(
+            torch.arange(config.card_slots, dtype=torch.float32)
+        )
+
+    logits, _context = head._prepare_card_prefix(
+        torch.zeros(2, 1, config.gru_hidden_dim),
+        None,
+        torch.zeros(2, 1, config.global_dim),
+    )
+    expected = torch.arange(config.card_slots, dtype=torch.float32).view(1, 1, -1)
+    torch.testing.assert_close(logits, expected.expand_as(logits))
+
+
+@requires_torch
+def test_current_encoded_action_features_add_current_state_to_gru_history() -> None:
+    from rl import ModelConfig, RecurrentHybridPolicy
+
+    values = {
+        field: getattr(_config(), field)
+        for field in _config().__dataclass_fields__
+    }
+    values.update(current_encoded_action_features=True)
+    config = ModelConfig(**values)
+    policy = RecurrentHybridPolicy(config)
+    encoded = torch.ones(2, 3, config.encoder_dim)
+    recurrent = torch.zeros(2, 3, config.gru_hidden_dim)
+
+    action_features = policy._action_features(encoded, recurrent)
+
+    torch.testing.assert_close(
+        action_features[..., : config.encoder_dim],
+        torch.ones_like(action_features[..., : config.encoder_dim]),
+    )
+    torch.testing.assert_close(
+        action_features[..., config.encoder_dim :],
+        torch.zeros_like(action_features[..., config.encoder_dim :]),
+    )
+
+
+def test_primary_and_current_action_feature_config_invariants() -> None:
+    from rl import ModelConfig
+
+    values = {
+        field: getattr(_config(), field)
+        for field in _config().__dataclass_fields__
+    }
+    with pytest.raises(ValueError, match="require direct_public_card_features"):
+        ModelConfig(**{**values, "primary_public_card_features": True})
+    with pytest.raises(ValueError, match="encoder_dim <= gru_hidden_dim"):
+        ModelConfig(
+            **{
+                **values,
+                "encoder_dim": values["gru_hidden_dim"] + 1,
+                "current_encoded_action_features": True,
+            }
+        )
+
+
+@requires_torch
 def test_action_masks_remove_illegal_card_and_placement_probability() -> None:
     from rl import ActionMasks, MaskedAutoregressivePolicy, ModelConfig
 

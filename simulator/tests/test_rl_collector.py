@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -43,6 +44,19 @@ def test_collector_defaults_to_actor_controlled_rollouts() -> None:
     assert config.expert_execution_probability == 0.0
     assert config.expert_label_on_threat_only is False
     assert config.expert_label_on_disagreement is False
+
+
+def test_fireball_teacher_label_has_decisive_sparse_card_weight() -> None:
+    from rl.collector import _expert_action_weight
+
+    environment = SimpleNamespace(
+        state=SimpleNamespace(
+            players=(SimpleNamespace(hand=("fireball",)), SimpleNamespace(hand=())),
+        ),
+    )
+    action = SimpleNamespace(kind="Play", card_slot=0, cell=(3, 17))
+
+    assert _expert_action_weight(environment, action, 0) == 20.0
 
 
 def test_action_agreement_compares_only_public_decision_fields() -> None:

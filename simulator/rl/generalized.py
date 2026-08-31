@@ -2322,12 +2322,22 @@ def _parser() -> argparse.ArgumentParser:
         help="feed public global elixir/hand features directly to card-slot selection",
     )
     train.add_argument(
+        "--primary-public-card-features",
+        action="store_true",
+        help="use the direct public card head as the primary card-slot policy",
+    )
+    train.add_argument(
         "--contextual-public-card-features",
         action="store_true",
         help=(
             "include recurrent public-entity context in the direct card-slot head "
             "for state-dependent defense/pressure choices"
         ),
+    )
+    train.add_argument(
+        "--current-encoded-action-features",
+        action="store_true",
+        help="add current public encoder features to GRU history for action decoding",
     )
     train.add_argument(
         "--direct-public-mask-features",
@@ -2642,7 +2652,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 behavior_cloning_card_factor_weight=args.bc_card_factor_weight,
                 direct_public_action_features=args.direct_public_action_features,
                 direct_public_card_features=args.direct_public_card_features,
+                primary_public_card_features=args.primary_public_card_features,
                 contextual_public_card_features=args.contextual_public_card_features,
+                current_encoded_action_features=args.current_encoded_action_features,
                 direct_public_mask_features=args.direct_public_mask_features,
                 direct_public_context_features=args.direct_public_context_features,
                 direct_public_slot_card_features=args.direct_public_slot_card_features,
