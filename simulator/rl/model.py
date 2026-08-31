@@ -1021,6 +1021,8 @@ class MaskedAutoregressivePolicy(nn.Module):
             card_input_dim = config.global_dim + (
                 hidden_dim if self.contextual_public_card_features else 0
             )
+            if config.hand_feature_offset >= 0:
+                card_input_dim += config.card_slots * hidden_dim
             self.public_card_head = nn.Sequential(
                 nn.Linear(card_input_dim, hidden_dim),
                 nn.GELU(),
@@ -1240,6 +1242,16 @@ class MaskedAutoregressivePolicy(nn.Module):
             card_features = public_features
             if self.contextual_public_card_features:
                 card_features = torch.cat((public_features, recurrent_features), dim=-1)
+                if hand_features is not None:
+                    # Feed the projected per-slot one-hot card table directly
+                    # to the contextual branch.  The raw global vector is
+                    # useful for elixir and legality context; these explicit
+                    # slot vectors make card identity available at the same
+                    # representation depth as recurrent state.
+                    card_features = torch.cat(
+                        (card_features, hand_features.flatten(start_dim=-2)),
+                        dim=-1,
+                    )
             if card_features.shape[-1] != self.public_card_head[0].in_features:
                 raise ValueError(
                     "public card feature width does not match the configured model"
