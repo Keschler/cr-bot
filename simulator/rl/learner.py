@@ -403,6 +403,7 @@ class UpdateMetrics:
     approx_kl: float
     clip_fraction: float
     gradient_norm: float
+    mean_abs_log_ratio: float = 0.0
     skipped_steps: int = 0
     behavior_cloning_loss: float = 0.0
     factor_behavior_cloning_loss: float = 0.0
@@ -426,6 +427,7 @@ class UpdateMetrics:
             "approx_kl": self.approx_kl,
             "clip_fraction": self.clip_fraction,
             "gradient_norm": self.gradient_norm,
+            "mean_abs_log_ratio": self.mean_abs_log_ratio,
             "skipped_steps": self.skipped_steps,
             "behavior_cloning_loss": self.behavior_cloning_loss,
             "factor_behavior_cloning_loss": self.factor_behavior_cloning_loss,
@@ -1040,6 +1042,7 @@ if TORCH_AVAILABLE:
                 "approx_kl": 0.0,
                 "clip_fraction": 0.0,
                 "gradient_norm": 0.0,
+                "mean_abs_log_ratio": 0.0,
                 "behavior_cloning_loss": 0.0,
                 "factor_behavior_cloning_loss": 0.0,
                 "effective_factor_behavior_cloning_coef": 0.0,
@@ -1193,6 +1196,7 @@ if TORCH_AVAILABLE:
                     factor_bc_loss,
                     belief_loss,
                     objective.approx_kl,
+                    objective.mean_abs_log_ratio,
                     objective.clip_fraction,
                 )
                 if not bool(torch.isfinite(torch.stack(finite_values)).all().item()):
@@ -1265,6 +1269,7 @@ if TORCH_AVAILABLE:
                     objective.behavior_cloning_loss,
                     factor_bc_loss,
                     objective.approx_kl,
+                    objective.mean_abs_log_ratio,
                     objective.clip_fraction,
                 )
             ).detach().cpu().tolist()
@@ -1281,7 +1286,8 @@ if TORCH_AVAILABLE:
                 ),
                 "placement_gradient_clip_fraction": placement_gradient_clipped,
                 "approx_kl": float(metric_values[7]),
-                "clip_fraction": float(metric_values[8]),
+                "mean_abs_log_ratio": float(metric_values[8]),
+                "clip_fraction": float(metric_values[9]),
                 "gradient_norm": gradient_norm,
                 "_optimization_step": 1.0,
                 "_skipped_step": 0.0,
@@ -1940,6 +1946,7 @@ def _skipped_minibatch_metrics() -> dict[str, float]:
         "effective_factor_behavior_cloning_coef": 0.0,
         "placement_gradient_clip_fraction": 0.0,
         "approx_kl": 0.0,
+        "mean_abs_log_ratio": 0.0,
         "clip_fraction": 0.0,
         "gradient_norm": 0.0,
         "_optimization_step": 0.0,

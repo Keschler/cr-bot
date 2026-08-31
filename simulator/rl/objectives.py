@@ -87,6 +87,7 @@ class PPOObjectiveResult:
     entropy: torch.Tensor
     behavior_cloning_loss: torch.Tensor
     approx_kl: torch.Tensor
+    mean_abs_log_ratio: torch.Tensor
     clip_fraction: torch.Tensor
 
 
@@ -255,6 +256,11 @@ def ppo_objective(
         entropy=entropy_mean,
         behavior_cloning_loss=bc_loss,
         approx_kl=(old_log_probs - new_log_probs).mean(),
+        # The signed sampled-log-ratio mean is useful as the conventional PPO
+        # diagnostic, but it can hide large movement when some actions become
+        # more likely and others become less likely.  Keep a conservative
+        # absolute movement metric for update guards and regression diagnosis.
+        mean_abs_log_ratio=(old_log_probs - new_log_probs).abs().mean(),
         clip_fraction=(torch.abs(ratio - 1.0) > float(config.clip_epsilon)).to(torch.float32).mean(),
     )
     for name, value in (
@@ -264,6 +270,7 @@ def ppo_objective(
         ("PPO entropy", result.entropy),
         ("behavior-cloning loss", result.behavior_cloning_loss),
         ("PPO approximate KL", result.approx_kl),
+        ("PPO mean absolute log ratio", result.mean_abs_log_ratio),
         ("PPO clip fraction", result.clip_fraction),
     ):
         _require_finite(name, value)

@@ -584,6 +584,26 @@ def test_ppo_kl_guard_rolls_back_only_excessive_updates() -> None:
     assert rolled_back["accepted_update"] == 8
     assert learner.loaded_state == {"update_count": 8}
 
+    # A signed mean can be tiny even when sampled action probabilities moved
+    # substantially in opposite directions.  The conservative movement
+    # metric must drive the rollback in that case.
+    learner.loaded_state = None
+    robust_rollback = _apply_update_approx_kl_guard(
+        learner,
+        SimpleNamespace(
+            approx_kl=-0.0001,
+            mean_abs_log_ratio=0.020,
+            update_index=9,
+        ),
+        max_update_approx_kl=0.008,
+        state_before_update={"update_count": 8},
+        starting_update=8,
+    )
+    assert robust_rollback["status"] == "rolled_back"
+    assert robust_rollback["guard_metric"] == "mean_abs_log_ratio"
+    assert robust_rollback["observed_mean_abs_log_ratio"] == pytest.approx(0.020)
+    assert robust_rollback["reason"] == "policy_movement_exceeded_bound"
+
     accepted = _apply_update_approx_kl_guard(
         learner,
         SimpleNamespace(approx_kl=0.004, update_index=9),

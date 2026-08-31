@@ -1182,6 +1182,18 @@ def _apply_update_approx_kl_guard(
         raise TypeError("enabled must be boolean")
 
     observed_approx_kl = float(metrics.approx_kl)
+    # ``approx_kl`` is the conventional PPO sampled estimate, but its signed
+    # mean can be close to zero when different branches move in opposite
+    # directions.  Use the learner's conservative absolute movement metric for
+    # the rollback decision whenever it is available, while retaining the
+    # signed value in the report for diagnosis and compatibility.
+    raw_mean_abs_log_ratio = getattr(metrics, "mean_abs_log_ratio", None)
+    if raw_mean_abs_log_ratio is None:
+        observed_mean_abs_log_ratio = abs(observed_approx_kl)
+        guard_metric = "absolute_approx_kl_fallback"
+    else:
+        observed_mean_abs_log_ratio = float(raw_mean_abs_log_ratio)
+        guard_metric = "mean_abs_log_ratio"
     guard: dict[str, object] = {
         "status": "disabled" if enabled else "not_applicable",
         "max_approx_kl": (
@@ -1190,6 +1202,8 @@ def _apply_update_approx_kl_guard(
             else float(max_update_approx_kl)
         ),
         "observed_approx_kl": observed_approx_kl,
+        "observed_mean_abs_log_ratio": observed_mean_abs_log_ratio,
+        "guard_metric": guard_metric,
         "starting_update": int(starting_update),
         "attempted_update": int(metrics.update_index),
         "accepted_update": int(learner.update_count),
@@ -1199,7 +1213,7 @@ def _apply_update_approx_kl_guard(
         return guard
     if max_update_approx_kl is None:
         return guard
-    if observed_approx_kl > float(max_update_approx_kl):
+    if observed_mean_abs_log_ratio > float(max_update_approx_kl):
         if state_before_update is None:  # pragma: no cover - config invariant
             raise RuntimeError("PPO KL guard has no pre-update learner state")
         learner.load_checkpoint_state(state_before_update)
@@ -1207,7 +1221,7 @@ def _apply_update_approx_kl_guard(
             {
                 "status": "rolled_back",
                 "accepted_update": int(learner.update_count),
-                "reason": "approx_kl_exceeded_bound",
+                "reason": "policy_movement_exceeded_bound",
             }
         )
     else:
