@@ -36,9 +36,9 @@ a controlled probe when the action boundary or causal behavior matters.
   connected run has yet satisfied the evidence/readiness gates.
 - The policy is a provisional research harness, not an any-deck player. The
   retained best current prototype is
-  `outputs/simulator/training/prototype-fast-a59ad2f/prototype.pt`; it is
+  `outputs/simulator/training/prototype-fast-current/prototype.pt`; it is
   current-ruleset evidence only and is not a strength promotion.
-- The current revision benchmark measured 3,400 reference and 517 process
+- The current revision benchmark measured 2,826 reference and 503 process
   environment steps/s at 16 lanes (100 steps, four process workers). Both
   process and packed transport runs matched the reference state-hash sequence;
   the packed transport remains a slow ABI prototype. Backend replay/event
@@ -56,7 +56,9 @@ a controlled probe when the action boundary or causal behavior matters.
   rollout farm. A 20-segment actor-controlled warm-start measured 88.2
   end-to-end decisions/s over 20,480 decisions with all audits clean. Its
   strategic-teacher imitation candidate scored 1/6 on the exact matrix and
-  was quarantined; the retained neural baseline remains 2/6.
+  was quarantined; the retained neural baseline remains 2/6. A deterministic
+  recovery segment reproduced that 2/6 result without changing the concrete
+  decision failures, so it was not promoted.
 
 These results establish plumbing and performance, not game strength or
 sim-to-real fidelity.
@@ -408,7 +410,7 @@ canonical state and public-event hashes on the parity corpus.
 
 The neural fast path remains about 4.69k actor-only and 3.77k full
 actor-selection decisions/s on an RTX 2050 at batch 16; the CPU parity gate is
-still open. The current reference simulator is 3.38k environment steps/s at
+still open. The current reference simulator is 2.83k environment steps/s at
 16 lanes. The bounded trainer remains physics-bound; rollout-process and
 larger-lane variants are benchmarked separately when they trade memory or
 behavior-policy freshness. The deployment-only decoding/layout changes

@@ -16,14 +16,15 @@ This permits provisional experiments only; it does not satisfy the fidelity
 gates or authorize a `training_ready` claim.
 
 The retained best provisional actor is
-`outputs/simulator/training/prototype-fast-a59ad2f/prototype.pt`. On the
+`outputs/simulator/training/prototype-fast-current/prototype.pt`. On the
 identical six-cell seeded matrix it completes 6/6 matches and wins 2/6; this
 is prototype evidence, not a held-out strength gate. Failed PPO candidates are
 not promoted over it. Commit `258175f` also adds actor-controlled,
 label-only teacher transport to the persistent rollout farm: the verified
 20,480-decision run reached 88.2 end-to-end decisions/s. Its strategic-teacher
 candidate scored 1/6 and was quarantined, so the 2/6 checkpoint remains the
-active baseline.
+active baseline. A deterministic recovery segment reproduced 2/6 without
+improving the underlying decision failures, so it was also quarantined.
 
 ## Setup and tests
 
@@ -413,7 +414,7 @@ snapshots; `crowns_end` reports final world-player crown totals; and
 trajectory.
 
 No checkpoint has earned a strength promotion. The retained
-`prototype-fast-a59ad2f` checkpoint is the current best provisional baseline:
+`prototype-fast-current` checkpoint is the current best provisional baseline:
 6/6 complete matches, 2/6 wins, zero rejected actions, and a clean exploit
 audit on the identical six-cell matrix. The update-22 cap and low-rate/reset
 continuations were quarantined after scoring 0/6.
@@ -582,11 +583,11 @@ The current committed revision measured:
 
 | Path | Throughput |
 | --- | ---: |
-| Simulator, 16 lanes, CPU reference | 3.38k environment steps/s |
+| Simulator, 16 lanes, CPU reference | 2.83k environment steps/s |
 | Actor-only deterministic fast path, batch 16, CPU | 0.84k decisions/s |
 | Actor-only deterministic fast path, batch 16, RTX 2050 | 4.69k decisions/s |
 | Full actor selection, batch 16, RTX 2050 | 3.77k decisions/s |
-| Simulator, 16 lanes, process backend, 4 workers | 508 environment steps/s |
+| Simulator, 16 lanes, process backend, 4 workers | 503 environment steps/s |
 | Historical end-to-end trainer, RTX 2050, 48 lanes, 8 rollout workers | 590 decisions/s |
 | Committed expert-guided rollout farm, 4 lanes, 4 workers, 20,480 decisions | 88.2 decisions/s |
 | Current memory-bounded PPO, RTX 2050, 2 lanes, 1,536 transitions | 96.4 decisions/s |
