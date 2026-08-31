@@ -608,6 +608,39 @@ def test_contextual_public_card_head_includes_projected_hand_slots() -> None:
 
 
 @requires_torch
+def test_non_contextual_public_card_head_includes_projected_hand_slots() -> None:
+    from rl import ModelConfig, RecurrentHybridPolicy
+
+    values = {
+        field: getattr(_config(), field)
+        for field in _config().__dataclass_fields__
+    }
+    values.update(
+        global_dim=16,
+        hand_feature_offset=1,
+        hand_card_count=3,
+        direct_public_card_features=True,
+        contextual_public_card_features=False,
+    )
+    config = ModelConfig(**values)
+    policy = RecurrentHybridPolicy(config)
+
+    assert policy.action_head.public_card_head is not None
+    assert policy.action_head.public_card_head[0].in_features == (
+        config.global_dim + config.card_slots * config.gru_hidden_dim
+    )
+    raster, global_features, entities, entity_mask, reset_mask = _inputs(config)
+    output = policy(
+        raster,
+        global_features,
+        entities,
+        entity_mask,
+        reset_mask=reset_mask,
+    )
+    assert output.card_logits.shape == (2, 3, config.card_slots)
+
+
+@requires_torch
 def test_public_card_context_starts_as_behavior_preserving_residual() -> None:
     from rl import ModelConfig, RecurrentHybridPolicy
 
