@@ -526,8 +526,7 @@ class CardVision:
         # screen, so keep the search in the collection band.  Once the page
         # scrolls, collection cards can move all the way to the top; using the
         # initial lower-band ROI after that point silently misses valid cards.
-        top_norm = self._collection_search_top(image, profile, scrolled=scrolled)
-        bounds = (0, int(profile.screen_height_px * top_norm), profile.screen_width_px, int(profile.screen_height_px * 0.94))
+        bounds = self._collection_search_bounds(image, profile, scrolled=scrolled)
         return self._best_in_bounds(image, card_id, bounds)
 
     @staticmethod
@@ -552,6 +551,49 @@ class CardVision:
             return min(profile.collection_top_norm, 0.50)
         return profile.collection_top_norm
 
+    @staticmethod
+    def _has_editor_switcher_chrome(image: Any) -> bool:
+        """Recognize the persistent deck/collection switcher in a screenshot.
+
+        After a swipe, collection cards may occupy the upper part of the
+        screen. That area is safe to search only when the active-deck editor
+        is no longer visible. Keep this matcher independent from
+        ``AutonomousPhone`` so it is usable in offline preparation checks.
+        """
+
+        cv2, np = CardVision._cv()
+        height = image.shape[0]
+        roi = image[int(height * 0.13) : int(height * 0.19), :]
+        if roi.size == 0:
+            return False
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        blue = (
+            (hsv[:, :, 0] >= 90)
+            & (hsv[:, :, 0] <= 125)
+            & (hsv[:, :, 1] >= 100)
+            & (hsv[:, :, 2] >= 90)
+        )
+        return float(np.mean(blue)) >= 0.35
+
+    def _collection_search_bounds(
+        self,
+        image: Any,
+        profile: UiProfile,
+        *,
+        scrolled: bool,
+    ) -> tuple[int, int, int, int]:
+        """Return a safe collection ROI for the current scroll state."""
+
+        height, width = image.shape[:2]
+        top = int(
+            height * self._collection_search_top(image, profile, scrolled=scrolled)
+        )
+        if scrolled and not self._has_editor_switcher_chrome(image):
+            # Once the editor chrome has scrolled away, the collection can
+            # legitimately occupy the upper half of the screen.
+            top = 0
+        return (0, top, width, int(height * 0.94))
+
     def find_collection_card_candidates(
         self,
         frame: Frame,
@@ -563,13 +605,7 @@ class CardVision:
         limit: int = 8,
     ) -> tuple[CardMatch, ...]:
         image = self._image(frame)
-        top_norm = self._collection_search_top(image, profile, scrolled=scrolled)
-        bounds = (
-            0,
-            int(profile.screen_height_px * top_norm),
-            profile.screen_width_px,
-            int(profile.screen_height_px * 0.94),
-        )
+        bounds = self._collection_search_bounds(image, profile, scrolled=scrolled)
         return self._candidates_in_bounds(
             image,
             card_id,
