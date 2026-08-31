@@ -1048,6 +1048,25 @@ class MaskedAutoregressivePolicy(nn.Module):
             # has learned from supervised labels.
             nn.init.zeros_(self.public_slot_card_head[-1].weight)
             nn.init.zeros_(self.public_slot_card_head[-1].bias)
+        self.contextual_hand_card_score: nn.Module | None = None
+        if (
+            config.direct_public_card_features
+            and config.contextual_public_card_features
+            and config.hand_feature_offset >= 0
+        ):
+            # The legacy scorer is additive: a recurrent slot bias plus a
+            # card-identity bias.  This small residual can represent the
+            # interaction that a defensive card is valuable in one visible
+            # state and a cycle card in another, while retaining the exact
+            # legacy policy at initialization.
+            self.contextual_hand_card_score = nn.Sequential(
+                nn.Linear(hidden_dim * 2, hidden_dim),
+                nn.GELU(),
+                nn.LayerNorm(hidden_dim),
+                nn.Linear(hidden_dim, 1),
+            )
+            nn.init.zeros_(self.contextual_hand_card_score[-1].weight)
+            nn.init.zeros_(self.contextual_hand_card_score[-1].bias)
         self.public_mask_head: nn.Module | None = None
         if config.direct_public_mask_features:
             self.public_mask_head = nn.Sequential(
@@ -1290,6 +1309,15 @@ class MaskedAutoregressivePolicy(nn.Module):
         if hand_features is not None:
             card_logits = card_logits + self.hand_card_score(hand_features).squeeze(-1)
             card_context = card_context + hand_features
+            if self.contextual_hand_card_score is not None:
+                recurrent_per_slot = recurrent_features.unsqueeze(-2).expand_as(hand_features)
+                contextual_hand = torch.cat(
+                    (recurrent_per_slot, hand_features),
+                    dim=-1,
+                )
+                card_logits = card_logits + self.contextual_hand_card_score(
+                    contextual_hand
+                ).squeeze(-1)
 
         return card_logits, card_context
 

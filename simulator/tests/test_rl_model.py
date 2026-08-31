@@ -593,6 +593,9 @@ def test_contextual_public_card_head_includes_projected_hand_slots() -> None:
     assert policy.action_head.public_slot_card_head is not None
     assert torch.count_nonzero(policy.action_head.public_slot_card_head[-1].weight) == 0
     assert torch.count_nonzero(policy.action_head.public_slot_card_head[-1].bias) == 0
+    assert policy.action_head.contextual_hand_card_score is not None
+    assert torch.count_nonzero(policy.action_head.contextual_hand_card_score[-1].weight) == 0
+    assert torch.count_nonzero(policy.action_head.contextual_hand_card_score[-1].bias) == 0
     raster, global_features, entities, entity_mask, reset_mask = _inputs(config)
     output = policy(
         raster,
