@@ -27,9 +27,10 @@ a controlled probe when the action boundary or causal behavior matters.
 - Generated coverage is deterministic and executable: a fresh strict run of
   1,182 cases passed execution, repeated hashes, complete roster coverage, and
   behavioral obligations (`1,182/1,182`, two repeats, per-tick validation,
-  eight workers).
-- The focused RL suite is green (`46 passed, 19 skipped`); the ruleset is still
-  provisional, with unresolved fidelity evidence and `training_ready: false`.
+  eight workers) on the current committed revision.
+- The simulator subtree non-physical suite is green (`341 passed, 49 skipped`);
+  the ruleset is still provisional, with 19 unresolved data fields and
+  `training_ready: false`.
 - Phase-0 physical-lab software is implemented, but physical evidence is
   intentionally deferred for the current RL-first execution path. No
   connected run has yet satisfied the evidence/readiness gates.
@@ -37,11 +38,12 @@ a controlled probe when the action boundary or causal behavior matters.
   retained best current prototype is
   `outputs/simulator/training/prototype-fast-a59ad2f/prototype.pt`; it is
   current-ruleset evidence only and is not a strength promotion.
-- The current revision benchmark measured 3,377 reference and 508 process
-  environment steps/s at 16 lanes (100 steps, four process workers). All
-  optimized runs matched the reference state-hash sequence; backend
-  replay/event parity is covered by the regression suite. The CUDA actor
-  fast-path benchmark remains 4.69k actor-only and 3.77k full decisions/s.
+- The current revision benchmark measured 3,400 reference and 517 process
+  environment steps/s at 16 lanes (100 steps, four process workers). Both
+  process and packed transport runs matched the reference state-hash sequence;
+  the packed transport remains a slow ABI prototype. Backend replay/event
+  parity is covered by the regression suite. The CUDA actor fast-path
+  benchmark remains 4.69k actor-only and 3.77k full decisions/s.
 - The retained historical end-to-end trainer baseline is 590 decisions/s on
   the RTX 2050 with 48 lanes, eight rollout workers, and overlap. The
   memory-bounded two-lane PPO path measures 96.4 decisions/s over 1,536
