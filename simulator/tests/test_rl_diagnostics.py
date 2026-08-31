@@ -158,6 +158,67 @@ def test_exact_timing_labels_require_counterfactual_consequence() -> None:
     assert harmful == ["action-too-early", "bad-follow-on-consequence"]
 
 
+def test_checkpoint_diagnosis_preserves_evaluation_deck_shuffling(monkeypatch) -> None:
+    from rl import diagnose
+    from rl.evaluation_matrix import OpponentDeckSpec, OpponentStrategySpec
+
+    deck = OpponentDeckSpec(
+        deck_id="heldout-random",
+        cards=(
+            "hog-rider",
+            "cannon",
+            "musketeer",
+            "skeletons",
+            "ice-golem",
+            "ice-spirit",
+            "fireball",
+            "log",
+        ),
+    )
+    strategy = OpponentStrategySpec(
+        strategy_id="deterministic-cycle",
+        description="test controller",
+    )
+    config = SimpleNamespace(
+        target_player=0,
+        max_decisions=1200,
+        shuffle_decks=True,
+        player_deck=deck.cards,
+        opponent_decks=(deck,),
+        strategies=(strategy,),
+        seeds=(10002,),
+    )
+    captured: dict[str, object] = {}
+
+    def fake_build(*args, **kwargs):
+        captured["build_kwargs"] = kwargs
+        return config
+
+    class FakeComparator:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def compare(self, specs):
+            captured["specs"] = specs
+            return {"kind": "test"}
+
+    monkeypatch.setattr(diagnose, "build_heldout_matrix_config", fake_build)
+    monkeypatch.setattr(diagnose, "ExactStateComparator", FakeComparator)
+
+    report = diagnose.compare_checkpoints(
+        "good.pt",
+        "candidate.pt",
+        archetypes=("random-legal",),
+        strategies=("deterministic-cycle",),
+        seeds=(10002,),
+        shuffle_decks=True,
+    )
+
+    assert captured["build_kwargs"]["shuffle_decks"] is True
+    assert captured["specs"][0].shuffle_decks is True
+    assert report["matrix"]["shuffle_decks"] is True
+
+
 @pytest.mark.skipif(torch is None, reason="PyTorch is not installed")
 def test_ppo_ratio_diagnostics_reports_objective_clipping() -> None:
     from rl.diagnostics import ppo_ratio_diagnostics

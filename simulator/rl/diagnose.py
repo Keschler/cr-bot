@@ -1095,6 +1095,7 @@ def compare_checkpoints(
     max_decisions: int | None = None,
     device: str | None = "auto",
     lookahead_steps: int = 8,
+    shuffle_decks: bool = True,
 ) -> dict[str, Any]:
     """Build the exact same matrix for good/bad/recovery probes."""
 
@@ -1109,7 +1110,7 @@ def compare_checkpoints(
         device=device,
         batch_size=1,
         include_match_results=False,
-        shuffle_decks=False,
+        shuffle_decks=shuffle_decks,
     )
     checkpoints: dict[str, str | Path] = {"good": good, "bad": bad}
     if recovery is not None:
@@ -1170,6 +1171,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--player-deck")
     parser.add_argument("--max-decisions", type=int)
     parser.add_argument("--device", default="auto")
+    shuffle_group = parser.add_mutually_exclusive_group()
+    shuffle_group.add_argument(
+        "--shuffle-decks",
+        dest="shuffle_decks",
+        action="store_true",
+        help="shuffle initial deck order exactly as normal evaluation does (default)",
+    )
+    shuffle_group.add_argument(
+        "--no-shuffle",
+        dest="shuffle_decks",
+        action="store_false",
+        help="preserve listed deck order for a matching no-shuffle evaluation",
+    )
+    parser.set_defaults(shuffle_decks=True)
     parser.add_argument(
         "--lookahead-decisions",
         type=int,
@@ -1190,6 +1205,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         max_decisions=args.max_decisions,
         device=args.device,
         lookahead_steps=args.lookahead_decisions,
+        shuffle_decks=args.shuffle_decks,
     )
     encoded = json.dumps(report, indent=2, sort_keys=True)
     if args.json_out is None:
