@@ -19,7 +19,11 @@ The retained best provisional actor is
 `outputs/simulator/training/prototype-fast-a59ad2f/prototype.pt`. On the
 identical six-cell seeded matrix it completes 6/6 matches and wins 2/6; this
 is prototype evidence, not a held-out strength gate. Failed PPO candidates are
-not promoted over it.
+not promoted over it. Commit `258175f` also adds actor-controlled,
+label-only teacher transport to the persistent rollout farm: the verified
+20,480-decision run reached 88.2 end-to-end decisions/s. Its strategic-teacher
+candidate scored 1/6 and was quarantined, so the 2/6 checkpoint remains the
+active baseline.
 
 ## Setup and tests
 
@@ -584,6 +588,7 @@ The current committed revision measured:
 | Full actor selection, batch 16, RTX 2050 | 3.77k decisions/s |
 | Simulator, 16 lanes, process backend, 4 workers | 508 environment steps/s |
 | Historical end-to-end trainer, RTX 2050, 48 lanes, 8 rollout workers | 590 decisions/s |
+| Committed expert-guided rollout farm, 4 lanes, 4 workers, 20,480 decisions | 88.2 decisions/s |
 | Current memory-bounded PPO, RTX 2050, 2 lanes, 1,536 transitions | 96.4 decisions/s |
 | Current batched matrix evaluation, RTX 2050, 8 lanes, hashes off | 377 decisions/s |
 

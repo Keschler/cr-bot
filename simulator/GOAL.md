@@ -52,6 +52,11 @@ a controlled probe when the action boundary or causal behavior matters.
 - The current action contract has `WAIT`/`PLAY`, card slot, and placement but
   no learned wait-duration head; `WAIT` advances the fixed simulator decision
   interval. The proposed timing head remains a future architecture change.
+- Commit `258175f` adds built-in teacher-label transport to the persistent
+  rollout farm. A 20-segment actor-controlled warm-start measured 88.2
+  end-to-end decisions/s over 20,480 decisions with all audits clean. Its
+  strategic-teacher imitation candidate scored 1/6 on the exact matrix and
+  was quarantined; the retained neural baseline remains 2/6.
 
 These results establish plumbing and performance, not game strength or
 sim-to-real fidelity.
@@ -171,7 +176,11 @@ targeted placement-gradient cap for evidence-backed retries, and fixes
 generalized resume controls so an explicit learning rate is actually applied
 after Adam state loading. The cap and low-rate/reset retries were rejected at
 0/6; the retained 2/6 checkpoint remains the current prototype. No larger PPO
-run is promoted until its decision-level failures improve.
+run is promoted until its decision-level failures improve. The accelerated
+label-only farm path was verified clean but did not improve the same failures:
+20,480 strategic-teacher decisions reached 1/6, and a five-segment low-weight
+teacher-regularized PPO retry also reached 1/6. Both candidates remain
+quarantined.
 
 ## Actor architecture
 
@@ -405,7 +414,10 @@ larger-lane variants are benchmarked separately when they trade memory or
 behavior-policy freshness. The deployment-only decoding/layout changes
 preserve the PPO forward path and exact selected-action parity on the
 regression workload. The preferred large-self-play target is 5k–10k simulator
-environment steps/s.
+environment steps/s. The committed 4-lane rollout farm with built-in
+strategic labels measured 88.2 end-to-end decisions/s over 20,480 decisions;
+its labels are transported in bounded shared memory and do not execute the
+learner's actions.
 The vector backend regression also checks state, event-log, and replay hashes
 across consecutive card-play steps with privileged info disabled; both process
 transports pass that parity check.
