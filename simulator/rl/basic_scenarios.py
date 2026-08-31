@@ -24,7 +24,7 @@ except ImportError:  # pragma: no cover - top-level ``rl`` imports
 
 
 BASIC_SCENARIO_SCHEMA_VERSION = 1
-BASIC_SCENARIO_REWARD_VERSION = "basic-mechanics-state-potential-v1"
+BASIC_SCENARIO_REWARD_VERSION = "basic-mechanics-state-potential-v2"
 BASIC_MECHANICS_SOURCES = (
     "isolated-offense",
     "ground-defense",
@@ -253,7 +253,7 @@ class BasicMechanicsScenarioEnv:
         self._episode_count = 0
         self._last_potential = 0.0
         self._initial_tower_hp = (0, 0)
-        self._tower_max_hp = (1, 1)
+        self._tower_reference_hp = (1, 1)
         self._threat_hp: dict[int, tuple[int, int]] = {}
         self._history_digest = hashlib.sha256(b"").hexdigest()
         self._sample_metadata: list[dict[str, object]] = []
@@ -394,11 +394,21 @@ class BasicMechanicsScenarioEnv:
 
         self._decision_count = 0
         self._initial_tower_hp = _tower_totals(state)
-        tower_max = [0, 0]
+        tower_reference = [0, 0]
         for entity in state.entities.values():
-            if entity.kind == "tower":
-                tower_max[entity.owner] += int(entity.max_hp)
-        self._tower_max_hp = max(1, tower_max[0]), max(1, tower_max[1])
+            if entity.kind == "tower" and entity.role != "king":
+                tower_reference[entity.owner] = max(
+                    tower_reference[entity.owner],
+                    int(entity.max_hp),
+                )
+        # Tower damage and removed setup-threat HP use the same Princess Tower
+        # HP denominator. The old unit-fraction bonus could value killing one
+        # cheap setup troop more than thousands of tower HP, allowing an
+        # all-WAIT learner to "win" while its tower was being destroyed.
+        self._tower_reference_hp = (
+            max(1, tower_reference[0]),
+            max(1, tower_reference[1]),
+        )
         self._threat_hp = {
             uid: (max(0, int(state.entities[uid].hp)), max(1, int(state.entities[uid].max_hp)))
             for uid in sorted(set(state.entities) - before_uids)
@@ -442,23 +452,26 @@ class BasicMechanicsScenarioEnv:
         current_hp = _tower_totals(state)
         enemy_damage = (
             self._initial_tower_hp[opponent] - current_hp[opponent]
-        ) / self._tower_max_hp[opponent]
+        ) / self._tower_reference_hp[opponent]
         own_damage = (
             self._initial_tower_hp[target] - current_hp[target]
-        ) / self._tower_max_hp[target]
+        ) / self._tower_reference_hp[target]
         threat_progress = 0.0
         if self._threat_hp:
-            removed = 0.0
-            for uid, (initial_hp, maximum_hp) in self._threat_hp.items():
+            removed_hp = 0
+            for uid, (initial_hp, _maximum_hp) in self._threat_hp.items():
                 entity = state.entities.get(uid)
                 remaining = (
                     max(0, int(entity.hp))
                     if entity is not None and entity.alive
                     else 0
                 )
-                removed += max(0, initial_hp - remaining) / maximum_hp
-            threat_progress = removed / len(self._threat_hp)
-        defense_weight = 0.0 if self.config.source == "isolated-offense" else 0.75
+                removed_hp += max(0, initial_hp - remaining)
+            threat_progress = removed_hp / self._tower_reference_hp[target]
+        # Threat removal is useful defensive progress, but tower preservation
+        # remains the dominant objective. This scores resulting state only;
+        # it does not prescribe a card, cell, or timing decision.
+        defense_weight = 0.0 if self.config.source == "isolated-offense" else 0.25
         return enemy_damage - own_damage + defense_weight * threat_progress
 
     def _scenario_step(self, result: Any) -> Any:

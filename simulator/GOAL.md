@@ -17,10 +17,10 @@ a controlled probe when the action boundary or causal behavior matters.
 
 ## Current status
 
-- The current supported RL implementation is commit `a3fd43b`. It adds a
-  primary public card-selection path, optional current-encoder action context,
-  corrected actor/teacher agreement diagnostics, and evidence-weighted
-  Fireball labels. Its focused suite passes (`66 passed`).
+- The current committed RL implementation includes the primary public card
+  path, executable Phase-1 states, and label-only strategic diagnostics that
+  cannot enter PPO loss or action execution. Its focused suite passes
+  (`93 passed`).
 - The best provisional actor is
   `outputs/simulator/training/prototype-public-primary-current/prototype.pt`.
   It has 117 updates / about 96k distillation decisions and uses the primary
@@ -49,6 +49,11 @@ a controlled probe when the action boundary or causal behavior matters.
   a declared decision horizon; and reward only resulting tower/threat state.
   Every generated initial state is deterministically fingerprinted. The actor
   chooses all learner actions, and unsupported process transports fail closed.
+- The Phase-1 state reward uses one Princess-Tower-HP scale for tower damage
+  and removed setup threats. An automated all-WAIT canary is included in the
+  exploit audit: the exact eight-lane reproducer went from 5/8 false wins to
+  0/8 after the reward-scale fix, and future majority-WAIT wins quarantine the
+  candidate.
 - The engine remains `reference-0.37.0`; ruleset V1 has 124 definitions and
   hash `sha256:992ead6f14016917b5a108eaa1ca370c10a48b70d6a87ad69c7de50a8b020d7a`,
   but is still provisional (`training_ready: false`). Physical evidence is

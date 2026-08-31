@@ -519,7 +519,10 @@ learner card. Every lane records state hashes and sampled setup metadata. Use
 `--no-regression` for an exact 25/25/20/15/15 lane mix and adjust the default
 64-decision horizon with `--basic-scenario-decisions`. These states currently
 require `--env-backend reference`; other backends fail closed until they carry
-the same reset/reward contract.
+the same reset/reward contract. Tower damage and removed setup threats share a
+Princess-Tower-HP reward scale. Each run also probes the same generated setups
+with an all-WAIT learner/opponent canary; a majority of passive wins is flagged
+as reward exploitation and quarantines the checkpoint.
 
 `LeagueOrchestrator` retains directional payoff and rating state, exposes PFSP
 sampling at the current cursor, and fails closed when a configured periodic

@@ -115,6 +115,21 @@ def test_reward_depends_on_resulting_state_not_a_card_label() -> None:
     assert "correct_card" not in result.info
 
 
+def test_all_wait_does_not_win_most_generated_setup_scenarios() -> None:
+    outcomes = []
+    for source in BASIC_MECHANICS_SOURCES:
+        environment = _environment(source, decisions=64)
+        result = None
+        for _decision in range(64):
+            result = environment.step_v2((None, None))
+            if result.terminated or result.truncated:
+                break
+        assert result is not None
+        outcomes.append(result.info["scenario_outcome"])
+
+    assert outcomes.count("win") <= len(outcomes) // 2
+
+
 def test_sampling_source_resolves_phase_one_rehearsal_only() -> None:
     assert basic_scenario_source("air-defense", episode_index=9) == "air-defense"
     assert basic_scenario_source("phase-1-rehearsal", episode_index=7) in BASIC_MECHANICS_SOURCES

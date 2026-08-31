@@ -424,6 +424,8 @@ def test_prototype_executes_and_audits_basic_scenario_resets(tmp_path) -> None:
     assert contract["success_definition"] == "resulting-game-state"
     assert contract["actor_controls_actions"] is True
     assert contract["lane_audits"][0]["episodes_generated"] == 3
+    assert contract["wait_baseline"]["status"] == "insufficient"
+    assert report["basic_scenario_wait_baseline"] == contract["wait_baseline"]
     assert report["outcomes"]["completed_matches"] == 2
     assert report["outcomes"]["truncated_matches"] == 0
     assert report["simulation_exploit_audit"]["status"] == "clean"

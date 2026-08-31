@@ -630,6 +630,119 @@ def _make_environment(
     return environment
 
 
+def _basic_scenario_wait_baseline(
+    config: PrototypeConfig,
+    ruleset: Any,
+    lane_decks: Sequence[tuple[tuple[str, ...], tuple[str, ...]]],
+    sources: Sequence[str | None] | None,
+    *,
+    decision_limit: int,
+) -> dict[str, object]:
+    """Probe generated setup rewards with a learner/opponent all-WAIT policy.
+
+    This is an exploitation canary, not a gameplay baseline. The scripted
+    opponent is intentionally paused after the generated setup so the probe
+    isolates whether passive tower fire alone can turn a majority of the
+    curriculum states into positive learner outcomes.
+    """
+
+    active = () if sources is None else tuple(
+        (lane, source) for lane, source in enumerate(sources) if source is not None
+    )
+    if not active:
+        return {
+            "status": "not-applicable",
+            "evaluated": 0,
+            "wins": 0,
+            "draws": 0,
+            "losses": 0,
+            "win_rate": 0.0,
+            "maximum_clean_win_rate": 0.5,
+            "minimum_evaluated": 5,
+            "rows": [],
+        }
+    try:
+        from ..actions import WaitAction
+    except ImportError:  # pragma: no cover - top-level ``rl`` layout
+        from simulator.actions import WaitAction
+
+    rows: list[dict[str, object]] = []
+    for lane, source in active:
+        environment = _make_environment(
+            config,
+            ruleset,
+            lane,
+            player_deck=lane_decks[lane][0],
+            opponent_deck=lane_decks[lane][1],
+            expose_privileged_info=False,
+            include_replay_hashes=False,
+            basic_scenario_source=source,
+            basic_scenario_decisions=decision_limit,
+        )
+        initial_state_hash = environment.state.state_hash()
+        total_return = 0.0
+        result = None
+        for decision in range(decision_limit):
+            result = environment.step_v2((WaitAction(0), WaitAction(1)))
+            total_return += float(result.rewards[config.target_player])
+            if result.terminated or result.truncated:
+                break
+        if result is None:  # pragma: no cover - positive decision limit
+            raise RuntimeError("basic-scenario WAIT baseline produced no transition")
+        info = result.info if isinstance(result.info, Mapping) else {}
+        outcome = info.get("scenario_outcome")
+        if outcome not in {"win", "draw", "loss"}:
+            winner = info.get("winner")
+            outcome = (
+                "win"
+                if winner == config.target_player
+                else "loss"
+                if winner == 1 - config.target_player
+                else "draw"
+            )
+        rows.append(
+            {
+                "lane": lane,
+                "source": source,
+                "initial_state_hash": initial_state_hash,
+                "decisions": decision + 1,
+                "outcome": outcome,
+                "return": total_return,
+                "terminated": bool(result.terminated),
+                "truncated": bool(result.truncated),
+                "terminal_reason": info.get("terminal_reason"),
+            }
+        )
+    wins = sum(row["outcome"] == "win" for row in rows)
+    draws = sum(row["outcome"] == "draw" for row in rows)
+    losses = sum(row["outcome"] == "loss" for row in rows)
+    evaluated = len(rows)
+    win_rate = wins / evaluated if evaluated else 0.0
+    minimum_evaluated = 5
+    maximum_clean_win_rate = 0.5
+    status = (
+        "insufficient"
+        if evaluated < minimum_evaluated
+        else "flagged"
+        if win_rate > maximum_clean_win_rate
+        else "clean"
+    )
+    return {
+        "status": status,
+        "evaluated": evaluated,
+        "wins": wins,
+        "draws": draws,
+        "losses": losses,
+        "win_rate": win_rate,
+        "maximum_clean_win_rate": maximum_clean_win_rate,
+        "minimum_evaluated": minimum_evaluated,
+        "learner_policy": "WAIT",
+        "post_setup_opponent_policy": "WAIT",
+        "purpose": "reward-exploitation canary; not gameplay strength evidence",
+        "rows": rows,
+    }
+
+
 def _opponent_callback() -> Any:
     """Return the non-learning controller used by the first prototype."""
 
@@ -1645,6 +1758,13 @@ def train_prototype(
         environments: Sequence[Any] = ()
         vector_environment = None
         batch_step = None
+        basic_scenario_wait_baseline = _basic_scenario_wait_baseline(
+            effective_config,
+            ruleset,
+            lane_decks,
+            None,
+            decision_limit=basic_scenario_decisions,
+        )
     else:
         environments = [
             _make_environment(
@@ -1665,6 +1785,13 @@ def train_prototype(
         vector_environment, batch_step = _make_batch_stepper(
             effective_config,
             environments,
+        )
+        basic_scenario_wait_baseline = _basic_scenario_wait_baseline(
+            effective_config,
+            ruleset,
+            lane_decks,
+            resolved_basic_scenario_sources,
+            decision_limit=basic_scenario_decisions,
         )
     expert_action = None
     if expert_guidance:
@@ -2138,7 +2265,9 @@ def train_prototype(
                         and effective_config.expert_execution_probability > 0.0
                     ),
                     "success_definition": "resulting-game-state",
+                    "wait_baseline": basic_scenario_wait_baseline,
                 },
+                "basic_scenario_wait_baseline": basic_scenario_wait_baseline,
                 "resume_controls": {
                     "learning_rate": (
                         None
