@@ -59,6 +59,14 @@ a controlled probe when the action boundary or causal behavior matters.
   was quarantined; the retained neural baseline remains 2/6. A deterministic
   recovery segment reproduced that 2/6 result without changing the concrete
   decision failures, so it was not promoted.
+- The current exact-state investigation is more specific: the strategic
+  teacher scores 4/6 on the common six-cell control matrix, but resumed,
+  fresh, teacher-executed, joint-loss, and placement-capped neural trials
+  scored 0/6 or 1/6. The baseline-versus-recovery traces show placement-head
+  divergence on 51/51 and 67/67 differing decisions, while card-head changes
+  occur only six times. All candidates completed and passed the exploit audit;
+  they remain quarantined because the decision-level placement failure was not
+  corrected.
 
 These results establish plumbing and performance, not game strength or
 sim-to-real fidelity.
@@ -176,13 +184,11 @@ environment action source throughout.
 The implementation keeps the generalized KL rollback gate at `0.008`, adds a
 targeted placement-gradient cap for evidence-backed retries, and fixes
 generalized resume controls so an explicit learning rate is actually applied
-after Adam state loading. The cap and low-rate/reset retries were rejected at
-0/6; the retained 2/6 checkpoint remains the current prototype. No larger PPO
-run is promoted until its decision-level failures improve. The accelerated
-label-only farm path was verified clean but did not improve the same failures:
-20,480 strategic-teacher decisions reached 1/6, and a five-segment low-weight
-teacher-regularized PPO retry also reached 1/6. Both candidates remain
-quarantined.
+after Adam state loading. Those controls did not correct the failure: the
+placement cap clipped every tested update but still scored 1/6, and the fresh
+and teacher-executed trials scored 0/6 or 1/6. The retained 2/6 checkpoint
+remains the current prototype. No larger PPO run is promoted until the
+placement-label/state-conditioning failure improves on identical states.
 
 ## Actor architecture
 
@@ -350,15 +356,15 @@ actor runs;
 `tower_hp_before`, `tower_hp_after`, and `tower_hp_end` have different
 per-decision versus terminal/cap-time meanings. The prototype `--trace-out` contains every decision; `troop_positions_end` and `tower_hp_end` are only terminal/cap-time snapshots. A finite `all_wins=true` result is not a universal-win claim.
 
-The update-22 trace contains the required per-decision state, legal mask,
-actor alternatives, label-only teacher, critic value, return/advantage,
-probability ratio, clipping, and per-head statistics. The tested placement cap
-clipped all 16 minibatches but still scored 0/6; a corrected low-rate plus
-one-time Adam-reset run preserved the first 100 exact decisions but also
-scored 0/6. Both are quarantined as failed candidates, with the retained
-checkpoint kept as the baseline. The exact-state comparator now skips
-recurrent-memory copies for physics-only comparisons, reserving them for
-lookahead.
+The update-22 and current imitation traces contain the required per-decision
+state, legal mask, actor alternatives, label-only teacher, critic value,
+return/advantage, probability ratio, clipping, and per-head statistics. The
+current short exact-state report found 51 placement divergences for the joint
+candidate and 67 for the standard candidate; the former caused 914 additional
+downstream self-tower-damage points in its 16-step continuation probes. The
+exact-state comparator now skips recurrent-memory copies for physics-only
+comparisons, reserving them for lookahead. All tested candidates are
+quarantined; the retained checkpoint is unchanged.
 
 ## Simulator requirements
 

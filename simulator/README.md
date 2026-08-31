@@ -24,7 +24,12 @@ label-only teacher transport to the persistent rollout farm: the verified
 20,480-decision run reached 88.2 end-to-end decisions/s. Its strategic-teacher
 candidate scored 1/6 and was quarantined, so the 2/6 checkpoint remains the
 active baseline. A deterministic recovery segment reproduced 2/6 without
-improving the underlying decision failures, so it was also quarantined.
+improving the underlying decision failures, so it was also quarantined. The
+latest exact-state trials are equally fail-closed: the public strategic teacher
+scores 4/6, but resumed/fresh neural imitation variants score 0/6 or 1/6.
+Their traces are dominated by placement-head divergence (51/51 and 67/67
+candidate differences); every run completed with a clean exploit audit, but
+none corrected the decision-level failure.
 
 ## Setup and tests
 
@@ -284,8 +289,8 @@ Generalized training now defaults to `--max-update-approx-kl 0.008`, supports
 `--resume-no-belief-loss`, and records the applied resume settings. A targeted
 placement-gradient cap is available only when placement-head evidence justifies
 it. The tested cap and low-rate/reset candidates were not promoted because
-both still scored 0/6; the known-good checkpoint remains the baseline. This
-is a decision-level stability fix, not a strength claim.
+they scored 0/6 or 1/6 on the common matrix; the known-good checkpoint remains
+the baseline. This is a decision-level stability finding, not a strength claim.
 
 The runnable neural prototype is in [rl/prototype.py](rl/prototype.py).
 The generalized runner adds curriculum sampling, held-out provenance,
@@ -416,8 +421,9 @@ trajectory.
 No checkpoint has earned a strength promotion. The retained
 `prototype-fast-current` checkpoint is the current best provisional baseline:
 6/6 complete matches, 2/6 wins, zero rejected actions, and a clean exploit
-audit on the identical six-cell matrix. The update-22 cap and low-rate/reset
-continuations were quarantined after scoring 0/6.
+audit on the identical six-cell matrix. The update-22 cap, low-rate/reset,
+fresh, teacher-executed, and joint-loss continuations were quarantined after
+scoring 0/6 or 1/6.
 
 ## RL phases
 
