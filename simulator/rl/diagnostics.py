@@ -475,9 +475,14 @@ def classify_decision(row: Mapping[str, Any]) -> list[str]:
         if action.get("mode") != reference.get("mode"):
             categories.append("mode-head-regression")
             if action.get("mode") == "PLAY" and reference.get("mode") == "WAIT":
-                categories.append("action-too-early")
+                # A reference WAIT versus candidate PLAY identifies a timing
+                # divergence, not its quality.  Waiting may preserve elixir
+                # for a combination, while an earlier defensive deployment
+                # may also be correct.  This one-step trace has no
+                # counterfactual continuation, so keep the label neutral.
+                categories.append("wait-to-play-divergence")
             elif action.get("mode") == "WAIT" and reference.get("mode") == "PLAY":
-                categories.append("action-too-late")
+                categories.append("play-to-wait-divergence")
         elif action.get("mode") == "PLAY" and reference.get("mode") == "PLAY":
             if action.get("card_slot") != reference.get("card_slot"):
                 categories.append("card-selection-head-regression")

@@ -25,10 +25,14 @@ all candidate quality and simulation-exploit gates pass. The checkpoint's
 `evaluation-exact6.json` and `evaluation-summary.json` contain the sealed
 evidence. This is simulator prototype evidence, not live-game strength.
 
-For the supported strength path, 8x128 GPU training is fastest at about 356
-end-to-end decisions/s (final segment: 346), versus 326 for 4x128 GPU and 160
-for 4x128 CPU. Exact evaluation measures about 323 decisions/s. Multi-batch
-evaluation is memory-safe at batch 6; batch 8 can be killed on the 4 GB GPU.
+The current stable PPO path uses 8 GPU lanes, a 512-decision rollout, recurrent
+minibatches of 8, and a `2e-6` resume learning rate. It completed 69,632 clean
+Phase-1 decisions without changing the retained held-out trajectory, at 336
+end-to-end decisions/s with bulky decision traces disabled. Full diagnostics
+measure about 128–145 decisions/s. Set
+`PYTORCH_ALLOC_CONF=expandable_segments:True` for multi-segment runs on the
+4 GB GPU; this fixes the observed allocator-fragmentation OOM. Exact evaluation
+remains memory-safe at batch 6.
 
 ## Setup and tests
 
@@ -312,6 +316,10 @@ The comparator reports per-match suspects, action/head failure categories,
 one-step state differences, approximate follow-on consequences, and aggregate
 update statistics. The actor remains in control; the teacher is label-only.
 Every training/evaluation report also runs the simulator-exploit audit.
+WAIT/PLAY differences are neutral timing divergences by default. The comparator
+emits `action-too-early` or `action-too-late` only when the candidate branch
+takes additional self-tower damage in the counterfactual window; an elixir
+deficit without demonstrated benefit is only a potential overcommitment.
 
 The diagnosis has two layers. A later PPO continuation failed at update 22:
 on identical states, Skeletons at `(3,22)` changed to Hog Rider at `(3,17)`;

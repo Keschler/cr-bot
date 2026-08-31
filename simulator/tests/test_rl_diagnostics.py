@@ -111,12 +111,51 @@ def test_reference_action_difference_gets_timing_and_threat_context() -> None:
     }
 
     assert set(classify_decision(row)) == {
-        "action-too-early",
         "ground-threat-response",
         "mode-head-regression",
         "potential-elixir-overcommitment",
         "threat-response",
+        "wait-to-play-divergence",
     }
+
+
+def test_exact_timing_labels_require_counterfactual_consequence() -> None:
+    from rl.diagnose import _categories, _timing_consequence_categories
+
+    good = {"mode": "WAIT"}
+    candidate = {"mode": "PLAY", "card_slot": 0, "world_cell": [3, 17]}
+    base = _categories(
+        {"units": []},
+        good_action=good,
+        candidate_action=candidate,
+        teacher_action=None,
+        consequence={"major_consequence": True},
+        causal_difference={
+            "additional_tower_damage_to_self": 0,
+            "additional_tower_damage_to_opponent": 0,
+        },
+    )
+
+    assert "wait-to-play-divergence" in base
+    assert "action-too-early" not in base
+    unresolved = _timing_consequence_categories(
+        target_player=0,
+        good_action=good,
+        candidate_action=candidate,
+        immediate_difference={},
+        good_follow_on=None,
+        candidate_follow_on=None,
+    )
+    assert unresolved == ["timing-consequence-unresolved"]
+    harmful = _timing_consequence_categories(
+        target_player=0,
+        good_action=good,
+        candidate_action=candidate,
+        immediate_difference={"additional_tower_damage_to_self": 100},
+        good_follow_on=None,
+        candidate_follow_on=None,
+    )
+    assert harmful == ["action-too-early", "bad-follow-on-consequence"]
 
 
 @pytest.mark.skipif(torch is None, reason="PyTorch is not installed")

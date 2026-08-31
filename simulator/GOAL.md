@@ -35,11 +35,13 @@ a controlled probe when the action boundary or causal behavior matters.
   former retained baseline. Cell IDs are identical. All candidate quality and
   exploit gates pass; the baseline's only report-gate failure is its expected
   older code revision. See `evaluation-summary.json` beside the checkpoint.
-- Equivalent end-to-end training benchmarks favor 8 GPU lanes: about 356
-  decisions/s for 8x128 GPU, 326 for 4x128 GPU, and 160 for 4x128 CPU. The
-  final 16k-decision segment measured 346 decisions/s. The retained exact
-  matrix evaluates at about 323 decisions/s. Batch 8 is not safe across
-  multiple evaluation batches on the 4 GB GPU; batch 6 in fresh processes is.
+- The stable PPO continuation uses 8 GPU lanes, a 512-decision rollout,
+  recurrent minibatches of 8, and a `2e-6` resume learning rate. It completed
+  69,632 clean Phase-1 decisions with exact retained held-out behavior at 336
+  end-to-end decisions/s without bulky traces; full diagnostic runs measure
+  about 128–145 decisions/s. Multi-segment training on the 4 GB GPU requires
+  `PYTORCH_ALLOC_CONF=expandable_segments:True` to avoid allocator
+  fragmentation. Exact evaluation remains memory-safe at batch 6.
 - The historical maximum-throughput trainer remains about 590 decisions/s on
   48 overlapped lanes. It is a different memory/optimization configuration and
   is not the strength-validated path above.
@@ -157,6 +159,11 @@ teacher/head entropies. `rl.diagnose` compares the last good, regressed, and
 recovery checkpoints on identical state streams/seeds and reports concrete
 category and consequence evidence. The actor remains the environment action
 source, and every run is subject to the simulator-exploit audit.
+The retained checkpoint is a reference rather than a strategic oracle, so a
+WAIT/PLAY difference is neutral by itself. `action-too-early` and
+`action-too-late` require additional self-tower damage on the immediate or
+follow-on candidate branch; lower elixir without a demonstrated payoff remains
+explicitly a potential overcommitment.
 
 The current continuation diagnosis found update-22 drift from the retained
 imitation-only warm-start. On identical states, the bad actor changed

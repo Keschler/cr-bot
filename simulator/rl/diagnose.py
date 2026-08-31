@@ -217,9 +217,9 @@ def _categories(
         if candidate_action.get("mode") != good_action.get("mode"):
             categories.add("mode-head-regression")
             if candidate_action.get("mode") == "PLAY" and good_action.get("mode") == "WAIT":
-                categories.add("action-too-early")
+                categories.add("wait-to-play-divergence")
             elif candidate_action.get("mode") == "WAIT" and good_action.get("mode") == "PLAY":
-                categories.add("action-too-late")
+                categories.add("play-to-wait-divergence")
         elif candidate_action.get("card_slot") != good_action.get("card_slot"):
             categories.add("card-selection-head-regression")
         if (
@@ -257,6 +257,90 @@ def _categories(
         categories.add("potential-unnecessary-action")
     if causal_difference and causal_difference.get("additional_tower_damage_to_self", 0):
         categories.add("bad-immediate-consequence")
+    return sorted(categories)
+
+
+def _timing_consequence_categories(
+    *,
+    target_player: int,
+    good_action: Mapping[str, Any],
+    candidate_action: Mapping[str, Any],
+    immediate_difference: Mapping[str, Any] | None,
+    good_follow_on: Mapping[str, Any] | None,
+    candidate_follow_on: Mapping[str, Any] | None,
+) -> list[str]:
+    """Classify timing only when counterfactual consequence evidence exists.
+
+    A retained ``WAIT`` and candidate ``PLAY`` is not evidence that the play
+    was early: the retained checkpoint is a reproducible reference, not an
+    oracle.  The stronger labels below therefore require additional tower
+    damage on the candidate branch.  Elixir-only evidence remains explicitly
+    ``potential`` because spending now can be correct defense or setup for a
+    later combination.
+    """
+
+    good_mode = good_action.get("mode")
+    candidate_mode = candidate_action.get("mode")
+    if good_mode == candidate_mode:
+        return []
+    wait_to_play = good_mode == "WAIT" and candidate_mode == "PLAY"
+    play_to_wait = good_mode == "PLAY" and candidate_mode == "WAIT"
+    if not wait_to_play and not play_to_wait:
+        return []
+
+    immediate = immediate_difference if isinstance(immediate_difference, Mapping) else {}
+    follow_difference: Mapping[str, Any] = {}
+    if isinstance(candidate_follow_on, Mapping):
+        value = candidate_follow_on.get("state_difference_vs_good")
+        if isinstance(value, Mapping):
+            follow_difference = value
+    extra_self_damage = int(immediate.get("additional_tower_damage_to_self", 0) or 0)
+    extra_self_damage += int(
+        follow_difference.get("additional_tower_damage_to_self", 0) or 0
+    )
+    extra_opponent_damage = int(
+        immediate.get("additional_tower_damage_to_opponent", 0) or 0
+    )
+    extra_opponent_damage += int(
+        follow_difference.get("additional_tower_damage_to_opponent", 0) or 0
+    )
+
+    categories: set[str] = set()
+    if extra_self_damage > 0:
+        categories.add("action-too-early" if wait_to_play else "action-too-late")
+        categories.add("bad-follow-on-consequence")
+    elif extra_opponent_damage > 0:
+        categories.add("short-horizon-timing-benefit")
+    else:
+        categories.add("timing-consequence-unresolved")
+
+    if wait_to_play and isinstance(good_follow_on, Mapping) and isinstance(
+        candidate_follow_on, Mapping
+    ):
+        good_final = good_follow_on.get("final_state")
+        candidate_final = candidate_follow_on.get("final_state")
+
+        def target_elixir(state: Any) -> int | None:
+            if not isinstance(state, Mapping):
+                return None
+            players = state.get("players")
+            if not isinstance(players, list) or target_player >= len(players):
+                return None
+            player = players[target_player]
+            if not isinstance(player, Mapping):
+                return None
+            value = player.get("elixir_milli")
+            return int(value) if type(value) is int else None
+
+        good_elixir = target_elixir(good_final)
+        candidate_elixir = target_elixir(candidate_final)
+        if (
+            good_elixir is not None
+            and candidate_elixir is not None
+            and candidate_elixir < good_elixir
+            and extra_opponent_damage <= 0
+        ):
+            categories.add("potential-elixir-overcommitment")
     return sorted(categories)
 
 
@@ -730,6 +814,32 @@ class ExactStateComparator:
                                         target_player=spec.target_player,
                                     )
                                 )
+            good_follow_on = consequences["good"].get("follow_on_consequence")
+            for label in divergent_labels:
+                actor = actor_rows[label]
+                evidence_categories = _timing_consequence_categories(
+                    target_player=spec.target_player,
+                    good_action=good_action,
+                    candidate_action=actor["action"],
+                    immediate_difference=consequences[label].get(
+                        "state_difference_vs_good"
+                    ),
+                    good_follow_on=(
+                        good_follow_on if isinstance(good_follow_on, Mapping) else None
+                    ),
+                    candidate_follow_on=(
+                        consequences[label].get("follow_on_consequence")
+                        if isinstance(
+                            consequences[label].get("follow_on_consequence"),
+                            Mapping,
+                        )
+                        else None
+                    ),
+                )
+                actor["suspicious_categories"] = sorted(
+                    set(actor.get("suspicious_categories", ()))
+                    | set(evidence_categories)
+                )
             rows.append(
                 {
                     "decision": decision,
