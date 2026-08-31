@@ -1347,9 +1347,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                     ),
                 },
             )
-            return 0 if report["failed_count"] == 0 and (
-                coverage_gate is None or coverage_gate["passed"]
-            ) and (behavioral_gate is None or behavioral_gate["passed"]) else 2
+            return (
+                0
+                if report.get("revision_guard", {}).get("status") == "stable"
+                and report["failed_count"] == 0
+                and (coverage_gate is None or coverage_gate["passed"])
+                and (behavioral_gate is None or behavioral_gate["passed"])
+                else 2
+            )
         except (OSError, ValueError, json.JSONDecodeError) as error:
             raise SystemExit(str(error)) from error
 
@@ -1839,8 +1844,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 decision_interval_ticks=args.decision_ticks,
                 engine_factory=lambda: BattleEngine(ruleset),
             )
-        _write_json(args.json_out, report.to_dict())
-        return 0
+        audit_payload = report.to_dict()
+        _write_json(args.json_out, audit_payload)
+        revision_guard = audit_payload.get("revision_guard", {})
+        return 0 if revision_guard.get("status") == "stable" else 2
 
     if args.command == "benchmark":
         if args.matches <= 0:

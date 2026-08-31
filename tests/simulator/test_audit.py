@@ -53,6 +53,9 @@ def test_audit_is_repeatable_json_safe_and_exercises_wait_and_play() -> None:
     assert first.seed_count == 3
     assert first.engine_version == ENGINE_VERSION
     assert first.to_dict()["engine_version"] == ENGINE_VERSION
+    assert first.to_dict()["revision_guard"]["status"] == "stable"
+    assert first.to_dict()["code_revision"]["commit"]
+    assert first.to_dict()["run_code_revision"] == first.to_dict()["revision_guard"]["start"]
     assert [run.seed for run in first.runs] == [17, 18, 19]
     assert first.total_ticks == 93
     assert first.total_actions == 96

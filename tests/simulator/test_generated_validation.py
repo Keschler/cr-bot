@@ -30,6 +30,9 @@ def test_generated_scenario_validation_reports_hash_identity(tmp_path) -> None:
     assert report["passed_count"] == 1
     assert report["failed_count"] == 0
     assert report["determinism_failures"] == 0
+    assert report["revision_guard"]["status"] == "stable"
+    assert report["code_revision"]["commit"]
+    assert report["run_code_revision"] == report["revision_guard"]["start"]
     assert len(report["cases"][0]["hashes"]) == 2
 
     output = tmp_path / "generated-validation.json"
@@ -132,7 +135,7 @@ def test_behavioral_obligation_gate_accepts_source_specific_deployment_cases() -
 
 
 def test_complete_roster_obligation_audit_closes_deployment_and_lifecycle_gaps() -> None:
-    """The generic card lifecycle must have source-specific event contracts."""
+    """Every generated roster case has a source-specific event contract."""
 
     ruleset = load_ruleset("v1")
     generated = generate_roster_scenarios(ruleset, per_mechanic=1)
@@ -140,16 +143,9 @@ def test_complete_roster_obligation_audit_closes_deployment_and_lifecycle_gaps()
         tuple(row.scenario for row in generated)
     )
 
-    assert gate["passed"] is False
-    assert gate["behavioral_obligation_gap_count"] == 43
-    gap_counts: dict[str, int] = {}
-    for gap in gate["gaps"]:
-        gap_counts[gap["mechanic"]] = gap_counts.get(gap["mechanic"], 0) + 1
-    assert gap_counts == {
-        "building_navigation": 12,
-        "passive_spawner": 6,
-        "target_legality": 25,
-    }
+    assert gate["passed"] is True
+    assert gate["behavioral_obligation_gap_count"] == 0
+    assert gate["gaps"] == []
 
 
 @pytest.mark.parametrize(

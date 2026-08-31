@@ -26,6 +26,25 @@ EngineFactory = Callable[[], BattleEngine]
 ControllerFactory = Callable[[int], "LegalFuzzController"]
 
 
+def _code_revision() -> dict[str, object]:
+    """Return Git provenance without making the simulator core import RL."""
+
+    from .rl.provenance import code_revision
+
+    return code_revision()
+
+
+def _revision_changed(
+    start: dict[str, object],
+    current: dict[str, object],
+) -> bool:
+    """Compare run-boundary provenance without importing RL at module load."""
+
+    from .rl.provenance import revision_changed
+
+    return revision_changed(start, current)
+
+
 class DeterminismAuditError(RuntimeError):
     """Raised when replicas, actions, or invariant checks diverge."""
 
@@ -149,6 +168,9 @@ class AuditSeedResult:
 @dataclass(frozen=True, slots=True)
 class AuditReport:
     mode: str
+    code_revision: dict[str, object]
+    run_code_revision: dict[str, object]
+    revision_guard: dict[str, object]
     engine_version: str
     ruleset_id: str
     ruleset_hash: str
@@ -192,6 +214,9 @@ class AuditReport:
             "schema_version": AUDIT_SCHEMA_VERSION,
             "kind": "simulator_determinism_audit",
             "mode": self.mode,
+            "code_revision": self.code_revision,
+            "run_code_revision": self.run_code_revision,
+            "revision_guard": self.revision_guard,
             "engine_version": self.engine_version,
             "ruleset": {
                 "id": self.ruleset_id,
@@ -238,6 +263,7 @@ def run_determinism_audit(
 ) -> AuditReport:
     """Run independent replicas in lockstep for a contiguous range of seeds."""
 
+    run_code_revision = _code_revision()
     first_engine, second_engine = _make_engines(engine_factory)
     if max_ticks_per_seed is None:
         max_ticks_per_seed = _complete_match_tick_limit(first_engine)
@@ -257,6 +283,7 @@ def run_determinism_audit(
         decision_interval_ticks=cadence,
         tick_budget=seed_count * max_ticks_per_seed,
         controller_factory=controller_factory,
+        run_code_revision=run_code_revision,
     )
 
 
@@ -286,6 +313,7 @@ def run_soak_audit(
     if ticks_per_seed_from_budget <= 0:
         raise ValueError("tick_budget must provide at least one tick per seed")
 
+    run_code_revision = _code_revision()
     first_engine, second_engine = _make_engines(engine_factory)
     requested_limit = (
         _complete_match_tick_limit(first_engine)
@@ -309,6 +337,7 @@ def run_soak_audit(
         decision_interval_ticks=cadence,
         tick_budget=tick_budget,
         controller_factory=controller_factory,
+        run_code_revision=run_code_revision,
     )
 
 
@@ -323,6 +352,7 @@ def _run_audit(
     decision_interval_ticks: int,
     tick_budget: int,
     controller_factory: ControllerFactory | None,
+    run_code_revision: dict[str, object],
 ) -> AuditReport:
     runs: list[AuditSeedResult] = []
     for seed in range(seed_start, seed_start + seed_count):
@@ -410,8 +440,21 @@ def _run_audit(
         )
 
     ruleset = first_engine.ruleset
+    end_code_revision = _code_revision()
+
     return AuditReport(
         mode=mode,
+        code_revision=end_code_revision,
+        run_code_revision=run_code_revision,
+        revision_guard={
+            "status": (
+                "drifted"
+                if _revision_changed(run_code_revision, end_code_revision)
+                else "stable"
+            ),
+            "start": run_code_revision,
+            "end": end_code_revision,
+        },
         engine_version=ENGINE_VERSION,
         ruleset_id=ruleset.ruleset_id,
         ruleset_hash=ruleset.content_hash,

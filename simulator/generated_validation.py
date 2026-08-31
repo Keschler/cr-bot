@@ -30,6 +30,22 @@ from .scenario_factory import GeneratedScenario, card_mechanics
 GENERATED_VALIDATION_SCHEMA_VERSION = 1
 
 
+def _code_revision() -> dict[str, Any]:
+    """Return Git provenance without making the simulator core import RL."""
+
+    from .rl.provenance import code_revision
+
+    return code_revision()
+
+
+def _revision_changed(start: Mapping[str, Any], current: Mapping[str, Any]) -> bool:
+    """Compare run-boundary provenance without importing RL at module load."""
+
+    from .rl.provenance import revision_changed
+
+    return revision_changed(start, current)
+
+
 def _manifest_hash(payload: Mapping[str, Any]) -> str:
     encoded = json.dumps(
         payload,
@@ -381,6 +397,7 @@ def validate_generated_scenarios(
     card_counts: Counter[str] = Counter()
     mechanic_counts: Counter[str] = Counter()
     started_ns = perf_counter_ns()
+    run_code_revision = _code_revision()
     if workers == 1 or len(materialized) <= 1:
         rows = [
             _validate_one_scenario(engine, scenario, repeats=repeats)
@@ -412,6 +429,7 @@ def validate_generated_scenarios(
         card_counts[row["card_id"]] += 1
         mechanic_counts[row["mechanic"]] += 1
     elapsed_ns = perf_counter_ns() - started_ns
+    end_code_revision = _code_revision()
     rows.sort(key=lambda row: row["scenario_id"])
     failures = [row for row in rows if not row["passed"]]
     behavioral_gaps = []
@@ -458,6 +476,20 @@ def validate_generated_scenarios(
     report: dict[str, Any] = {
         "schema_version": GENERATED_VALIDATION_SCHEMA_VERSION,
         "kind": "simulator_generated_scenario_validation",
+        # Generated coverage is a release/readiness input.  Bind it to the
+        # exact tracked source that produced it so a later simulator commit
+        # cannot be mistaken for the validated implementation.
+        "code_revision": end_code_revision,
+        "run_code_revision": run_code_revision,
+        "revision_guard": {
+            "status": (
+                "drifted"
+                if _revision_changed(run_code_revision, end_code_revision)
+                else "stable"
+            ),
+            "start": run_code_revision,
+            "end": end_code_revision,
+        },
         "engine_version": ENGINE_VERSION,
         "state_validation": (
             "every_tick" if engine.validate_every_tick else "final_state"
