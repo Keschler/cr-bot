@@ -64,8 +64,13 @@ a controlled probe when the action boundary or causal behavior matters.
   Hog plays with no Fireball/Musketeer plays across the common matrix. The
   teacher makes 26 Hog, 32 Fireball, and 23 Musketeer plays. Card-residual,
   card-head, teacher-forced, and actor-controlled DAgger candidates scored
-  0/6 or 1/6; every run was clean for simulator exploitation, so all remain
-  quarantined and the retained checkpoint is unchanged.
+  0/6 or 1/6; the latest disagreement-only actor-controlled probe scored 0/6
+  with entropy rising from about 0.19 to 1.34. A frozen public-card residual
+  probe stayed at 2/6 without moving the base mode/placement behavior. Every
+  completed run was clean for simulator exploitation, so all remain
+  quarantined and the retained checkpoint is unchanged. A threat-stratified
+  follow-up was quarantined after an independent tracked simulator edit
+  changed during collection.
 
 These results establish plumbing and performance, not game strength or
 sim-to-real fidelity.
@@ -362,7 +367,8 @@ verified regression is an overconfident cheap-cycle card head; moving card
 labels alone also exposed an unadapted card-conditioned placement path. A
 neutral `--bc-card-factor-weight` control is available for future evidence-led
 experiments. All tested candidates are quarantined; the retained checkpoint is
-unchanged.
+unchanged. The disagreement-only label control is diagnostic-only until a
+decision-level improvement is demonstrated.
 
 ## Simulator requirements
 

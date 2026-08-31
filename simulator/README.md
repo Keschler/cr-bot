@@ -26,7 +26,11 @@ Skeletons (six Hog plays and no Fireball/Musketeer in the common matrix), while
 the teacher uses those decisive cards. Card-residual, card-head, teacher-forced,
 and actor-controlled DAgger trials scored 0/6 or 1/6, all with clean exploit
 audits, so the 2/6 checkpoint remains active. The diagnosis is understood, but
-no neural fix has yet passed the decision-level gate.
+no neural fix has yet passed the decision-level gate. The latest
+disagreement-only actor-controlled probe scored 0/6 and raised policy entropy
+from about 0.19 to 1.34; a frozen public-card residual probe stayed at 2/6
+without changing the base mode/placement behavior. Both audits were clean,
+so neither candidate was promoted.
 
 ## Setup and tests
 
@@ -102,6 +106,46 @@ PYTHONPATH=.:..:../src ../capture/.venv-train/bin/python -m simulator lab run \
 Offline runs remain `candidate_only`. Device preparation, calibration,
 capture, ingest, and the connected two-phone workflow are documented in
 [PHYSICAL_FIDELITY_LAB.md](PHYSICAL_FIDELITY_LAB.md).
+
+### Prototype actor on a phone
+
+`run_prototype_live.py` connects the existing `cr_bot` extractor to the
+recurrent public actor in
+`outputs/simulator/training/prototype-fast-current/prototype.pt`. It samples
+one explicitly selected phone with serial-scoped ADB screenshots, converts
+each emitted frame to `PolicyObservationV2`, carries the GRU state forward,
+and records `WAIT`/`PLAY(card_slot, (column, row))` decisions as JSONL:
+
+```bash
+PYTHONPATH=..:../src ../capture/.venv-train/bin/python run_prototype_live.py \
+  --serial SERIAL \
+  --max-frames 20 \
+  --jsonl-out outputs/simulator/prototype-live-dry-run.jsonl
+```
+
+The default is a dry-run, so it never taps the device. A recorded video can
+also be inspected without ADB:
+
+```bash
+PYTHONPATH=..:../src ../capture/.venv-train/bin/python run_prototype_live.py \
+  --video /path/to/gameplay.mp4 \
+  --jsonl-out outputs/simulator/prototype-video-dry-run.jsonl
+```
+
+Real taps require an explicitly matched calibration, card templates, and both
+confirmation flags. `AutonomousPhone` takes a fresh screenshot and verifies
+the selected card before the calibrated card and arena taps:
+
+```bash
+PYTHONPATH=..:../src ../capture/.venv-train/bin/python run_prototype_live.py \
+  --serial SERIAL \
+  --calibration physical_lab/calibrations/phone-a-candidate.json \
+  --execute --confirm-live
+```
+
+Use a reviewed calibration artifact and the correct card-template root for a
+real device. Stop the process with `Ctrl-C`; no game force-stop or storage
+eviction is performed by this controller.
 
 ### Fidelity readiness
 
@@ -289,6 +333,8 @@ they scored 0/6 or 1/6 on the common matrix; the known-good checkpoint remains
 the baseline. The supervised factor loss exposes `--bc-card-factor-weight`
 (default `1.0`) as a neutral, evidence-gated control for card-head experiments;
 tested non-default candidates were quarantined and did not improve the matrix.
+The disagreement-only label control is likewise diagnostic-only until a
+decision-level improvement is demonstrated.
 
 The runnable neural prototype is in [rl/prototype.py](rl/prototype.py).
 The generalized runner adds curriculum sampling, held-out provenance,
@@ -422,6 +468,9 @@ No checkpoint has earned a strength promotion. The retained
 audit on the identical six-cell matrix. The update-22 cap, low-rate/reset,
 fresh, teacher-executed, and joint-loss continuations were quarantined after
 scoring 0/6 or 1/6.
+The isolated card-residual probe also scored 2/6, matching the retained
+baseline; a threat-stratified follow-up was quarantined when an independent
+tracked simulator edit changed during collection.
 
 ## RL phases
 

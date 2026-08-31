@@ -31,6 +31,8 @@ def test_collector_config_rejects_invalid_rollout_shape() -> None:
         CollectorConfig(decks=(("hog-rider",), ("cannon",)))
     with pytest.raises(ValueError, match="expert_execution_probability"):
         CollectorConfig(expert_execution_probability=1.1)
+    with pytest.raises(TypeError, match="expert_label_on_disagreement"):
+        CollectorConfig(expert_label_on_disagreement=1)
 
 
 def test_collector_defaults_to_actor_controlled_rollouts() -> None:
@@ -40,6 +42,17 @@ def test_collector_defaults_to_actor_controlled_rollouts() -> None:
 
     assert config.expert_execution_probability == 0.0
     assert config.expert_label_on_threat_only is False
+    assert config.expert_label_on_disagreement is False
+
+
+def test_action_agreement_compares_only_public_decision_fields() -> None:
+    from actions import PlayCardAction, WaitAction
+    from rl.collector import _actions_match
+
+    assert _actions_match(WaitAction(0), WaitAction(1))
+    assert _actions_match(PlayCardAction(0, 2, (3, 17)), PlayCardAction(1, 2, (3, 17)))
+    assert not _actions_match(PlayCardAction(0, 2, (3, 17)), PlayCardAction(0, 2, (3, 18)))
+    assert not _actions_match(WaitAction(0), PlayCardAction(0, 2, (3, 17)))
 
 
 def test_public_threat_label_gate_uses_only_visible_observation() -> None:

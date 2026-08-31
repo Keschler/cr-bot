@@ -142,6 +142,10 @@ class PrototypeConfig:
     # This is data curation only: it does not alter actor actions, masks, or
     # simulator behavior.
     expert_label_on_threat_only: bool = False
+    # Restrict labels to states where the sampled actor decision differs from
+    # the teacher decision; this is a sparse reference-preserving recovery
+    # mode for a diagnosed policy regression.
+    expert_label_on_disagreement: bool = False
     deterministic_rollouts: bool = False
     max_grad_norm: float = 0.5
     placement_max_grad_norm: float | None = None
@@ -214,6 +218,7 @@ class PrototypeConfig:
             "spatial_placement_features",
             "imitation_only",
             "expert_label_on_threat_only",
+            "expert_label_on_disagreement",
             "deterministic_rollouts",
             "overlap_rollouts",
             "compile_policy",
@@ -1013,6 +1018,7 @@ def _make_collector(
                 else expert_execution_probability
             ),
             expert_label_on_threat_only=config.expert_label_on_threat_only,
+            expert_label_on_disagreement=config.expert_label_on_disagreement,
             stop_on_episode_end=stop,
             freeze_completed_lanes=freeze_completed_lanes,
             diagnostics=diagnostics,
@@ -4031,6 +4037,14 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     train.add_argument(
+        "--expert-label-on-disagreement",
+        action="store_true",
+        help=(
+            "apply teacher labels only when the actor's proposed action differs "
+            "from the teacher; actor actions remain unchanged"
+        ),
+    )
+    train.add_argument(
         "--deterministic-rollouts",
         action="store_true",
         help=(
@@ -4170,6 +4184,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 imitation_only=args.imitation_only,
                 expert_execution_probability=args.expert_execution_probability,
                 expert_label_on_threat_only=args.expert_label_on_threat_only,
+                expert_label_on_disagreement=args.expert_label_on_disagreement,
                 deterministic_rollouts=args.deterministic_rollouts,
                 device=args.device,
                 env_backend=args.env_backend,

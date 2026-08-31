@@ -91,6 +91,10 @@ class CollectorConfig:
     # labels outside publicly visible threat states while leaving actor
     # actions and legality masks unchanged.
     expert_label_on_threat_only: bool = False
+    # Optional sparse-label mode for recovery training.  A teacher label is
+    # retained only when the actor's proposed action differs, so the baseline
+    # policy remains the reference on already-correct states.
+    expert_label_on_disagreement: bool = False
     stop_on_episode_end: bool = False
     freeze_completed_lanes: bool = False
     # Full model/simulator decision records are opt-in because serializing
@@ -123,6 +127,8 @@ class CollectorConfig:
             raise ValueError("expert_execution_probability must be in [0, 1]")
         if type(self.expert_label_on_threat_only) is not bool:
             raise TypeError("expert_label_on_threat_only must be boolean")
+        if type(self.expert_label_on_disagreement) is not bool:
+            raise TypeError("expert_label_on_disagreement must be boolean")
         if type(self.stop_on_episode_end) is not bool:
             raise TypeError("stop_on_episode_end must be boolean")
         if type(self.freeze_completed_lanes) is not bool:
@@ -286,6 +292,27 @@ def _card_id(card_id: str, card_count: int) -> int:
     if type(raw_id) is not int or not 0 <= raw_id < card_count:
         return -100
     return raw_id
+
+
+def _action_signature(action: Any) -> tuple[Any, ...]:
+    """Return the public decision fields used for actor/teacher agreement."""
+
+    kind = str(getattr(action, "kind", "")).casefold().replace("_", "-")
+    if kind in {"wait", "noop", "no-op"} or action.__class__.__name__ == "WaitAction":
+        return ("wait",)
+    card_slot = getattr(action, "card_slot", None)
+    if card_slot is None:
+        card_slot = getattr(action, "card_idx", None)
+    cell = getattr(action, "cell", None)
+    if card_slot is None or not isinstance(cell, tuple) or len(cell) != 2:
+        return (kind, card_slot, cell)
+    return ("play", int(card_slot), int(cell[0]), int(cell[1]))
+
+
+def _actions_match(left: Any, right: Any) -> bool:
+    """Compare actor and teacher decisions without consulting private state."""
+
+    return _action_signature(left) == _action_signature(right)
 
 
 if TORCH_AVAILABLE:
@@ -613,15 +640,19 @@ if TORCH_AVAILABLE:
                             if _expert_should_execute(self.config, lane, _time)
                             else decoded_actions[lane]
                         )
-                        expert_weights.append(
-                            _expert_action_weight(
-                                environment,
-                                expert_action,
-                                target_player,
-                                observation=current_observations[lane][target_player],
-                                threat_only=self.config.expert_label_on_threat_only,
-                            )
+                        expert_weight = _expert_action_weight(
+                            environment,
+                            expert_action,
+                            target_player,
+                            observation=current_observations[lane][target_player],
+                            threat_only=self.config.expert_label_on_threat_only,
                         )
+                        if (
+                            self.config.expert_label_on_disagreement
+                            and _actions_match(decoded_actions[lane], expert_action)
+                        ):
+                            expert_weight = 0.0
+                        expert_weights.append(expert_weight)
                     teacher_actions = _encode_actions(
                         expert_actions,
                         device=self.learner.device,
