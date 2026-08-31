@@ -444,6 +444,65 @@ def test_generalized_training_can_keep_a_scenario_across_rollouts(monkeypatch, t
     assert report["revision_guard"]["status"] == "stable"
 
 
+def test_phase_one_sources_are_executed_as_short_states(monkeypatch, tmp_path) -> None:
+    import simulator.rl.generalized as generalized
+
+    captured: list[tuple[tuple[str | None, ...], int]] = []
+
+    def fake_train(
+        config,
+        *,
+        checkpoint,
+        checkpoint_out,
+        basic_scenario_sources,
+        basic_scenario_decisions,
+        **kwargs,
+    ):
+        captured.append((tuple(basic_scenario_sources), basic_scenario_decisions))
+        return {
+            "final_update": 1,
+            "outcomes": {
+                "completed_matches": 0,
+                "wins": 0,
+                "draws": 0,
+                "losses": 0,
+                "truncated_matches": 0,
+            },
+        }
+
+    monkeypatch.setattr(generalized, "train_prototype", fake_train)
+    config = GeneralizedTrainingConfig(
+        prototype_config=PrototypeConfig(envs=20, horizon=2, updates=1),
+        segments=1,
+        include_regression=False,
+        basic_scenario_decisions=48,
+        checkpoint_out=tmp_path / "phase-one.pt",
+    )
+
+    report = generalized.train_generalized(config)
+
+    sources, decision_limit = captured[0]
+    assert decision_limit == 48
+    assert Counter(sources) == Counter(
+        {
+            "isolated-offense": 5,
+            "ground-defense": 5,
+            "air-defense": 4,
+            "spell-situations": 3,
+            "kiting-cycling-elixir": 3,
+        }
+    )
+    assert report["stage_metadata"][0]["short_scenario_source_counts"] == {
+        "air-defense": 4,
+        "ground-defense": 5,
+        "isolated-offense": 5,
+        "kiting-cycling-elixir": 3,
+        "spell-situations": 3,
+    }
+    assert report["basic_scenarios"] is True
+    assert report["basic_scenario_decisions"] == 48
+
+
 def test_generalized_training_rejects_a_quarantined_segment(monkeypatch, tmp_path) -> None:
     import simulator.rl.generalized as generalized
 

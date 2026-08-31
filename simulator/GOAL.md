@@ -43,6 +43,12 @@ a controlled probe when the action boundary or causal behavior matters.
 - The historical maximum-throughput trainer remains about 590 decisions/s on
   48 overlapped lanes. It is a different memory/optimization configuration and
   is not the strength-validated path above.
+- Phase 1 now has executable short-state episodes rather than deck labels
+  pretending to be scenarios. The five declared sources randomize lane, hand
+  order, elixir, Princess Tower HP, threat timing, and placement; terminate at
+  a declared decision horizon; and reward only resulting tower/threat state.
+  Every generated initial state is deterministically fingerprinted. The actor
+  chooses all learner actions, and unsupported process transports fail closed.
 - The engine remains `reference-0.37.0`; ruleset V1 has 124 definitions and
   hash `sha256:992ead6f14016917b5a108eaa1ca370c10a48b70d6a87ad69c7de50a8b020d7a`,
   but is still provisional (`training_ready: false`). Physical evidence is
@@ -249,6 +255,15 @@ use the segment cursor. These labels select opponent/scenario provenance only;
 they never select the learner's card, timing, lane, or placement. Generalized
 reports persist the cumulative decision cursor so resume does not infer phase
 progress from a changed lane count or horizon.
+
+During the mechanics-foundation phase, those source labels instantiate
+`BasicMechanicsScenarioEnv` states with the declared 25/25/20/15/15 weighted
+schedule. `phase-1-rehearsal` deterministically reuses the same five state
+families later. Use `--no-regression` when the percentages must cover every
+training lane exactly; the fixed regression lane otherwise remains an
+additional full-match anchor. `--basic-scenario-decisions` controls the short
+horizon. Short-state collection currently requires the reference backend so
+that episode boundaries and state-result rewards cannot be dropped in IPC.
 
 Side-balanced self-play is executable with matched generalized runs using
 `--target-player 0` and `--target-player 1`. The trainer swaps only world deck

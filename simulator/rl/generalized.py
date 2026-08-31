@@ -70,6 +70,7 @@ from .opponent_pool import (
 )
 from .prototype import PrototypeConfig, train_prototype
 from .provenance import code_revision, revision_changed
+from .basic_scenarios import basic_scenario_source
 
 
 GENERALIZED_TRAINING_SCHEMA_VERSION = 1
@@ -346,6 +347,11 @@ class GeneralizedTrainingConfig:
     resume_reset_optimizer: bool = False
     include_regression: bool = True
     threat_stratified: bool = False
+    # Execute Phase-1 source labels as randomized short simulator states.
+    # This changes only the initial state, episode horizon, and state-result
+    # objective; it never supplies a learner action or card label.
+    basic_scenarios: bool = True
+    basic_scenario_decisions: int = 64
     # The stage changes only the opponent distribution. It never supplies a
     # learner action or a strategic action mask.
     curriculum: StrategicCurriculum = field(default_factory=default_strategic_curriculum)
@@ -423,6 +429,9 @@ class GeneralizedTrainingConfig:
             raise GeneralizedTrainingError("include_regression must be boolean")
         if type(self.threat_stratified) is not bool:
             raise GeneralizedTrainingError("threat_stratified must be boolean")
+        if type(self.basic_scenarios) is not bool:
+            raise GeneralizedTrainingError("basic_scenarios must be boolean")
+        _positive_int("basic_scenario_decisions", self.basic_scenario_decisions)
         if not isinstance(self.curriculum, StrategicCurriculum):
             raise GeneralizedTrainingError(
                 "curriculum must be a StrategicCurriculum"
@@ -1204,6 +1213,17 @@ def train_generalized(
             threat_stratified=config.threat_stratified,
             sampling_mix=None if stage is None else stage.sampling_mix,
         )
+        short_scenario_sources = tuple(
+            (
+                basic_scenario_source(
+                    scenario.sampling_source,
+                    episode_index=scenario.episode_index,
+                )
+                if config.basic_scenarios
+                else None
+            )
+            for scenario in scenarios
+        )
         checkpoint_assignments = _scenario_checkpoint_assignments(
             scenarios,
             config.opponent_checkpoints,
@@ -1285,6 +1305,8 @@ def train_generalized(
                 checkpoint is not None for checkpoint in checkpoint_assignments
             ),
             expert_guidance=config.expert_guidance,
+            basic_scenario_sources=short_scenario_sources,
+            basic_scenario_decisions=config.basic_scenario_decisions,
             resume_learning_rate=(
                 config.resume_learning_rate if local_segment_index == 0 else None
             ),
@@ -1365,6 +1387,17 @@ def train_generalized(
                     ]
                 ),
                 "sampling_source_counts": sampling_source_counts,
+                "short_scenario_source_counts": {
+                    source: short_scenario_sources.count(source)
+                    for source in sorted(
+                        {
+                            source
+                            for source in short_scenario_sources
+                            if source is not None
+                        }
+                    )
+                },
+                "short_scenario_decision_limit": config.basic_scenario_decisions,
                 "learner_actions": (
                     "actor-sampled"
                     if not (
@@ -1458,6 +1491,8 @@ def train_generalized(
         ),
         "include_regression": config.include_regression,
         "threat_stratified": config.threat_stratified,
+        "basic_scenarios": config.basic_scenarios,
+        "basic_scenario_decisions": config.basic_scenario_decisions,
         "curriculum_enabled": config.use_curriculum,
         "curriculum": config.curriculum.as_dict(),
         "stage_metadata": stage_metadata,
@@ -2246,6 +2281,20 @@ def _parser() -> argparse.ArgumentParser:
             "defensive sequences in every segment"
         ),
     )
+    train.add_argument(
+        "--basic-scenario-decisions",
+        type=int,
+        default=defaults.basic_scenario_decisions,
+        help="decision horizon for executable Phase-1 short-state episodes",
+    )
+    train.add_argument(
+        "--no-basic-scenarios",
+        action="store_true",
+        help=(
+            "disable executable Phase-1 initial states and retain source labels only; "
+            "intended for compatibility/debugging, not the declared curriculum"
+        ),
+    )
     train.add_argument("--expert-guidance", action="store_true")
     train.add_argument(
         "--expert-teacher",
@@ -2688,6 +2737,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 resume_reset_optimizer=args.resume_reset_optimizer,
                 include_regression=not args.no_regression,
                 threat_stratified=args.threat_stratified,
+                basic_scenarios=not args.no_basic_scenarios,
+                basic_scenario_decisions=args.basic_scenario_decisions,
                 use_curriculum=not args.flat_curriculum,
                 potential_reward_anneal_segments=args.potential_reward_anneal_segments,
                 max_update_approx_kl=max_update_approx_kl,

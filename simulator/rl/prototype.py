@@ -564,6 +564,8 @@ def _make_environment(
     opponent_deck: tuple[str, ...] | None = None,
     expose_privileged_info: bool = False,
     include_replay_hashes: bool = True,
+    basic_scenario_source: str | None = None,
+    basic_scenario_decisions: int = 64,
 ) -> Any:
     (
         BattleEngine,
@@ -602,6 +604,17 @@ def _make_environment(
                 entity_observation_noise_std=config.entity_observation_noise_std,
             ),
             seed=_mix_seed(config.seed, lane, 0xD0A1),
+        )
+    if basic_scenario_source is not None:
+        from .basic_scenarios import BasicMechanicsScenarioEnv, BasicScenarioConfig
+
+        environment = BasicMechanicsScenarioEnv(
+            environment,
+            BasicScenarioConfig(
+                source=basic_scenario_source,
+                target_player=config.target_player,
+                decision_limit=basic_scenario_decisions,
+            ),
         )
     reset_v2 = getattr(environment, "reset_v2", None)
     if not callable(reset_v2):  # pragma: no cover - all prototype envs provide V2 reset
@@ -1378,6 +1391,8 @@ def train_prototype(
     opponent_action: Callable[[Any, Any, int], Any | None] | None = None,
     rollout_opponent_specs: Sequence[tuple[str, int]] | None = None,
     opponent_uses_public_observation: bool | None = None,
+    basic_scenario_sources: Sequence[str | None] | None = None,
+    basic_scenario_decisions: int = 64,
 ) -> dict[str, object]:
     """Run recurrent PPO updates and save one complete prototype artifact.
 
@@ -1411,6 +1426,37 @@ def train_prototype(
         opponent_uses_public_observation
     ) is not bool:
         raise TypeError("opponent_uses_public_observation must be boolean or None")
+    if type(basic_scenario_decisions) is not int or basic_scenario_decisions <= 0:
+        raise PrototypeConfigurationError(
+            "basic_scenario_decisions must be a positive integer"
+        )
+    resolved_basic_scenario_sources: tuple[str | None, ...] | None = None
+    if basic_scenario_sources is not None:
+        if len(basic_scenario_sources) != config.envs:
+            raise PrototypeConfigurationError(
+                "basic_scenario_sources must contain one source or None per environment"
+            )
+        from .basic_scenarios import BasicScenarioConfig
+
+        resolved_rows: list[str | None] = []
+        for source in basic_scenario_sources:
+            if source is None:
+                resolved_rows.append(None)
+                continue
+            # Constructing the contract here normalizes and validates every
+            # source before a checkpoint/model or environment is mutated.
+            row = BasicScenarioConfig(
+                source=source,
+                target_player=config.target_player,
+                decision_limit=basic_scenario_decisions,
+            )
+            resolved_rows.append(row.source)
+        resolved_basic_scenario_sources = tuple(resolved_rows)
+        if any(source is not None for source in resolved_rows) and config.env_backend != "reference":
+            raise PrototypeConfigurationError(
+                "basic-mechanics short scenarios currently require env_backend='reference'; "
+                "process transports do not yet carry scenario episode boundaries/rewards"
+            )
     if expert_guidance and not (
         config.behavior_cloning_coef > 0.0
         or config.behavior_cloning_factor_coef > 0.0
@@ -1605,6 +1651,12 @@ def train_prototype(
                 lane,
                 player_deck=lane_decks[lane][0],
                 opponent_deck=lane_decks[lane][1],
+                basic_scenario_source=(
+                    None
+                    if resolved_basic_scenario_sources is None
+                    else resolved_basic_scenario_sources[lane]
+                ),
+                basic_scenario_decisions=basic_scenario_decisions,
             )
             for lane in range(effective_config.envs)
         ]
@@ -2055,6 +2107,31 @@ def train_prototype(
                         for strategy, seed in rollout_opponent_specs
                     ]
                 ),
+                "basic_scenarios": {
+                    "enabled": bool(
+                        resolved_basic_scenario_sources is not None
+                        and any(
+                            source is not None
+                            for source in resolved_basic_scenario_sources
+                        )
+                    ),
+                    "decision_limit": basic_scenario_decisions,
+                    "lane_sources": (
+                        None
+                        if resolved_basic_scenario_sources is None
+                        else list(resolved_basic_scenario_sources)
+                    ),
+                    "lane_audits": [
+                        environment.scenario_audit()
+                        for environment in environments
+                        if callable(getattr(environment, "scenario_audit", None))
+                    ],
+                    "actor_controls_actions": not (
+                        expert_guidance
+                        and effective_config.expert_execution_probability > 0.0
+                    ),
+                    "success_definition": "resulting-game-state",
+                },
                 "resume_controls": {
                     "learning_rate": (
                         None

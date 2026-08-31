@@ -381,6 +381,80 @@ def test_recurrent_prototype_train_resume_and_evaluate(tmp_path) -> None:
 
 
 @requires_torch
+def test_prototype_executes_and_audits_basic_scenario_resets(tmp_path) -> None:
+    from rl.opponent_pool import OpponentPool
+    from rl.prototype import PrototypeConfig, train_prototype
+    from simulator.ruleset import load_fixed_ruleset
+
+    opponent = OpponentPool(load_fixed_ruleset(), seed=91).sample_deck(
+        0,
+        archetype="air-beatdown",
+    )
+    config = PrototypeConfig(
+        envs=1,
+        horizon=2,
+        updates=1,
+        decision_interval_us=250_000,
+        seed=91,
+        update_epochs=1,
+        sequence_minibatch_size=1,
+        sequence_length=2,
+        model_dim=8,
+        encoder_dim=8,
+        transformer_heads=2,
+        transformer_layers=1,
+        transformer_ff_dim=16,
+        gru_hidden_dim=8,
+        use_privileged_critic=False,
+        collect_belief_targets=False,
+        allow_provisional=True,
+    )
+
+    report = train_prototype(
+        config,
+        checkpoint_out=tmp_path / "phase-one.pt",
+        opponent_decks=(opponent.cards,),
+        basic_scenario_sources=("air-defense",),
+        basic_scenario_decisions=1,
+    )
+
+    contract = report["basic_scenarios"]
+    assert contract["enabled"] is True
+    assert contract["lane_sources"] == ["air-defense"]
+    assert contract["success_definition"] == "resulting-game-state"
+    assert contract["actor_controls_actions"] is True
+    assert contract["lane_audits"][0]["episodes_generated"] == 3
+    assert report["outcomes"]["completed_matches"] == 2
+    assert report["outcomes"]["truncated_matches"] == 0
+    assert report["simulation_exploit_audit"]["status"] == "clean"
+
+
+def test_basic_scenarios_fail_closed_on_process_backend(tmp_path) -> None:
+    from rl.prototype import (
+        PrototypeConfig,
+        PrototypeConfigurationError,
+        train_prototype,
+    )
+
+    config = PrototypeConfig(
+        envs=1,
+        horizon=1,
+        updates=1,
+        env_backend="persistent-process",
+        env_workers=1,
+        use_privileged_critic=False,
+        collect_belief_targets=False,
+        allow_provisional=True,
+    )
+    with pytest.raises(PrototypeConfigurationError, match="require env_backend='reference'"):
+        train_prototype(
+            config,
+            checkpoint_out=tmp_path / "must-not-exist.pt",
+            basic_scenario_sources=("ground-defense",),
+        )
+
+
+@requires_torch
 def test_training_diagnostics_capture_decisions_and_update_statistics(tmp_path) -> None:
     from rl.prototype import PrototypeConfig, train_prototype
 

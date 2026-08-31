@@ -512,6 +512,15 @@ fallback. A source is opponent/scenario provenance only; it never chooses the
 learner's action. Generalized reports persist the cumulative decision cursor,
 so resume remains correct even if the next run changes lane count or horizon.
 
+Phase 1 is executable, not merely labeled: `BasicMechanicsScenarioEnv`
+constructs deterministic randomized initial states, ends them at the declared
+short horizon, and rewards resulting tower/threat changes without choosing a
+learner card. Every lane records state hashes and sampled setup metadata. Use
+`--no-regression` for an exact 25/25/20/15/15 lane mix and adjust the default
+64-decision horizon with `--basic-scenario-decisions`. These states currently
+require `--env-backend reference`; other backends fail closed until they carry
+the same reset/reward contract.
+
 `LeagueOrchestrator` retains directional payoff and rating state, exposes PFSP
 sampling at the current cursor, and fails closed when a configured periodic
 exploiter reset has no callback. The callback owns the actual learner reset;

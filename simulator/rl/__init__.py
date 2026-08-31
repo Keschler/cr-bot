@@ -37,6 +37,16 @@ from .domain_randomization import (
     DomainVariantSampler,
     SimulationVariant,
 )
+from .basic_scenarios import (
+    BASIC_MECHANICS_SOURCES,
+    BASIC_SCENARIO_REWARD_VERSION,
+    BASIC_SCENARIO_SCHEMA_VERSION,
+    BasicMechanicsScenarioEnv,
+    BasicScenarioConfig,
+    BasicScenarioError,
+    basic_scenario_source,
+    phase_one_rehearsal_source,
+)
 from .exploit_audit import (
     SIMULATION_EXPLOIT_AUDIT_KIND,
     SIMULATION_EXPLOIT_AUDIT_SCHEMA_VERSION,
@@ -135,6 +145,14 @@ _TORCH_EXPORTS = {
 }
 
 _FOUNDATION_EXPORTS = {
+    "BASIC_MECHANICS_SOURCES",
+    "BASIC_SCENARIO_REWARD_VERSION",
+    "BASIC_SCENARIO_SCHEMA_VERSION",
+    "BasicMechanicsScenarioEnv",
+    "BasicScenarioConfig",
+    "BasicScenarioError",
+    "basic_scenario_source",
+    "phase_one_rehearsal_source",
     "BCDecision",
     "BCTeacherConfidencePolicy",
     "CurriculumConfigurationError",
