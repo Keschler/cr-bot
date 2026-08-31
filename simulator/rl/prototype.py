@@ -136,6 +136,7 @@ class PrototypeConfig:
     expert_execution_probability: float = 0.0
     deterministic_rollouts: bool = False
     max_grad_norm: float = 0.5
+    placement_max_grad_norm: float | None = None
 
     # The first model is intentionally small enough for a CPU smoke run while
     # retaining the production topology: public entity Transformer + GRU +
@@ -282,6 +283,13 @@ class PrototypeConfig:
         )
         if not isfinite(float(self.max_grad_norm)) or float(self.max_grad_norm) < 0.0:
             raise PrototypeConfigurationError("max_grad_norm must be non-negative")
+        if self.placement_max_grad_norm is not None and (
+            not isfinite(float(self.placement_max_grad_norm))
+            or float(self.placement_max_grad_norm) <= 0.0
+        ):
+            raise PrototypeConfigurationError(
+                "placement_max_grad_norm must be positive or None"
+            )
         for name in (
             "model_dim",
             "encoder_dim",
@@ -421,6 +429,7 @@ def _model_and_learner(config: PrototypeConfig) -> Any:
         # data distribution reproducible from a checkpoint report.
         belief_coef=config.belief_coef,
         max_grad_norm=config.max_grad_norm,
+        placement_max_grad_norm=config.placement_max_grad_norm,
         require_privileged_critic=config.use_privileged_critic,
     )
     policy = RecurrentHybridPolicy(model_config)
@@ -3758,6 +3767,15 @@ def _parser() -> argparse.ArgumentParser:
             "disabled by default for the low-level prototype trainer"
         ),
     )
+    train.add_argument(
+        "--placement-max-grad-norm",
+        type=float,
+        default=None,
+        help=(
+            "targeted raw-gradient cap for placement/spatial parameters; "
+            "leave unset unless placement-head regression evidence justifies it"
+        ),
+    )
     train.add_argument("--checkpoint", type=Path, help="resume a prototype checkpoint")
     train.add_argument(
         "--checkpoint-out",
@@ -4067,6 +4085,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 dense_reward=args.dense_reward,
                 potential_reward_weight=args.potential_reward_weight,
                 max_update_approx_kl=args.max_update_approx_kl,
+                placement_max_grad_norm=args.placement_max_grad_norm,
                 decision_interval_jitter_ticks=args.decision_interval_jitter_ticks,
                 action_latency_max_steps=args.action_latency_max_steps,
                 entity_observation_noise_std=args.entity_observation_noise_std,

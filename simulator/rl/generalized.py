@@ -337,6 +337,13 @@ class GeneralizedTrainingConfig:
     segment_offset: int | None = None
     checkpoint: str | Path | None = None
     checkpoint_out: str | Path = "outputs/simulator/training/generalized-recurrent-prototype.pt"
+    # Resume controls are applied when the first segment loads ``checkpoint``.
+    # The learning-rate override is retained in the segment config so later
+    # segments continue with the same optimizer setting; Adam moments are
+    # reset only once at the start of a resumed run.
+    resume_learning_rate: float | None = None
+    resume_disable_belief_loss: bool = False
+    resume_reset_optimizer: bool = False
     include_regression: bool = True
     threat_stratified: bool = False
     # The stage changes only the opponent distribution. It never supplies a
@@ -391,6 +398,25 @@ class GeneralizedTrainingConfig:
             not isinstance(self.checkpoint, (str, Path)) or not str(self.checkpoint).strip()
         ):
             raise GeneralizedTrainingError("checkpoint must be a non-empty path or None")
+        if type(self.resume_disable_belief_loss) is not bool:
+            raise GeneralizedTrainingError("resume_disable_belief_loss must be boolean")
+        if type(self.resume_reset_optimizer) is not bool:
+            raise GeneralizedTrainingError("resume_reset_optimizer must be boolean")
+        if self.resume_learning_rate is not None and (
+            isinstance(self.resume_learning_rate, bool)
+            or not isinstance(self.resume_learning_rate, (int, float))
+            or not isfinite(float(self.resume_learning_rate))
+            or float(self.resume_learning_rate) <= 0.0
+        ):
+            raise GeneralizedTrainingError(
+                "resume_learning_rate must be positive and finite or None"
+            )
+        if self.checkpoint is None and (
+            self.resume_learning_rate is not None
+            or self.resume_disable_belief_loss
+            or self.resume_reset_optimizer
+        ):
+            raise GeneralizedTrainingError("resume controls require checkpoint")
         if not isinstance(self.checkpoint_out, (str, Path)) or not str(self.checkpoint_out).strip():
             raise GeneralizedTrainingError("checkpoint_out must be a non-empty path")
         if type(self.include_regression) is not bool:
@@ -1094,6 +1120,22 @@ def train_generalized(
     )
     total_transitions = config.segments * transitions_per_segment
 
+    # ``train_prototype`` applies resume controls only after loading the
+    # checkpoint. Keep the requested learning rate in all segment configs so
+    # a multi-segment run does not revert to the command's fresh-run default.
+    segment_base_config = config.prototype_config
+    if config.resume_learning_rate is not None:
+        segment_base_config = replace(
+            segment_base_config,
+            learning_rate=float(config.resume_learning_rate),
+        )
+    if config.resume_disable_belief_loss:
+        segment_base_config = replace(
+            segment_base_config,
+            belief_coef=0.0,
+            collect_belief_targets=False,
+        )
+
     pfsp_sampler: PFSPOpponentSampler | None = None
     payoff_book: LeaguePayoffBook | None = None
     payoff_book_source: str | None = None
@@ -1178,7 +1220,7 @@ def train_generalized(
                 )
             )
         segment_config = _segment_config(
-            config.prototype_config,
+            segment_base_config,
             segment_index=segment_index,
             rollouts_per_scenario=config.rollouts_per_scenario,
             potential_reward_anneal_segments=(
@@ -1238,6 +1280,15 @@ def train_generalized(
             ),
             expert_guidance=config.expert_guidance,
             expert_action_callback=expert_action,
+            resume_learning_rate=(
+                config.resume_learning_rate if local_segment_index == 0 else None
+            ),
+            resume_disable_belief_loss=(
+                config.resume_disable_belief_loss if local_segment_index == 0 else False
+            ),
+            resume_reset_optimizer=(
+                config.resume_reset_optimizer if local_segment_index == 0 else False
+            ),
         )
         segment_revision_guard = report.get("revision_guard")
         if (
@@ -2204,7 +2255,30 @@ def _parser() -> argparse.ArgumentParser:
         default=0.0,
         help="balanced mode/card/placement imitation loss for expert guidance",
     )
-    train.add_argument("--learning-rate", type=float, default=3e-4)
+    train.add_argument(
+        "--learning-rate",
+        type=float,
+        default=None,
+        help=(
+            "Adam learning rate for a fresh run; when explicitly supplied with "
+            "--checkpoint, reapply it after loading the checkpoint"
+        ),
+    )
+    train.add_argument(
+        "--resume-learning-rate",
+        type=float,
+        help="override Adam learning rate after loading a checkpoint",
+    )
+    train.add_argument(
+        "--resume-reset-optimizer",
+        action="store_true",
+        help="when resuming, discard Adam moments before the first update",
+    )
+    train.add_argument(
+        "--resume-no-belief-loss",
+        action="store_true",
+        help="when resuming, disable the auxiliary belief loss and target collection",
+    )
     train.add_argument("--update-epochs", type=int, default=3)
     train.add_argument("--sequence-minibatch-size", type=int, default=8)
     train.add_argument(
@@ -2382,6 +2456,15 @@ def _parser() -> argparse.ArgumentParser:
             "exceeds this evidence-based bound; pass 0 to disable"
         ),
     )
+    train.add_argument(
+        "--placement-max-grad-norm",
+        type=float,
+        default=None,
+        help=(
+            "targeted raw-gradient cap for placement/spatial parameters; "
+            "leave unset unless placement-head regression evidence justifies it"
+        ),
+    )
     train.add_argument("--json-out", type=Path)
 
     evaluate = subparsers.add_parser("evaluate", help="evaluate a checkpoint on a held-out matrix")
@@ -2481,6 +2564,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         if args.command == "train":
+            if args.learning_rate is not None and args.resume_learning_rate is not None:
+                raise GeneralizedTrainingError(
+                    "pass either --learning-rate or --resume-learning-rate, not both"
+                )
+            learning_rate = 3e-4 if args.learning_rate is None else args.learning_rate
+            resume_learning_rate = args.resume_learning_rate
+            if args.checkpoint is not None and args.learning_rate is not None:
+                # Preserve the familiar spelling while making its post-load
+                # behavior explicit and reliable for generalized resumes.
+                resume_learning_rate = args.learning_rate
             max_update_approx_kl = (
                 None if args.max_update_approx_kl == 0.0 else args.max_update_approx_kl
             )
@@ -2498,7 +2591,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 diagnostic_trace_out=(
                     None if args.diagnostic_trace_out is None else str(args.diagnostic_trace_out)
                 ),
-                learning_rate=args.learning_rate,
+                learning_rate=learning_rate,
                 update_epochs=args.update_epochs,
                 sequence_minibatch_size=args.sequence_minibatch_size,
                 sequence_length=args.sequence_length,
@@ -2511,6 +2604,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 dense_reward=args.dense_reward,
                 potential_reward_weight=args.potential_reward_weight,
                 max_update_approx_kl=max_update_approx_kl,
+                placement_max_grad_norm=args.placement_max_grad_norm,
                 behavior_cloning_coef=args.bc_coef,
                 behavior_cloning_factor_coef=args.bc_factor_coef,
                 direct_public_action_features=args.direct_public_action_features,
@@ -2544,6 +2638,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 segment_offset=args.segment_offset,
                 checkpoint=args.checkpoint,
                 checkpoint_out=args.checkpoint_out,
+                resume_learning_rate=resume_learning_rate,
+                resume_disable_belief_loss=args.resume_no_belief_loss,
+                resume_reset_optimizer=args.resume_reset_optimizer,
                 include_regression=not args.no_regression,
                 threat_stratified=args.threat_stratified,
                 use_curriculum=not args.flat_curriculum,

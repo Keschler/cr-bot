@@ -156,6 +156,11 @@ class LearnerConfig:
     belief_coef: float = 0.0
     require_privileged_critic: bool = False
     shuffle_sequences: bool = True
+    # Optional targeted guard for the card-conditioned placement branch. A
+    # global norm can remain below its limit while the large placement
+    # distribution still moves sharply; leave this unset for legacy runs and
+    # enable it only when placement-head evidence justifies the guard.
+    placement_max_grad_norm: float | None = None
 
     def __post_init__(self) -> None:
         if not math.isfinite(float(self.learning_rate)) or float(self.learning_rate) <= 0.0:
@@ -168,6 +173,11 @@ class LearnerConfig:
                 raise ValueError(f"{name} must be a positive integer")
         if not math.isfinite(float(self.max_grad_norm)) or float(self.max_grad_norm) < 0.0:
             raise ValueError("max_grad_norm must be non-negative")
+        if self.placement_max_grad_norm is not None and (
+            not math.isfinite(float(self.placement_max_grad_norm))
+            or float(self.placement_max_grad_norm) <= 0.0
+        ):
+            raise ValueError("placement_max_grad_norm must be positive or None")
         if not 0.0 < float(self.gamma) <= 1.0:
             raise ValueError("gamma must be in (0, 1]")
         if not 0.0 <= float(self.gae_lambda) <= 1.0:
@@ -397,6 +407,7 @@ class UpdateMetrics:
     behavior_cloning_loss: float = 0.0
     factor_behavior_cloning_loss: float = 0.0
     effective_factor_behavior_cloning_coef: float = 0.0
+    placement_gradient_clip_fraction: float = 0.0
     # Raw pre-clipping gradient norms grouped by actor head/encoder.  Empty in
     # ordinary runs so the hot path and old report shape remain unchanged.
     per_head_gradient_norms: Mapping[str, float] = field(default_factory=dict)
@@ -419,6 +430,7 @@ class UpdateMetrics:
             "behavior_cloning_loss": self.behavior_cloning_loss,
             "factor_behavior_cloning_loss": self.factor_behavior_cloning_loss,
             "effective_factor_behavior_cloning_coef": self.effective_factor_behavior_cloning_coef,
+            "placement_gradient_clip_fraction": self.placement_gradient_clip_fraction,
             "per_head_gradient_norms": dict(self.per_head_gradient_norms),
         }
 
@@ -1031,6 +1043,7 @@ if TORCH_AVAILABLE:
                 "behavior_cloning_loss": 0.0,
                 "factor_behavior_cloning_loss": 0.0,
                 "effective_factor_behavior_cloning_coef": 0.0,
+                "placement_gradient_clip_fraction": 0.0,
             }
             head_sums: dict[str, float] = {}
             minibatches = 0
@@ -1215,6 +1228,20 @@ if TORCH_AVAILABLE:
                 self.optimizer.zero_grad(set_to_none=True)
                 return _skipped_minibatch_metrics()
 
+            placement_gradient_clipped = 0.0
+            if self.config.placement_max_grad_norm is not None:
+                placement_parameters = self._placement_parameters()
+                placement_gradient_norm = _gradient_norm(placement_parameters)
+                if not math.isfinite(placement_gradient_norm):
+                    self.optimizer.zero_grad(set_to_none=True)
+                    return _skipped_minibatch_metrics()
+                if placement_gradient_norm > self.config.placement_max_grad_norm:
+                    scale = self.config.placement_max_grad_norm / placement_gradient_norm
+                    for parameter in placement_parameters:
+                        if parameter.grad is not None:
+                            parameter.grad.mul_(scale)
+                    placement_gradient_clipped = 1.0
+
             if self.config.max_grad_norm and gradient_norm > self.config.max_grad_norm:
                 scale = self.config.max_grad_norm / gradient_norm
                 for parameter in parameters:
@@ -1252,6 +1279,7 @@ if TORCH_AVAILABLE:
                 "effective_factor_behavior_cloning_coef": float(
                     effective_factor_bc_coef
                 ),
+                "placement_gradient_clip_fraction": placement_gradient_clipped,
                 "approx_kl": float(metric_values[7]),
                 "clip_fraction": float(metric_values[8]),
                 "gradient_norm": gradient_norm,
@@ -1290,6 +1318,15 @@ if TORCH_AVAILABLE:
                     norm = float(parameter.grad.detach().float().norm(2).cpu().item())
                     grouped[group] = grouped.get(group, 0.0) + norm * norm
             return {name: math.sqrt(value) for name, value in grouped.items()}
+
+        def _placement_parameters(self) -> list[nn.Parameter]:
+            """Return direct placement/spatial parameters for the targeted guard."""
+
+            return [
+                parameter
+                for name, parameter in self.policy.named_parameters()
+                if "placement" in name.casefold() or "spatial" in name.casefold()
+            ]
 
         def _optimizer_parameters(self) -> list[nn.Parameter]:
             parameters: list[nn.Parameter] = []

@@ -17,8 +17,10 @@ a controlled probe when the action boundary or causal behavior matters.
 
 ## Current status
 
-- Latest validated RL implementation revision: `01f524ce10ac1ee847d79d9fbdd2695a12518abf`;
-  its tracked worktree is clean and the current ruleset hash is
+- The current source tree contains the guarded PPO/resume implementation; all
+  new artifacts must record its commit after the focused change is committed.
+  The current engine is `reference-0.37.0`; new artifacts record engine `reference-0.37.0`.
+  The current ruleset hash is
   `sha256:992ead6f14016917b5a108eaa1ca370c10a48b70d6a87ad69c7de50a8b020d7a`.
 - `rulesets/v1.json` contains 124 definitions, including all 109 eligible
   opponent cards, and remains `training_ready: false`.
@@ -26,18 +28,15 @@ a controlled probe when the action boundary or causal behavior matters.
   1,182 cases passed execution, repeated hashes, complete roster coverage, and
   behavioral obligations (`1,182/1,182`, two repeats, per-tick validation,
   eight workers).
-- The focused RL/diagnostics/vector suite is green (`230 passed, 11 warnings`)
-  when process-backend tests run with forkserver permissions. The ruleset is
-  still provisional, with unresolved fidelity evidence and `training_ready:
-  false`.
+- The focused RL suite is green (`46 passed, 19 skipped`); the ruleset is still
+  provisional, with unresolved fidelity evidence and `training_ready: false`.
 - Phase-0 physical-lab software is implemented, but physical evidence is
   intentionally deferred for the current RL-first execution path. No
   connected run has yet satisfied the evidence/readiness gates.
 - The policy is a provisional research harness, not an any-deck player. The
-  retained checkpoints under `outputs/training/` were produced on stale
-  `cd22` ruleset/revision hashes and must not be used as current evidence. The
-  current engine `reference-0.37.0` is used for new runs, which must be
-  revision-pinned.
+  retained best current prototype is
+  `outputs/simulator/training/prototype-fast-a59ad2f/prototype.pt`; it is
+  current-ruleset evidence only and is not a strength promotion.
 - The current revision benchmark measured 3,377 reference and 508 process
   environment steps/s at 16 lanes (100 steps, four process workers). All
   optimized runs matched the reference state-hash sequence; backend
@@ -157,25 +156,20 @@ recovery checkpoints on identical state streams/seeds and reports concrete
 category and consequence evidence. The actor remains the environment action
 source, and every run is subject to the simulator-exploit audit.
 
-The earlier mixed-PPO factor behavior-cloning issue is already isolated to
-explicit `imitation_only` warm-starts; its effective coefficient is zero in
-ordinary PPO. The current continuing-PPO diagnosis is separate: on the exact
-same seed/state stream, update 8 differed from the known-good checkpoint on 4
-decisions, update 9 differed on 437, and update 10 on 438. Update 9 measured
-mean KL `0.009348`, with post-update ratio clipping on `0.1256` of samples;
-the sparse actor-controlled rollout had 1,490 WAIT and 110 PLAY decisions.
-The dominant failure was a shared recurrent update generalizing a single
-loss-making siege/bait lane into premature `WAIT -> PLAY` mode decisions.
+The current continuation diagnosis found update-22 drift from the retained
+imitation-only warm-start. On identical states, the bad actor changed
+Skeletons `(3,22)` to Hog Rider `(3,17)`; the bounded six-cell comparison
+found 48 action divergences and 1,560 follow-on self-tower damage. Global KL
+was only `0.001057`, while the raw placement gradient was `0.247` and
+selected-card placement entropy fell `4.367 -> 1.869`. The actor remained the
+environment action source throughout.
 
-The smallest justified fix is a generalized-training KL rollback gate with
-default bound `0.008`. It attempts the update, records its diagnostics, and
-restores the complete learner checkpoint when the bound is exceeded; it never
-selects, masks, or executes an environment action. On the identical seed
-`10000`, the regressed update-9 checkpoint still differed on 437 decisions,
-while the guarded checkpoint differed on 4, exactly matching update 8. The
-guarded run had a stable revision and clean simulator-exploit audit. This is a
-decision-level regression fix, not a strength promotion; larger PPO training
-has not yet resumed.
+The implementation keeps the generalized KL rollback gate at `0.008`, adds a
+targeted placement-gradient cap for evidence-backed retries, and fixes
+generalized resume controls so an explicit learning rate is actually applied
+after Adam state loading. The cap and low-rate/reset retries were rejected at
+0/6; the retained 2/6 checkpoint remains the current prototype. No larger PPO
+run is promoted until its decision-level failures improve.
 
 ## Actor architecture
 
@@ -343,14 +337,15 @@ actor runs;
 `tower_hp_before`, `tower_hp_after`, and `tower_hp_end` have different
 per-decision versus terminal/cap-time meanings. The prototype `--trace-out` contains every decision; `troop_positions_end` and `tower_hp_end` are only terminal/cap-time snapshots. A finite `all_wins=true` result is not a universal-win claim.
 
-The current revision-pinned regression reproduction on `01f524c` attempted
-update 9 from the exact prior checkpoint, rolled it back at KL `0.009348 >
-0.008`, preserved update count 8, and passed the simulator-exploit audit. The
-same-state diagnosis reports `437 -> 4` bad-vs-good divergences. It is
-diagnostic evidence only; no held-out strength claim is attached.
-The clean continuation then accepted segments 9–10 (3,200 transitions) at
-KL `0.004676` and `0.003874`; its exploit audit passed and the same-state
-comparison remained at 4 divergences. This is still not a strength promotion.
+The update-22 trace contains the required per-decision state, legal mask,
+actor alternatives, label-only teacher, critic value, return/advantage,
+probability ratio, clipping, and per-head statistics. The tested placement cap
+clipped all 16 minibatches but still scored 0/6; a corrected low-rate plus
+one-time Adam-reset run preserved the first 100 exact decisions but also
+scored 0/6. Both are quarantined as failed candidates, with the retained
+checkpoint kept as the baseline. The exact-state comparator now skips
+recurrent-memory copies for physics-only comparisons, reserving them for
+lookahead.
 
 ## Simulator requirements
 
@@ -433,3 +428,5 @@ mechanics pass generated, regression, parity, and independent held-out gates;
 the physical-lab evidence chain is reproducible; the optimized backend is
 hash-identical to the reference; and video, reference simulation, and
 optimized simulation share the same versioned observation/action contract.
+
+MAIN GOAL NOW IS A GOOD/WORKING PROTOTYPE as fast as possible!!

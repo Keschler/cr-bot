@@ -15,9 +15,11 @@ while the actor, training loop, evaluation, and simulator throughput improve.
 This permits provisional experiments only; it does not satisfy the fidelity
 gates or authorize a `training_ready` claim.
 
-The current RL safety fix is committed in
-`01f524ce10ac1ee847d79d9fbdd2695a12518abf`; the tracked worktree is clean at
-that code revision.
+The retained best provisional actor is
+`outputs/simulator/training/prototype-fast-a59ad2f/prototype.pt`. On the
+identical six-cell seeded matrix it completes 6/6 matches and wins 2/6; this
+is prototype evidence, not a held-out strength gate. Failed PPO candidates are
+not promoted over it.
 
 ## Setup and tests
 
@@ -262,24 +264,23 @@ one-step state differences, approximate follow-on consequences, and aggregate
 update statistics. The actor remains in control; the teacher is label-only.
 Every training/evaluation report also runs the simulator-exploit audit.
 
-The earlier mixed-PPO factor behavior-cloning issue is already limited to
-explicit `--imitation-only` warm-starts; its effective coefficient is zero in
-ordinary PPO. The current continuing-PPO diagnosis found the first collapse
-at update 9: on an identical state stream, update 8 differed from the known
-good checkpoint on 4 decisions, update 9 on 437, and update 10 on 438.
-Update 9 measured mean KL `0.009348`, and post-update ratio clipping was
-`0.1256`; the rollout contained 1,490 WAIT and 110 PLAY decisions. The
-dominant failure was a premature `WAIT -> PLAY` mode shift after a sparse,
-loss-making siege/bait lane.
+The current continuation diagnosis found a later failure at update 22. The
+retained checkpoint was an explicit imitation-only warm-start; the attempted
+continuation disabled that phase and ran sparse ordinary PPO. On identical
+states, the card/placement choice changed from Skeletons at `(3,22)` to Hog
+Rider at `(3,17)`. The bounded six-cell comparison found 48 divergences and
+1,560 follow-on self-tower damage. The update's global KL was only `0.001057`,
+but the raw placement gradient was `0.247` versus a global norm of `0.314`, and
+selected-card placement entropy fell from `4.367` to `1.869`. This is why a
+global KL check alone is insufficient here.
 
-Generalized training now defaults to `--max-update-approx-kl 0.008`. It
-records the attempted update and rolls back the complete learner checkpoint
-when the measured mean KL exceeds the bound; it never selects or masks an
-environment action. On the identical seed `10000`, the guarded checkpoint
-reduced the regressed update-9 comparison from 437 divergences to 4, exactly
-matching update 8. Its revision guard and simulator-exploit audit were clean.
-This is a decision-level stability fix, not a strength claim; larger PPO
-training must still be evaluated on held-out seeds.
+Generalized training now defaults to `--max-update-approx-kl 0.008`, supports
+`--resume-learning-rate`, `--resume-reset-optimizer`, and
+`--resume-no-belief-loss`, and records the applied resume settings. A targeted
+placement-gradient cap is available only when placement-head evidence justifies
+it. The tested cap and low-rate/reset candidates were not promoted because
+both still scored 0/6; the known-good checkpoint remains the baseline. This
+is a decision-level stability fix, not a strength claim.
 
 The runnable neural prototype is in [rl/prototype.py](rl/prototype.py).
 The generalized runner adds curriculum sampling, held-out provenance,
@@ -407,11 +408,11 @@ snapshots; `crowns_end` reports final world-player crown totals; and
 `troop_positions_end` is likewise terminal/cap-time data, not a continuous
 trajectory.
 
-No checkpoint has earned a strength promotion. Older checkpoints and
-evaluation tables are retained only as provenance and must not be used as
-current policy evidence. The clean post-fix continuation accepted segments
-9–10 (3,200 transitions) at KL `0.004676` and `0.003874`, passed the exploit
-audit, and remained at 4 divergences on the identical diagnostic seed.
+No checkpoint has earned a strength promotion. The retained
+`prototype-fast-a59ad2f` checkpoint is the current best provisional baseline:
+6/6 complete matches, 2/6 wins, zero rejected actions, and a clean exploit
+audit on the identical six-cell matrix. The update-22 cap and low-rate/reset
+continuations were quarantined after scoring 0/6.
 
 ## RL phases
 

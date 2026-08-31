@@ -215,6 +215,73 @@ def test_generalized_ppo_kl_guard_is_configured_per_segment() -> None:
         GeneralizedTrainingConfig(max_update_approx_kl=0.0)
 
 
+def test_generalized_resume_controls_are_forwarded_only_on_first_segment(
+    monkeypatch, tmp_path
+) -> None:
+    import simulator.rl.generalized as generalized
+
+    calls: list[dict[str, object]] = []
+
+    def fake_train(config, *, checkpoint, checkpoint_out, **kwargs):
+        calls.append(
+            {
+                "config_learning_rate": config.learning_rate,
+                "config_belief_coef": config.belief_coef,
+                "config_collect_belief_targets": config.collect_belief_targets,
+                "learning_rate": kwargs["resume_learning_rate"],
+                "disable_belief": kwargs["resume_disable_belief_loss"],
+                "reset_optimizer": kwargs["resume_reset_optimizer"],
+            }
+        )
+        return {
+            "final_update": 1,
+            "outcomes": {
+                "completed_matches": 0,
+                "wins": 0,
+                "draws": 0,
+                "losses": 0,
+                "truncated_matches": 0,
+            },
+        }
+
+    monkeypatch.setattr(generalized, "train_prototype", fake_train)
+    config = GeneralizedTrainingConfig(
+        prototype_config=PrototypeConfig(envs=1, horizon=8, updates=1),
+        segments=2,
+        checkpoint=tmp_path / "starting.pt",
+        checkpoint_out=tmp_path / "next.pt",
+        resume_learning_rate=1e-5,
+        resume_disable_belief_loss=True,
+        resume_reset_optimizer=True,
+    )
+
+    generalized.train_generalized(config)
+
+    assert calls == [
+        {
+            "config_learning_rate": pytest.approx(1e-5),
+            "config_belief_coef": 0.0,
+            "config_collect_belief_targets": False,
+            "learning_rate": pytest.approx(1e-5),
+            "disable_belief": True,
+            "reset_optimizer": True,
+        },
+        {
+            "config_learning_rate": pytest.approx(1e-5),
+            "config_belief_coef": 0.0,
+            "config_collect_belief_targets": False,
+            "learning_rate": None,
+            "disable_belief": False,
+            "reset_optimizer": False,
+        },
+    ]
+
+
+def test_generalized_resume_controls_require_a_checkpoint() -> None:
+    with pytest.raises(GeneralizedTrainingError, match="resume controls"):
+        GeneralizedTrainingConfig(resume_learning_rate=1e-5)
+
+
 def test_pfsp_updates_use_lane_indexed_terminal_outcomes() -> None:
     assignments = (None, "old-a", "old-b")
     report = {

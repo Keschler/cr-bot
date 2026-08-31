@@ -621,7 +621,15 @@ class ExactStateComparator:
             before = state_snapshot(state)
             if before is None:
                 raise EvaluationMatrixError("could not snapshot diagnosis state")
-            source_memories = deepcopy(getattr(environment, "_memories", None))
+            # Physics-only comparisons do not read observation memory. Avoid
+            # copying the entire recurrent public-event history for every
+            # candidate and decision; the full memory snapshot is required
+            # only when branch lookahead will call ``observe_v2``.
+            source_memories = (
+                deepcopy(getattr(environment, "_memories", None))
+                if self.lookahead_steps
+                else None
+            )
             actor_rows: dict[str, dict[str, Any]] = {}
             candidate_actions: dict[str, Any] = {}
             branch_hidden: dict[str, Any] = {}
