@@ -554,6 +554,7 @@ def test_prototype_defaults_to_teacher_free_ppo() -> None:
     assert config.imitation_only is False
     assert config.behavior_cloning_coef == 0.0
     assert config.behavior_cloning_factor_coef == 0.0
+    assert config.behavior_cloning_card_factor_weight == 1.0
     assert config.entropy_coef > 0.0
     assert inspect.signature(evaluate_prototype).parameters["policy_mode"].default == "actor"
 

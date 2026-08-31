@@ -2261,6 +2261,15 @@ def _parser() -> argparse.ArgumentParser:
         help="balanced mode/card/placement imitation loss for expert guidance",
     )
     train.add_argument(
+        "--bc-card-factor-weight",
+        type=float,
+        default=1.0,
+        help=(
+            "relative card-head weight inside the factor imitation loss; "
+            "use only for diagnosed card-selection collapse"
+        ),
+    )
+    train.add_argument(
         "--learning-rate",
         type=float,
         default=None,
@@ -2621,6 +2630,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 placement_max_grad_norm=args.placement_max_grad_norm,
                 behavior_cloning_coef=args.bc_coef,
                 behavior_cloning_factor_coef=args.bc_factor_coef,
+                behavior_cloning_card_factor_weight=args.bc_card_factor_weight,
                 direct_public_action_features=args.direct_public_action_features,
                 direct_public_card_features=args.direct_public_card_features,
                 contextual_public_card_features=args.contextual_public_card_features,

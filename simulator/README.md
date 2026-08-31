@@ -18,18 +18,15 @@ gates or authorize a `training_ready` claim.
 The retained best provisional actor is
 `outputs/simulator/training/prototype-fast-current/prototype.pt`. On the
 identical six-cell seeded matrix it completes 6/6 matches and wins 2/6; this
-is prototype evidence, not a held-out strength gate. Failed PPO candidates are
-not promoted over it. Commit `258175f` also adds actor-controlled,
-label-only teacher transport to the persistent rollout farm: the verified
-20,480-decision run reached 88.2 end-to-end decisions/s. Its strategic-teacher
-candidate scored 1/6 and was quarantined, so the 2/6 checkpoint remains the
-active baseline. A deterministic recovery segment reproduced 2/6 without
-improving the underlying decision failures, so it was also quarantined. The
-latest exact-state trials are equally fail-closed: the public strategic teacher
-scores 4/6, but resumed/fresh neural imitation variants score 0/6 or 1/6.
-Their traces are dominated by placement-head divergence (51/51 and 67/67
-candidate differences); every run completed with a clean exploit audit, but
-none corrected the decision-level failure.
+is prototype evidence, not a held-out strength gate. Failed PPO and imitation
+candidates are not promoted over it. The public strategic teacher scores 4/6,
+but the actor's full decision trace shows a card-selection collapse: the
+baseline almost exclusively cycles Cannon, Ice Golem, Ice Spirit, Log, and
+Skeletons (six Hog plays and no Fireball/Musketeer in the common matrix), while
+the teacher uses those decisive cards. Card-residual, card-head, teacher-forced,
+and actor-controlled DAgger trials scored 0/6 or 1/6, all with clean exploit
+audits, so the 2/6 checkpoint remains active. The diagnosis is understood, but
+no neural fix has yet passed the decision-level gate.
 
 ## Setup and tests
 
@@ -274,15 +271,14 @@ one-step state differences, approximate follow-on consequences, and aggregate
 update statistics. The actor remains in control; the teacher is label-only.
 Every training/evaluation report also runs the simulator-exploit audit.
 
-The current continuation diagnosis found a later failure at update 22. The
-retained checkpoint was an explicit imitation-only warm-start; the attempted
-continuation disabled that phase and ran sparse ordinary PPO. On identical
-states, the card/placement choice changed from Skeletons at `(3,22)` to Hog
-Rider at `(3,17)`. The bounded six-cell comparison found 48 divergences and
-1,560 follow-on self-tower damage. The update's global KL was only `0.001057`,
-but the raw placement gradient was `0.247` versus a global norm of `0.314`, and
-selected-card placement entropy fell from `4.367` to `1.869`. This is why a
-global KL check alone is insufficient here.
+The diagnosis has two layers. A later PPO continuation failed at update 22:
+on identical states, Skeletons at `(3,22)` changed to Hog Rider at `(3,17)`;
+the bounded comparison found 48 divergences and 1,560 follow-on self-tower
+damage despite global KL `0.001057`. The broader full-match trace then showed
+the retained actor's persistent failure is card selection: it makes only six
+Hog plays and no Fireball/Musketeer plays across the common matrix, whereas the
+public teacher makes 26 Hog, 32 Fireball, and 23 Musketeer plays. This is why
+the card head, not a simulator rule, is the current training target.
 
 Generalized training now defaults to `--max-update-approx-kl 0.008`, supports
 `--resume-learning-rate`, `--resume-reset-optimizer`, and
@@ -290,7 +286,9 @@ Generalized training now defaults to `--max-update-approx-kl 0.008`, supports
 placement-gradient cap is available only when placement-head evidence justifies
 it. The tested cap and low-rate/reset candidates were not promoted because
 they scored 0/6 or 1/6 on the common matrix; the known-good checkpoint remains
-the baseline. This is a decision-level stability finding, not a strength claim.
+the baseline. The supervised factor loss exposes `--bc-card-factor-weight`
+(default `1.0`) as a neutral, evidence-gated control for card-head experiments;
+tested non-default candidates were quarantined and did not improve the matrix.
 
 The runnable neural prototype is in [rl/prototype.py](rl/prototype.py).
 The generalized runner adds curriculum sampling, held-out provenance,

@@ -59,14 +59,13 @@ a controlled probe when the action boundary or causal behavior matters.
   was quarantined; the retained neural baseline remains 2/6. A deterministic
   recovery segment reproduced that 2/6 result without changing the concrete
   decision failures, so it was not promoted.
-- The current exact-state investigation is more specific: the strategic
-  teacher scores 4/6 on the common six-cell control matrix, but resumed,
-  fresh, teacher-executed, joint-loss, and placement-capped neural trials
-  scored 0/6 or 1/6. The baseline-versus-recovery traces show placement-head
-  divergence on 51/51 and 67/67 differing decisions, while card-head changes
-  occur only six times. All candidates completed and passed the exploit audit;
-  they remain quarantined because the decision-level placement failure was not
-  corrected.
+- The current exact-state investigation is concrete: the public strategic
+  teacher scores 4/6, while the retained actor scores 2/6 and makes only six
+  Hog plays with no Fireball/Musketeer plays across the common matrix. The
+  teacher makes 26 Hog, 32 Fireball, and 23 Musketeer plays. Card-residual,
+  card-head, teacher-forced, and actor-controlled DAgger candidates scored
+  0/6 or 1/6; every run was clean for simulator exploitation, so all remain
+  quarantined and the retained checkpoint is unchanged.
 
 These results establish plumbing and performance, not game strength or
 sim-to-real fidelity.
@@ -356,15 +355,14 @@ actor runs;
 `tower_hp_before`, `tower_hp_after`, and `tower_hp_end` have different
 per-decision versus terminal/cap-time meanings. The prototype `--trace-out` contains every decision; `troop_positions_end` and `tower_hp_end` are only terminal/cap-time snapshots. A finite `all_wins=true` result is not a universal-win claim.
 
-The update-22 and current imitation traces contain the required per-decision
-state, legal mask, actor alternatives, label-only teacher, critic value,
+The update-22 and full-match traces contain the required per-decision state,
+legal mask, actor alternatives, label-only teacher, critic value,
 return/advantage, probability ratio, clipping, and per-head statistics. The
-current short exact-state report found 51 placement divergences for the joint
-candidate and 67 for the standard candidate; the former caused 914 additional
-downstream self-tower-damage points in its 16-step continuation probes. The
-exact-state comparator now skips recurrent-memory copies for physics-only
-comparisons, reserving them for lookahead. All tested candidates are
-quarantined; the retained checkpoint is unchanged.
+verified regression is an overconfident cheap-cycle card head; moving card
+labels alone also exposed an unadapted card-conditioned placement path. A
+neutral `--bc-card-factor-weight` control is available for future evidence-led
+experiments. All tested candidates are quarantined; the retained checkpoint is
+unchanged.
 
 ## Simulator requirements
 

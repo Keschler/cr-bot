@@ -129,6 +129,10 @@ class PrototypeConfig:
     belief_coef: float = 0.05
     behavior_cloning_coef: float = 0.0
     behavior_cloning_factor_coef: float = 0.0
+    # Relative card-factor weight inside the supervised factor loss. Keep the
+    # default neutral; raise it only when diagnostics identify card-head
+    # collapse while mode and placement remain healthy.
+    behavior_cloning_card_factor_weight: float = 1.0
     imitation_only: bool = False
     # PPO must collect the actions selected by the actor.  Teacher execution is
     # an explicit, separately reported bootstrap mode and is never the safe
@@ -260,6 +264,7 @@ class PrototypeConfig:
             "belief_coef",
             "behavior_cloning_coef",
             "behavior_cloning_factor_coef",
+            "behavior_cloning_card_factor_weight",
             "potential_reward_weight",
         ):
             value = float(getattr(self, name))
@@ -428,6 +433,7 @@ def _model_and_learner(config: PrototypeConfig) -> Any:
         entropy_coef=config.entropy_coef,
         bc_coef=config.behavior_cloning_coef,
         bc_factor_coef=config.behavior_cloning_factor_coef,
+        bc_card_factor_weight=config.behavior_cloning_card_factor_weight,
         imitation_only=config.imitation_only,
         # DAgger/teacher forcing is a collector setting rather than a model
         # setting, but keeping it in the serialized runtime config makes the
@@ -3809,6 +3815,15 @@ def _parser() -> argparse.ArgumentParser:
         help="balanced mode/card/placement imitation loss for teacher-guided rollouts",
     )
     train.add_argument(
+        "--bc-card-factor-weight",
+        type=float,
+        default=1.0,
+        help=(
+            "relative card-head weight inside the factor imitation loss; "
+            "use only for diagnosed card-selection collapse"
+        ),
+    )
+    train.add_argument(
         "--expert-guidance",
         action="store_true",
         help=(
@@ -4151,6 +4166,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 belief_coef=args.belief_coef,
                 behavior_cloning_coef=args.bc_coef,
                 behavior_cloning_factor_coef=args.bc_factor_coef,
+                behavior_cloning_card_factor_weight=args.bc_card_factor_weight,
                 imitation_only=args.imitation_only,
                 expert_execution_probability=args.expert_execution_probability,
                 expert_label_on_threat_only=args.expert_label_on_threat_only,

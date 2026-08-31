@@ -152,6 +152,10 @@ class LearnerConfig:
     normalize_advantage: bool = True
     bc_coef: float = 0.0
     bc_factor_coef: float = 0.0
+    # Relative weight of the card factor inside the supervised mode/card/
+    # placement objective.  The default preserves the original balance; a
+    # larger value is useful when diagnostics show card-selection collapse.
+    bc_card_factor_weight: float = 1.0
     imitation_only: bool = False
     belief_coef: float = 0.0
     require_privileged_critic: bool = False
@@ -189,6 +193,7 @@ class LearnerConfig:
             "entropy_coef",
             "bc_coef",
             "bc_factor_coef",
+            "bc_card_factor_weight",
             "belief_coef",
         ):
             value = float(getattr(self, name))
@@ -1157,6 +1162,7 @@ if TORCH_AVAILABLE:
                         trajectory,
                         batch.behavior_cloning_weights,
                         actions=behavior_cloning_actions,
+                        card_factor_weight=self.config.bc_card_factor_weight,
                     )
                     if self.config.imitation_only or diagnostics
                     else evaluation.output.recurrent_features.new_zeros(())
@@ -1801,6 +1807,7 @@ def _factor_behavior_cloning_loss(
     weights: Any | None,
     *,
     actions: Any | None = None,
+    card_factor_weight: float = 1.0,
 ) -> Any:
     """Balance teacher gradients across mode, card, and placement factors.
 
@@ -1813,6 +1820,13 @@ def _factor_behavior_cloning_loss(
 
     if weights is None:
         return output.recurrent_features.new_zeros(())
+    if (
+        isinstance(card_factor_weight, bool)
+        or not isinstance(card_factor_weight, (int, float))
+        or not math.isfinite(float(card_factor_weight))
+        or float(card_factor_weight) < 0.0
+    ):
+        raise ValueError("card_factor_weight must be a finite non-negative value")
     weights = weights.to(
         device=output.recurrent_features.device,
         dtype=output.recurrent_features.dtype,
@@ -1865,7 +1879,8 @@ def _factor_behavior_cloning_loss(
         # teacher already marks decisive cards (such as Hog Rider) more
         # strongly; making every rare card equally frequent would erase the
         # distinction between pressure, defense, and spell labels.
-        losses.append(-(play_weights * card_log_probs).sum() / play_denominator)
+        card_loss = -(play_weights * card_log_probs).sum() / play_denominator
+        losses.append(float(card_factor_weight) * card_loss)
 
         placement = factors.placement[play]
         sample_number = torch.arange(

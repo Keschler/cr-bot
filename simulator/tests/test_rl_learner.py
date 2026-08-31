@@ -33,6 +33,8 @@ def test_learner_config_validates_long_horizon_defaults() -> None:
         LearnerConfig(learning_rate=float("nan"))
     with pytest.raises(ValueError, match="imitation_only"):
         LearnerConfig(imitation_only="yes")
+    with pytest.raises(ValueError, match="bc_card_factor_weight"):
+        LearnerConfig(bc_card_factor_weight=-1.0)
     with pytest.raises(ValueError, match="clip_epsilon"):
         PPOObjectiveConfig(clip_epsilon=float("inf"))
 
