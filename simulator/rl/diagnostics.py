@@ -44,15 +44,23 @@ def _action_descriptor(action: Any) -> dict[str, Any]:
 
     if action is None:
         return {"mode": "WAIT"}
-    kind = str(getattr(action, "kind", "Wait")).strip().casefold().replace("_", "-")
+    if isinstance(action, Mapping):
+        raw_kind = action.get("mode", action.get("kind", "WAIT"))
+        slot = action.get("card_slot", action.get("card_idx"))
+        cell = action.get("world_cell", action.get("cell"))
+    else:
+        raw_kind = getattr(action, "kind", "Wait")
+        slot = getattr(action, "card_idx", None)
+        if slot is None:
+            slot = getattr(action, "card_slot", None)
+        cell = getattr(action, "cell", None)
+    kind = str(raw_kind).strip().casefold().replace("_", "-")
+    if kind == "play":
+        kind = "play"
     if kind in {"wait", "noop", "no-op"}:
         return {"mode": "WAIT"}
     if kind != "play":
         return {"mode": kind.upper()}
-    slot = getattr(action, "card_idx", None)
-    if slot is None:
-        slot = getattr(action, "card_slot", None)
-    cell = getattr(action, "cell", None)
     row: dict[str, Any] = {
         "mode": "PLAY",
         "card_slot": None if slot is None else int(slot),

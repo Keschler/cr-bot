@@ -2975,6 +2975,31 @@ def _evaluate_parallel_episodes(
     }
 
 
+def _diagnostic_state_copy(state: Any) -> Any:
+    """Copy only the authoritative state needed by an evaluation trace.
+
+    ``BattleState`` retains the complete event history.  Deep-copying that
+    history once per decision makes a long trace increasingly expensive even
+    though the trace serializer needs only the current state fields.  The
+    primitive snapshot keeps RNG, entities, towers, and player state while
+    deliberately omitting the redundant event log; callers still retain the
+    post-step event data transported in the step result.
+    """
+
+    if state is None:
+        return None
+    to_primitive = getattr(state, "to_primitive", None)
+    if callable(to_primitive):
+        try:
+            return to_primitive(include_events=False)
+        except TypeError:
+            # Compatibility with a state implementation predating the
+            # include_events keyword.  This fallback is still bounded to one
+            # state object and preserves the old diagnostic behavior.
+            pass
+    return deepcopy(state)
+
+
 def _evaluate_public_counter_fast(
     checkpoint: str | Path,
     *,
@@ -3347,7 +3372,9 @@ def evaluate_prototype(
         last_results: list[Any | None] = [None for _ in episode_ids]
         last_states: list[Any | None] = [None for _ in episode_ids]
         before_states: list[Any | None] = [
-            deepcopy(getattr(environment, "state", None)) if trace_enabled else None
+            _diagnostic_state_copy(getattr(environment, "state", None))
+            if trace_enabled
+            else None
             for environment in environments
         ]
 
@@ -3362,7 +3389,7 @@ def evaluate_prototype(
             )
             if trace_enabled:
                 episode_rows[lane].append(row)
-                before_states[lane] = deepcopy(record.state_after)
+                before_states[lane] = _diagnostic_state_copy(record.state_after)
             last_results[lane] = record.result
             last_states[lane] = record.state_after
             info = getattr(record.result, "info", {})

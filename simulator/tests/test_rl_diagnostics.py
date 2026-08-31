@@ -24,6 +24,17 @@ def test_teacher_disagreement_alone_is_not_classified_as_head_regression() -> No
     assert classify_decision(row) == ["teacher_disagreement"]
 
 
+def test_action_equal_accepts_serialized_policy_descriptors() -> None:
+    from rl.diagnostics import action_equal
+    from cr_bot.domain.game_state import Action
+
+    assert action_equal(
+        {"mode": "PLAY", "card_slot": 2, "world_cell": [3, 17]},
+        Action(kind="Play", card_idx=2, cell=(3, 17)),
+    )
+    assert action_equal({"mode": "WAIT"}, Action(kind="Wait"))
+
+
 def test_reference_action_difference_gets_timing_and_threat_context() -> None:
     from rl.diagnostics import classify_decision
 
