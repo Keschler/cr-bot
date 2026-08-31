@@ -37,6 +37,17 @@ def test_action_equal_accepts_serialized_policy_descriptors() -> None:
     assert action_equal({"mode": "WAIT"}, Action(kind="Wait"))
 
 
+def test_simulator_play_action_is_not_serialized_as_wait() -> None:
+    from actions import PlayCardAction
+    from rl.diagnostics import _action_descriptor
+
+    assert _action_descriptor(PlayCardAction(1, 2, (3, 12))) == {
+        "mode": "PLAY",
+        "card_slot": 2,
+        "world_cell": [3, 12],
+    }
+
+
 @pytest.mark.skipif(torch is None, reason="PyTorch is not installed")
 def test_teacher_agreement_compares_actor_not_teacher_executed_action() -> None:
     from rl import ActionBatch, ActionMasks, MaskedAutoregressivePolicy, ModelConfig
@@ -112,7 +123,7 @@ def test_reference_action_difference_gets_timing_and_threat_context() -> None:
 
     assert set(classify_decision(row)) == {
         "ground-threat-response",
-        "mode-head-regression",
+        "mode-head-divergence",
         "potential-elixir-overcommitment",
         "threat-response",
         "wait-to-play-divergence",
@@ -158,6 +169,47 @@ def test_exact_timing_labels_require_counterfactual_consequence() -> None:
     assert harmful == ["action-too-early", "bad-follow-on-consequence"]
 
 
+def test_head_quality_requires_signed_counterfactual_tower_swing() -> None:
+    from rl.diagnose import (
+        _head_consequence_categories,
+        _relative_state_difference,
+    )
+
+    good = {
+        "tower_hp": {
+            "player_0": {"left": {"hp": 1545}},
+            "player_1": {"left": {"hp": 2982}},
+        },
+        "units": [],
+    }
+    candidate = {
+        "tower_hp": {
+            "player_0": {"left": {"hp": 2229}},
+            "player_1": {"left": {"hp": 3017}},
+        },
+        "units": [],
+    }
+    difference = _relative_state_difference(good, candidate, target_player=0)
+
+    assert difference["avoided_tower_damage_to_self"] == 684
+    assert difference["foregone_tower_damage_to_opponent"] == 35
+    assert difference["tower_swing_delta"] == 649
+    assert _head_consequence_categories(
+        good_action={"mode": "PLAY", "card_slot": 1, "world_cell": [14, 19]},
+        candidate_action={"mode": "PLAY", "card_slot": 1, "world_cell": [3, 19]},
+        immediate_difference={},
+        candidate_follow_on={"state_difference_vs_good": difference},
+    ) == ["placement-head-improvement"]
+    assert _head_consequence_categories(
+        good_action={"mode": "PLAY", "card_slot": 1, "world_cell": [3, 19]},
+        candidate_action={"mode": "PLAY", "card_slot": 1, "world_cell": [14, 19]},
+        immediate_difference=_relative_state_difference(
+            candidate, good, target_player=0
+        ),
+        candidate_follow_on=None,
+    ) == ["placement-head-regression"]
+
+
 def test_checkpoint_diagnosis_preserves_evaluation_deck_shuffling(monkeypatch) -> None:
     from rl import diagnose
     from rl.evaluation_matrix import OpponentDeckSpec, OpponentStrategySpec
@@ -174,6 +226,12 @@ def test_checkpoint_diagnosis_preserves_evaluation_deck_shuffling(monkeypatch) -
             "fireball",
             "log",
         ),
+        metadata={"archetype": "random-legal"},
+    )
+    other_deck = OpponentDeckSpec(
+        deck_id="heldout-aggressive",
+        cards=deck.cards,
+        metadata={"archetype": "aggressive-pressure"},
     )
     strategy = OpponentStrategySpec(
         strategy_id="deterministic-cycle",
@@ -184,7 +242,7 @@ def test_checkpoint_diagnosis_preserves_evaluation_deck_shuffling(monkeypatch) -
         max_decisions=1200,
         shuffle_decks=True,
         player_deck=deck.cards,
-        opponent_decks=(deck,),
+        opponent_decks=(deck, other_deck),
         strategies=(strategy,),
         seeds=(10002,),
     )
@@ -208,15 +266,19 @@ def test_checkpoint_diagnosis_preserves_evaluation_deck_shuffling(monkeypatch) -
     report = diagnose.compare_checkpoints(
         "good.pt",
         "candidate.pt",
-        archetypes=("random-legal",),
+        archetypes=("aggressive-pressure", "random-legal"),
         strategies=("deterministic-cycle",),
         seeds=(10002,),
         shuffle_decks=True,
+        only_archetypes=("random-legal",),
     )
 
     assert captured["build_kwargs"]["shuffle_decks"] is True
     assert captured["specs"][0].shuffle_decks is True
+    assert len(captured["specs"]) == 1
+    assert captured["specs"][0].opponent_deck.deck_id == "heldout-random"
     assert report["matrix"]["shuffle_decks"] is True
+    assert report["matrix"]["diagnosed_archetypes"] == ["random-legal"]
 
 
 @pytest.mark.skipif(torch is None, reason="PyTorch is not installed")

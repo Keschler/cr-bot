@@ -45,15 +45,20 @@ def _action_descriptor(action: Any) -> dict[str, Any]:
     if action is None:
         return {"mode": "WAIT"}
     if isinstance(action, Mapping):
-        raw_kind = action.get("mode", action.get("kind", "WAIT"))
         slot = action.get("card_slot", action.get("card_idx"))
         cell = action.get("world_cell", action.get("cell"))
+        raw_kind = action.get("mode", action.get("kind"))
     else:
-        raw_kind = getattr(action, "kind", "Wait")
         slot = getattr(action, "card_idx", None)
         if slot is None:
             slot = getattr(action, "card_slot", None)
         cell = getattr(action, "cell", None)
+        raw_kind = getattr(action, "kind", None)
+    if raw_kind is None:
+        # Simulator ``PlayCardAction`` deliberately has no string ``kind``
+        # attribute. Infer it from its structural fields so opponent actions
+        # in exact-state reports are not silently serialized as WAIT.
+        raw_kind = "Play" if slot is not None and cell is not None else "Wait"
     kind = str(raw_kind).strip().casefold().replace("_", "-")
     if kind == "play":
         kind = "play"
@@ -473,7 +478,7 @@ def classify_decision(row: Mapping[str, Any]) -> list[str]:
         categories.append("teacher_disagreement")
     if isinstance(action, Mapping) and isinstance(reference, Mapping):
         if action.get("mode") != reference.get("mode"):
-            categories.append("mode-head-regression")
+            categories.append("mode-head-divergence")
             if action.get("mode") == "PLAY" and reference.get("mode") == "WAIT":
                 # A reference WAIT versus candidate PLAY identifies a timing
                 # divergence, not its quality.  Waiting may preserve elixir
@@ -485,9 +490,9 @@ def classify_decision(row: Mapping[str, Any]) -> list[str]:
                 categories.append("play-to-wait-divergence")
         elif action.get("mode") == "PLAY" and reference.get("mode") == "PLAY":
             if action.get("card_slot") != reference.get("card_slot"):
-                categories.append("card-selection-head-regression")
+                categories.append("card-selection-head-divergence")
             if action.get("world_cell") != reference.get("world_cell"):
-                categories.append("placement-head-regression")
+                categories.append("placement-head-divergence")
     if row.get("action_status") == "rejected":
         categories.append("invalid-action")
     before = row.get("state_before")

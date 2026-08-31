@@ -181,21 +181,34 @@ def _relative_state_difference(
             old_hp = reference_row.get("hp")
             new_hp = candidate_row.get("hp")
             if type(old_hp) is int and type(new_hp) is int:
-                # Positive means the candidate branch has the lower tower HP.
-                delta += max(0, int(old_hp) - int(new_hp))
+                # Positive means the candidate branch has the lower tower HP;
+                # negative means it preserved more HP than the reference.
+                delta += int(old_hp) - int(new_hp)
         return delta
 
-    extra_self_damage = hp_delta(target_player)
-    extra_opponent_damage = hp_delta(1 - target_player)
+    self_damage_delta = hp_delta(target_player)
+    opponent_damage_delta = hp_delta(1 - target_player)
+    extra_self_damage = max(0, self_damage_delta)
+    avoided_self_damage = max(0, -self_damage_delta)
+    extra_opponent_damage = max(0, opponent_damage_delta)
+    foregone_opponent_damage = max(0, -opponent_damage_delta)
+    tower_swing_delta = opponent_damage_delta - self_damage_delta
     return {
         "additional_tower_damage_to_self": extra_self_damage,
+        "avoided_tower_damage_to_self": avoided_self_damage,
         "additional_tower_damage_to_opponent": extra_opponent_damage,
+        "foregone_tower_damage_to_opponent": foregone_opponent_damage,
+        # Positive is better for the candidate: more opponent damage and/or
+        # less self damage. Negative is a verified adverse tower swing.
+        "tower_swing_delta": tower_swing_delta,
         "units_added": added,
         "units_removed": removed,
         "units_changed": changed[:32],
         "major_consequence": bool(
             extra_self_damage
+            or avoided_self_damage
             or extra_opponent_damage
+            or foregone_opponent_damage
             or added
             or removed
             or changed
@@ -215,19 +228,19 @@ def _categories(
     categories: set[str] = set()
     if candidate_action != good_action:
         if candidate_action.get("mode") != good_action.get("mode"):
-            categories.add("mode-head-regression")
+            categories.add("mode-head-divergence")
             if candidate_action.get("mode") == "PLAY" and good_action.get("mode") == "WAIT":
                 categories.add("wait-to-play-divergence")
             elif candidate_action.get("mode") == "WAIT" and good_action.get("mode") == "PLAY":
                 categories.add("play-to-wait-divergence")
         elif candidate_action.get("card_slot") != good_action.get("card_slot"):
-            categories.add("card-selection-head-regression")
-        if (
+            categories.add("card-selection-head-divergence")
+        elif (
             candidate_action.get("mode") == "PLAY"
             and good_action.get("mode") == "PLAY"
             and candidate_action.get("world_cell") != good_action.get("world_cell")
         ):
-            categories.add("placement-head-regression")
+            categories.add("placement-head-divergence")
     if teacher_action is not None and candidate_action != teacher_action:
         categories.add("teacher-disagreement")
     is_divergence = candidate_action != good_action
@@ -258,6 +271,45 @@ def _categories(
     if causal_difference and causal_difference.get("additional_tower_damage_to_self", 0):
         categories.add("bad-immediate-consequence")
     return sorted(categories)
+
+
+def _head_consequence_categories(
+    *,
+    good_action: Mapping[str, Any],
+    candidate_action: Mapping[str, Any],
+    immediate_difference: Mapping[str, Any] | None,
+    candidate_follow_on: Mapping[str, Any] | None,
+) -> list[str]:
+    """Label a head regression/improvement only from a signed tower swing."""
+
+    if candidate_action == good_action:
+        return []
+    if candidate_action.get("mode") != good_action.get("mode"):
+        head = "mode"
+    elif candidate_action.get("card_slot") != good_action.get("card_slot"):
+        head = "card-selection"
+    elif (
+        candidate_action.get("mode") == "PLAY"
+        and good_action.get("mode") == "PLAY"
+        and candidate_action.get("world_cell") != good_action.get("world_cell")
+    ):
+        head = "placement"
+    else:
+        return []
+
+    difference = (
+        immediate_difference if isinstance(immediate_difference, Mapping) else {}
+    )
+    if isinstance(candidate_follow_on, Mapping):
+        follow_difference = candidate_follow_on.get("state_difference_vs_good")
+        if isinstance(follow_difference, Mapping):
+            difference = follow_difference
+    swing = int(difference.get("tower_swing_delta", 0) or 0)
+    if swing > 0:
+        return [f"{head}-head-improvement"]
+    if swing < 0:
+        return [f"{head}-head-regression"]
+    return []
 
 
 def _timing_consequence_categories(
@@ -294,22 +346,19 @@ def _timing_consequence_categories(
         value = candidate_follow_on.get("state_difference_vs_good")
         if isinstance(value, Mapping):
             follow_difference = value
-    extra_self_damage = int(immediate.get("additional_tower_damage_to_self", 0) or 0)
-    extra_self_damage += int(
-        follow_difference.get("additional_tower_damage_to_self", 0) or 0
-    )
-    extra_opponent_damage = int(
-        immediate.get("additional_tower_damage_to_opponent", 0) or 0
-    )
-    extra_opponent_damage += int(
-        follow_difference.get("additional_tower_damage_to_opponent", 0) or 0
-    )
+    difference = follow_difference if follow_difference else immediate
+    if "tower_swing_delta" in difference:
+        tower_swing = int(difference.get("tower_swing_delta", 0) or 0)
+    else:
+        tower_swing = int(
+            difference.get("additional_tower_damage_to_opponent", 0) or 0
+        ) - int(difference.get("additional_tower_damage_to_self", 0) or 0)
 
     categories: set[str] = set()
-    if extra_self_damage > 0:
+    if tower_swing < 0:
         categories.add("action-too-early" if wait_to_play else "action-too-late")
         categories.add("bad-follow-on-consequence")
-    elif extra_opponent_damage > 0:
+    elif tower_swing > 0:
         categories.add("short-horizon-timing-benefit")
     else:
         categories.add("timing-consequence-unresolved")
@@ -338,7 +387,7 @@ def _timing_consequence_categories(
             good_elixir is not None
             and candidate_elixir is not None
             and candidate_elixir < good_elixir
-            and extra_opponent_damage <= 0
+            and tower_swing <= 0
         ):
             categories.add("potential-elixir-overcommitment")
     return sorted(categories)
@@ -839,6 +888,25 @@ class ExactStateComparator:
                 actor["suspicious_categories"] = sorted(
                     set(actor.get("suspicious_categories", ()))
                     | set(evidence_categories)
+                    | set(
+                        _head_consequence_categories(
+                            good_action=good_action,
+                            candidate_action=actor["action"],
+                            immediate_difference=consequences[label].get(
+                                "state_difference_vs_good"
+                            ),
+                            candidate_follow_on=(
+                                consequences[label].get("follow_on_consequence")
+                                if isinstance(
+                                    consequences[label].get(
+                                        "follow_on_consequence"
+                                    ),
+                                    Mapping,
+                                )
+                                else None
+                            ),
+                        )
+                    )
                 )
             rows.append(
                 {
@@ -900,9 +968,8 @@ class ExactStateComparator:
                         {},
                     )
                     score = (
-                        1000.0 * float(
-                            causal_difference.get("additional_tower_damage_to_self", 0)
-                        )
+                        1000.0
+                        * abs(float(causal_difference.get("tower_swing_delta", 0)))
                         + 10.0 * len(causal_difference.get("units_removed", ()))
                         + 1.0 * len(actor.get("suspicious_categories", ()))
                     )
@@ -914,10 +981,8 @@ class ExactStateComparator:
                         if isinstance(follow_on, Mapping)
                         else {}
                     )
-                    score += 1000.0 * float(
-                        follow_on_difference.get(
-                            "additional_tower_damage_to_self", 0
-                        )
+                    score += 1000.0 * abs(
+                        float(follow_on_difference.get("tower_swing_delta", 0))
                     )
                     good_actor = row["checkpoints"]["good"]
                     suspects.append(
@@ -1003,8 +1068,12 @@ class ExactStateComparator:
         for label in ("bad", "recovery"):
             counts: Counter[str] = Counter()
             extra_self_damage = 0
+            avoided_self_damage = 0
+            immediate_tower_swing = 0
             follow_on_self_damage = 0
             follow_on_additional_self_damage = 0
+            follow_on_avoided_self_damage = 0
+            follow_on_tower_swing = 0
             follow_on_cases = 0
             divergences_for_label = 0
             for match in matches:
@@ -1020,6 +1089,12 @@ class ExactStateComparator:
                     causal = consequence.get("state_difference_vs_good", {})
                     extra_self_damage += int(
                         causal.get("additional_tower_damage_to_self", 0) or 0
+                    )
+                    avoided_self_damage += int(
+                        causal.get("avoided_tower_damage_to_self", 0) or 0
+                    )
+                    immediate_tower_swing += int(
+                        causal.get("tower_swing_delta", 0) or 0
                     )
                     follow_on = consequence.get("follow_on_consequence")
                     if isinstance(follow_on, Mapping):
@@ -1037,46 +1112,122 @@ class ExactStateComparator:
                                 )
                                 or 0
                             )
+                            follow_on_avoided_self_damage += int(
+                                follow_on_difference.get(
+                                    "avoided_tower_damage_to_self", 0
+                                )
+                                or 0
+                            )
+                            follow_on_tower_swing += int(
+                                follow_on_difference.get("tower_swing_delta", 0)
+                                or 0
+                            )
             per_checkpoint[label] = {
                 "divergent_decisions": divergences_for_label,
                 "category_counts": dict(sorted(counts.items())),
                 "additional_immediate_self_tower_damage": extra_self_damage,
+                "avoided_immediate_self_tower_damage": avoided_self_damage,
+                "immediate_tower_swing_delta": immediate_tower_swing,
                 "follow_on_cases": follow_on_cases,
                 "follow_on_self_tower_damage": follow_on_self_damage,
                 "follow_on_additional_self_tower_damage": follow_on_additional_self_damage,
+                "follow_on_avoided_self_tower_damage": follow_on_avoided_self_damage,
+                "follow_on_tower_swing_delta": follow_on_tower_swing,
             }
         bad_counts = Counter(per_checkpoint["bad"]["category_counts"])
-        mode = int(bad_counts.get("mode-head-regression", 0))
-        card = int(bad_counts.get("card-selection-head-regression", 0))
-        placement = int(bad_counts.get("placement-head-regression", 0))
+        mode = int(bad_counts.get("mode-head-divergence", 0))
+        card = int(bad_counts.get("card-selection-head-divergence", 0))
+        placement = int(bad_counts.get("placement-head-divergence", 0))
+        mode_regressions = int(bad_counts.get("mode-head-regression", 0))
+        card_regressions = int(
+            bad_counts.get("card-selection-head-regression", 0)
+        )
+        placement_regressions = int(
+            bad_counts.get("placement-head-regression", 0)
+        )
+        mode_improvements = int(bad_counts.get("mode-head-improvement", 0))
+        card_improvements = int(
+            bad_counts.get("card-selection-head-improvement", 0)
+        )
+        placement_improvements = int(
+            bad_counts.get("placement-head-improvement", 0)
+        )
+        regressions = mode_regressions + card_regressions + placement_regressions
+        improvements = mode_improvements + card_improvements + placement_improvements
         teacher = int(bad_counts.get("teacher-disagreement", 0))
         if bad_rows == 0:
             statement = "No bad-vs-good action divergence was observed on the selected exact states."
+            status = "no-divergence"
+        elif regressions and improvements:
+            statement = (
+                "The candidate has mixed verified head outcomes; inspect the "
+                "per-decision signed tower swings before changing training."
+            )
+            status = "mixed-evidence"
+        elif regressions:
+            dominant = max(
+                (
+                    (mode_regressions, "mode"),
+                    (card_regressions, "card-selection"),
+                    (placement_regressions, "placement"),
+                )
+            )[1]
+            statement = (
+                f"The candidate has verified {dominant}-head regressions on "
+                "the selected exact states."
+            )
+            status = "verified-regression"
+        elif improvements:
+            dominant = max(
+                (
+                    (mode_improvements, "mode"),
+                    (card_improvements, "card-selection"),
+                    (placement_improvements, "placement"),
+                )
+            )[1]
+            statement = (
+                f"The candidate has verified {dominant}-head improvements on "
+                "the selected exact states."
+            )
+            status = "verified-improvement"
         elif mode > max(card, placement):
             statement = (
-                "The bad checkpoint is dominated by WAIT/PLAY mode-head changes; "
-                "pair the trace with the update where mode entropy, teacher "
-                "disagreement, and mode gradients moved."
+                "The candidate is dominated by WAIT/PLAY mode-head divergences, "
+                "but the sampled consequence horizon does not prove their quality."
             )
+            status = "divergence-only"
         elif card > placement:
             statement = (
-                "The bad checkpoint is dominated by card-selection changes; "
-                "inspect card-head gradients and teacher labels before changing PPO hyperparameters."
+                "The candidate is dominated by card-selection divergences, but "
+                "the sampled consequence horizon does not prove their quality."
             )
+            status = "divergence-only"
         elif placement > card:
             statement = (
-                "The bad checkpoint is dominated by placement changes; inspect "
-                "placement-head logits, masks, and gradients before changing PPO hyperparameters."
+                "The candidate is dominated by placement divergences, but the "
+                "sampled consequence horizon does not prove their quality."
             )
+            status = "divergence-only"
         else:
-            statement = "The observed regression is mixed; the trace is insufficient to attribute it to one head without additional held-out states."
+            statement = (
+                "The observed divergences are mixed and consequence-neutral on "
+                "the sampled horizon."
+            )
+            status = "divergence-only"
         return {
-            "status": "evidence-ranked, not proof" if bad_rows else "no-divergence",
+            "status": status,
             "statement": statement,
             "bad_divergent_decisions": bad_rows,
             "recovery_divergent_decisions": recovery_rows,
-            "card_head_regression_count": card,
-            "placement_head_regression_count": placement,
+            "mode_head_divergence_count": mode,
+            "card_head_divergence_count": card,
+            "placement_head_divergence_count": placement,
+            "mode_head_regression_count": mode_regressions,
+            "card_head_regression_count": card_regressions,
+            "placement_head_regression_count": placement_regressions,
+            "mode_head_improvement_count": mode_improvements,
+            "card_head_improvement_count": card_improvements,
+            "placement_head_improvement_count": placement_improvements,
             "teacher_disagreement_count": teacher,
             "per_checkpoint": per_checkpoint,
             "required_next_check": "validate the same category and consequence improvements on the held-out seeds after the smallest fix",
@@ -1096,6 +1247,7 @@ def compare_checkpoints(
     device: str | None = "auto",
     lookahead_steps: int = 8,
     shuffle_decks: bool = True,
+    only_archetypes: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Build the exact same matrix for good/bad/recovery probes."""
 
@@ -1120,6 +1272,19 @@ def compare_checkpoints(
         device=device,
         lookahead_steps=lookahead_steps,
     )
+    selected_archetypes: set[str] | None = None
+    if only_archetypes is not None:
+        selected_archetypes = {
+            str(archetype).strip() for archetype in only_archetypes if str(archetype).strip()
+        }
+        if not selected_archetypes:
+            raise ValueError("only_archetypes must not be empty")
+        unknown = selected_archetypes.difference(archetypes)
+        if unknown:
+            raise ValueError(
+                "only_archetypes must be drawn from the generated matrix: "
+                + ", ".join(sorted(unknown))
+            )
     specs = [
         MatchSpec(
             checkpoint=good,
@@ -1136,7 +1301,11 @@ def compare_checkpoints(
         for deck in config.opponent_decks
         for strategy in config.strategies
         for seed in config.seeds
+        if selected_archetypes is None
+        or deck.metadata.get("archetype") in selected_archetypes
     ]
+    if not specs:
+        raise ValueError("only_archetypes selected no matrix cells")
     result = comparator.compare(specs)
     result["matrix"] = {
         "archetypes": list(archetypes),
@@ -1145,6 +1314,11 @@ def compare_checkpoints(
         "max_decisions": max_decisions,
         "shuffle_decks": config.shuffle_decks,
         "player_deck": list(config.player_deck),
+        "diagnosed_archetypes": (
+            list(archetypes)
+            if selected_archetypes is None
+            else sorted(selected_archetypes)
+        ),
     }
     return _safe(result)
 
@@ -1171,6 +1345,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--player-deck")
     parser.add_argument("--max-decisions", type=int)
     parser.add_argument("--device", default="auto")
+    parser.add_argument(
+        "--only-archetypes",
+        help=(
+            "comma-separated subset to diagnose after constructing the full matrix; "
+            "this preserves the exact generated decks while reducing trace cost"
+        ),
+    )
     shuffle_group = parser.add_mutually_exclusive_group()
     shuffle_group.add_argument(
         "--shuffle-decks",
@@ -1206,6 +1387,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         device=args.device,
         lookahead_steps=args.lookahead_decisions,
         shuffle_decks=args.shuffle_decks,
+        only_archetypes=(
+            None if args.only_archetypes is None else _csv(args.only_archetypes)
+        ),
     )
     encoded = json.dumps(report, indent=2, sort_keys=True)
     if args.json_out is None:
