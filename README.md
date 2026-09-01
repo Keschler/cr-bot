@@ -211,3 +211,9 @@ cr-bot/
 
 Battlefield detection uses the patched KataCR dual-YOLO runtime. Hand-card and
 next-card classification use project-trained MobileNetV3-Small models.
+
+## Architecture
+
+![Connected systems architecture](docs/architecture.png)
+
+Editable diagrams.net source: [`docs/architecture.drawio`](docs/architecture.drawio)

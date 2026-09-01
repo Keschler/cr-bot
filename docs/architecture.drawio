@@ -1,0 +1,256 @@
+<mxfile host="Electron" agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/29.6.1 Chrome/142.0.7444.265 Electron/39.8.10 Safari/537.36">
+  <diagram name="System architecture" id="cr-bot-system-architecture">
+    <mxGraphModel dx="3444" dy="757" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2400" pageHeight="1350" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=24;fontStyle=1;fontColor=#1f2937;" value="Clash Royale bot — connected systems architecture" vertex="1">
+          <mxGeometry height="40" width="1200" x="40" y="30" as="geometry" />
+        </mxCell>
+        <mxCell id="lane-device" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eff6ff;strokeColor=#93c5fd;dashed=1;dashPattern=8 8;strokeWidth=2;align=left;verticalAlign=top;spacingTop=14;spacingLeft=18;fontSize=15;fontStyle=1;fontColor=#1e3a8a;" value="ANDROID DEVICE + I/O" vertex="1">
+          <mxGeometry height="730" width="330" x="30" y="160" as="geometry" />
+        </mxCell>
+        <mxCell id="lane-capture" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8fafc;strokeColor=#cbd5e1;dashed=1;dashPattern=8 8;strokeWidth=2;align=left;verticalAlign=top;spacingTop=14;spacingLeft=18;fontSize=15;fontStyle=1;fontColor=#475569;" value="CAPTURE + ORCHESTRATION" vertex="1">
+          <mxGeometry height="730" width="350" x="420" y="160" as="geometry" />
+        </mxCell>
+        <mxCell id="lane-vision" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#faf5ff;strokeColor=#c4b5fd;dashed=1;dashPattern=8 8;strokeWidth=2;align=left;verticalAlign=top;spacingTop=14;spacingLeft=18;fontSize=15;fontStyle=1;fontColor=#5b21b6;" value="VISUAL EXTRACTION" vertex="1">
+          <mxGeometry height="730" width="430" x="830" y="160" as="geometry" />
+        </mxCell>
+        <mxCell id="lane-state" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f0fdf4;strokeColor=#86efac;dashed=1;dashPattern=8 8;strokeWidth=2;align=left;verticalAlign=top;spacingTop=14;spacingLeft=18;fontSize=15;fontStyle=1;fontColor=#166534;" value="SESSION + PUBLIC STATE" vertex="1">
+          <mxGeometry height="730" width="420" x="1320" y="160" as="geometry" />
+        </mxCell>
+        <mxCell id="lane-policy" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff7ed;strokeColor=#fdba74;dashed=1;dashPattern=8 8;strokeWidth=2;align=left;verticalAlign=top;spacingTop=14;spacingLeft=18;fontSize=15;fontStyle=1;fontColor=#9a3412;" value="POLICY + ACTION BRIDGE" vertex="1">
+          <mxGeometry height="730" width="570" x="1800" y="160" as="geometry" />
+        </mxCell>
+        <mxCell id="lane-offline" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8fafc;strokeColor=#94a3b8;dashed=1;dashPattern=8 8;strokeWidth=2;align=left;verticalAlign=top;spacingTop=14;spacingLeft=18;fontSize=15;fontStyle=1;fontColor=#475569;" value="OFFLINE DEVELOPMENT + EVALUATION SYSTEMS" vertex="1">
+          <mxGeometry height="260" width="1950" x="420" y="950" as="geometry" />
+        </mxCell>
+        <mxCell id="phone-app" parent="1" style="shape=umlActor;verticalLabelPosition=bottom;verticalAlign=top;whiteSpace=wrap;html=1;fillColor=#dbeafe;strokeColor=#2563eb;strokeWidth=2;fontSize=16;fontStyle=1;fontColor=#1e3a8a;" value="ANDROID PHONE&lt;br&gt;Clash Royale app" vertex="1">
+          <mxGeometry height="95" width="155" x="120" y="250" as="geometry" />
+        </mxCell>
+        <mxCell id="screen-stream" parent="1" style="shape=parallelogram;perimeter=parallelogramPerimeter;whiteSpace=wrap;html=1;fillColor=#e2e8f0;strokeColor=#64748b;strokeWidth=2;fontSize=14;fontStyle=1;fontColor=#1e293b;" value="SCREEN STREAM&lt;br&gt;scrcpy → v4l2loopback&lt;br&gt;or ADB screenrecord → H.264" vertex="1">
+          <mxGeometry height="100" width="260" x="65" y="425" as="geometry" />
+        </mxCell>
+        <mxCell id="phone-action" parent="1" style="shape=ellipse;whiteSpace=wrap;html=1;fillColor=#dbeafe;strokeColor=#2563eb;strokeWidth=2;fontSize=14;fontStyle=1;fontColor=#1e3a8a;" value="PHONE ACTION&lt;br&gt;card tap + arena tap" vertex="1">
+          <mxGeometry height="75" width="260" x="65" y="555" as="geometry" />
+        </mxCell>
+        <mxCell id="adb-controller" parent="1" style="shape=parallelogram;perimeter=parallelogramPerimeter;whiteSpace=wrap;html=1;fillColor=#fee2e2;strokeColor=#dc2626;strokeWidth=2;fontSize=14;fontStyle=1;fontColor=#991b1b;" value="ADB CONTROL&lt;br&gt;AdbPhoneController&lt;br&gt;serial-scoped touch events" vertex="1">
+          <mxGeometry height="95" width="260" x="65" y="710" as="geometry" />
+        </mxCell>
+        <mxCell id="input-adapters" parent="1" style="shape=parallelogram;perimeter=parallelogramPerimeter;whiteSpace=wrap;html=1;fillColor=#e2e8f0;strokeColor=#64748b;strokeWidth=2;fontSize=14;fontStyle=1;fontColor=#1e293b;" value="FRAME SOURCES&lt;br&gt;AdbH264FrameSource&lt;br&gt;cv2.VideoCapture / ReplayCacheReader" vertex="1">
+          <mxGeometry height="130" width="300" x="445" y="265" as="geometry" />
+        </mxCell>
+        <mxCell id="runtime-orchestrator" parent="1" style="shape=process;whiteSpace=wrap;html=1;fillColor=#e2e8f0;strokeColor=#64748b;strokeWidth=2;fontSize=14;fontStyle=1;fontColor=#1e293b;" value="RUNTIME ORCHESTRATOR&lt;br&gt;cr_bot.app.main&lt;br&gt;LivePrototypeRunner" vertex="1">
+          <mxGeometry height="115" width="300" x="445" y="475" as="geometry" />
+        </mxCell>
+        <mxCell id="frame-normalization" parent="1" style="shape=process;whiteSpace=wrap;html=1;fillColor=#e2e8f0;strokeColor=#64748b;strokeWidth=2;fontSize=14;fontStyle=1;fontColor=#1e293b;" value="FRAME PREPARATION&lt;br&gt;normalize_frame()&lt;br&gt;BGR frame + source timestamp" vertex="1">
+          <mxGeometry height="95" width="300" x="445" y="665" as="geometry" />
+        </mxCell>
+        <mxCell id="arena-preprocess" parent="1" style="shape=process;whiteSpace=wrap;html=1;fillColor=#ede9fe;strokeColor=#7c3aed;strokeWidth=2;fontSize=14;fontStyle=1;fontColor=#4c1d95;" value="ARENA PREPROCESSING&lt;br&gt;KataCR ratio/crop&lt;br&gt;ROIs + coordinate mapping" vertex="1">
+          <mxGeometry height="90" width="370" x="865" y="250" as="geometry" />
+        </mxCell>
+        <mxCell id="object-detector" parent="1" style="shape=process;whiteSpace=wrap;html=1;fillColor=#ede9fe;strokeColor=#7c3aed;strokeWidth=2;fontSize=14;fontStyle=1;fontColor=#4c1d95;" value="OBJECT DETECTION&lt;br&gt;YOLO / KataCR&lt;br&gt;ByteTrack, units, towers, effects" vertex="1">
+          <mxGeometry height="130" width="175" x="865" y="410" as="geometry" />
+        </mxCell>
+        <mxCell id="hud-extractors" parent="1" style="shape=process;whiteSpace=wrap;html=1;fillColor=#ede9fe;strokeColor=#7c3aed;strokeWidth=2;fontSize=14;fontStyle=1;fontColor=#4c1d95;" value="HUD + OCR EXTRACTORS&lt;br&gt;cards, elixir, timer&lt;br&gt;tower HP, emotes" vertex="1">
+          <mxGeometry height="130" width="175" x="1060" y="410" as="geometry" />
+        </mxCell>
+        <mxCell id="frame-analysis" parent="1" style="shape=document;whiteSpace=wrap;html=1;fillColor=#f5f3ff;strokeColor=#8b5cf6;strokeWidth=2;fontSize=14;fontStyle=1;fontColor=#4c1d95;" value="FrameAnalysisResult&lt;br&gt;frame-local matches, boxes, HUD values, arena_px" vertex="1">
+          <mxGeometry height="115" width="370" x="865" y="590" as="geometry" />
+        </mxCell>
+        <mxCell id="vision-assets" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;fillColor=#f5f3ff;strokeColor=#8b5cf6;strokeWidth=2;fontSize=13;fontStyle=1;fontColor=#4c1d95;" value="MODEL + TEMPLATE ASSETS&lt;br&gt;assets/models • card templates&lt;br&gt;vendored KataCR runtime" vertex="1">
+          <mxGeometry height="90" width="370" x="865" y="760" as="geometry" />
+        </mxCell>
+        <mxCell id="match-session" parent="1" style="shape=process;whiteSpace=wrap;html=1;fillColor=#dcfce7;strokeColor=#16a34a;strokeWidth=2;fontSize=14;fontStyle=1;fontColor=#166534;" value="MATCH SESSION&lt;br&gt;MatchSession.process()&lt;br&gt;lifecycle + emit gate" vertex="1">
+          <mxGeometry height="95" width="340" x="1360" y="250" as="geometry" />
+        </mxCell>
+        <mxCell id="temporal-filters" parent="1" style="shape=process;whiteSpace=wrap;html=1;fillColor=#dcfce7;strokeColor=#16a34a;strokeWidth=2;fontSize=13;fontStyle=1;fontColor=#166534;" value="FILTERS&lt;br&gt;HandStateFilter&lt;br&gt;MatchClockFilter • TowerHPFilter" vertex="1">
+          <mxGeometry height="145" width="170" x="1340" y="430" as="geometry" />
+        </mxCell>
+        <mxCell id="action-trackers" parent="1" style="shape=process;whiteSpace=wrap;html=1;fillColor=#dcfce7;strokeColor=#16a34a;strokeWidth=2;fontSize=13;fontStyle=1;fontColor=#166534;" value="TRACKERS&lt;br&gt;OwnActionTracker&lt;br&gt;EnemyCardTracker" vertex="1">
+          <mxGeometry height="145" width="170" x="1530" y="430" as="geometry" />
+        </mxCell>
+        <mxCell id="state-builder" parent="1" style="shape=process;whiteSpace=wrap;html=1;fillColor=#dcfce7;strokeColor=#16a34a;strokeWidth=2;fontSize=14;fontStyle=1;fontColor=#166534;" value="STATE BUILDER&lt;br&gt;build_game_state()" vertex="1">
+          <mxGeometry height="95" width="340" x="1360" y="630" as="geometry" />
+        </mxCell>
+        <mxCell id="game-state" parent="1" style="shape=document;whiteSpace=wrap;html=1;fillColor=#bbf7d0;strokeColor=#16a34a;strokeWidth=2;fontSize=15;fontStyle=1;fontColor=#166534;" value="GameState&lt;br&gt;public visual state" vertex="1">
+          <mxGeometry height="95" width="340" x="1360" y="780" as="geometry" />
+        </mxCell>
+        <mxCell id="policy-bridge" parent="1" style="shape=process;whiteSpace=wrap;html=1;fillColor=#ffedd5;strokeColor=#ea580c;strokeWidth=2;fontSize=14;fontStyle=1;fontColor=#9a3412;" value="POLICY BRIDGE&lt;br&gt;physical_lab/policy_bridge.py&lt;br&gt;GameState → feature tensors" vertex="1">
+          <mxGeometry height="125" width="260" x="1830" y="235" as="geometry" />
+        </mxCell>
+        <mxCell id="public-observation" parent="1" style="shape=document;whiteSpace=wrap;html=1;fillColor=#fef3c7;strokeColor=#d97706;strokeWidth=2;fontSize=14;fontStyle=1;fontColor=#92400e;" value="PolicyObservation V1/V2&lt;br&gt;board • global • entities • masks" vertex="1">
+          <mxGeometry height="125" width="180" x="2170" y="250" as="geometry" />
+        </mxCell>
+        <mxCell id="policy-actor" parent="1" style="shape=hexagon;perimeter=hexagonPerimeter2;whiteSpace=wrap;html=1;fillColor=#ffedd5;strokeColor=#ea580c;strokeWidth=2;fontSize=14;fontStyle=1;fontColor=#9a3412;" value="POLICY / RECURRENT ACTOR&lt;br&gt;PrototypeActor + simulator RL checkpoint&lt;br&gt;decides from the public observation" vertex="1">
+          <mxGeometry height="105" width="510" x="1830" y="430" as="geometry" />
+        </mxCell>
+        <mxCell id="logical-action" parent="1" style="shape=parallelogram;perimeter=parallelogramPerimeter;whiteSpace=wrap;html=1;fillColor=#fef3c7;strokeColor=#d97706;strokeWidth=2;fontSize=14;fontStyle=1;fontColor=#92400e;" value="Action: Wait or Play(slot, cell)" vertex="1">
+          <mxGeometry height="100" width="250" x="1810" y="590" as="geometry" />
+        </mxCell>
+        <mxCell id="placement-command" parent="1" style="shape=parallelogram;perimeter=parallelogramPerimeter;whiteSpace=wrap;html=1;fillColor=#fef3c7;strokeColor=#d97706;strokeWidth=2;fontSize=14;fontStyle=1;fontColor=#92400e;" value="PLACEMENT COMMAND&lt;br&gt;validate card + 18×32 cell&lt;br&gt;CalibrationArtifact → native pixels" vertex="1">
+          <mxGeometry height="100" width="240" x="2100" y="590" as="geometry" />
+        </mxCell>
+        <mxCell id="video-replay" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;fillColor=#e2e8f0;strokeColor=#64748b;strokeWidth=2;fontSize=14;fontStyle=1;fontColor=#1e293b;" value="RECORDED INPUTS&lt;br&gt;video files + replay caches" vertex="1">
+          <mxGeometry height="90" width="300" x="460" y="1040" as="geometry" />
+        </mxCell>
+        <mxCell id="simulator-training" parent="1" style="shape=process;whiteSpace=wrap;html=1;fillColor=#fef3c7;strokeColor=#d97706;strokeWidth=2;fontSize=14;fontStyle=1;fontColor=#92400e;" value="SIMULATOR + RL TRAINING&lt;br&gt;deterministic engine → policy checkpoint&lt;br&gt;shared public observation/action contract" vertex="1">
+          <mxGeometry height="90" width="330" x="840" y="1040" as="geometry" />
+        </mxCell>
+        <mxCell id="physical-evaluation" parent="1" style="shape=process;whiteSpace=wrap;html=1;fillColor=#f1f5f9;strokeColor=#64748b;strokeWidth=2;fontSize=14;fontStyle=1;fontColor=#334155;" value="PHYSICAL LAB + EVALUATION&lt;br&gt;extract observations, compare to simulator&lt;br&gt;seal evidence and timing" vertex="1">
+          <mxGeometry height="90" width="350" x="1260" y="1040" as="geometry" />
+        </mxCell>
+        <mxCell id="artifacts" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;fillColor=#f1f5f9;strokeColor=#64748b;strokeWidth=2;fontSize=14;fontStyle=1;fontColor=#334155;" value="REPLAY / DEBUG / EVAL OUTPUTS&lt;br&gt;FrameAnalysisResult • GameState • actions&lt;br&gt;media, caches, reports" vertex="1">
+          <mxGeometry height="90" width="420" x="1830" y="1040" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-phone-screen" edge="1" parent="1" source="phone-app" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;labelBackgroundColor=#ffffff;labelBorderColor=#cbd5e1;fontColor=#334155;fontSize=11;strokeWidth=2;endArrow=block;endFill=1;strokeColor=#475569;" target="screen-stream" value="screen pixels">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-screen-input" edge="1" parent="1" source="screen-stream" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;labelBackgroundColor=#ffffff;labelBorderColor=#cbd5e1;fontColor=#334155;fontSize=11;strokeWidth=2;endArrow=block;endFill=1;strokeColor=#475569;" target="input-adapters" value="decoded frames">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="595" y="460" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-input-runtime" edge="1" parent="1" source="input-adapters" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;labelBackgroundColor=#ffffff;labelBorderColor=#cbd5e1;fontColor=#334155;fontSize=11;strokeWidth=2;endArrow=block;endFill=1;strokeColor=#475569;" target="runtime-orchestrator" value="SourceFrame">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="650" y="440" />
+              <mxPoint x="650" y="440" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-runtime-normalize" edge="1" parent="1" source="runtime-orchestrator" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;labelBackgroundColor=#ffffff;labelBorderColor=#cbd5e1;fontColor=#334155;fontSize=11;strokeWidth=2;endArrow=block;endFill=1;strokeColor=#475569;" target="frame-normalization" value="next frame">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-normalize-preprocess" edge="1" parent="1" source="frame-normalization" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;labelBackgroundColor=#ffffff;labelBorderColor=#cbd5e1;fontColor=#334155;fontSize=11;strokeWidth=2;endArrow=block;endFill=1;strokeColor=#475569;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="arena-preprocess" value="BGR frame">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="760" y="713" />
+              <mxPoint x="760" y="295" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-preprocess-detector" edge="1" parent="1" source="arena-preprocess" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;labelBackgroundColor=#ffffff;labelBorderColor=#cbd5e1;fontColor=#334155;fontSize=11;strokeWidth=2;endArrow=block;endFill=1;strokeColor=#7c3aed;" target="object-detector" value="arena crop">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-preprocess-hud" edge="1" parent="1" source="arena-preprocess" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;labelBackgroundColor=#ffffff;labelBorderColor=#cbd5e1;fontColor=#334155;fontSize=11;strokeWidth=2;endArrow=block;endFill=1;strokeColor=#7c3aed;" target="hud-extractors" value="full frame + ROIs">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-detector-analysis" edge="1" parent="1" source="object-detector" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;labelBackgroundColor=#ffffff;labelBorderColor=#cbd5e1;fontColor=#334155;fontSize=11;strokeWidth=2;endArrow=block;endFill=1;strokeColor=#7c3aed;" target="frame-analysis" value="boxes + tracks">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-hud-analysis" edge="1" parent="1" source="hud-extractors" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;labelBackgroundColor=#ffffff;labelBorderColor=#cbd5e1;fontColor=#334155;fontSize=11;strokeWidth=2;endArrow=block;endFill=1;strokeColor=#7c3aed;" target="frame-analysis" value="HUD values">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-assets-detector" edge="1" parent="1" source="vision-assets" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;labelBackgroundColor=#ffffff;labelBorderColor=#cbd5e1;fontColor=#334155;fontSize=11;strokeWidth=1;dashed=1;dashPattern=6 6;endArrow=block;endFill=1;strokeColor=#8b5cf6;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="object-detector" value="weights / labels">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="790" y="805" />
+              <mxPoint x="790" y="475" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-assets-hud" edge="1" parent="1" source="vision-assets" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;labelBackgroundColor=#ffffff;labelBorderColor=#cbd5e1;fontColor=#334155;fontSize=11;strokeWidth=1;dashed=1;dashPattern=6 6;endArrow=block;endFill=1;strokeColor=#8b5cf6;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" target="hud-extractors" value="templates">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1270" y="805" />
+              <mxPoint x="1270" y="475" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-analysis-session" edge="1" parent="1" source="frame-analysis" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;labelBackgroundColor=#ffffff;labelBorderColor=#cbd5e1;fontColor=#334155;fontSize=11;strokeWidth=2;endArrow=block;endFill=1;strokeColor=#475569;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="match-session" value="FrameAnalysisResult">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1310" y="648" />
+              <mxPoint x="1310" y="298" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-session-filters" edge="1" parent="1" source="match-session" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;labelBackgroundColor=#ffffff;labelBorderColor=#cbd5e1;fontColor=#334155;fontSize=11;strokeWidth=2;endArrow=block;endFill=1;strokeColor=#16a34a;" target="temporal-filters" value="smooth HUD">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-session-trackers" edge="1" parent="1" source="match-session" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;labelBackgroundColor=#ffffff;labelBorderColor=#cbd5e1;fontColor=#334155;fontSize=11;strokeWidth=2;endArrow=block;endFill=1;strokeColor=#16a34a;" target="action-trackers" value="tracker evidence">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-filters-builder" edge="1" parent="1" source="temporal-filters" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;labelBackgroundColor=#ffffff;labelBorderColor=#cbd5e1;fontColor=#334155;fontSize=11;strokeWidth=2;endArrow=block;endFill=1;strokeColor=#16a34a;" target="state-builder" value="filtered">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-trackers-builder" edge="1" parent="1" source="action-trackers" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;labelBackgroundColor=#ffffff;labelBorderColor=#cbd5e1;fontColor=#334155;fontSize=11;strokeWidth=2;endArrow=block;endFill=1;strokeColor=#16a34a;" target="state-builder" value="card/action evidence">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-builder-state" edge="1" parent="1" source="state-builder" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;labelBackgroundColor=#ffffff;labelBorderColor=#cbd5e1;fontColor=#334155;fontSize=11;strokeWidth=2;endArrow=block;endFill=1;strokeColor=#16a34a;" target="game-state" value="typed state">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-state-bridge" edge="1" parent="1" source="game-state" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;labelBackgroundColor=#ffffff;labelBorderColor=#cbd5e1;fontColor=#334155;fontSize=11;strokeWidth=2;endArrow=block;endFill=1;strokeColor=#475569;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="policy-bridge" value="GameState">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1700" y="780" />
+              <mxPoint x="1770" y="780" />
+              <mxPoint x="1770" y="298" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-bridge-observation" edge="1" parent="1" source="policy-bridge" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;labelBackgroundColor=#ffffff;labelBorderColor=#cbd5e1;fontColor=#334155;fontSize=11;strokeWidth=2;endArrow=block;endFill=1;strokeColor=#d97706;" target="public-observation" value="public tensors + masks">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-observation-actor" edge="1" parent="1" source="public-observation" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;labelBackgroundColor=#ffffff;labelBorderColor=#cbd5e1;fontColor=#334155;fontSize=11;strokeWidth=2;endArrow=block;endFill=1;strokeColor=#d97706;" target="policy-actor" value="observation">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-actor-action" edge="1" parent="1" source="policy-actor" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;labelBackgroundColor=#ffffff;labelBorderColor=#cbd5e1;fontColor=#334155;fontSize=11;strokeWidth=2;endArrow=block;endFill=1;strokeColor=#d97706;" target="logical-action" value="decision">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-action-placement" edge="1" parent="1" source="logical-action" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;labelBackgroundColor=#ffffff;labelBorderColor=#cbd5e1;fontColor=#334155;fontSize=11;strokeWidth=2;endArrow=block;endFill=1;strokeColor=#d97706;" target="placement-command" value="slot + cell">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-placement-adb" edge="1" parent="1" source="placement-command" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;labelBackgroundColor=#ffffff;labelBorderColor=#cbd5e1;fontColor=#334155;fontSize=11;strokeWidth=2;endArrow=block;endFill=1;strokeColor=#dc2626;entryX=1;entryY=0.5;entryDx=0;entryDy=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;" target="adb-controller" value="validated touch plan">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="2220" y="900" />
+              <mxPoint x="360" y="900" />
+              <mxPoint x="360" y="757" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-adb-phone-action" edge="1" parent="1" source="adb-controller" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;labelBackgroundColor=#ffffff;labelBorderColor=#cbd5e1;fontColor=#334155;fontSize=11;strokeWidth=2;endArrow=block;endFill=1;strokeColor=#dc2626;" target="phone-action" value="touch events">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-phone-action-app" edge="1" parent="1" source="phone-action" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;labelBackgroundColor=#ffffff;labelBorderColor=#cbd5e1;fontColor=#334155;fontSize=11;strokeWidth=2;dashed=1;dashPattern=8 8;endArrow=block;endFill=1;strokeColor=#2563eb;entryX=0;entryY=0.5;entryDx=0;entryDy=0;exitX=0;exitY=0.5;exitDx=0;exitDy=0;" target="phone-app" value="game state changes">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="45" y="592" />
+              <mxPoint x="45" y="302" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-recorded-inputs" edge="1" parent="1" source="video-replay" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;labelBackgroundColor=#ffffff;labelBorderColor=#cbd5e1;fontColor=#334155;fontSize=11;strokeWidth=1;dashed=1;dashPattern=6 6;endArrow=block;endFill=1;strokeColor=#64748b;entryX=0;entryY=0.5;entryDx=0;entryDy=0;exitX=0;exitY=0.5;exitDx=0;exitDy=0;" target="input-adapters" value="offline source">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="390" y="1085" />
+              <mxPoint x="390" y="330" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-training-actor" edge="1" parent="1" source="simulator-training" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;labelBackgroundColor=#ffffff;labelBorderColor=#cbd5e1;fontColor=#334155;fontSize=11;strokeWidth=1;dashed=1;dashPattern=6 6;endArrow=block;endFill=1;strokeColor=#d97706;entryX=0;entryY=0.5;entryDx=0;entryDy=0;exitX=0.5;exitY=0;exitDx=0;exitDy=0;" target="policy-actor" value="policy checkpoint">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1005" y="920" />
+              <mxPoint x="1790" y="920" />
+              <mxPoint x="1790" y="483" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-state-evaluation" edge="1" parent="1" source="game-state" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;labelBackgroundColor=#ffffff;labelBorderColor=#cbd5e1;fontColor=#334155;fontSize=11;strokeWidth=1;dashed=1;dashPattern=6 6;endArrow=block;endFill=1;strokeColor=#64748b;" target="physical-evaluation" value="normalized observations">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-evaluation-artifacts" edge="1" parent="1" source="physical-evaluation" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;labelBackgroundColor=#ffffff;labelBorderColor=#cbd5e1;fontColor=#334155;fontSize=11;strokeWidth=1;dashed=1;dashPattern=6 6;endArrow=block;endFill=1;strokeColor=#64748b;" target="artifacts" value="sealed reports">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="legend" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=13;fontColor=#64748b;" value="Notation: actor = external device   •   parallelogram = input/output   •   process = computation   •   document = state/message   •   cylinder = stored artifact   •   hexagon = policy/decision" vertex="1">
+          <mxGeometry height="30" width="900" x="40" y="1260" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
