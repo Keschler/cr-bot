@@ -52,6 +52,26 @@ Use the current best trained policy,
 `--checkpoint` is optional when the bundled `prototype-fast-current` policy is
 sufficient.
 
+The repository also includes a [1080×2400 sample gameplay video](assets/pictures/gameplay.mp4)
+that can be used to reproduce the extractor locally. It starts with roughly
+five seconds of loading and the versus animation, so sampling every tenth
+source frame reaches the in-game section without preprocessing the video:
+
+```bash
+./prototype-live-linux-x86_64 \
+  --checkpoint /absolute/path/to/prototype.pt \
+  --video assets/pictures/gameplay.mp4 \
+  --frame-stride 10 \
+  --max-frames 30 \
+  --jsonl-out /tmp/prototype-gameplay.jsonl
+```
+
+`--max-frames` counts processed frames; with `--frame-stride 10`, these 30
+frames cover approximately the first 10 seconds. Use `--frame-stride 1` to
+process every frame, allowing enough frames to pass the opening animation.
+If you downloaded only the release binary, the same video is available as a
+[direct download](https://github.com/Keschler/cr-bot/raw/main/assets/pictures/gameplay.mp4).
+
 ### 3. Dry run on a phone
 
 Enable USB debugging, connect and authorize the phone, then use its exact ADB

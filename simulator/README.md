@@ -149,6 +149,24 @@ Use the current best trained policy,
 `--checkpoint` is optional when the bundled `prototype-fast-current` policy is
 sufficient.
 
+The repository includes a [1080×2400 sample gameplay video](../assets/pictures/gameplay.mp4).
+It starts with roughly five seconds of loading and the versus animation, so
+this smoke test samples every tenth source frame to reach the in-game section
+without preprocessing the video:
+
+```bash
+./dist/prototype-live-linux-x86_64 \
+  --checkpoint /absolute/path/to/prototype.pt \
+  --video ../assets/pictures/gameplay.mp4 \
+  --frame-stride 10 \
+  --max-frames 30 \
+  --jsonl-out /tmp/prototype-gameplay.jsonl
+```
+
+`--max-frames` counts processed frames; with `--frame-stride 10`, these 30
+frames cover approximately the first 10 seconds. Use `--frame-stride 1` to
+process every frame, allowing enough frames to pass the opening animation.
+
 #### 3. Dry run on a phone
 
 Enable USB debugging, connect and authorize the phone, then use its exact ADB
