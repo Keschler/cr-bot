@@ -13,107 +13,85 @@ pip, a virtual environment, or a repository checkout.
 
 <img width="1600" height="900" alt="cr-bot-banner-v1-dashboard" src="https://github.com/user-attachments/assets/1d225b86-79a3-4477-b524-2274faa92692" />
 
-## Quick start
+## Run the packaged binary
 
 Download `prototype-live-linux-x86_64` from the
-[latest GitHub release](https://github.com/keschler/cr-bot/releases/latest),
-make it executable, and inspect its options:
+[latest GitHub release](https://github.com/keschler/cr-bot/releases/latest).
+
+```text
+phone → live stream → visual extractor → public state
+      → policy → card + placement → ADB → phone action
+```
+
+> [!NOTE]
+> The Linux x86-64 binary is approximately **800 MB** because it bundles the
+> Python runtime, visual-extractor assets, policy, ADB, FFmpeg, and their
+> dependencies. It uses **CPU inference only**, which is substantially slower
+> than GPU inference. An RTX 2050 / Intel i9-13900H machine reached up to
+> **4 FPS** during a live-action run. A GPU build is not distributed because
+> its additional dependencies would make the download significantly larger.
+
+### 1. Make it executable
 
 ```bash
 chmod +x prototype-live-linux-x86_64
-./prototype-live-linux-x86_64 --help
 ```
 
-The executable is CPU-only and targets Linux x86-64. It includes the
-`prototype-fast-current` checkpoint by default.
-### Current best trained neural network
+### 2. Test on a video
 
-The current best neural network produced by training is
-[`prototype.pt`](https://github.com/Keschler/cr-bot/releases/download/v0.5/prototype.pt).
-
-You can use it with the live executable by passing it with `--checkpoint`:
-
-```bash
-./prototype-live-linux-x86_64 \
-  --checkpoint /absolute/path/to/prototype.pt
-```
-
-### Test with a recorded video
-
-```bash
-./prototype-live-linux-x86_64 \
-  --video /absolute/path/to/gameplay.mp4 \
-  --max-frames 20 \
-  --jsonl-out /tmp/prototype-video-dry-run.jsonl
-```
-
-Use another compatible recurrent checkpoint with `--checkpoint`:
+Use the current best trained policy,
+[`prototype.pt`](https://github.com/Keschler/cr-bot/releases/download/v0.5/prototype.pt):
 
 ```bash
 ./prototype-live-linux-x86_64 \
   --checkpoint /absolute/path/to/prototype.pt \
-  --video /absolute/path/to/gameplay.mp4
+  --video /absolute/path/to/gameplay.mp4 \
+  --max-frames 20
 ```
 
-### Run an ADB dry run
+`--checkpoint` is optional when the bundled `prototype-fast-current` policy is
+sufficient.
 
-Enable USB debugging, authorize the computer, and pass the phone's exact ADB
+### 3. Dry run on a phone
+
+Enable USB debugging, connect and authorize the phone, then use its exact ADB
 serial:
 
 ```bash
 ./prototype-live-linux-x86_64 \
-  --serial R7AIB700D744BX7 \
+  --checkpoint /absolute/path/to/prototype.pt \
+  --serial YOUR_PHONE_SERIAL \
   --max-frames 100 \
-  --jsonl-out /tmp/prototype-live-dry-run.jsonl
+  --jsonl-out /tmp/prototype-live.jsonl
 ```
 
-Dry run is the default: it observes and records decisions but never taps the
-device. The binary deliberately does not guess which connected phone to use.
+> [!NOTE]
+> This is a dry run by default: it observes the game and records decisions,
+> but never taps the phone. The default transport is a low-latency H.264
+> stream; use `--adb-transport screenshot` for diagnosis.
 
-### Execute policy actions
+### 4. Enable live actions
 
-Validate dry-run behavior first. Real taps require a reviewed, phone-specific
-calibration artifact and both execution confirmations:
+> [!WARNING]
+> Live actions are calibrated only for a **1080×2400 phone**. Do not enable
+> taps on another resolution or layout without a separately reviewed
+> calibration.
+
+Validate dry runs first. Real taps require a phone-specific calibration file
+and both confirmation flags:
 
 ```bash
 ./prototype-live-linux-x86_64 \
-  --serial R7AIB700D744BX7 \
-  --calibration /absolute/path/to/phone-a-candidate.json \
+  --checkpoint /absolute/path/to/prototype.pt \
+  --serial YOUR_PHONE_SERIAL \
+  --calibration /absolute/path/to/phone-calibration.json \
   --execute \
   --confirm-live
 ```
 
-Before every real play, the controller verifies the selected card and then
-uses the calibrated card and arena coordinates. `WAIT` never taps the phone.
-Stop safely with `Ctrl-C`; the controller does not force-stop the game or
-delete device recordings or storage.
-
-## Live pipeline
-
-```text
-newest Android frame
-        |
-        v
-KataCR + HUD/card extraction
-        |
-        v
-PolicyObservationV2 + legal-action masks
-        |
-        v
-recurrent public actor
-        |
-        v
-WAIT or verified card/arena taps
-```
-
-Live mode uses a persistent, serial-scoped H.264 screen stream decoded by the
-bundled FFmpeg. Only the newest frame is retained, preventing slow CPU
-inference from acting on a stale backlog. Use `--adb-transport screenshot` for
-the diagnostic per-frame screenshot transport.
-
-The default YOLO input size is `896`. `--yolo-image-size 640` is faster but can
-reduce small-object detection quality and should be validated in dry runs
-before live use.
+Before every `PLAY`, the controller verifies the selected card and applies the
+calibrated card and arena taps. `WAIT` never taps the phone. Press `Ctrl-C` to
+stop the controller.
 
 ## Development
 
