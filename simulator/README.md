@@ -111,63 +111,87 @@ capture, ingest, and the connected two-phone workflow are documented in
 
 ### Prototype actor on a phone
 
-The one-file distribution is
-`dist/prototype-live-linux-x86_64`. It contains the Python runtime, CPU
-PyTorch, `cr_bot` visual extraction, KataCR inference, bundled extractor
-assets, the default `prototype-fast-current` checkpoint, and the `adb`/`ffmpeg`
-helpers. Recipients do not need Python, pip, a virtual environment, or Python
-packages. It is a Linux x86-64 CPU executable.
+`dist/prototype-live-linux-x86_64` is a standalone Linux x86-64 CPU
+executable. It contains the live controller, visual extractor, neural-network
+runtime and assets, default policy, ADB, and FFmpeg.
 
-See [RUN_PROTOTYPE_LIVE.md](RUN_PROTOTYPE_LIVE.md) for download, ADB setup,
-checkpoint selection, binary execution, safety gates, and native-build
-instructions.
+```text
+phone → live stream → visual extractor → public state
+      → policy → card + placement → ADB → phone action
+```
+
+> [!NOTE]
+> The binary is approximately **800 MB** because it bundles the runtime and
+> all required dependencies. It uses **CPU inference only**, which is
+> substantially slower than GPU inference. An RTX 2050 / Intel i9-13900H
+> machine reached up to **4 FPS** during a live-action run. A GPU build is not
+> distributed because its additional dependencies would make the download
+> significantly larger.
+
+#### 1. Make it executable
+
+```bash
+chmod +x dist/prototype-live-linux-x86_64
+```
+
+#### 2. Test on a video
+
+Use the current best trained policy,
+[`prototype.pt`](https://github.com/Keschler/cr-bot/releases/download/v0.5/prototype.pt):
 
 ```bash
 ./dist/prototype-live-linux-x86_64 \
   --checkpoint /absolute/path/to/prototype.pt \
-  --serial SERIAL \
-  --max-frames 20 \
-  --jsonl-out outputs/simulator/prototype-live-dry-run.jsonl
+  --video /absolute/path/to/gameplay.mp4 \
+  --max-frames 20
 ```
 
-The default is a dry-run, so it never taps the device. A recorded video can
-also be inspected without ADB:
+`--checkpoint` is optional when the bundled `prototype-fast-current` policy is
+sufficient.
+
+#### 3. Dry run on a phone
+
+Enable USB debugging, connect and authorize the phone, then use its exact ADB
+serial:
 
 ```bash
 ./dist/prototype-live-linux-x86_64 \
   --checkpoint /absolute/path/to/prototype.pt \
-  --video /path/to/gameplay.mp4 \
-  --jsonl-out outputs/simulator/prototype-video-dry-run.jsonl
+  --serial YOUR_PHONE_SERIAL \
+  --max-frames 100 \
+  --jsonl-out /tmp/prototype-live.jsonl
 ```
 
-Real taps require an explicitly matched calibration, card templates, and both
-confirmation flags. `AutonomousPhone` takes a recent decoded stream frame and
-verifies the selected card before the calibrated card and arena taps:
+> [!NOTE]
+> This is a dry run by default: it observes the game and records decisions,
+> but never taps the phone. The default transport is a low-latency H.264
+> stream; use `--adb-transport screenshot` for diagnosis.
+
+#### 4. Enable live actions
+
+> [!WARNING]
+> Live actions are calibrated only for a **1080×2400 phone**. Do not enable
+> taps on another resolution or layout without a separately reviewed
+> calibration.
+
+Validate dry runs first. Real taps require a phone-specific calibration file
+and both confirmation flags:
 
 ```bash
 ./dist/prototype-live-linux-x86_64 \
   --checkpoint /absolute/path/to/prototype.pt \
-  --serial SERIAL \
-  --calibration physical_lab/calibrations/phone-a-candidate.json \
-  --execute --confirm-live
+  --serial YOUR_PHONE_SERIAL \
+  --calibration /absolute/path/to/phone-calibration.json \
+  --execute \
+  --confirm-live
 ```
 
-Live serial mode uses a persistent, serial-scoped H.264 `screenrecord` stream
-decoded by the bundled `ffmpeg`; it keeps only the newest frame so CPU
-inference cannot fall behind and act on stale video. The original screenshot
-transport remains available with `--adb-transport screenshot`.
+Before every `PLAY`, the controller verifies the selected card and applies the
+calibrated card and arena taps. `WAIT` never taps the phone. Press `Ctrl-C` to
+stop the controller.
 
-Live mode retains the extractor's original YOLO input size of 896 by default.
-For the faster experimental profile, add `--yolo-image-size 640`; this can
-reduce small-object detection quality and should be validated against gameplay
-before live use. Live mode also caches the successful source screenshot or
-decoded stream frame as the short-lived ADB connectivity proof, avoiding the
-redundant device probe before each tap. The cache interval can be changed with
-`--connection-check-interval-s`.
-
-Use a reviewed calibration artifact and the correct card-template root for a
-real device. Stop the process with `Ctrl-C`; no game force-stop or storage
-eviction is performed by this controller.
+See [RUN_PROTOTYPE_LIVE.md](RUN_PROTOTYPE_LIVE.md) for the complete option
+reference, troubleshooting, safety gates, and native-build instructions.
 
 ### Fidelity readiness
 
