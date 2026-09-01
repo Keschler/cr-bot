@@ -120,10 +120,15 @@ the CPU-only PyTorch wheels and the project's PyInstaller installation, then
 run from the simulator directory:
 
 ```bash
-PYTHONPATH=/path/to/cpu-only-site-packages \
-  /path/to/build-python -m PyInstaller --clean --noconfirm \
+PROTOTYPE_LIVE_CHECKPOINT=/absolute/path/to/prototype.pt \
+  ../outputs/venv/bin/python -m PyInstaller --clean --noconfirm \
   prototype_live.spec
 ```
+
+Omit `PROTOTYPE_LIVE_CHECKPOINT` when the repository's generated
+`prototype-fast-current` checkpoint is available at its default path. Otherwise,
+set it to any compatible recurrent prototype checkpoint to embed that model as
+the binary's default.
 
 The result is written to `dist/prototype-live-linux-x86_64`. The spec locates
 the checkpoint, extractor assets, and the `adb`/`ffmpeg` binaries from the

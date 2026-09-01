@@ -2,8 +2,8 @@
 
 Build with the repository's inference environment, for example:
 
-    capture/.venv-train/bin/python -m PyInstaller --clean --noconfirm \
-        simulator/prototype_live.spec
+    ../outputs/venv/bin/python -m PyInstaller --clean --noconfirm \
+        prototype_live.spec
 
 The resulting native executable is written to ``simulator/dist/``.  This
 spec intentionally targets Linux x86-64; PyInstaller builds are native and
@@ -11,10 +11,12 @@ must be produced separately for other operating systems/architectures.
 """
 
 from pathlib import Path
+import os
 import shutil
 import sys
 
 from PyInstaller.building.build_main import Analysis, EXE, PYZ
+from PyInstaller.utils.hooks import collect_submodules
 
 
 try:
@@ -25,8 +27,9 @@ except NameError:  # pragma: no cover - useful when linting this file directly
 SIMULATOR_ROOT = _spec_path.parent
 CHECKOUT_ROOT = SIMULATOR_ROOT.parent
 SOURCE_ROOT = CHECKOUT_ROOT / "src"
-CAPTURE_ROOT = CHECKOUT_ROOT / "capture"
-KATACR_SOURCE_ROOT = CAPTURE_ROOT / "vendor" / "external" / "KataCR"
+ASSETS_ROOT = CHECKOUT_ROOT / "assets"
+VENDOR_ROOT = CHECKOUT_ROOT / "vendor"
+KATACR_SOURCE_ROOT = VENDOR_ROOT / "external" / "KataCR"
 DEFAULT_CHECKPOINT = (
     SIMULATOR_ROOT
     / "outputs"
@@ -35,6 +38,11 @@ DEFAULT_CHECKPOINT = (
     / "prototype-fast-current"
     / "prototype.pt"
 )
+# Training outputs are intentionally ignored by Git.  A build can select a
+# compatible checkpoint from another location without staging it in the repo.
+CHECKPOINT = Path(
+    os.environ.get("PROTOTYPE_LIVE_CHECKPOINT", str(DEFAULT_CHECKPOINT))
+).expanduser()
 
 for _import_root in (CHECKOUT_ROOT, SOURCE_ROOT, KATACR_SOURCE_ROOT):
     if str(_import_root) not in sys.path:
@@ -60,11 +68,11 @@ datas = [
     (str(_require(CHECKOUT_ROOT / "assets" / "models")), "assets/models"),
     (str(_require(CHECKOUT_ROOT / "assets" / "templates")), "assets/templates"),
     (
-        str(_require(CAPTURE_ROOT / "templates" / "cr-api-assets" / "cards-150")),
+        str(_require(ASSETS_ROOT / "templates" / "cr-api-assets" / "cards-150")),
         "assets/templates/cr-api-assets/cards-150",
     ),
     (
-        str(_require(CAPTURE_ROOT / "templates" / "cr-api-assets" / "cards-gold")),
+        str(_require(ASSETS_ROOT / "templates" / "cr-api-assets" / "cards-gold")),
         "assets/templates/cr-api-assets/cards-gold",
     ),
     (
@@ -74,8 +82,7 @@ datas = [
     (
         str(
             _require(
-                CAPTURE_ROOT
-                / "vendor"
+                VENDOR_ROOT
                 / "external"
                 / "Clash-Royale-Detection-Dataset"
                 / "version_info"
@@ -84,7 +91,8 @@ datas = [
         ),
         "vendor/external/Clash-Royale-Detection-Dataset/version_info",
     ),
-    (str(_require(DEFAULT_CHECKPOINT)), "simulator/outputs/simulator/training/prototype-fast-current"),
+    (str(_require(SIMULATOR_ROOT / "rulesets")), "simulator/rulesets"),
+    (str(_require(CHECKPOINT)), "simulator/outputs/simulator/training/prototype-fast-current"),
 ]
 
 # AppDetector resolves this tracker file through KATACR_ROOT.  Keep the
@@ -119,6 +127,7 @@ hiddenimports = [
     "katacr.yolov8.custom_result",
     "katacr.yolov8.custom_trackers",
 ]
+hiddenimports += collect_submodules("torch.distributed")
 hiddenimports = sorted(set(hiddenimports))
 
 a = Analysis(
@@ -146,15 +155,7 @@ a = Analysis(
         "tensorboardX",
         "jax",
         "jaxlib",
-        "matplotlib",
-        "scipy",
-        "sympy.plotting",
         "triton",
-        "torch._dynamo",
-        "torch._inductor",
-        "torch.export",
-        "torch.onnx",
-        "torch.testing",
         "yt_dlp",
         "onnxruntime",
     ],

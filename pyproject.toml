@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "cr-bot"
 version = "0.1.0"
 description = "Clash Royale vision, tracking, and feature generation bot."
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.13"
 dynamic = ["dependencies"]
 
 [project.scripts]

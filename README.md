@@ -117,7 +117,8 @@ before live use.
 
 ## Development
 
-Python 3.12 or newer is required for source development:
+Python 3.12 is required for source development because the pinned PyTorch and
+JAX wheels do not support the newer system Python versions:
 
 ```bash
 git clone https://github.com/Keschler/cr-bot.git
