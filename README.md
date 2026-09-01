@@ -26,6 +26,17 @@ chmod +x prototype-live-linux-x86_64
 
 The executable is CPU-only and targets Linux x86-64. It includes the
 `prototype-fast-current` checkpoint by default.
+### Current best trained neural network
+
+The current best neural network produced by training is
+[`prototype.pt`](https://github.com/Keschler/cr-bot/releases/download/v0.5/prototype.pt).
+
+You can use it with the live executable by passing it with `--checkpoint`:
+
+```bash
+./prototype-live-linux-x86_64 \
+  --checkpoint /absolute/path/to/prototype.pt
+```
 
 ### Test with a recorded video
 
