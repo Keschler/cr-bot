@@ -53,14 +53,25 @@ EVO_TEMPLATES = {
 }
 
 
-def extract_hand_state(frame):
-    cards = {
-        "card_1": {"image": crop(frame, ROIS["hand_card_slot_1"]), "detected_card": None},
-        "card_2": {"image": crop(frame, ROIS["hand_card_slot_2"]), "detected_card": None},
-        "card_3": {"image": crop(frame, ROIS["hand_card_slot_3"]), "detected_card": None},
-        "card_4": {"image": crop(frame, ROIS["hand_card_slot_4"]), "detected_card": None},
-        "next_card": {"image": crop(frame, ROIS["next_card_slot"]), "detected_card": None},
-    }
+def extract_hand_state(frame, *, rois=None):
+    if rois is None:
+        cards = {
+            "card_1": {"image": crop(frame, ROIS["hand_card_slot_1"]), "detected_card": None},
+            "card_2": {"image": crop(frame, ROIS["hand_card_slot_2"]), "detected_card": None},
+            "card_3": {"image": crop(frame, ROIS["hand_card_slot_3"]), "detected_card": None},
+            "card_4": {"image": crop(frame, ROIS["hand_card_slot_4"]), "detected_card": None},
+            "next_card": {"image": crop(frame, ROIS["next_card_slot"]), "detected_card": None},
+        }
+    else:
+        from cr_bot.vision.roi_adapt import resolve_crop as _resolve_crop
+
+        cards = {
+            "card_1": {"image": _resolve_crop(frame, "hand_card_slot_1", rois=rois), "detected_card": None},
+            "card_2": {"image": _resolve_crop(frame, "hand_card_slot_2", rois=rois), "detected_card": None},
+            "card_3": {"image": _resolve_crop(frame, "hand_card_slot_3", rois=rois), "detected_card": None},
+            "card_4": {"image": _resolve_crop(frame, "hand_card_slot_4", rois=rois), "detected_card": None},
+            "next_card": {"image": _resolve_crop(frame, "next_card_slot", rois=rois), "detected_card": None},
+        }
 
     hand_slots = ["card_1", "card_2", "card_3", "card_4"]
     hand_images = [cards[slot]["image"] for slot in hand_slots]

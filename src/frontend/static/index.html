@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Arena Replay Analyst v1.2.0</title>
+  <link rel="stylesheet" href="styles.css?v=24" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-dot" aria-hidden="true"></span>
+      <div class="brand-text">
+        <strong>Arena Replay Analyst</strong>
+        <span class="brand-version">v1.2.0</span>
+      </div>
+    </div>
+
+    <nav class="topnav" aria-label="Primary">
+      <button id="btn-open-replay" class="nav-btn" type="button" title="Focus the video session panel">Open Replay</button>
+      <button id="btn-dashboard" class="nav-btn" type="button" title="Focus the live session panel">Dashboard</button>
+      <div id="mode-tabs" class="mode-tabs" role="tablist" aria-label="Mode">
+        <button id="tab-video" class="mode-tab is-active" type="button" role="tab" aria-selected="true" data-mode="video">Video</button>
+        <button id="tab-live" class="mode-tab" type="button" role="tab" aria-selected="false" data-mode="live">Live</button>
+      </div>
+    </nav>
+
+    <div class="top-right">
+      <span id="status-pill" class="status-pill is-idle" role="status" title="Backend status">No session</span>
+    </div>
+  </header>
+
+  <div id="error-bar" class="error-bar" hidden></div>
+
+  <main class="layout">
+    <!-- LEFT -->
+    <aside class="panel panel-left" aria-label="Extracted State">
+      <h2>Extracted State</h2>
+
+      <section class="card card-session" aria-label="Session">
+        <div class="session-head">
+          <h3>SESSION</h3>
+          <span id="session-mini" class="session-mini" hidden></span>
+          <span class="spacer"></span>
+          <button id="btn-stop-mini" class="btn btn-mini" type="button" hidden>Stop</button>
+          <button id="btn-session-toggle" class="tool" type="button" aria-expanded="true" title="Collapse session panel">–</button>
+        </div>
+        <div id="panel-video" class="session-panel">
+          <div class="field">
+            <span>Video file</span>
+            <div class="file-picker">
+              <input id="input-video-file" class="file-input-hidden" type="file" accept="video/*,.mp4,.mov,.mkv,.avi,.webm" tabindex="-1" aria-hidden="true" />
+              <button id="btn-browse-video" class="btn" type="button">Choose file</button>
+              <span id="video-file-label" class="file-name">No file chosen</span>
+            </div>
+            <p id="video-file-meta" class="hint" hidden></p>
+          </div>
+          <label class="field">
+            <span>Checkpoint</span>
+            <select id="select-checkpoint">
+              <option value="prototype.pt" selected>prototype.pt (default)</option>
+            </select>
+          </label>
+          <div class="field-row trio">
+            <label class="field">
+              <span>Start frame</span>
+              <input id="input-start-frame" type="number" inputmode="numeric" value="0" min="0" step="1" title="First video frame to analyse (0 = from the beginning)" />
+            </label>
+            <label class="field">
+              <span>Stride</span>
+              <input id="input-stride" type="number" inputmode="numeric" value="1" min="1" step="1" />
+            </label>
+            <label class="field">
+              <span>Max frames</span>
+              <input id="input-max-frames" type="number" inputmode="numeric" value="500" min="1" step="1" />
+            </label>
+          </div>
+          <label class="check" hidden><input id="check-adapt-rois" type="checkbox">Adapt ROIs to this video's format</label>
+          <p id="adapt-notice" class="hint" hidden></p>
+          <div class="btn-row"><button id="btn-preview-rois" class="btn" type="button" hidden>Preview ROIs</button></div>
+          <img id="roi-preview" alt="Adapted ROI preview" hidden>
+          <p id="roi-preview-meta" class="hint" hidden></p>
+          <label class="check" id="accept-rois-row" hidden><input id="check-accept-rois" type="checkbox">Use adapted ROIs for this run</label>
+          <div class="btn-row">
+            <button id="btn-start-video" class="btn btn-primary" type="button">Start</button>
+            <button id="btn-stop-video" class="btn" type="button">Stop</button>
+          </div>
+        </div>
+        <div id="panel-live" class="session-panel" hidden>
+          <label class="field">
+            <span>Device serial</span>
+            <input id="input-serial" type="text" placeholder="e.g. emulator-5554" autocomplete="off" />
+          </label>
+          <label class="field">
+            <span>Checkpoint</span>
+            <select id="select-live-checkpoint">
+              <option value="prototype.pt" selected>prototype.pt (default)</option>
+            </select>
+          </label>
+          <div class="field-row">
+            <label class="field">
+              <span>Transport</span>
+              <select id="select-transport">
+                <option value="stream">stream (H.264)</option>
+                <option value="screenshot">screenshot (poll)</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Calibration</span>
+              <input id="input-calibration" type="text" placeholder="optional profile" autocomplete="off" />
+            </label>
+          </div>
+          <label class="check">
+            <input id="check-execute" type="checkbox" />
+            <span>Execute actions on device</span>
+          </label>
+          <label class="check">
+            <input id="check-confirm-live" type="checkbox" />
+            <span>I confirm live control of this device</span>
+          </label>
+          <p id="live-warning" class="warning" hidden>Warning: execute mode can play cards on the connected device. Only enable with confirmation on a test account.</p>
+          <div class="btn-row">
+            <button id="btn-start-live" class="btn btn-primary" type="button">Start</button>
+            <button id="btn-stop-live" class="btn" type="button">Stop</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="card" aria-label="Match metadata">
+        <h3>MATCH METADATA</h3>
+        <dl class="meta">
+          <div><dt>Replay ID</dt><dd id="meta-replay-id">—</dd></div>
+          <div><dt>Arena</dt><dd id="meta-arena">—</dd></div>
+          <div><dt>Tick</dt><dd id="meta-tick">—</dd></div>
+          <div><dt>Phase</dt><dd id="meta-phase">—</dd></div>
+        </dl>
+      </section>
+
+      <section class="card" aria-label="Hand and selection">
+        <h3>HAND / SELECTION</h3>
+        <div id="hand-slots" class="hand-slots">
+          <button class="hand-slot" type="button" data-slot="0"><img class="hand-icon" alt="" hidden /><span class="card-name">—</span><span class="card-cost">—</span></button>
+          <button class="hand-slot" type="button" data-slot="1"><img class="hand-icon" alt="" hidden /><span class="card-name">—</span><span class="card-cost">—</span></button>
+          <button class="hand-slot" type="button" data-slot="2"><img class="hand-icon" alt="" hidden /><span class="card-name">—</span><span class="card-cost">—</span></button>
+          <button class="hand-slot" type="button" data-slot="3"><img class="hand-icon" alt="" hidden /><span class="card-name">—</span><span class="card-cost">—</span></button>
+        </div>
+        <p class="elixir-line">Next: <span id="next-card">—</span></p>
+        <p class="elixir-line">Own Elixir <span id="own-elixir-text">—</span></p>
+        <div class="elixir-bar" aria-hidden="true"><div id="own-elixir-fill"></div></div>
+        <p class="elixir-line foe-line">Enemy Elixir <span id="enemy-elixir-text">—</span></p>
+        <div class="elixir-bar foe-bar" aria-hidden="true"><div id="enemy-elixir-fill"></div></div>
+      </section>
+
+      <section class="card" aria-label="Tower status">
+        <h3>TOWER STATUS</h3>
+        <div id="tower-rows" class="tower-rows">
+          <p class="empty">No session</p>
+        </div>
+      </section>
+
+      <section class="card" aria-label="Detected objects">
+        <h3>DETECTED OBJECTS <span id="detection-count" class="muted"></span></h3>
+        <ul id="detected-objects" class="detected">
+          <li class="empty">No session</li>
+        </ul>
+      </section>
+    </aside>
+
+    <!-- CENTER -->
+    <section class="panel panel-center" aria-label="Current frame">
+      <div class="center-head">
+        <div>
+          <p class="eyebrow">CURRENT FRAME</p>
+          <h2>Replay Inspection</h2>
+        </div>
+        <div class="badges">
+          <span id="badge-ingame" class="badge">—</span>
+          <span id="badge-perf" class="badge">—</span>
+          <span id="badge-arena" class="badge">—</span>
+        </div>
+      </div>
+
+      <div class="toolbar" role="toolbar" aria-label="Overlay tools">
+        <button id="toggle-boxes" class="tool is-on" type="button" aria-pressed="true">Boxes</button>
+        <button id="toggle-grid" class="tool is-on" type="button" aria-pressed="true">Grid</button>
+        <button id="toggle-labels" class="tool is-on" type="button" aria-pressed="true">Labels</button>
+      </div>
+
+      <figure id="frame-wrap" class="frame-wrap">
+        <img id="center-frame" alt="Latest game frame" hidden />
+        <canvas id="frame-overlay"></canvas>
+        <figcaption id="frame-empty" class="frame-empty">No session</figcaption>
+        <span id="history-badge" class="history-badge" hidden>viewing history</span>
+      </figure>
+
+      <div class="transport" aria-label="Transport">
+        <button id="btn-play" class="btn" type="button" aria-pressed="true">Pause</button>
+        <button id="btn-prev" class="btn" type="button" title="Previous frame">|◀</button>
+        <button id="btn-next" class="btn" type="button" title="Next frame">▶|</button>
+        <span id="time-label" class="time-label">—</span>
+        <label class="speed">Speed
+          <select id="speed-select">
+            <option value="0.5">0.5x</option>
+            <option value="1" selected>1x</option>
+            <option value="1.5">1.5x</option>
+            <option value="2">2x</option>
+          </select>
+        </label>
+      </div>
+    </section>
+
+    <!-- RIGHT -->
+    <aside class="panel panel-right" aria-label="Bot Would Do">
+      <h2>Bot Would Do</h2>
+      <div id="suggestions" class="suggestions">
+        <p class="empty">No session</p>
+      </div>
+
+      <section class="card" aria-label="Reasoning summary">
+        <h3>REASONING SUMMARY</h3>
+        <p id="reason-text" class="muted">No session</p>
+        <dl class="meta">
+          <div><dt>Entropy</dt><dd id="reason-entropy">—</dd></div>
+          <div><dt>Mode probs</dt><dd id="reason-mode-probs">—</dd></div>
+          <div><dt>Hand stable</dt><dd id="reason-hand-stable">—</dd></div>
+        </dl>
+        <p class="confidence-line">Confidence <span id="reason-confidence">—</span></p>
+      </section>
+    </aside>
+  </main>
+
+  <footer class="timeline-bar" aria-label="Timeline">
+    <div class="timeline-head">
+      <span id="timeline-label">No session</span>
+    </div>
+    <div id="timeline-track" class="timeline-track" role="slider" aria-label="Session timeline. Arrow keys step, Home and End jump." tabindex="0" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0">
+      <div id="timeline-rail" class="timeline-rail">
+        <div id="timeline-fill" class="timeline-fill"></div>
+        <div id="timeline-markers" class="timeline-markers"></div>
+        <div id="timeline-cursor" class="timeline-thumb" hidden></div>
+        <div id="timeline-tooltip" class="timeline-tooltip" hidden></div>
+      </div>
+    </div>
+    <ul class="legend" aria-label="Timeline legend">
+      <li><span class="dot dot-user"></span>Your play</li>
+      <li><span class="dot dot-foe"></span>Opponent play</li>
+      <li><span class="dot dot-match"></span>Match start/end</li>
+      <li><span class="dot dot-tower"></span>Tower damage</li>
+    </ul>
+  </footer>
+
+  <script src="app.js?v=26"></script>
+</body>
+</html>

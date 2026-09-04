@@ -17,10 +17,13 @@ class TowerHPCrop:
     mode: str
 
 
-def extract_tower_hp(frame, yolo_boxes=None, debug_steps_by_tower=None, support_tower_yolo_boxes=None):
+def extract_tower_hp(frame, yolo_boxes=None, debug_steps_by_tower=None, support_tower_yolo_boxes=None, *, rois=None):
     if yolo_boxes is None: # Live gameplay
         pause_own_tower_hp = has_blocking_emotes(support_tower_yolo_boxes)
-        tower_crops = extract_tower_hp_crops(frame)
+        if rois is None:
+            tower_crops = extract_tower_hp_crops(frame)
+        else:
+            tower_crops = extract_tower_hp_crops(frame, rois=rois)
         towers_hp = {tower_crop.tower_name: None for tower_crop in tower_crops}
         pending_crops = {}
 
@@ -39,7 +42,10 @@ def extract_tower_hp(frame, yolo_boxes=None, debug_steps_by_tower=None, support_
         for tower_name, prediction in predictions.items():
             towers_hp[tower_name] = prediction.value
 
-        king_tower_activated = detect_if_king_tower_activated(frame)
+        if rois is None:
+            king_tower_activated = detect_if_king_tower_activated(frame)
+        else:
+            king_tower_activated = detect_if_king_tower_activated(frame, rois=rois)
 
         if not pause_own_tower_hp and not king_tower_activated["own_king_activated"]:
             towers_hp["own_king"] = KING_TOWER_HP
@@ -49,7 +55,10 @@ def extract_tower_hp(frame, yolo_boxes=None, debug_steps_by_tower=None, support_
         if support_tower_yolo_boxes is not None:
             support_tower_alive = detect_if_support_tower_alive_from_yolo(support_tower_yolo_boxes)
         else:
-            support_tower_alive = detect_if_support_tower_alive(frame)
+            if rois is None:
+                support_tower_alive = detect_if_support_tower_alive(frame)
+            else:
+                support_tower_alive = detect_if_support_tower_alive(frame, rois=rois)
 
         if not pause_own_tower_hp and not support_tower_alive["support_left_activated"]:
             towers_hp["own_support_left"] = 0
@@ -90,14 +99,25 @@ def _tower_debug(debug_steps_by_tower, tower_name):
     return debug_steps_by_tower.setdefault(tower_name, {})
 
 
-def extract_tower_hp_crops(frame):
+def extract_tower_hp_crops(frame, *, rois=None):
+    if rois is None:
+        return [
+            TowerHPCrop("enemy_king", crop(frame, ROIS["opponent_king_health_text"]), "fixed_roi"),
+            TowerHPCrop("own_king", crop(frame, ROIS["player_king_health_text"]), "fixed_roi"),
+            TowerHPCrop("enemy_support_left", crop(frame, ROIS["opponent_left_support_health_text"]), "fixed_roi"),
+            TowerHPCrop("enemy_support_right", crop(frame, ROIS["opponent_right_support_health_text"]), "fixed_roi"),
+            TowerHPCrop("own_support_left", crop(frame, ROIS["player_left_support_health_text"]), "fixed_roi"),
+            TowerHPCrop("own_support_right", crop(frame, ROIS["player_right_support_health_text"]), "fixed_roi"),
+        ]
+    from cr_bot.vision.roi_adapt import resolve_crop as _resolve_crop
+
     return [
-        TowerHPCrop("enemy_king", crop(frame, ROIS["opponent_king_health_text"]), "fixed_roi"),
-        TowerHPCrop("own_king", crop(frame, ROIS["player_king_health_text"]), "fixed_roi"),
-        TowerHPCrop("enemy_support_left", crop(frame, ROIS["opponent_left_support_health_text"]), "fixed_roi"),
-        TowerHPCrop("enemy_support_right", crop(frame, ROIS["opponent_right_support_health_text"]), "fixed_roi"),
-        TowerHPCrop("own_support_left", crop(frame, ROIS["player_left_support_health_text"]), "fixed_roi"),
-        TowerHPCrop("own_support_right", crop(frame, ROIS["player_right_support_health_text"]), "fixed_roi"),
+        TowerHPCrop("enemy_king", _resolve_crop(frame, "opponent_king_health_text", rois=rois), "fixed_roi"),
+        TowerHPCrop("own_king", _resolve_crop(frame, "player_king_health_text", rois=rois), "fixed_roi"),
+        TowerHPCrop("enemy_support_left", _resolve_crop(frame, "opponent_left_support_health_text", rois=rois), "fixed_roi"),
+        TowerHPCrop("enemy_support_right", _resolve_crop(frame, "opponent_right_support_health_text", rois=rois), "fixed_roi"),
+        TowerHPCrop("own_support_left", _resolve_crop(frame, "player_left_support_health_text", rois=rois), "fixed_roi"),
+        TowerHPCrop("own_support_right", _resolve_crop(frame, "player_right_support_health_text", rois=rois), "fixed_roi"),
     ]
 
 

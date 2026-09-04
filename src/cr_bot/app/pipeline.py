@@ -44,6 +44,9 @@ def process_frame(
     detector,
     show_rois: bool = False,
     yolo_tower_hp_detections: bool = False,
+    *,
+    rois=None,
+    native_frame=None,
 ) -> FrameAnalysisResult:
     _, draw_boxes, _ = load_yolo_runtime()
     frame_to_analyze = draw_rois(frame, ROIS) if show_rois else frame
@@ -81,36 +84,70 @@ def process_frame(
     )
 
     rendered = draw_boxes(frame_to_analyze, yolo_boxes)
-    elixir = extract_elixir(frame)
-    elixir_change = detect_elixir_change(frame)
-
     tower_hp_debug_steps = {}
     timer_debug_steps = {}
-    if yolo_tower_hp_detections:
-        towers_hp = extract_tower_hp(
-            frame,
-            tower_hp_yolo_boxes,
-            debug_steps_by_tower=tower_hp_debug_steps,
-            support_tower_yolo_boxes=tower_hp_yolo_boxes,
-        )
-        current_time_text = extract_time(frame, debug_steps=timer_debug_steps)
+    if rois is None or native_frame is None:
+        elixir = extract_elixir(frame)
+        elixir_change = detect_elixir_change(frame)
+
+        if yolo_tower_hp_detections:
+            towers_hp = extract_tower_hp(
+                frame,
+                tower_hp_yolo_boxes,
+                debug_steps_by_tower=tower_hp_debug_steps,
+                support_tower_yolo_boxes=tower_hp_yolo_boxes,
+            )
+            current_time_text = extract_time(frame, debug_steps=timer_debug_steps)
+        else:
+            towers_hp = extract_tower_hp(
+                frame,
+                debug_steps_by_tower=tower_hp_debug_steps,
+                support_tower_yolo_boxes=tower_hp_yolo_boxes,
+            )
+            current_time_text = extract_time(
+                frame,
+                debug_steps=timer_debug_steps,
+                yolo_templates=yolo_tower_hp_detections,
+            )
+
+        overtime = is_overtime(frame)
+        time_left_s = parse_time_left_s(current_time_text)
+        total_remaining_s = total_remaining_seconds(time_left_s, overtime)
+
+        hand_state = extract_hand_state(frame)
     else:
-        towers_hp = extract_tower_hp(
-            frame,
-            debug_steps_by_tower=tower_hp_debug_steps,
-            support_tower_yolo_boxes=tower_hp_yolo_boxes,
-        )
-        current_time_text = extract_time(
-            frame,
-            debug_steps=timer_debug_steps,
-            yolo_templates=yolo_tower_hp_detections,
-        )
+        elixir = extract_elixir(native_frame, rois=rois)
+        elixir_change = detect_elixir_change(native_frame, rois=rois)
 
-    overtime = is_overtime(frame)
-    time_left_s = parse_time_left_s(current_time_text)
-    total_remaining_s = total_remaining_seconds(time_left_s, overtime)
+        if yolo_tower_hp_detections:
+            towers_hp = extract_tower_hp(
+                frame,
+                tower_hp_yolo_boxes,
+                debug_steps_by_tower=tower_hp_debug_steps,
+                support_tower_yolo_boxes=tower_hp_yolo_boxes,
+            )
+            current_time_text = extract_time(
+                native_frame, debug_steps=timer_debug_steps, rois=rois
+            )
+        else:
+            towers_hp = extract_tower_hp(
+                native_frame,
+                debug_steps_by_tower=tower_hp_debug_steps,
+                support_tower_yolo_boxes=tower_hp_yolo_boxes,
+                rois=rois,
+            )
+            current_time_text = extract_time(
+                native_frame,
+                debug_steps=timer_debug_steps,
+                yolo_templates=yolo_tower_hp_detections,
+                rois=rois,
+            )
 
-    hand_state = extract_hand_state(frame)
+        overtime = is_overtime(native_frame, rois=rois)
+        time_left_s = parse_time_left_s(current_time_text)
+        total_remaining_s = total_remaining_seconds(time_left_s, overtime)
+
+        hand_state = extract_hand_state(native_frame, rois=rois)
 
     troops, bars = convert_yolo(yolo_boxes)
     estimate_health(frame, bars)

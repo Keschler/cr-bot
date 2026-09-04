@@ -281,7 +281,7 @@ def _measure_timer_text_red_ratio(timer_frame: np.ndarray) -> float:
     return float(red_text_pixels.sum() / max(int(text_mask.sum()), 1))
 
 
-def _locate_timer(frame, debug_steps=None):
+def _locate_timer(frame, debug_steps=None, *, rois=None):
     search_img, (search_x, search_y, _, _) = _normalized_crop(frame, TOP_RIGHT_TIMER_SEARCH_ROI)
     if debug_steps is not None:
         debug_steps["search_raw"] = search_img.copy()
@@ -358,8 +358,14 @@ def _locate_timer(frame, debug_steps=None):
             "frame_bbox": (search_x + x, search_y + y, w, h),
         }
 
-    timer_frame = crop(frame, ROIS["match_timer"])
-    timer_box = crop(frame, ROIS["timer_box"])
+    if rois is None:
+        timer_frame = crop(frame, ROIS["match_timer"])
+        timer_box = crop(frame, ROIS["timer_box"])
+    else:
+        from cr_bot.vision.roi_adapt import resolve_crop as _resolve_crop
+
+        timer_frame = _resolve_crop(frame, "match_timer", rois=rois)
+        timer_box = _resolve_crop(frame, "timer_box", rois=rois)
     fallback_text = _normalize_timer_text(_read_timer_from_roi(timer_frame))
     if fallback_text is None:
         fallback_text = re.sub(r":+", ":", str(_read_timer_from_roi(timer_frame)))
@@ -371,8 +377,11 @@ def _locate_timer(frame, debug_steps=None):
     }
 
 
-def extract_time(frame, debug_steps=None, yolo_templates=None):
-    located = _locate_timer(frame, debug_steps=debug_steps)
+def extract_time(frame, debug_steps=None, yolo_templates=None, *, rois=None):
+    if rois is None:
+        located = _locate_timer(frame, debug_steps=debug_steps)
+    else:
+        located = _locate_timer(frame, debug_steps=debug_steps, rois=rois)
     timer_debug = debug_steps if debug_steps is not None else None
     time = _read_timer_from_roi(located["timer_frame"], debug_steps=timer_debug, yolo_templates=None)
     normalized = _normalize_timer_text(located["time"])
@@ -383,8 +392,11 @@ def extract_time(frame, debug_steps=None, yolo_templates=None):
         normalized = re.sub(r':+', ':', str(time)).strip(":")
     return normalized
 
-def is_overtime(frame):
-    located = _locate_timer(frame)
+def is_overtime(frame, *, rois=None):
+    if rois is None:
+        located = _locate_timer(frame)
+    else:
+        located = _locate_timer(frame, rois=rois)
     timer_box = located["timer_box"]
     red_ratio = _measure_red_ratio(timer_box, False)
     red_text_ratio = _measure_timer_text_red_ratio(located["timer_frame"])

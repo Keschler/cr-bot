@@ -48,17 +48,30 @@ def detect_elixir_digit(digit_img, templates=DIGIT_TEMPLATES):
     return best_digit, best_score
 
 
-def read_elixir_value(displayed_digit, frame, slot_rois=ELIXIR_SLOT_ROIS):
+def read_elixir_value(displayed_digit, frame, slot_rois=ELIXIR_SLOT_ROIS, *, rois=None):
     number = displayed_digit
 
     if number >= 10:
         return 0.0
 
-    next_slot = crop(frame, slot_rois[number])
+    if rois is None:
+        next_slot = crop(frame, slot_rois[number])
+    else:
+        from cr_bot.vision.roi_adapt import resolve_crop as _resolve_crop
+
+        next_slot = _resolve_crop(frame, f"elixir_fill_slot_{number + 1}", rois=rois)
     return estimate_slot_fraction(next_slot)
 
-def estimate_total_slots(frame):
-    pink_fractions = [pink_amount(crop(frame, roi)) for roi in ELIXIR_SLOT_ROIS]
+def estimate_total_slots(frame, *, rois=None):
+    if rois is None:
+        pink_fractions = [pink_amount(crop(frame, roi)) for roi in ELIXIR_SLOT_ROIS]
+    else:
+        from cr_bot.vision.roi_adapt import resolve_crop as _resolve_crop
+
+        pink_fractions = [
+            pink_amount(_resolve_crop(frame, f"elixir_fill_slot_{i}", rois=rois))
+            for i in range(1, 11)
+        ]
     for idx, fraction in enumerate(pink_fractions):
         if fraction >= 0.7:
             pink_fractions[idx] = 1
@@ -68,9 +81,13 @@ def estimate_total_slots(frame):
     return fraction_sum
 
 
-def extract_elixir(frame, templates=DIGIT_TEMPLATES):
-    full_elixir_slots = estimate_total_slots(frame)
-    elixir_estimate = read_elixir_value(full_elixir_slots, frame)
+def extract_elixir(frame, templates=DIGIT_TEMPLATES, *, rois=None):
+    if rois is None:
+        full_elixir_slots = estimate_total_slots(frame)
+        elixir_estimate = read_elixir_value(full_elixir_slots, frame)
+    else:
+        full_elixir_slots = estimate_total_slots(frame, rois=rois)
+        elixir_estimate = read_elixir_value(full_elixir_slots, frame, rois=rois)
 
     displayed_digit = full_elixir_slots
     return {

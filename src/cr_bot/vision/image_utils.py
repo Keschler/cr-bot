@@ -676,9 +676,15 @@ def _measure_white_ratio(bar_img, king: bool):
     return float(white_mask.mean() / 255.0)
 
 
-def detect_if_king_tower_activated(img):
-    own_king_hp_bar = crop(img, ROIS["player_king_health_bar"])
-    enemy_king_hp_bar = crop(img, ROIS["opponent_king_health_bar"])
+def detect_if_king_tower_activated(img, *, rois=None):
+    if rois is None:
+        own_king_hp_bar = crop(img, ROIS["player_king_health_bar"])
+        enemy_king_hp_bar = crop(img, ROIS["opponent_king_health_bar"])
+    else:
+        from cr_bot.vision.roi_adapt import resolve_crop as _resolve_crop
+
+        own_king_hp_bar = _resolve_crop(img, "player_king_health_bar", rois=rois)
+        enemy_king_hp_bar = _resolve_crop(img, "opponent_king_health_bar", rois=rois)
 
     own_king = (
         _measure_cyan_ratio(own_king_hp_bar) >= TOWER_BAR_VISIBLE_RATIO_THRESHOLD
@@ -694,12 +700,21 @@ def detect_if_king_tower_activated(img):
         "enemy_king_activated": enemy_king,
     }
 
-def detect_if_support_tower_alive(img):
-    own_support_left_bar = crop(img, ROIS["player_left_support_health_bar"])
-    own_support_right_bar = crop(img, ROIS["player_right_support_health_bar"])
+def detect_if_support_tower_alive(img, *, rois=None):
+    if rois is None:
+        own_support_left_bar = crop(img, ROIS["player_left_support_health_bar"])
+        own_support_right_bar = crop(img, ROIS["player_right_support_health_bar"])
 
-    enemy_support_left_bar = crop(img, ROIS["opponent_left_support_health_bar"])
-    enemy_support_right_bar = crop(img, ROIS["opponent_right_support_health_bar"])
+        enemy_support_left_bar = crop(img, ROIS["opponent_left_support_health_bar"])
+        enemy_support_right_bar = crop(img, ROIS["opponent_right_support_health_bar"])
+    else:
+        from cr_bot.vision.roi_adapt import resolve_crop as _resolve_crop
+
+        own_support_left_bar = _resolve_crop(img, "player_left_support_health_bar", rois=rois)
+        own_support_right_bar = _resolve_crop(img, "player_right_support_health_bar", rois=rois)
+
+        enemy_support_left_bar = _resolve_crop(img, "opponent_left_support_health_bar", rois=rois)
+        enemy_support_right_bar = _resolve_crop(img, "opponent_right_support_health_bar", rois=rois)
 
     support_left = (
         _measure_cyan_ratio(own_support_left_bar) >= TOWER_BAR_VISIBLE_RATIO_THRESHOLD
@@ -726,9 +741,14 @@ def detect_if_support_tower_alive(img):
             "enemy_support_right_activated": enemy_support_right
             }
 
-def detect_elixir_change(img):
+def detect_elixir_change(img, *, rois=None):
     "Detect elixir change through for example troop placement by checking if the elixir digit is covered up"
-    elixir_digit_crop = crop(img, ROIS["elixir_digit"])
+    if rois is None:
+        elixir_digit_crop = crop(img, ROIS["elixir_digit"])
+    else:
+        from cr_bot.vision.roi_adapt import resolve_crop as _resolve_crop
+
+        elixir_digit_crop = _resolve_crop(img, "elixir_digit", rois=rois)
     elixir_digit_bottom = elixir_digit_crop[elixir_digit_crop.shape[0] // 2 :, :]
     white = white_digit_ratio(elixir_digit_bottom)
     pink = pink_overlay_ratio(elixir_digit_bottom)
