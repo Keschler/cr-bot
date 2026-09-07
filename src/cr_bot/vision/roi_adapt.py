@@ -725,10 +725,13 @@ def _refine_timer_pill(native_bgr, nw: int, nh: int, entries: dict) -> None:
     raise RuntimeError("no timer pill")
 
 
-def adapt_rois_for_probe(native_bgr):
+def adapt_rois_for_probe(native_bgr, draw_overlay=True):
     """Adapt ROIs for one native probe frame.
 
     Returns ``(roi_entries, overlay_jpeg_bytes, warnings, (nw, nh))``.
+    With ``draw_overlay=False`` the JPEG is the raw (resized) probe frame
+    without ROI rectangles — for interactive review UIs that draw their
+    own boxes.
     """
     if native_bgr is None or not hasattr(native_bgr, "shape"):
         raise ValueError("unreadable probe frame")
@@ -773,10 +776,11 @@ def adapt_rois_for_probe(native_bgr):
     roi_entries = [entries[name] for name in ROIS.keys()]
 
     overlay = native_bgr.copy()
-    for item in roi_entries:
-        x, y, w, h = (int(v) for v in item["rect"])
-        color = (0, 255, 0) if item["source"] == "landmark" else (255, 0, 0)
-        cv2.rectangle(overlay, (x, y), (x + w, y + h), color, 2)
+    if draw_overlay:
+        for item in roi_entries:
+            x, y, w, h = (int(v) for v in item["rect"])
+            color = (0, 255, 0) if item["source"] == "landmark" else (255, 0, 0)
+            cv2.rectangle(overlay, (x, y), (x + w, y + h), color, 2)
     max_width = 720
     preview = overlay
     if nw > max_width:

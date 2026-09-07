@@ -155,19 +155,9 @@ body {
 
 /* ROI adaptation (video format differs from 1080x2400 native). */
 #adapt-notice { margin: 4px 0; }
-#accept-rois-row { margin: 4px 0; }
-#roi-preview,
-.roi-preview {
-  max-width: 100%;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  margin-top: 8px;
-}
-.roi-preview img {
-  max-width: 100%;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-}
+/* While a proposed ROI set is under review in the middle player, the
+   overlay canvas takes pointer events for drag-to-adjust gestures. */
+.frame-wrap.roi-preview canvas { pointer-events: auto; }
 #roi-preview-meta { margin-top: 4px; }
 
 /* Hand */
@@ -274,7 +264,10 @@ body {
 
 /* Detected */
 .detected { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-.detected li { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+.detected li { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; border-bottom: 1px solid var(--border); padding-bottom: 6px; flex-wrap: wrap; }
+.detections-side .detected li > span:first-child { min-width: 0; }
+.detections-side .cedit { flex-wrap: wrap; row-gap: 4px; }
+.detections-side .cedit select { max-width: 96px; }
 .detected .team { font-size: 11px; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--border); margin-right: 6px; }
 .team-ally { color: var(--green); }
 .team-enemy { color: var(--red); }
@@ -410,10 +403,13 @@ body {
 }
 .timeline-track:active .timeline-thumb { box-shadow: 0 2px 10px rgba(0, 0, 0, 0.6), 0 0 0 4px rgba(46, 166, 255, 0.35); }
 .timeline-tooltip {
-  position: absolute; bottom: calc(100% + 10px); transform: translateX(-50%);
+  /* Fixed, not absolute: the footer bar clips overflow, so an in-flow
+     tooltip above the track gets its top cut off. Position comes from JS
+     (viewport coords above the track, clamped horizontally). */
+  position: fixed; transform: translate(-50%, -100%);
   background: #05080f; border: 1px solid var(--border); border-radius: 8px;
   padding: 6px 10px; font-size: 12px; line-height: 1.5; white-space: nowrap;
-  z-index: 5; pointer-events: none; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  z-index: 50; pointer-events: none; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
   max-width: 320px; overflow: hidden; text-overflow: ellipsis;
 }
 .timeline-tooltip .tt-head { color: var(--text); font-weight: 600; }
@@ -427,4 +423,68 @@ body {
   body { min-width: 0; }
   .layout { grid-template-columns: 1fr; }
   .timeline-bar { grid-template-columns: 1fr; }
+  .frame-row { flex-direction: column; }
+  .detections-side { width: auto; max-height: 320px; }
+  .history-side { width: auto; max-height: 240px; }
 }
+
+/* Frame + detections side-by-side (portrait video leaves wide gutters) */
+.frame-row { display: flex; gap: 12px; flex: 1; min-height: 0; }
+.frame-row .frame-wrap { flex: 1 1 auto; min-width: 0; }
+.detections-side { width: 300px; flex: none; margin-bottom: 0; overflow-y: auto; }
+.history-side { width: 260px; flex: none; margin-bottom: 0; overflow-y: auto; }
+.detected li { cursor: default; }
+.detections-side .detected li[data-ckey] { cursor: pointer; }
+.detections-side .detected { max-height: 460px; overflow-y: auto; }
+.detected li.more { border-bottom: 0; }
+.detected li.more button.mini { width: 100%; }
+.detected li.is-selected { outline: 2px solid #ffd166; outline-offset: -2px; border-radius: 6px; }
+
+/* Label correction (what-if re-evaluation) */
+.correction-controls { margin-top: 10px; }
+.correction-badge {
+  background: rgba(255, 209, 102, 0.12);
+  border: 1px solid rgba(255, 209, 102, 0.55);
+  color: #ffd166;
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+.detected li.is-edited { border-left: 3px solid #ffa94d; }
+.detected li.is-deleted { opacity: 0.55; border-left: 3px solid #ff6b6b; }
+.detected li.is-added { border-left: 3px dashed #ffd166; }
+.actions li[data-seek] { cursor: pointer; }
+.actions li[data-seek]:hover { border-color: var(--accent); }
+.cedit { display: inline-flex; gap: 4px; margin-left: 6px; }
+.cedit select { max-width: 110px; font-size: 11px; padding: 1px 2px; }
+button.mini {
+  font-size: 11px; padding: 1px 7px; border-radius: 6px;
+  border: 1px solid var(--border); background: #101a30; color: var(--text);
+  cursor: pointer;
+}
+button.mini:hover { border-color: var(--blue); }
+#btn-add-box.is-active { border-color: #ffd166; color: #ffd166; }
+
+/* Label edit mode (drag-and-drop correction) */
+.head-right { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.edit-toggle { display: flex; justify-content: flex-end; }
+#btn-edit-labels.is-on { border-color: #ffd166; color: #ffd166; }
+/* Never let the browser select or drag the frame image itself: in edit
+   mode every gesture belongs to the box logic on the overlay canvas. */
+.frame-wrap, .frame-wrap img, .frame-wrap canvas {
+  user-select: none; -webkit-user-select: none;
+}
+.frame-wrap img { -webkit-user-drag: none; }
+.frame-wrap.editing { touch-action: none; }
+.frame-wrap.editing canvas { pointer-events: auto; }
+.frame-wrap.editing { cursor: crosshair; }
+.edit-floatbar {
+  position: absolute; z-index: 6; display: flex; gap: 4px; align-items: center;
+  background: rgba(5, 8, 15, 0.92); border: 1px solid #ffd166; border-radius: 8px;
+  padding: 4px 6px; font-size: 12px;
+}
+/* Author display:flex beats the UA [hidden]{display:none}, so hide explicitly. */
+.edit-floatbar[hidden] { display: none; }
+.edit-floatbar button.mini { border-color: #ffd166; }
+.edit-floatbar .elink { color: var(--muted); max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -45,6 +45,7 @@ class AppDetector:
         conf=0.7,
         iou_thre=0.6,
         tracker="bytetrack",
+        device=None,
     ):
         YOLO_CR, _CRResults, cr_on_predict_start, _cr_on_predict_postprocess_end = _load_katacr_runtime()
         self._cr_results_cls = _CRResults
@@ -53,7 +54,7 @@ class AppDetector:
         self.show_conf = show_conf
         self.conf = conf
         self.iou_thre = iou_thre
-        self.device = yolo_device()
+        self.device = device if device else yolo_device()
         self.tracker = None
         if tracker == "bytetrack":
             self.conf = 0.1
@@ -117,13 +118,20 @@ def load_yolo_runtime():
     return CombinedDetector, draw_boxes, idx2unit
 
 
-def build_detector() -> Any:
+def build_detector(device: str | None = None) -> Any:
+    """Build the app detector, optionally pinning the YOLO device.
+
+    ``device`` is passed to the Ultralytics runtime (e.g. ``"cpu"`` or
+    ``"cuda"``). ``None`` keeps the existing auto-selection from
+    :func:`yolo_device` (``YOLO_DEVICE`` env or CUDA-if-available).
+    """
     return AppDetector(
             DEFAULT_DETECTOR_WEIGHTS,
             show_conf=True,
             conf=YOLO_CONF_THRESHOLD,
             iou_thre=YOLO_IOU_THRESHOLD,
-            tracker='bytetrack'
+            tracker='bytetrack',
+            device=device,
             )
 
 

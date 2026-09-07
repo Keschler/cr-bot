@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
-from cr_bot.app.state_builder import build_game_state
+from cr_bot.app.state_builder import build_game_state, card_name
 from cr_bot.domain.frame_analysis import FrameAnalysisResult
 from cr_bot.trackers.enemy_cards import EnemyCardTracker
 from cr_bot.trackers.hand_state_filter import HandStateFilter
@@ -38,6 +38,10 @@ class MatchSession:
         self.not_in_game_streak = 0
 
     def process(self, analysis: FrameAnalysisResult, *, frame, now_s: float) -> MatchSessionStep:
+        # The own-action tracker needs the RAW hand transitions (a played
+        # slot briefly reads empty), while policy + display use the debounced
+        # hand. Capture the raw state before the filter rewrites it.
+        raw_hand_state = analysis.hand_state
         temporal_spell_detections = (
             self.temporal_spell_predictor.update(
                 frame,
@@ -61,7 +65,8 @@ class MatchSession:
                 now_s=now_s,
             )
             game_state = self._build_game_state(analysis)
-            self._update_own_actions(game_state, analysis, frame=frame, now_s=now_s)
+            self._update_own_actions(game_state, analysis, frame=frame, now_s=now_s,
+                                     raw_hand_state=raw_hand_state)
             return MatchSessionStep(
                 analysis=analysis,
                 game_state=game_state,
@@ -90,7 +95,8 @@ class MatchSession:
                 self.tower_hp_filter.update(analysis.towers_hp)
             )
             game_state = self._build_game_state(analysis)
-            self._update_own_actions(game_state, analysis, frame=frame, now_s=now_s)
+            self._update_own_actions(game_state, analysis, frame=frame, now_s=now_s,
+                                     raw_hand_state=raw_hand_state)
             self.enemy_card_tracker.update(
                 analysis.total_remaining_s,
                 analysis.matches,
@@ -143,9 +149,25 @@ class MatchSession:
             game_started=self.game_started,
         )
 
-    def _update_own_actions(self, game_state, analysis: FrameAnalysisResult, *, frame, now_s: float) -> None:
+    def _update_own_actions(self, game_state, analysis: FrameAnalysisResult, *, frame, now_s: float, raw_hand_state=None) -> None:
+        # The tracker watches for played slots going empty, a transition the
+        # hand-state filter deliberately hides from policy/display. Give it a
+        # copy of the game state with the raw (unfiltered) hand instead.
+        tracker_state = game_state
+        if isinstance(raw_hand_state, dict):
+            try:
+                raw_hand = [
+                    card_name(raw_hand_state.get(f"card_{slot_idx}"))
+                    for slot_idx in range(1, 5)
+                ]
+                tracker_state = replace(
+                    game_state,
+                    hud=replace(game_state.hud, hand_cards=raw_hand),
+                )
+            except (TypeError, ValueError, AttributeError):
+                tracker_state = game_state
         self.own_action_tracker.update(
-            game_state,
+            tracker_state,
             analysis.arena_px,
             frame=frame,
             clock_boxes=analysis.clock_boxes,

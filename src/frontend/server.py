@@ -19,7 +19,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
-from .session import FrontendSession, run_live_session, run_video_session
+from .session import (
+    FrontendSession,
+    resolve_inference_devices,
+    run_live_session,
+    run_video_session,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -66,7 +71,7 @@ class VideoStartRequest(BaseModel):
     start_frame: int = 0
     max_frames: int | None = None
     checkpoint: str | None = None
-    device: str = "cpu"
+    device: str = "auto"
     yolo_image_size: int = 896
     # Any + manual 400 checks so wrong JSON types map to 400 (not 422).
     adapt_rois: Any = False
@@ -77,7 +82,7 @@ class LiveStartRequest(BaseModel):
     serial: str
     transport: str = "stream"
     checkpoint: str | None = None
-    device: str = "cpu"
+    device: str = "auto"
     calibration: str | None = None
     execute: bool = False
     confirm_live: bool = False
@@ -86,6 +91,12 @@ class LiveStartRequest(BaseModel):
 class StopResponse(BaseModel):
     stopped: bool = True
     running: bool = False
+
+
+class ReevaluateRequest(BaseModel):
+    updates: Any = None
+    deletes: Any = None
+    adds: Any = None
 
 
 app = FastAPI(title="cr-bot frontend")
@@ -258,12 +269,17 @@ def _frame_to_json(frame: Any) -> dict[str, Any]:
         "frame_height": getattr(frame, "frame_height", None),
         "own_actions": getattr(frame, "own_actions", []),
         "enemy_plays": getattr(frame, "enemy_plays", []),
+        "detections": getattr(frame, "detections", []),
+        "corrected": getattr(frame, "corrected", None),
     }
 
 
 @app.get("/api/health")
 def api_health() -> dict[str, Any]:
-    return {"ok": True}
+    from .session import INFERENCE_DEVICES, _cuda_available
+
+    cuda = _cuda_available()
+    return {"ok": True, "cuda_available": cuda, "inference_devices": list(INFERENCE_DEVICES)}
 
 
 @app.get("/api/status")
@@ -322,6 +338,10 @@ def api_video_start(request: VideoStartRequest) -> dict[str, Any]:
     video_path = _resolve_against_repo(request.video_path)
     if not video_path:
         raise HTTPException(status_code=400, detail="video_path is required")
+    try:
+        resolve_inference_devices(request.device)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     if not Path(video_path).is_file():
         raise HTTPException(
             status_code=404, detail=f"video file does not exist: {video_path}"
@@ -380,7 +400,7 @@ def api_video_start(request: VideoStartRequest) -> dict[str, Any]:
             kwargs={
                 "video_path": video_path,
                 "checkpoint": checkpoint,
-                "device": request.device or "cpu",
+                "device": request.device or "auto",
                 "frame_stride": request.frame_stride,
                 "start_frame": request.start_frame,
                 "max_frames": request.max_frames,
@@ -399,6 +419,10 @@ def api_live_start(request: LiveStartRequest) -> dict[str, Any]:
     serial = (request.serial or "").strip()
     if not serial:
         raise HTTPException(status_code=400, detail="serial must be non-empty")
+    try:
+        resolve_inference_devices(request.device)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     if request.transport not in ("stream", "screenshot"):
         raise HTTPException(
             status_code=400, detail="transport must be 'stream' or 'screenshot'"
@@ -427,7 +451,7 @@ def api_live_start(request: LiveStartRequest) -> dict[str, Any]:
                 "serial": serial,
                 "transport": request.transport,
                 "checkpoint": checkpoint,
-                "device": request.device or "cpu",
+                "device": request.device or "auto",
                 "calibration": calibration,
                 "execute": bool(request.execute),
                 "confirm_live": bool(request.confirm_live),
@@ -551,8 +575,13 @@ def api_video_info(path: str = Query(default="")) -> dict[str, Any]:
 def api_roi_preview(
     path: str = Query(default=""),
     frame: int | None = Query(default=None),
+    overlay: int = Query(default=1),
 ) -> dict[str, Any]:
-    """Preview adapted ROIs for one video frame."""
+    """Preview adapted ROIs for one video frame.
+
+    ``overlay=0`` returns the raw probe frame JPEG so interactive clients
+    can draw (and edit) the proposed boxes themselves.
+    """
     video_path = _resolve_against_repo(path)
     if not video_path or not Path(video_path).is_file():
         raise HTTPException(
@@ -612,7 +641,9 @@ def api_roi_preview(
             status_code=501, detail="roi adaptation requires OpenCV"
         ) from error
     try:
-        roi_entries, overlay_jpeg, warnings, (nw, nh) = adapt_rois_for_probe(native)
+        roi_entries, overlay_jpeg, warnings, (nw, nh) = adapt_rois_for_probe(
+            native, draw_overlay=(overlay != 0)
+        )
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     try:
@@ -681,6 +712,66 @@ def api_frame_at(frame_index: int) -> Response:
                 headers={"Cache-Control": "public, max-age=86400"},
             )
     return Response(status_code=204)
+
+
+@app.get("/api/labels")
+def api_labels() -> dict[str, Any]:
+    """Unit-class vocabulary for label correction (best-effort)."""
+    from .session import unit_label_vocabulary
+
+    labels = unit_label_vocabulary()
+    return {"labels": labels if labels is not None else [], "teams": ["ally", "enemy"]}
+
+
+@app.post("/api/frame/{frame_index}/reevaluate")
+def api_frame_reevaluate(frame_index: int, request: ReevaluateRequest) -> dict[str, Any]:
+    """Run a what-if forward pass for label-corrected detections.
+
+    Applies ``{updates, deletes, adds}`` to the frame's retained detection
+    rows, rebuilds the observation, and scores it with the live actor
+    (hidden state restored afterwards). The result is stored as the frame's
+    display correction; trackers, history, and the execute path are never
+    touched. Unknown/evicted indices answer 404, missing actor 409,
+    malformed edits 400, unbuildable observations 422.
+    """
+    from .session import (
+        CorrectionUnprocessableError,
+        FrameNotFoundError,
+        NoActorError,
+        reevaluate_frame,
+    )
+
+    session = _get_session()
+    edits = {
+        "updates": request.updates if request.updates is not None else [],
+        "deletes": request.deletes if request.deletes is not None else [],
+        "adds": request.adds if request.adds is not None else [],
+    }
+    try:
+        correction = reevaluate_frame(session, frame_index, edits)
+    except FrameNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except NoActorError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except CorrectionUnprocessableError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return {"frame_index": int(frame_index), "corrected": correction}
+
+
+@app.delete("/api/frame/{frame_index}/reevaluate")
+def api_frame_reevaluate_revert(frame_index: int) -> dict[str, Any]:
+    """Clear a frame's what-if correction (404 when evicted)."""
+    from .session import FrameNotFoundError, clear_reevaluation
+
+    session = _get_session()
+    if session.find_frame(frame_index) is None:
+        raise HTTPException(
+            status_code=404, detail=f"frame {frame_index!r} is not retained"
+        )
+    reverted = clear_reevaluation(session, frame_index)
+    return {"frame_index": int(frame_index), "reverted": bool(reverted)}
 
 
 @app.get("/api/stream")

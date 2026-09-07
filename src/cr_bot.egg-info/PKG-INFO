@@ -1,0 +1,22 @@
+Metadata-Version: 2.4
+Name: cr-bot
+Version: 0.1.0
+Summary: Clash Royale vision, tracking, and feature generation bot.
+Requires-Python: <3.13,>=3.12
+License-File: LICENSE
+Requires-Dist: lap
+Requires-Dist: jax==0.4.26
+Requires-Dist: jaxlib==0.4.26
+Requires-Dist: numpy==1.26.4
+Requires-Dist: opencv-python==4.9.0.80
+Requires-Dist: pillow==10.3.0
+Requires-Dist: pytest
+Requires-Dist: scipy>=1.11
+Requires-Dist: torch==2.2.2
+Requires-Dist: torchvision==0.17.2
+Requires-Dist: tqdm==4.66.2
+Requires-Dist: ultralytics==8.4.37
+Requires-Dist: fastapi>=0.110
+Requires-Dist: uvicorn>=0.29
+Requires-Dist: python-multipart>=0.0.9
+Dynamic: license-file

@@ -1,0 +1,2 @@
+[console_scripts]
+cr-bot = cr_bot.app.cli:main

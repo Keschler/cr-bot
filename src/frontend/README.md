@@ -26,11 +26,17 @@ The page polls `GET /api/status` every 2 s and `GET /api/frames` every
 3. If the probed video size differs from the native `1080x2400` ROI space,
    an **Adapt ROIs to this video's format** checkbox appears (auto-checked)
    with a notice such as `1080x1920 detected — fixed ROIs assume 1080x2400.`.
-   Press **Preview ROIs** (`GET /api/roi-preview?path=`), inspect the debug
-   image plus the `Frame N · X landmark / Y scaled` meta line, then tick
-   **Use adapted ROIs for this run**. Start (`POST /api/video/start`) sends
-   `adapt_rois` + `roi_set` and aborts with an error unless the preview was
-   accepted (or the adapt checkbox is unchecked).
+   Checking it fetches the proposal automatically
+   (`GET /api/roi-preview?path=`) and shows it in the middle player: the
+   probe frame with one box per ROI (green = landmark, blue = scaled
+   fallback, orange dashed = your adjustment, yellow = selected). Drag a
+   box to move it, a corner to resize it (`Reset adjustments` reverts).
+   If the probe frame is bad (menus, emotes, transitions), **Another
+   frame** re-probes at a different point of the video — edits are reset.
+   Pressing **Start** is the confirmation: it sends `adapt_rois` + `roi_set`
+   (proposal plus your adjustments). Start aborts with an error when Adapt
+   is on but no proposal is ready yet (still loading or failed — try
+   Another frame, or uncheck the adapt checkbox).
 4. Press **Start** (`POST /api/video/start`).
 5. Scrub history with the transport bar or the bottom timeline.
    Pausing stops frame polling; the status poll keeps running.
@@ -58,15 +64,42 @@ and a dedicated device; never enable execute on an unattended phone.
 | GET    | `/api/checkpoints`  | List `*.pt` candidates + default (`prototype.pt`)    |
 | POST   | `/api/upload`       | Upload a video file (`multipart/form-data`)          |
 | GET    | `/api/video/info?path=` | Probe frames/fps/duration/size of a video          |
-| GET    | `/api/roi-preview?path=&frame=` | Preview adapted ROIs → `{probe_frame, native_size, adapted, rois, warnings, image}` (404/422/501 on failures) |
+| GET    | `/api/roi-preview?path=&frame=&overlay=` | Preview adapted ROIs → `{probe_frame, native_size, adapted, rois, warnings, image}` (404/422/501 on failures; `overlay=0` returns the raw probe frame so clients can draw/edit boxes themselves) |
 | GET    | `/api/status`       | `{running, mode, error, summary, frame_count, latest_frame_index}` |
-| POST   | `/api/video/start`  | `{video_path, checkpoint, start_frame, frame_stride, max_frames, adapt_rois, roi_set}` |
-| POST   | `/api/live/start`   | `{serial, transport, checkpoint, calibration, execute, confirm_live}` |
+| POST   | `/api/video/start`  | `{video_path, checkpoint, start_frame, frame_stride, max_frames, device, adapt_rois, roi_set}` |
+| POST   | `/api/live/start`   | `{serial, transport, checkpoint, device, calibration, execute, confirm_live}` |
 | POST   | `/api/stop`         | Stop the current session                             |
 | GET    | `/api/frames?since=N&limit=50` | `{frames: [{frame_index, timestamp_s, in_game, emitted, record: {visual_state, action, result}, suggestions, diagnostics}]}` |
 | GET    | `/api/frame/latest` | Current frame as `image/jpeg`                        |
 | GET    | `/api/frame/{index}` | One history frame as `image/jpeg` (204 if evicted) |
+| GET    | `/api/labels` | Unit-class vocabulary + teams for label correction |
+| POST   | `/api/frame/{index}/reevaluate` | What-if re-score with corrected labels `{updates, deletes, adds}` (404 evicted / 409 no actor / 400 malformed / 422 unbuildable) |
+| DELETE | `/api/frame/{index}/reevaluate` | Revert a frame's what-if correction |
 | GET    | `/api/stream`       | Optional SSE stream (polling `/api/frames` is enough for v1) |
 
 Fixed ROIs assume `NATIVE_SIZE = [1080, 2400]`. The adapt UI applies only
 when the probed video dims differ.
+
+`device` is one of `auto` (default), `cpu`, or `cuda`, and pins both the
+YOLO detector and the policy network. Explicit `cpu`/`cuda` override the
+`YOLO_DEVICE` environment; `auto` keeps the existing auto-selection.
+Requesting `cuda` without CUDA in the server environment fails with 400.
+The resolved devices are reported in the session `summary.devices`.
+CPU-only installs cannot use `cuda` (see `outputs/venv-gpu` for a CUDA
+build); video throughput is ~3x higher on GPU.
+
+Label correction is a stateless what-if: the DETECTED OBJECTS panel lets
+you relabel a detection's class/team, delete false positives, or draw a
+box for a missed unit, then re-score that frame with the live policy
+(hidden state restored afterwards). The result overwrites only the
+frame's displayed suggestions (badge + Revert); trackers, timeline
+markers, history, and live execution are never touched. Frames expose
+their raw `detections` (box + class + team + track) for this; only
+emitted in-game frames within the bounded history can be revised.
+
+The Edit labels button (top right, under the arena badge) enters a
+drag-and-drop mode and pauses playback: drag a box to move it, drag a
+corner handle to resize, click a box to select it (floating Team/Delete
+actions, `Delete`/`t`/`Esc` shortcuts), or drag empty canvas to add a
+missed unit with the picked label. Moves and resizes are updates carrying
+the new box; everything else follows the same what-if pipeline.

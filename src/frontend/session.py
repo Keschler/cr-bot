@@ -35,6 +35,65 @@ class FrontendFrame:
     # JPEG downscaling). The UI uses these to map overlays onto the preview.
     frame_width: int | None = None
     frame_height: int | None = None
+    # Raw troop rows retained for label correction (box + class + team +
+    # confidence + track + hp + center). Bounded per frame by detector output.
+    detections: list[dict] = field(default_factory=list)
+    # What-if re-evaluation overlay (display only; trackers/history untouched).
+    corrected: dict | None = None
+
+
+INFERENCE_DEVICES = ("auto", "cpu", "cuda")
+
+
+def _cuda_available() -> bool:
+    """Whether this environment can run CUDA inference (never raises)."""
+    try:
+        import torch  # lazy: keeps module import light
+    except ImportError:
+        return False
+    try:
+        return bool(torch.cuda.is_available())
+    except Exception:
+        return False
+
+
+def resolve_inference_devices(device: Any) -> tuple[str, str]:
+    """Map a UI/API device choice to ``(yolo_device, torch_device)``.
+
+    Accepted names (case-insensitive): ``"auto"``, ``"cpu"``, ``"cuda"``.
+    ``None``/empty means ``"auto"``. Explicit ``"cpu"``
+    and ``"cuda"`` override the ``YOLO_DEVICE``/``CARD_CLASSIFIER_DEVICE``
+    environment; ``"auto"`` keeps the existing auto-selection. Raises
+    ``ValueError`` for unknown names or when ``"cuda"`` is requested but
+    unavailable.
+    """
+
+    if device is not None and not isinstance(device, str):
+        raise ValueError(
+            f"device must be one of {', '.join(INFERENCE_DEVICES)}, "
+            f"got {device!r}"
+        )
+    name = (device or "").strip().lower() or "auto"
+    if name not in INFERENCE_DEVICES:
+        raise ValueError(
+            f"device must be one of {', '.join(INFERENCE_DEVICES)}, "
+            f"got {device!r}"
+        )
+    if name == "cpu":
+        return "cpu", "cpu"
+    cuda = _cuda_available()
+    if name == "cuda":
+        if not cuda:
+            raise ValueError(
+                "device 'cuda' requested but CUDA is not available "
+                "in this environment"
+            )
+        return "cuda", "cuda"
+    try:
+        from cr_bot.vision.model_loader import yolo_device
+    except ImportError:
+        return ("cuda" if cuda else "cpu"), ("cuda" if cuda else "cpu")
+    return yolo_device(), ("cuda" if cuda else "cpu")
 
 
 def _frame_dimensions(image: Any) -> tuple[int | None, int | None]:
@@ -62,6 +121,11 @@ class FrontendSession:
         self.mode: str = mode
         self.error: str | None = None
         self.summary: dict | None = None
+        # Live policy actor owned by the worker thread (None when idle).
+        # Re-evaluation borrows it under ``actor_lock`` with hidden-state
+        # save/restore, so the running session is never disturbed.
+        self.actor: Any | None = None
+        self.actor_lock = threading.Lock()
 
     @property
     def history(self) -> list[FrontendFrame]:
@@ -85,6 +149,30 @@ class FrontendSession:
     def get_latest(self) -> FrontendFrame | None:
         with self._lock:
             return self.latest
+
+    def find_frame(self, frame_index: Any) -> FrontendFrame | None:
+        """Return the retained frame with ``frame_index`` (None if evicted)."""
+        try:
+            wanted = int(frame_index)
+        except (TypeError, ValueError):
+            return None
+        with self._lock:
+            for frame in self._frames:
+                try:
+                    if int(frame.frame_index) == wanted:
+                        return frame
+                except (TypeError, ValueError):
+                    continue
+        return None
+
+    def set_correction(self, frame_index: Any, correction: dict | None) -> bool:
+        """Attach (or with None, clear) a what-if correction. Thread-safe."""
+        frame = self.find_frame(frame_index)
+        if frame is None:
+            return False
+        with self._lock:
+            frame.corrected = dict(correction) if correction is not None else None
+        return True
 
     def get_since(
         self, since: int = 0, limit: int | None = 50
@@ -363,6 +451,65 @@ def _new_tracker_actions(
     return new_own, new_enemy, own_tracker_seen, own_baseline, enemy_seen_ids
 
 
+def _detection_row(match: Any) -> dict[str, Any] | None:
+    """Summarize one analysis match as an editable detection row (fail-soft).
+
+    Keeps the raw troop fields the label-correction flow needs to rebuild a
+    what-if observation: box, class, team, confidence, track id, HP, center.
+    """
+    try:
+        troop = getattr(match, "troop", None)
+        if troop is None:
+            return None
+        class_name = getattr(troop, "class_name", None)
+        team = getattr(troop, "team", None)
+        if not isinstance(class_name, str) or not class_name.strip():
+            return None
+        if not isinstance(team, str) or not team.strip():
+            return None
+        track_id = getattr(troop, "track_id", None)
+        try:
+            track_id = int(track_id) if track_id is not None else None
+        except (TypeError, ValueError, OverflowError):
+            track_id = str(track_id)
+        try:
+            confidence = float(getattr(troop, "confidence", 0.0))
+        except (TypeError, ValueError, OverflowError):
+            confidence = 0.0
+        try:
+            x1 = float(getattr(troop, "x1"))
+            y1 = float(getattr(troop, "y1"))
+            x2 = float(getattr(troop, "x2"))
+            y2 = float(getattr(troop, "y2"))
+            center_x = float(getattr(troop, "center_x"))
+            center_y = float(getattr(troop, "center_y"))
+        except (TypeError, ValueError, OverflowError):
+            return None
+        import math
+
+        values = (confidence, x1, y1, x2, y2, center_x, center_y)
+        if not all(math.isfinite(v) for v in values):
+            return None
+        try:
+            hp_raw = getattr(troop, "estimated_hp", None)
+            hp = float(hp_raw) if hp_raw is not None else None
+            if hp is not None and not math.isfinite(hp):
+                hp = None
+        except (TypeError, ValueError, OverflowError):
+            hp = None
+        return {
+            "class_name": class_name,
+            "team": team,
+            "confidence": confidence,
+            "track_id": track_id,
+            "box": [x1, y1, x2, y2],
+            "center": [center_x, center_y],
+            "estimated_hp": hp,
+        }
+    except AttributeError:
+        return None
+
+
 def _decide_with_fallback(
     actor: Any,
     observation: Any,
@@ -535,12 +682,15 @@ def _run_pump_loop(
                         result = "observation-not-ready"
                     else:
                         t_stage = time.monotonic()
-                        action_obj, suggestions, diagnostics = _decide_with_fallback(
-                            actor,
-                            observation,
-                            decide_with_scores,
-                            action_to_dict_fn,
-                        )
+                        # Serialized with what-if re-evaluations borrowing the
+                        # same actor (see reevaluate_frame).
+                        with frontend_session.actor_lock:
+                            action_obj, suggestions, diagnostics = _decide_with_fallback(
+                                actor,
+                                observation,
+                                decide_with_scores,
+                                action_to_dict_fn,
+                            )
                         timing_ms["decide"] = (time.monotonic() - t_stage) * 1000.0
                         action_json = action_to_dict_fn(action_obj)
                         if action_json.get("kind") == "wait":
@@ -633,6 +783,16 @@ def _run_pump_loop(
                     enemy_seen_ids=enemy_seen_ids,
                 )
             )
+            detection_rows: list[dict[str, Any]] = []
+            try:
+                matches = getattr(analysis, "matches", None)
+                if isinstance(matches, (list, tuple)):
+                    for match in matches:
+                        row = _detection_row(match)
+                        if row is not None:
+                            detection_rows.append(row)
+            except Exception:
+                detection_rows = []
             frontend_frame = FrontendFrame(
                 frame_index=int(source_frame.frame_index),
                 timestamp_s=float(source_frame.timestamp_s),
@@ -646,6 +806,7 @@ def _run_pump_loop(
                 frame_height=frame_height,
                 own_actions=new_own,
                 enemy_plays=new_enemy,
+                detections=detection_rows,
             )
             if should_emit:
                 frontend_session.push(frontend_frame)
@@ -678,7 +839,9 @@ class _OffsetFrameSource:
 
     Source frame indices and timestamps are preserved, so the timeline still
     shows real video positions. EOF during the skip ends the session with
-    zero processed frames instead of failing.
+    zero processed frames instead of failing. When the inner source offers
+    ``fast_forward_to`` (keyframe seek), the skip decodes only the small
+    remainder instead of every discarded frame.
     """
 
     def __init__(self, inner: Any, start_frame: int) -> None:
@@ -693,6 +856,12 @@ class _OffsetFrameSource:
     def next_frame(self) -> Any:
         if not self._primed:
             self._primed = True
+            fast_forward = getattr(self._inner, "fast_forward_to", None)
+            if callable(fast_forward):
+                try:
+                    fast_forward(self._start_frame)
+                except Exception:
+                    pass
             while True:
                 candidate = self._inner.next_frame()
                 if candidate is None or int(candidate.frame_index) >= self._start_frame:
@@ -715,7 +884,7 @@ def run_video_session(
     *,
     video_path: str,
     checkpoint: str,
-    device: str = "cpu",
+    device: str = "auto",
     frame_stride: int = 1,
     start_frame: int = 0,
     max_frames: int | None = None,
@@ -735,6 +904,7 @@ def run_video_session(
     session.running = True
     session.error = None
     session.summary = None
+    session.actor = None
     session.clear()
     frame_source: Any = None
     try:
@@ -826,12 +996,16 @@ def run_video_session(
         startup_ms["adapt_probe"] = (time.monotonic() - t_startup) * 1000.0
 
         t_startup = time.monotonic()
-        detector = build_detector()
+        yolo_device_name, actor_device = resolve_inference_devices(device)
+        detector = build_detector(device=yolo_device_name)
         startup_ms["build_detector"] = (time.monotonic() - t_startup) * 1000.0
         t_startup = time.monotonic()
         configure_detector_inference_size(detector, yolo_image_size)
-        actor = PrototypeActor(checkpoint, device=device)
+        actor = PrototypeActor(checkpoint, device=actor_device)
         startup_ms["load_actor"] = (time.monotonic() - t_startup) * 1000.0
+        # Lend the live actor to what-if re-evaluations (borrowed under
+        # session.actor_lock with hidden-state save/restore).
+        session.actor = actor
         t_startup = time.monotonic()
         match_session = MatchSession(tracker_debug=False)
         match_session.hand_state_filter = LiveHandStateFilter()
@@ -868,6 +1042,11 @@ def run_video_session(
             adapt_rois_enabled=bool(adapt_rois),
         )
         summary["startup_ms"] = startup_ms
+        summary["devices"] = {
+            "requested": device,
+            "yolo": yolo_device_name,
+            "actor": actor_device,
+        }
         session.summary = summary
         return summary
     except Exception as error:
@@ -890,7 +1069,7 @@ def run_live_session(
     serial: str,
     transport: str = "stream",
     checkpoint: str,
-    device: str = "cpu",
+    device: str = "auto",
     calibration: str | Path | None = None,
     execute: bool = False,
     confirm_live: bool = False,
@@ -914,6 +1093,10 @@ def run_live_session(
     session.running = True
     session.error = None
     session.summary = None
+    # A previous run's actor is stale once a new run starts; the new actor
+    # is lent below after loading. Retained actors keep history revisable
+    # after a run finishes (what-if only, never execute).
+    session.actor = None
     session.clear()
     frame_source: Any = None
     try:
@@ -1031,9 +1214,13 @@ def run_live_session(
                 action_frame_provider=action_frame_provider,
             )
 
-        detector = build_detector()
+        yolo_device_name, actor_device = resolve_inference_devices(device)
+        detector = build_detector(device=yolo_device_name)
         configure_detector_inference_size(detector, yolo_image_size)
-        actor = PrototypeActor(checkpoint, device=device)
+        actor = PrototypeActor(checkpoint, device=actor_device)
+        # Lend the live actor to what-if re-evaluations (borrowed under
+        # session.actor_lock with hidden-state save/restore).
+        session.actor = actor
         match_session = MatchSession(tracker_debug=False)
         match_session.hand_state_filter = LiveHandStateFilter()
         detection_filter = LiveDetectionFilter()
@@ -1062,6 +1249,11 @@ def run_live_session(
             yolo_tower_hp_detections=yolo_tower_hp_detections,
             normalize=normalize,
         )
+        summary["devices"] = {
+            "requested": device,
+            "yolo": yolo_device_name,
+            "actor": actor_device,
+        }
         session.summary = summary
         return summary
     except Exception as error:
@@ -1072,6 +1264,7 @@ def run_live_session(
         session.error = str(error) or repr(error)
         raise
     finally:
+        session.actor = None
         if frame_source is not None:
             try:
                 frame_source.close()
@@ -1080,10 +1273,500 @@ def run_live_session(
         session.running = False
 
 
+class FrameNotFoundError(LookupError):
+    """A retained frame with the requested index does not exist (evicted)."""
+
+
+class CorrectionUnprocessableError(ValueError):
+    """Edits are well-formed but cannot be turned into an observation."""
+
+
+class NoActorError(RuntimeError):
+    """No live policy actor is available for re-evaluation."""
+
+
+def _finite_number(value: Any) -> float | None:
+    try:
+        result = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    import math
+
+    return result if math.isfinite(result) else None
+
+
+def unit_label_vocabulary() -> list[str] | None:
+    """Return sorted unit class names, or None when labels are unavailable.
+
+    Health-bar artifacts are excluded (they are not placeable/fixable
+    units). Never raises: label maps are an optional import.
+    """
+    try:
+        from katacr.constants.label_list import idx2unit
+    except ImportError:
+        try:
+            from cr_bot.vision.yolo_runtime import idx2unit
+        except ImportError:
+            return None
+    try:
+        names = {str(name) for name in dict(idx2unit).values()}
+    except (TypeError, ValueError, AttributeError):
+        return None
+    return sorted(
+        name for name in names if name and "bar" not in name.casefold()
+    )
+
+
+def _match_edit_key(target: Any) -> tuple[str, Any]:
+    """Normalize an update/delete target to a match key."""
+    if not isinstance(target, dict):
+        raise ValueError("edit target must be an object")
+    if "track" in target:
+        try:
+            return ("track", int(target["track"]))
+        except (TypeError, ValueError, OverflowError):
+            return ("track", str(target["track"]))
+    label = target.get("label")
+    center = target.get("center")
+    if not isinstance(label, str) or not label.strip():
+        raise ValueError("edit target needs 'track' or 'label'+'center'")
+    if (
+        not isinstance(center, (list, tuple))
+        or len(center) != 2
+        or _finite_number(center[0]) is None
+        or _finite_number(center[1]) is None
+    ):
+        raise ValueError("edit target 'center' must be [x, y] numbers")
+    return (
+        "label",
+        (label.strip(), round(float(center[0]), 1), round(float(center[1]), 1)),
+    )
+
+
+def _find_row_index(rows: list[dict], key: tuple[str, Any]) -> int | None:
+    kind, value = key
+    if kind == "track":
+        for index, row in enumerate(rows):
+            track = row.get("track_id")
+            try:
+                if track is not None and int(track) == int(value):
+                    return index
+            except (TypeError, ValueError, OverflowError):
+                if track is not None and str(track) == str(value):
+                    return index
+        return None
+    label, cx, cy = value
+    for index, row in enumerate(rows):
+        try:
+            if (
+                str(row.get("class_name")) == label
+                and abs(float(row["center"][0]) - cx) <= 8
+                and abs(float(row["center"][1]) - cy) <= 8
+            ):
+                return index
+        except (TypeError, ValueError, KeyError, IndexError):
+            continue
+    return None
+
+
+def _apply_correction_edits(
+    base_rows: list[dict],
+    edits: Any,
+    *,
+    frame_width: int | None,
+    frame_height: int | None,
+) -> tuple[list[dict], dict]:
+    """Validate ``edits`` and apply them to copies of ``base_rows``.
+
+    Returns ``(final_rows, summary)``. Raises ``ValueError`` for malformed
+    edits and ``CorrectionUnprocessableError`` when an edit references
+    nothing or cannot be satisfied.
+    """
+    if not isinstance(edits, dict):
+        raise ValueError("edits must be an object")
+    unknown = set(edits) - {"updates", "deletes", "adds"}
+    if unknown:
+        raise ValueError(f"unknown edit sections: {sorted(unknown)}")
+    for section in ("updates", "deletes", "adds"):
+        items = edits.get(section, [])
+        if not isinstance(items, list):
+            raise ValueError(f"edits.{section} must be a list")
+    try:
+        from cr_bot.domain.troop_hp_level16 import get_unit_hp_level16
+    except ImportError:
+        get_unit_hp_level16 = None  # type: ignore[assignment]
+    vocab = unit_label_vocabulary()
+    vocab_set = set(vocab) if vocab else None
+
+    def check_class(name: Any) -> str:
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("class_name must be a non-empty string")
+        cleaned = name.strip()
+        if vocab_set is not None and cleaned not in vocab_set:
+            raise ValueError(f"unknown unit label: {cleaned!r}")
+        return cleaned
+
+    def check_team(team: Any) -> str:
+        if not isinstance(team, str):
+            raise ValueError("team must be 'ally' or 'enemy'")
+        lowered = team.strip().lower()
+        if lowered not in ("ally", "enemy"):
+            raise ValueError("team must be 'ally' or 'enemy'")
+        return lowered
+
+    rows = [dict(row) for row in base_rows if isinstance(row, dict)]
+    normalized: dict[str, list] = {"updates": [], "deletes": [], "adds": []}
+
+    def check_box(box: Any, owner: str) -> list[float]:
+        if (
+            not isinstance(box, (list, tuple))
+            or len(box) != 4
+            or any(_finite_number(v) is None for v in box)
+        ):
+            raise ValueError(f"{owner}.box must be [x1, y1, x2, y2] numbers")
+        x1, y1, x2, y2 = (float(v) for v in box)
+        if not (x1 < x2 and y1 < y2 and x2 - x1 >= 2 and y2 - y1 >= 2):
+            raise ValueError(f"{owner}.box must be a non-empty rectangle")
+        if frame_width is not None and not (0 <= x1 <= frame_width and 0 <= x2 <= frame_width):
+            raise ValueError(f"{owner}.box x is outside the frame")
+        if frame_height is not None and not (0 <= y1 <= frame_height and 0 <= y2 <= frame_height):
+            raise ValueError(f"{owner}.box y is outside the frame")
+        return [x1, y1, x2, y2]
+
+    for item in edits.get("updates", []):
+        if not isinstance(item, dict):
+            raise ValueError("each update must be an object")
+        if "target" not in item:
+            raise ValueError("each update needs a 'target'")
+        key = _match_edit_key(item["target"])
+        index = _find_row_index(rows, key)
+        if index is None:
+            raise CorrectionUnprocessableError("update target matches no detection")
+        row = rows[index]
+        changed = False
+        entry: dict[str, Any] = {"target": item["target"]}
+        if "class_name" in item:
+            new_class = check_class(item["class_name"])
+            if new_class != row.get("class_name"):
+                row["class_name"] = new_class
+                hp = get_unit_hp_level16(new_class) if get_unit_hp_level16 else None
+                row["estimated_hp"] = hp
+                changed = True
+            entry["class_name"] = new_class
+        if "team" in item:
+            new_team = check_team(item["team"])
+            if new_team != row.get("team"):
+                row["team"] = new_team
+                changed = True
+            entry["team"] = new_team
+        if "box" in item:
+            new_box = check_box(item["box"], "update")
+            if list(new_box) != list(row.get("box") or []):
+                row["box"] = new_box
+                row["center"] = [(new_box[0] + new_box[2]) / 2.0, (new_box[1] + new_box[3]) / 2.0]
+                changed = True
+            entry["box"] = new_box
+        if not changed:
+            raise ValueError("update changes neither class_name, team nor box")
+        entry["row"] = dict(row)
+        normalized["updates"].append(entry)
+
+    removed: set[int] = set()
+    for item in edits.get("deletes", []):
+        if not isinstance(item, dict):
+            raise ValueError("each delete must be an object")
+        if "target" not in item:
+            raise ValueError("each delete needs a 'target'")
+        key = _match_edit_key(item["target"])
+        index = _find_row_index(
+            [r for i, r in enumerate(rows) if i not in removed], key
+        )
+        if index is None:
+            raise CorrectionUnprocessableError("delete target matches no detection")
+        real_index = [i for i in range(len(rows)) if i not in removed][index]
+        removed.add(real_index)
+        normalized["deletes"].append({"target": item["target"]})
+    rows = [row for i, row in enumerate(rows) if i not in removed]
+
+    for item in edits.get("adds", []):
+        if not isinstance(item, dict):
+            raise ValueError("each add must be an object")
+        if "class_name" not in item or "team" not in item:
+            raise ValueError("each add needs 'box', 'class_name' and 'team'")
+        x1, y1, x2, y2 = check_box(item.get("box"), "add")
+        new_class = check_class(item["class_name"])
+        new_team = check_team(item["team"])
+        hp = get_unit_hp_level16(new_class) if get_unit_hp_level16 else None
+        rows.append(
+            {
+                "class_name": new_class,
+                "team": new_team,
+                "confidence": 1.0,
+                "track_id": None,
+                "box": [x1, y1, x2, y2],
+                "center": [(x1 + x2) / 2.0, (y1 + y2) / 2.0],
+                "estimated_hp": hp,
+            }
+        )
+        normalized["adds"].append(
+            {"box": [x1, y1, x2, y2], "class_name": new_class, "team": new_team}
+        )
+
+    summary = {
+        "updated": len(normalized["updates"]),
+        "deleted": len(normalized["deletes"]),
+        "added": len(normalized["adds"]),
+    }
+    if sum(summary.values()) == 0:
+        raise ValueError("edits contain no updates, deletes or adds")
+    return rows, {"edits": normalized, "counts": summary}
+
+
+def _live_policy_imports() -> tuple[Any, Any, Any]:
+    """Lazily resolve (observation_fn, decide_fn, action_to_dict_fn)."""
+    try:
+        from simulator.physical_lab.policy_bridge import (
+            observation_v2_from_game_state,
+        )
+    except ImportError:
+        try:
+            from physical_lab.policy_bridge import (  # type: ignore
+                observation_v2_from_game_state,
+            )
+        except ImportError as error:
+            raise CorrectionUnprocessableError(
+                "policy bridge is not importable"
+            ) from error
+    decide_fn = _try_import_decide_with_scores()
+    if decide_fn is None:
+        raise CorrectionUnprocessableError("scored decision entry point is missing")
+    try:
+        from simulator.physical_lab.prototype_controller import action_to_dict
+    except ImportError:
+        try:
+            from physical_lab.prototype_controller import (  # type: ignore
+                action_to_dict,
+            )
+        except ImportError as error:
+            raise CorrectionUnprocessableError(
+                "action serializer is not importable"
+            ) from error
+    return observation_v2_from_game_state, decide_fn, action_to_dict
+
+
+def _corrected_observation(frame: FrontendFrame, rows: list[dict]) -> Any:
+    """Rebuild a V2 observation for edited rows (pure; no tracker/state)."""
+    try:
+        from cr_bot.domain.game_state import (
+            Detection,
+            GameState,
+            HudState,
+            Match,
+            PrincessTowerState,
+        )
+    except ImportError as error:
+        raise CorrectionUnprocessableError(
+            "game-state models are not importable"
+        ) from error
+    record = frame.record if isinstance(frame.record, dict) else {}
+    visual = record.get("visual_state")
+    if not isinstance(visual, dict):
+        raise CorrectionUnprocessableError("frame has no extracted visual state")
+    time_left = _finite_number(visual.get("time_left_s"))
+    if time_left is None:
+        raise CorrectionUnprocessableError("frame has no readable match clock")
+    arena = visual.get("arena_px")
+    if (
+        not isinstance(arena, (list, tuple))
+        or len(arena) != 4
+        or any(_finite_number(v) is None for v in arena)
+    ):
+        raise CorrectionUnprocessableError("frame has no arena calibration")
+    hand = visual.get("hand")
+    hand_cards = [
+        (hand[i] if isinstance(hand, (list, tuple)) and i < len(hand) else None)
+        for i in range(4)
+    ]
+    elixir = _finite_number(visual.get("elixir"))
+    if elixir is None:
+        raise CorrectionUnprocessableError("frame has no elixir reading")
+
+    def triplet(key: str) -> list:
+        values = visual.get(key)
+        if not isinstance(values, (list, tuple)):
+            raise CorrectionUnprocessableError(f"frame has no {key}")
+        out = list(values)[:3]
+        while len(out) < 3:
+            out.append(None)
+        return out
+
+    hp_self = triplet("tower_hp_self")
+    hp_enemy = triplet("tower_hp_enemy")
+
+    def alive(value: Any) -> bool:
+        number = _finite_number(value)
+        return number is not None and number > 0
+
+    seen: list[int] = []
+    raw_seen = visual.get("seen_enemy_cards")
+    if isinstance(raw_seen, (list, tuple, set)):
+        for card in raw_seen:
+            try:
+                seen.append(int(card))
+            except (TypeError, ValueError, OverflowError):
+                continue
+    own_units: list = []
+    enemy_units: list = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        team = str(row.get("team", "")).strip().lower()
+        if team not in ("ally", "enemy"):
+            raise CorrectionUnprocessableError("edited row has an invalid team")
+        try:
+            box = [float(v) for v in row["box"]]
+            center = [float(v) for v in row["center"]]
+        except (TypeError, ValueError, KeyError):
+            raise CorrectionUnprocessableError("edited row has an invalid box")
+        detection = Detection(
+            track_id=row.get("track_id"),
+            class_name=str(row.get("class_name")),
+            team=team,
+            confidence=float(row.get("confidence", 1.0)),
+            x1=box[0],
+            y1=box[1],
+            x2=box[2],
+            y2=box[3],
+            center_x=center[0],
+            center_y=center[1],
+            estimated_hp=row.get("estimated_hp"),
+        )
+        match = Match(troop=detection, bar=None)
+        (own_units if team == "ally" else enemy_units).append(match)
+    game_state = GameState(
+        hud=HudState(
+            time_left_s=time_left,
+            overtime=bool(visual.get("overtime", False)),
+            elixir_self=elixir,
+            hand_cards=hand_cards,
+            next_card=visual.get("next_card"),
+            tower_hp_self=hp_self,
+            tower_hp_enemy=hp_enemy,
+            princess_towers=PrincessTowerState(
+                own_left_alive=alive(hp_self[0]),
+                own_right_alive=alive(hp_self[2]),
+                enemy_left_alive=alive(hp_enemy[0]),
+                enemy_right_alive=alive(hp_enemy[2]),
+            ),
+        ),
+        total_remaining_s=_finite_number(visual.get("total_remaining_s")) or time_left,
+        own_units=own_units,
+        enemy_units=enemy_units,
+        seen_enemy_cards=seen,
+        elixir_enemy_est=_finite_number(visual.get("enemy_elixir_est")) or 0.0,
+        own_king_active=bool(visual.get("own_king_active", False)),
+        enemy_king_active=bool(visual.get("enemy_king_active", False)),
+        started=True,
+    )
+    observation_fn, _, _ = _live_policy_imports()
+    try:
+        observation = observation_fn(
+            game_state, arena_px=tuple(float(v) for v in arena), legal_wait=True
+        )
+    except Exception as error:
+        raise CorrectionUnprocessableError(
+            f"edited state cannot be turned into an observation: {error}"
+        ) from error
+    if observation is None:
+        raise CorrectionUnprocessableError("edited state yields no observation")
+    return observation
+
+
+def reevaluate_frame(
+    session: FrontendSession, frame_index: Any, edits: Any
+) -> dict[str, Any]:
+    """Run a what-if forward pass for label-corrected detections.
+
+    Applies ``edits`` to the frame's retained detection rows, rebuilds the
+    observation, and scores it with the live actor under ``actor_lock``
+    (hidden state saved/restored, so the running session is undisturbed).
+    Stores the result on the frame as its display correction and returns it.
+
+    Never touches trackers, history, or the execute path. Raises
+    ``FrameNotFoundError`` (evicted), ``NoActorError`` (no live actor),
+    ``ValueError`` (malformed edits), or ``CorrectionUnprocessableError``.
+    """
+    frame = session.find_frame(frame_index)
+    if frame is None:
+        raise FrameNotFoundError(f"frame {frame_index!r} is not retained")
+    if not frame.in_game or not frame.emitted:
+        raise CorrectionUnprocessableError("only emitted in-game frames can be revised")
+    actor = session.actor
+    if actor is None:
+        raise NoActorError("no live policy actor is available")
+    rows, applied = _apply_correction_edits(
+        frame.detections if isinstance(frame.detections, list) else [],
+        edits,
+        frame_width=frame.frame_width,
+        frame_height=frame.frame_height,
+    )
+    observation = _corrected_observation(frame, rows)
+    _, decide_fn, action_to_dict_fn = _live_policy_imports()
+    with session.actor_lock:
+        hidden = getattr(actor, "_hidden", None)
+        try:
+            try:
+                scored = decide_fn(actor, observation)
+            except TypeError:
+                scored = decide_fn(observation)
+            if not (isinstance(scored, tuple) and len(scored) == 3):
+                raise CorrectionUnprocessableError("decision entry point misbehaved")
+            action_obj, suggestions, diagnostics = scored
+        finally:
+            try:
+                actor._hidden = hidden
+            except (AttributeError, TypeError):
+                pass
+    suggestion_dicts = [
+        _suggestion_to_dict(s)
+        for s in (suggestions if isinstance(suggestions, (list, tuple)) else [])
+    ]
+    try:
+        action_json = action_to_dict_fn(action_obj)
+        if not isinstance(action_json, dict):
+            action_json = {"kind": "wait"}
+    except Exception as error:
+        raise CorrectionUnprocessableError(
+            f"decided action cannot be serialized: {error}"
+        ) from error
+    correction = {
+        "suggestions": suggestion_dicts,
+        "diagnostics": diagnostics if isinstance(diagnostics, dict) else {},
+        "action": action_json,
+        "applied": applied,
+        "revised": True,
+    }
+    session.set_correction(frame.frame_index, correction)
+    return correction
+
+
+def clear_reevaluation(session: FrontendSession, frame_index: Any) -> bool:
+    """Clear a frame's what-if correction (True when the frame exists)."""
+    return session.set_correction(frame_index, None)
+
+
 __all__ = [
+    "CorrectionUnprocessableError",
+    "FrameNotFoundError",
     "FrontendFrame",
     "FrontendSession",
+    "INFERENCE_DEVICES",
+    "NoActorError",
+    "clear_reevaluation",
     "encode_jpeg",
+    "reevaluate_frame",
+    "resolve_inference_devices",
     "run_live_session",
     "run_video_session",
+    "unit_label_vocabulary",
 ]
