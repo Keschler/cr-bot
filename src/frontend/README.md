@@ -84,6 +84,9 @@ persist in `localStorage` (`ara-settings-v1`) and are restored on reload.
 4. Press **Start** (`POST /api/video/start`).
 5. Scrub history with the transport bar or the bottom timeline.
    Seeks pause playback; polling continues so the timeline stays fresh.
+   Keyboard: `Space` play/pause, `←`/`→` or `j`/`l` step (`Shift` = 10),
+   `Home`/`End` jump, `e` edit mode, `1`–`3` inspect a suggestion, `?`
+   opens the shortcut help, `Esc` closes it. Keys no-op while typing.
    The transport bar also holds share actions: **JSON** (session frames +
    suggestions), **CSV** (confirmed own/foe plays), **Frame** (current
    frame JPEG), and **Link** (copies a `#f=<frame>&r=<rank>&v=<video>`

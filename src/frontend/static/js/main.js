@@ -27,6 +27,7 @@ import {
   pollStatus, scheduleFrames,
 } from './features/session.js';
 import { bindExportEvents } from './features/export.js';
+import { bindShortcutEvents } from './features/shortcuts.js';
 import { bindRoiEvents, roiPreviewVisible, drawRoiPreviewBoxes } from './features/roi-editor.js';
 import { bindCorrectionEvents, bindCanvasEvents, loadLabels } from './features/corrections.js';
 import { bindPanelsEvents } from './features/panels.js';
@@ -42,6 +43,7 @@ bindCanvasEvents();
 bindPanelsEvents();
 bindTimelineEvents();
 bindExportEvents();
+bindShortcutEvents();
 applyPersistedSettings();
 setPendingDeepLink(decodeHash(window.location.hash));
 

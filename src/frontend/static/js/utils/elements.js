@@ -7,7 +7,7 @@ export const $ = (id) => document.getElementById(id);
 
 export const els = {};
 [
-  'status-pill', 'error-bar',
+  'status-pill', 'error-bar', 'btn-help', 'help-modal', 'btn-help-close',
   'tab-video', 'tab-live', 'btn-open-replay', 'btn-dashboard',
   'panel-video', 'panel-live',
   'btn-session-toggle', 'btn-stop-mini', 'session-mini',

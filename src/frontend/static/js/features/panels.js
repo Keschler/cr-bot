@@ -500,6 +500,13 @@ export function renderRight(frame) {
   }
 }
 
+export function toggleInspectRank(rank) {
+  const r = Number.isFinite(rank) ? rank : 0;
+  state.selectedRank = state.selectedRank === r ? null : r;
+  renderCurrent();
+  writeLocationHash();
+}
+
 export function bindPanelsEvents() {
   // Inspect toggles locate the suggestion on the arena (delegated: cards
   // re-render on every poll). Raw JSON stays behind a secondary toggle.
@@ -512,9 +519,6 @@ export function bindPanelsEvents() {
     }
     const btn = ev.target.closest('[data-inspect]');
     if (!btn) return;
-    const rank = parseInt(btn.dataset.inspect, 10) || 0;
-    state.selectedRank = state.selectedRank === rank ? null : rank;
-    renderCurrent();
-    writeLocationHash();
+    toggleInspectRank(parseInt(btn.dataset.inspect, 10) || 0);
   });
 }
