@@ -1,0 +1,48 @@
+/* Bottom timeline: track, markers, tooltip. */
+
+/* Bottom timeline */
+.timeline-bar {
+  grid-row: 4;
+  background: var(--panel); border-top: 1px solid var(--border);
+  padding: 10px 16px; display: grid; grid-template-columns: 220px 1fr auto;
+  gap: 12px; align-items: center; overflow: hidden;
+}
+.timeline-head { color: var(--muted); font-size: 12px; }
+.timeline-track {
+  position: relative; height: 40px; background: var(--panel-2);
+  border: 1px solid var(--border); border-radius: 8px;
+  cursor: ew-resize; outline: none; touch-action: none;
+}
+.timeline-track:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+/* Inset rail: dots and thumb at 0%/100% stay inside the container. */
+.timeline-rail {
+  position: absolute; left: 16px; right: 16px; top: 50%; height: 6px;
+  transform: translateY(-50%); background: #2b3a55; border-radius: 3px;
+}
+.timeline-fill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: var(--accent); border-radius: 3px; }
+.timeline-markers { position: absolute; inset: 0; pointer-events: none; }
+.marker { position: absolute; top: 50%; width: 9px; height: 9px; border-radius: 50%; transform: translate(-50%, -50%); border: 1px solid rgba(0, 0, 0, 0.55); }
+.marker.small { width: 7px; height: 7px; }
+.timeline-thumb {
+  position: absolute; top: 50%; width: 22px; height: 22px; border-radius: 50%;
+  background: #fff; transform: translate(-50%, -50%);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(0, 0, 0, 0.2);
+  z-index: 2;
+}
+.timeline-track:active .timeline-thumb { box-shadow: 0 2px 10px rgba(0, 0, 0, 0.6), 0 0 0 4px rgba(46, 166, 255, 0.35); }
+.timeline-tooltip {
+  /* Fixed, not absolute: the footer bar clips overflow, so an in-flow
+     tooltip above the track gets its top cut off. Position comes from JS
+     (viewport coords above the track, clamped horizontally). */
+  position: fixed; transform: translate(-50%, -100%);
+  background: #05080f; border: 1px solid var(--border); border-radius: 8px;
+  padding: 6px 10px; font-size: 12px; line-height: 1.5; white-space: nowrap;
+  z-index: 50; pointer-events: none; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  max-width: 320px; overflow: hidden; text-overflow: ellipsis;
+}
+.timeline-tooltip .tt-head { color: var(--text); font-weight: 600; }
+.timeline-tooltip .tt-sub { color: var(--muted); }
+.marker-user { background: var(--blue); }
+.marker-foe { background: #b48cff; }
+.marker-match { background: var(--green); }
+.marker-tower { background: var(--red); }

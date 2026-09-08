@@ -1,0 +1,83 @@
+:root {
+  --bg: #0b1220;
+  --panel: #111a2e;
+  --panel-2: #0e1628;
+  --border: #22304d;
+  --text: #dbe4f5;
+  --muted: #8fa0bd;
+  --accent: #2ea6ff;
+  --green: #3ddc84;
+  --amber: #ffb454;
+  --red: #ff6b6b;
+  --blue: #3b82f6;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  min-width: 1100px;
+  display: grid;
+  grid-template-rows: 48px auto minmax(0, 1fr) auto;
+  height: 100vh;
+}
+
+/* Header */
+.topbar {
+  grid-row: 1;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 16px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.brand { display: flex; align-items: center; gap: 10px; }
+.brand-dot {
+  width: 22px; height: 22px; border-radius: 50%;
+  border: 3px solid var(--accent);
+  display: inline-block;
+}
+.brand-text { display: flex; flex-direction: column; line-height: 1.1; }
+.brand-version { color: var(--muted); font-size: 12px; }
+
+.topnav { display: flex; align-items: center; gap: 8px; margin: 0 auto; }
+.nav-btn {
+  background: transparent; color: var(--text);
+  border: 1px solid transparent; border-radius: 8px;
+  padding: 6px 10px; cursor: pointer;
+}
+.nav-btn:hover { border-color: var(--border); }
+
+.mode-tabs { display: flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.mode-tab {
+  background: transparent; color: var(--muted);
+  border: 0; padding: 6px 14px; cursor: pointer;
+}
+.mode-tab.is-active { background: #1b2a47; color: var(--text); }
+
+.top-right { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.status-pill {
+  font-size: 12px; padding: 4px 10px; border-radius: 999px;
+  border: 1px solid var(--border); background: #16213a;
+}
+.status-pill.is-idle { color: var(--muted); }
+.status-pill.is-running { color: var(--green); border-color: #1f4d36; }
+.status-pill.is-error { color: var(--red); border-color: #5b2b2b; }
+
+.error-bar {
+  background: #2a1414; color: #ffc9c9;
+  border-bottom: 1px solid #5b2b2b;
+  padding: 8px 16px; font-size: 13px;
+}

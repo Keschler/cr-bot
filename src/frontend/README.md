@@ -3,6 +3,46 @@
 Vanilla HTML/CSS/JS dashboard for the Arena Replay Analyst. All data comes
 from the real backend API — there are no mocks or bundled fixtures.
 
+## Layout
+
+Backend (`src/frontend/`, `src` layout so tests import both `frontend.*`
+and `src.frontend.*`):
+
+- `app.py` — `create_app()` factory (CORS, routers, static mount) + `app`.
+  `server.py` is a thin back-compat shim re-exporting `app` and handlers.
+- `api/` — one `APIRouter` per domain: `system`, `video`, `live`,
+  `frames`, `roi`, `assets`, `corrections`, `stream` (`deps` shares the
+  session manager).
+- `models/` — `frames` (`FrontendFrame`), `session` (`FrontendSession`
+  store only), `requests` (Pydantic request/response models).
+- `services/` — `paths`, `devices`, `checkpoints`, `uploads`, `card_art`,
+  `session_manager` (background-thread lifecycle + frame JSON).
+- `runners/` — `pump` (frame-pump loop + tracker summarizers), `video`,
+  `live`. `session.py` is a shim re-exporting these for old imports.
+- `corrections/` — what-if label-correction engine (`_common`, `vocab`,
+  `edits`, `observation`, `reevaluate`).
+- `scoring.py` — pure policy-scoring helpers, unchanged.
+- `imaging.py` — JPEG encode + frame-dimension helpers.
+
+No heavy imports (`torch`/`cv2`/`cr_bot`) at module top: they stay lazy
+inside functions so the server imports without GPU/CV deps.
+
+Frontend (`static/`, native ES modules, no bundler — entry
+`<script type="module" src="js/main.js">`):
+
+- `js/main.js` — boot: binds all feature events, runs init loads.
+- `js/state/store.js` — single shared mutable `state` + constants.
+- `js/utils/` — `elements` (DOM/canvas handles), `dom`, `format`,
+  `geometry` (canvas/coordinate mapping).
+- `js/api/client.js` — fetch wrappers.
+- `js/features/` — `frames` (frame accessors), `roi` (pure payload
+  helpers), `roi-editor` (proposal review), `session` (polling, image,
+  video/live controls), `panels` (side panels), `overlay` (canvas
+  layers), `corrections` (drafts, edit mode, gestures), `timeline`
+  (history, markers, `renderCurrent` fan-out).
+- `styles/*.css` — topical stylesheets (`styles.css` is an `@import`
+  shim so the old `<link>` keeps working).
+
 ## Run
 
 From the repository root:

@@ -1,0 +1,61 @@
+/* Label correction + edit mode. */
+.detected li { cursor: default; }
+.detections-side .detected li[data-ckey] { cursor: pointer; }
+.detections-side .detected { max-height: 460px; overflow-y: auto; }
+.detected li.more { border-bottom: 0; }
+.detected li.more button.mini { width: 100%; }
+.detected li.is-selected { outline: 2px solid #ffd166; outline-offset: -2px; border-radius: 6px; }
+
+/* Label correction (what-if re-evaluation) */
+.correction-controls { margin-top: 10px; }
+.correction-badge {
+  background: rgba(255, 209, 102, 0.12);
+  border: 1px solid rgba(255, 209, 102, 0.55);
+  color: #ffd166;
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+.detected li.is-edited { border-left: 3px solid #ffa94d; }
+.detected li.is-deleted { opacity: 0.55; border-left: 3px solid #ff6b6b; }
+.detected li.is-added { border-left: 3px dashed #ffd166; }
+.actions li[data-seek] { cursor: pointer; }
+.actions li[data-seek]:hover { border-color: var(--accent); }
+.cedit { display: inline-flex; gap: 4px; margin-left: 6px; }
+.cedit select { max-width: 110px; font-size: 11px; padding: 1px 2px; }
+button.mini {
+  font-size: 11px; padding: 1px 7px; border-radius: 6px;
+  border: 1px solid var(--border); background: #101a30; color: var(--text);
+  cursor: pointer;
+}
+button.mini:hover { border-color: var(--blue); }
+#btn-add-box.is-active { border-color: #ffd166; color: #ffd166; }
+
+/* Label edit mode (drag-and-drop correction) */
+.head-right { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.edit-toggle { display: flex; justify-content: flex-end; }
+#btn-edit-labels.is-on { border-color: #ffd166; color: #ffd166; }
+/* Never let the browser select or drag the frame image itself: in edit
+   mode every gesture belongs to the box logic on the overlay canvas. */
+.frame-wrap, .frame-wrap img, .frame-wrap canvas {
+  user-select: none; -webkit-user-select: none;
+}
+.frame-wrap img { -webkit-user-drag: none; }
+.frame-wrap.editing { touch-action: none; }
+.frame-wrap.editing canvas { pointer-events: auto; }
+.frame-wrap.editing { cursor: crosshair; }
+/* ROI proposal review also needs canvas gestures: without this the review
+   boxes are display-only because center.css disables canvas pointer events. */
+.frame-wrap.roi-preview { touch-action: none; }
+.frame-wrap.roi-preview canvas { pointer-events: auto; }
+.frame-wrap.roi-preview { cursor: crosshair; }
+.edit-floatbar {
+  position: absolute; z-index: 6; display: flex; gap: 4px; align-items: center;
+  background: rgba(5, 8, 15, 0.92); border: 1px solid #ffd166; border-radius: 8px;
+  padding: 4px 6px; font-size: 12px;
+}
+/* Author display:flex beats the UA [hidden]{display:none}, so hide explicitly. */
+.edit-floatbar[hidden] { display: none; }
+.edit-floatbar button.mini { border-color: #ffd166; }
+.edit-floatbar .elink { color: var(--muted); max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
