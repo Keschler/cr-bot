@@ -113,7 +113,11 @@ auto-resumed — re-check Adapt ROIs and Start manually.
 
 1. Click the **Live** tab (or **Dashboard** in the top bar).
 2. Enter the ADB `serial`, `transport` (`stream` / `screenshot`), pick a
-   checkpoint (defaults to `prototype.pt`) and optional `calibration` profile.
+   checkpoint (prefers `prototype.pt`) and optional `calibration` profile.
+   Leaving calibration blank uses
+   `simulator/physical_lab/calibrations/phone-a-candidate.json` for the ASUS
+   AI2302 (1080×2400). Enter a device-specific JSON path for another layout;
+   relative paths resolve from the repository root.
 3. Press **Start** (`POST /api/live/start`).
 4. Press **Stop** in either mode to call `POST /api/stop`.
 
