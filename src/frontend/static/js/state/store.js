@@ -64,3 +64,25 @@ state.editMode = false; // label edit mode: drag to move/resize/add
 state.selection = null; // detection key selected on canvas
 state.dragBox = null; // display-px rubber band while drawing
 state.dragMove = null; // {key, part, startX/Y, origBox, curBox, moved}
+
+// Persisted UI settings (localStorage, versioned key so future schemas can
+// migrate). Only plain UI preferences — never session frames or drafts.
+export const SETTINGS_KEY = 'ara-settings-v1';
+
+export function loadPersistedSettings() {
+  try {
+    const raw = window.localStorage.getItem(SETTINGS_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    return data && typeof data === 'object' ? data : null;
+  } catch (e) {
+    return null; // private mode / disabled storage: run with defaults
+  }
+}
+
+export function persistSettings(patch) {
+  try {
+    const cur = loadPersistedSettings() || {};
+    window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(Object.assign({}, cur, patch || {})));
+  } catch (e) { /* storage unavailable: settings stay memory-only */ }
+}

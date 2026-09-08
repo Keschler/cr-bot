@@ -13,7 +13,7 @@ export const els = {};
   'btn-session-toggle', 'btn-stop-mini', 'session-mini',
   'input-video-file', 'btn-browse-video', 'video-file-label', 'video-file-meta', 'select-checkpoint',
   'input-start-frame', 'input-stride', 'input-max-frames', 'select-device',
-  'btn-start-video', 'btn-stop-video',
+  'btn-start-video', 'btn-stop-video', 'recent-sessions',
   'check-adapt-rois', 'adapt-notice',
   'roi-preview-meta', 'btn-reset-rois',
   'btn-another-frame',

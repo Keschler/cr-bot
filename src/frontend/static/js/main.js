@@ -20,8 +20,8 @@
 
 import { img } from './utils/elements.js';
 import {
-  setMode, bindImageEvents, bindSessionEvents,
-  loadCheckpoints, loadServerCapabilities, loadGrid,
+  setMode, bindImageEvents, bindSessionEvents, applyPersistedSettings,
+  loadCheckpoints, loadServerCapabilities, loadGrid, loadRecentSessions,
   pollStatus, scheduleFrames,
 } from './features/session.js';
 import { bindRoiEvents, roiPreviewVisible, drawRoiPreviewBoxes } from './features/roi-editor.js';
@@ -38,6 +38,7 @@ bindCorrectionEvents();
 bindCanvasEvents();
 bindPanelsEvents();
 bindTimelineEvents();
+applyPersistedSettings();
 
 window.addEventListener('resize', () => {
   drawOverlay(currentFrame());
@@ -54,6 +55,7 @@ loadCheckpoints();
 loadServerCapabilities();
 loadLabels();
 loadGrid();
+loadRecentSessions();
 pollStatus();
 setInterval(pollStatus, 2000);
 scheduleFrames();

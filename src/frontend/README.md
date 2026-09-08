@@ -53,7 +53,11 @@ uvicorn src.frontend.server:app
 
 Then open `http://127.0.0.1:8000/` (or the host/port your server binds).
 The page polls `GET /api/status` every 2 s and `GET /api/frames` every
-`1 s / speed`. The center image refreshes from `GET /api/frame/latest`.
+1 s (playback speed steps the cursor through buffered frames instead of
+changing the poll rate). The center image refreshes from `GET /api/frame/latest`.
+
+UI preferences (overlay toggles, speed, device, checkpoint, transport)
+persist in `localStorage` (`ara-settings-v1`) and are restored on reload.
 
 ## Video mode
 
@@ -79,7 +83,14 @@ The page polls `GET /api/status` every 2 s and `GET /api/frames` every
    Another frame, or uncheck the adapt checkbox).
 4. Press **Start** (`POST /api/video/start`).
 5. Scrub history with the transport bar or the bottom timeline.
-   Pausing stops frame polling; the status poll keeps running.
+   Seeks pause playback; polling continues so the timeline stays fresh.
+
+Every video start is recorded in the **Recent replays** list (backed by
+`uploads/sessions.json` via `GET/POST /api/sessions` and
+`DELETE /api/sessions/{name}`, newest first, capped at 50). **Resume**
+re-runs the replay with its saved parameters and jumps back to the saved
+cursor once analysis catches up. Replays that used adapted ROIs are not
+auto-resumed — re-check Adapt ROIs and Start manually.
 
 ## Live mode
 
@@ -109,6 +120,9 @@ and a dedicated device; never enable execute on an unattended phone.
 | POST   | `/api/video/start`  | `{video_path, checkpoint, start_frame, frame_stride, max_frames, device, adapt_rois, roi_set}` |
 | POST   | `/api/live/start`   | `{serial, transport, checkpoint, device, calibration, execute, confirm_live}` |
 | POST   | `/api/stop`         | Stop the current session                             |
+| GET    | `/api/sessions`       | Saved recent replays (newest first, max 50)          |
+| POST   | `/api/sessions`       | Upsert a replay entry `{name, video_path, params, cursor_frame, frame_count}` |
+| DELETE | `/api/sessions/{name}` | Forget one saved replay                             |
 | GET    | `/api/frames?since=N&limit=50` | `{frames: [{frame_index, timestamp_s, in_game, emitted, record: {visual_state, action, result}, suggestions, diagnostics}]}` |
 | GET    | `/api/frame/latest` | Current frame as `image/jpeg`                        |
 | GET    | `/api/frame/{index}` | One history frame as `image/jpeg` (204 if evicted) |

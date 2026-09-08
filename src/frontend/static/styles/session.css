@@ -60,3 +60,23 @@
 .session-mini { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .btn-mini { padding: 3px 10px; font-size: 12px; }
 .card-session.collapsed .session-panel { display: none; }
+
+/* Recent replays (session library). */
+.recent-wrap { margin-top: 10px; }
+.recent-wrap h4 {
+  margin: 0 0 6px; font-size: 11px; letter-spacing: 0.08em;
+  color: var(--muted); font-weight: 600;
+}
+.recent-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.recent-list .empty { color: var(--muted); font-size: 12px; }
+.recent-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+  padding: 6px 8px; font-size: 12px;
+}
+.recent-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.recent-main strong {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-weight: 600; max-width: 180px;
+}
+.recent-actions { display: flex; gap: 4px; flex: none; }

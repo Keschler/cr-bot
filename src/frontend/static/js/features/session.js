@@ -3,11 +3,11 @@
  * start/stop. Rendering itself lives in panels/overlay/timeline.
  */
 
-import { state, GRID_COLS, GRID_ROWS } from '../state/store.js';
+import { state, GRID_COLS, GRID_ROWS, loadPersistedSettings, persistSettings } from '../state/store.js';
 import { els, img } from '../utils/elements.js';
-import { showError, setPill } from '../utils/dom.js';
+import { showError, setPill, esc } from '../utils/dom.js';
 import { num, basename } from '../utils/format.js';
-import { apiGet, apiPost } from '../api/client.js';
+import { apiGet, apiPost, apiDelete } from '../api/client.js';
 import { roiAdaptAvailableFromDims, buildVideoStartPayload } from './roi.js';
 import { clearRoiAdapt, showRoiAdaptAvailable, roiPreviewVisible, syncRoiPreviewClass, drawRoiPreviewBoxes } from './roi-editor.js';
 import { visualStateOf, suggestionsOf, diagnosticsOf, currentFrame, isLiveEdge } from './frames.js';
@@ -47,6 +47,9 @@ export function frameDelayMs() {
 
 let playAcc = 0;
 let lastLiveRefresh = 0;
+let pendingResumeFrame = null;
+let lastLibrarySave = 0;
+
 
 export function scheduleFrames() {
   if (state.framesTimer) clearTimeout(state.framesTimer);
@@ -107,6 +110,16 @@ export async function pollFrames() {
         state.cursor = state.history.length - 1;
       }
       renderCurrent();
+      // A resumed replay jumps back to its saved cursor once the
+      // re-analysis has caught up (seek pauses, so the jump sticks).
+      if (pendingResumeFrame !== null && pendingResumeFrame !== undefined) {
+        const last = state.history[state.history.length - 1];
+        if (last && last.frame_index >= pendingResumeFrame) {
+          const target = state.history.findIndex((f) => f.frame_index >= pendingResumeFrame);
+          pendingResumeFrame = null;
+          seek(target >= 0 ? target : state.history.length - 1);
+        }
+      }
     }
     refreshImage();
   } catch (err) {
@@ -312,6 +325,46 @@ export function fillCheckpointSelect(selectEl, data) {
     if (item.default) opt.selected = true;
     selectEl.appendChild(opt);
   }
+  // Restore the persisted checkpoint when it still exists server-side.
+  try {
+    const saved = loadPersistedSettings();
+    const want = selectEl === els['select-checkpoint']
+      ? saved && saved.videoCheckpoint
+      : saved && saved.liveCheckpoint;
+    if (want !== undefined && want !== null) {
+      const match = Array.from(selectEl.options).some((o) => o.value === want);
+      if (match) selectEl.value = want;
+    }
+  } catch (e) { /* keep server default */ }
+}
+
+export function applyPersistedSettings() {
+  let saved = null;
+  try { saved = loadPersistedSettings(); } catch (e) { saved = null; }
+  if (!saved) return;
+  if (saved.toggles && typeof saved.toggles === 'object') {
+    for (const [id, key] of [['toggle-boxes', 'boxes'], ['toggle-grid', 'grid'], ['toggle-labels', 'labels']]) {
+      if (typeof saved.toggles[key] !== 'boolean' || !els[id]) continue;
+      state.toggles[key] = saved.toggles[key];
+      els[id].classList.toggle('is-on', state.toggles[key]);
+      els[id].setAttribute('aria-pressed', String(state.toggles[key]));
+    }
+  }
+  if (saved.speed !== undefined && saved.speed !== null && els['speed-select']) {
+    const v = parseFloat(saved.speed);
+    const match = Array.from(els['speed-select'].options).some((o) => o.value === String(saved.speed));
+    if (Number.isFinite(v) && v > 0 && match) {
+      state.speed = v;
+      els['speed-select'].value = String(saved.speed);
+    }
+  }
+  for (const [id, key] of [['select-device', 'device'], ['select-live-device', 'liveDevice'],
+      ['select-transport', 'transport']]) {
+    const el = els[id];
+    if (!el || saved[key] === undefined || saved[key] === null) continue;
+    const match = Array.from(el.options).some((o) => o.value === String(saved[key]));
+    if (match) el.value = String(saved[key]);
+  }
 }
 
 export async function loadGrid() {
@@ -508,6 +561,7 @@ export async function startVideo() {
     scheduleFrames();
     pollStatus();
     pollFrames();
+    saveRecentSession();
   } catch (err) {
     setPill('Start failed', 'is-error', String(err && err.message || err));
     showError(String(err && err.message || err));
@@ -559,7 +613,125 @@ export async function stopSession() {
   } catch (err) {
     showError(String(err && err.message || err));
   }
+  noteCursorMoved(true);
   pollStatus();
+}
+
+/* ---------- recent replays (session library) ---------- */
+
+export function currentVideoParams() {
+  return {
+    frame_stride: Math.max(1, parseInt(els['input-stride'].value, 10) || 1),
+    start_frame: Math.max(0, parseInt(els['input-start-frame'].value, 10) || 0),
+    max_frames: Math.max(1, parseInt(els['input-max-frames'].value, 10) || 500),
+    checkpoint: els['select-checkpoint'] ? els['select-checkpoint'].value : '',
+    device: els['select-device'] ? els['select-device'].value : 'auto',
+  };
+}
+
+export async function saveRecentSession() {
+  // Video sessions only (v1): live serials are not resumable replays.
+  if (!state.uploadedVideoPath) return;
+  const frame = currentFrame();
+  try {
+    await apiPost('/api/sessions', {
+      name: state.uploadedVideoName || basename(state.uploadedVideoPath),
+      video_path: state.uploadedVideoPath,
+      filename: state.uploadedVideoName || basename(state.uploadedVideoPath),
+      params: currentVideoParams(),
+      cursor_frame: frame ? frame.frame_index : null,
+      frame_count: state.history.length,
+    });
+    loadRecentSessions();
+  } catch (err) { /* library is best-effort; never break the session */ }
+}
+
+export function noteCursorMoved(force) {
+  // Seeks fire rapidly while dragging: throttle library writes, but always
+  // persist on Stop so the resumed cursor is fresh.
+  const now = Date.now();
+  if (!force && now - lastLibrarySave < 2000) return;
+  lastLibrarySave = now;
+  saveRecentSession();
+}
+
+export async function loadRecentSessions() {
+  const list = els['recent-sessions'];
+  if (!list) return;
+  let entries = [];
+  try {
+    const data = await apiGet('/api/sessions');
+    if (data && Array.isArray(data.sessions)) entries = data.sessions;
+  } catch (err) { /* keep previous list on probe failure */ }
+  list.innerHTML = '';
+  if (!entries.length) {
+    list.innerHTML = '<li class="empty">No saved replays yet</li>';
+    return;
+  }
+  for (const e of entries.slice(0, 20)) {
+    const li = document.createElement('li');
+    li.className = 'recent-row';
+    const sub = [];
+    if (e.frame_count !== undefined && e.frame_count !== null) sub.push(e.frame_count + ' fr');
+    if (e.cursor_frame !== undefined && e.cursor_frame !== null) sub.push('f' + e.cursor_frame);
+    li.innerHTML = '<span class="recent-main"><strong>' + esc(e.filename || e.name || 'replay') + '</strong>' +
+      '<span class="muted">' + esc(sub.join(' · ') || '—') + '</span></span>' +
+      '<span class="recent-actions"><button type="button" class="mini" data-resume="' + esc(e.name || '') +
+      '" title="Re-run this replay and jump back">Resume</button>' +
+      '<button type="button" class="mini" data-del="' + esc(e.name || '') + '" title="Forget this replay">✕</button></span>';
+    list.appendChild(li);
+  }
+}
+
+export async function resumeSession(name) {
+  let entries = [];
+  try {
+    const data = await apiGet('/api/sessions');
+    if (data && Array.isArray(data.sessions)) entries = data.sessions;
+  } catch (err) {
+    showError(String(err && err.message || err));
+    return;
+  }
+  const entry = entries.find((e) => e && e.name === name);
+  if (!entry) {
+    showError('Saved replay not found: ' + name);
+    return;
+  }
+  if (entry.params && entry.params.adapt_rois) {
+    showError('This replay used adapted ROIs — re-check Adapt ROIs and Start manually.');
+    return;
+  }
+  setMode('video');
+  state.uploadedVideoPath = entry.video_path || '';
+  state.uploadedVideoName = entry.filename || entry.name || '';
+  setVideoFileLabel(state.uploadedVideoName);
+  setVideoFileMeta(null);
+  const p = entry.params || {};
+  if (p.frame_stride !== undefined) els['input-stride'].value = p.frame_stride;
+  if (p.start_frame !== undefined) els['input-start-frame'].value = p.start_frame;
+  if (p.max_frames !== undefined) els['input-max-frames'].value = p.max_frames;
+  if (p.checkpoint !== undefined && els['select-checkpoint']) {
+    const match = Array.from(els['select-checkpoint'].options).some((o) => o.value === p.checkpoint);
+    if (match) els['select-checkpoint'].value = p.checkpoint;
+  }
+  if (p.device !== undefined && els['select-device']) {
+    const match = Array.from(els['select-device'].options).some((o) => o.value === p.device);
+    if (match) els['select-device'].value = p.device;
+  }
+  pendingResumeFrame = entry.cursor_frame !== undefined && entry.cursor_frame !== null
+    ? entry.cursor_frame : null;
+  await startVideo();
+  if (!state.uploadedVideoPath) pendingResumeFrame = null;
+}
+
+export async function deleteRecentSession(name) {
+  try {
+    await apiDelete('/api/sessions/' + encodeURIComponent(name));
+  } catch (err) {
+    showError(String(err && err.message || err));
+    return;
+  }
+  loadRecentSessions();
 }
 
 export function bindToggle(id, key) {
@@ -567,7 +739,16 @@ export function bindToggle(id, key) {
     state.toggles[key] = !state.toggles[key];
     els[id].classList.toggle('is-on', state.toggles[key]);
     els[id].setAttribute('aria-pressed', String(state.toggles[key]));
+    persistSettings({ toggles: Object.assign({}, state.toggles) });
     renderCenter(currentFrame());
+  });
+}
+
+export function bindPersistedSelect(id, key) {
+  const el = els[id];
+  if (!el) return;
+  el.addEventListener('change', () => {
+    persistSettings({ [key]: el.value });
   });
 }
 
@@ -595,6 +776,18 @@ export function bindSessionEvents() {
     applySessionVisibility(null);
   });
   els['input-video-file'].addEventListener('change', onVideoFileChange);
+  if (els['recent-sessions']) {
+    // Delegated: rows re-render on every library load.
+    els['recent-sessions'].addEventListener('click', (ev) => {
+      const resume = ev.target && ev.target.closest ? ev.target.closest('[data-resume]') : null;
+      if (resume) {
+        resumeSession(resume.dataset.resume);
+        return;
+      }
+      const del = ev.target && ev.target.closest ? ev.target.closest('[data-del]') : null;
+      if (del) deleteRecentSession(del.dataset.del);
+    });
+  }
 
   els['check-execute'].addEventListener('change', () => {
     els['live-warning'].hidden = !els['check-execute'].checked;
@@ -616,8 +809,15 @@ export function bindSessionEvents() {
   els['speed-select'].addEventListener('change', () => {
     const v = parseFloat(els['speed-select'].value);
     state.speed = Number.isFinite(v) && v > 0 ? v : 1;
+    persistSettings({ speed: els['speed-select'].value });
     scheduleFrames();
   });
+
+  bindPersistedSelect('select-device', 'device');
+  bindPersistedSelect('select-live-device', 'liveDevice');
+  bindPersistedSelect('select-transport', 'transport');
+  bindPersistedSelect('select-checkpoint', 'videoCheckpoint');
+  bindPersistedSelect('select-live-checkpoint', 'liveCheckpoint');
 
   bindToggle('toggle-boxes', 'boxes');
   bindToggle('toggle-grid', 'grid');

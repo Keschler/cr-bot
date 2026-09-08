@@ -11,7 +11,7 @@ import { renderLeft, renderRight } from './panels.js';
 import { renderCenter } from './overlay.js';
 import { roiPreviewVisible } from './roi-editor.js';
 import { hideFloatbar } from './corrections.js';
-import { refreshImage } from './session.js';
+import { refreshImage, noteCursorMoved } from './session.js';
 
 export function frameFlags(frame, prev) {
   let tower = false;
@@ -274,6 +274,7 @@ export function hideTrackTooltip() {
   els['timeline-tooltip'].hidden = true;
 }
 
+
 export function renderCurrent() {
   // A pre-session ROI preview takes over the whole center column: session
   // panels fall back to "No session" while the proposal is reviewed.
@@ -303,6 +304,7 @@ export function seek(i) {
   hideFloatbar();
   refreshImage();
   renderCurrent();
+  noteCursorMoved(false);
 }
 
 let trackDragging = false;

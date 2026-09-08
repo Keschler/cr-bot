@@ -9,6 +9,7 @@ from .api.corrections import router as corrections_router
 from .api.frames import router as frames_router
 from .api.live import router as live_router
 from .api.roi import router as roi_router
+from .api.sessions import router as sessions_router
 from .api.stream import router as stream_router
 from .api.system import router as system_router
 from .api.video import router as video_router
@@ -30,6 +31,7 @@ def create_app() -> FastAPI:
     app.include_router(live_router)
     app.include_router(frames_router)
     app.include_router(roi_router)
+    app.include_router(sessions_router)
     app.include_router(assets_router)
     app.include_router(corrections_router)
     app.include_router(stream_router)
