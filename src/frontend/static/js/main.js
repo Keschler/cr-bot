@@ -24,7 +24,7 @@ import {
   setMode, bindImageEvents, bindSessionEvents, applyPersistedSettings,
   loadCheckpoints, loadServerCapabilities, loadGrid, loadRecentSessions,
   setPendingDeepLink,
-  pollStatus, scheduleFrames,
+  pollStatus, scheduleFrames, scheduleStatus,
 } from './features/session.js';
 import { bindExportEvents } from './features/export.js';
 import { bindShortcutEvents } from './features/shortcuts.js';
@@ -64,5 +64,5 @@ loadLabels();
 loadGrid();
 loadRecentSessions();
 pollStatus();
-setInterval(pollStatus, 2000);
+scheduleStatus();
 scheduleFrames();

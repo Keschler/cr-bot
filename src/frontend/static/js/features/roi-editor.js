@@ -5,7 +5,7 @@
 
 import { state } from '../state/store.js';
 import { els, img, canvas, ctx } from '../utils/elements.js';
-import { showError } from '../utils/dom.js';
+import { showError, toast } from '../utils/dom.js';
 import { num } from '../utils/format.js';
 import { apiGet } from '../api/client.js';
 import { containRect } from '../utils/geometry.js';
@@ -108,9 +108,16 @@ export async function previewRois(probeIndex) {
       // A failed re-probe keeps the previous proposal (and any
       // adjustments) instead of losing the review work.
       updateRoiAdaptMeta();
+      toast('Re-probe failed — kept the previous proposal.', 'error');
     } else {
       state.roiAdapt.showInMiddle = false;
       if (meta) { meta.hidden = false; meta.textContent = 'ROI preview failed — see error above.'; }
+      // Leave Another frame available so a bad probe frame can be skipped
+      // without toggling Adapt off and on again.
+      if (els['btn-another-frame']) els['btn-another-frame'].hidden = false;
+      toast('ROI preview failed.', 'error', {
+        action: { label: 'Retry', onClick: () => { previewRois(); } },
+      });
     }
     showError(String(err && err.message || err));
   } finally {

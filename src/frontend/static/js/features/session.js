@@ -5,7 +5,7 @@
 
 import { state, GRID_COLS, GRID_ROWS, loadPersistedSettings, persistSettings } from '../state/store.js';
 import { els, img } from '../utils/elements.js';
-import { showError, setPill, esc } from '../utils/dom.js';
+import { showError, setPill, esc, toast } from '../utils/dom.js';
 import { num, basename } from '../utils/format.js';
 import { apiGet, apiPost, apiDelete } from '../api/client.js';
 import { roiAdaptAvailableFromDims, buildVideoStartPayload } from './roi.js';
@@ -15,11 +15,21 @@ import { drawOverlay, renderCenter } from './overlay.js';
 import { renderCurrent, seek } from './timeline.js';
 import { hideFloatbar, setCorrectionStatus } from './corrections.js';
 
-/* ---------- status + frames polling ---------- */
+/* ---------- status + frames polling (with reconnect backoff) ---------- */
+
+let statusFails = 0;
+let statusTimer = null;
+let statusDownToast = null;
 
 export async function pollStatus() {
   try {
     const s = await apiGet('/api/status');
+    if (statusFails > 0 && statusDownToast) {
+      statusDownToast.dismiss();
+      statusDownToast = null;
+      toast('Backend reconnected', 'success');
+    }
+    statusFails = 0;
     if (s && s.error) {
       setPill('Error: ' + String(s.error).slice(0, 80), 'is-error', String(s.error));
       showError(String(s.error));
@@ -35,8 +45,36 @@ export async function pollStatus() {
     }
     applySessionVisibility(s);
   } catch (err) {
-    setPill('Backend unreachable', 'is-error', String(err && err.message || err));
+    statusFails++;
+    setPill('Backend unreachable — retrying… (click to retry)', 'is-error', String(err && err.message || err));
+    if (!statusDownToast) {
+      statusDownToast = toast('Backend unreachable — retrying…', 'error', {
+        timeoutMs: 0,
+        action: {
+          label: 'Retry now',
+          onClick: () => {
+            statusDownToast = null;
+            pollStatus();
+            scheduleStatus();
+          },
+        },
+      });
+    }
   }
+}
+
+export function scheduleStatus() {
+  // Fixed 2s cadence while healthy, exponential backoff (max 30s) while the
+  // backend is unreachable. Clicking the pill retries immediately.
+  if (statusTimer) clearTimeout(statusTimer);
+  const step = async () => {
+    await pollStatus();
+    scheduleStatus();
+  };
+  const delay = statusFails > 0
+    ? Math.min(30000, 2000 * Math.pow(2, Math.min(statusFails, 4)))
+    : 2000;
+  statusTimer = setTimeout(step, delay);
 }
 
 export function frameDelayMs() {
@@ -50,6 +88,7 @@ let lastLiveRefresh = 0;
 let pendingResumeFrame = null;
 let pendingLink = null;
 let lastLibrarySave = 0;
+let framesFails = 0;
 
 export function setPendingDeepLink(link) {
   pendingLink = link && typeof link === 'object' ? link : null;
@@ -81,7 +120,11 @@ export function scheduleFrames() {
       playAcc = 0;
     }
     scheduleFrames();
-  }, frameDelayMs());
+    // Back off while frame fetches fail (server down/restarting); the
+    // status loop reports and recovers separately.
+  }, Math.max(frameDelayMs(), framesFails > 0
+    ? Math.min(15000, 1000 * Math.pow(2, Math.min(framesFails, 4)))
+    : 0));
 }
 
 export async function pollFrames() {
@@ -149,7 +192,9 @@ export async function pollFrames() {
       }
     }
     refreshImage();
+    framesFails = 0;
   } catch (err) {
+    framesFails++;
     setPill('Frames error: ' + String(err && err.message || err).slice(0, 80), 'is-error');
   }
 }
@@ -179,6 +224,7 @@ export function refreshImage() {
       img.dataset.previewFrame = tag;
       img.dataset.src = 'roi-preview';
       delete img.dataset.fi;
+      imgRequestId++; // cancel any in-flight session image fetch
       img.src = url;
     }
     return;
@@ -188,42 +234,101 @@ export function refreshImage() {
   delete img.dataset.previewFrame;
   // The session preview always tracks the cursor frame (history frames have
   // their own served JPEGs), so panels, image, and overlays stay aligned
-  // while scrubbing. The badge only flags that you are off the live edge.
+  // while scrubbing. Images load via fetch so evicted (HTTP 204) frames are
+  // detected explicitly instead of stalling silently on a bare <img> src.
+  refreshEvictBadge();
   const frame = currentFrame();
   const atEdge = isLiveEdge();
-  els['history-badge'].hidden = !(frame && !atEdge);
   const now = Date.now();
   if (!frame) {
     // No frames yet: keep showing the live stream while playing, throttled
     // to one request per 2s so an idle page doesn't hammer /api/frame/latest.
     if (state.playing && now - lastLiveRefresh > 2000) {
       lastLiveRefresh = now;
-      const liveUrl = '/api/frame/latest?t=' + now;
-      img.dataset.src = liveUrl;
-      delete img.dataset.fi;
-      img.src = liveUrl;
+      loadFrameImage('/api/frame/latest?t=' + now, null, true);
     }
     return;
   }
+  const fi = String(frame.frame_index);
   if (atEdge) {
     // Live edge reloads when the index advances, or at most every 1.5s while
     // staying on one index (content may advance under the same index).
-    const fi = String(frame.frame_index);
     if (img.dataset.fi !== fi || now - lastLiveRefresh > 1500) {
       lastLiveRefresh = now;
-      const url = frameImageUrl(frame, true);
-      img.dataset.src = url;
-      img.dataset.fi = fi;
-      img.src = url;
+      loadFrameImage(frameImageUrl(frame, true), fi, true);
     }
     return;
   }
   const url = frameImageUrl(frame, false);
   if (img.dataset.src !== url) {
     img.dataset.src = url;
-    img.dataset.fi = String(frame.frame_index);
-    img.src = url;
+    loadFrameImage(url, fi, false);
   }
+}
+
+// Frames evicted from the bounded server history answer HTTP 204: no image
+// arrives, so the UI keeps the last pixels and says so instead of looking
+// frozen. Overlays stay withheld via imageMatchesFrame().
+const evictedFrames = new Set();
+let lastEvictToastFi = null;
+let imgRequestId = 0;
+let lastObjectUrl = null;
+
+export function refreshEvictBadge() {
+  const badge = els['history-badge'];
+  if (!badge) return;
+  const frame = currentFrame();
+  if (frame && !isLiveEdge() && evictedFrames.has(String(frame.frame_index))) {
+    badge.hidden = false;
+    badge.textContent = 'frame evicted — showing last image';
+    badge.title = 'This frame left the bounded server history; overlays withheld.';
+  } else {
+    badge.textContent = 'viewing history';
+    badge.title = '';
+    badge.hidden = !(frame && !isLiveEdge());
+  }
+}
+
+async function loadFrameImage(url, fi, edge) {
+  const id = ++imgRequestId;
+  let res = null;
+  try {
+    res = await fetch(url, { cache: 'no-store' });
+  } catch (err) {
+    return; // network blip: keep last image; the status loop reports outages
+  }
+  if (id !== imgRequestId) return; // superseded by a newer scrub/poll
+  if (!res.ok || res.status === 204) {
+    if (!edge && fi !== null) {
+      evictedFrames.add(String(fi));
+      if (lastEvictToastFi !== String(fi)) {
+        lastEvictToastFi = String(fi);
+        toast('Frame f' + fi + ' left the server history — showing last image.', 'error');
+      }
+    }
+    refreshEvictBadge();
+    return;
+  }
+  let blob = null;
+  try {
+    blob = await res.blob();
+  } catch (err) {
+    return;
+  }
+  if (id !== imgRequestId || !blob || !blob.size) return;
+  const objUrl = URL.createObjectURL(blob);
+  if (lastObjectUrl) {
+    try { URL.revokeObjectURL(lastObjectUrl); } catch (e) { /* gone */ }
+  }
+  lastObjectUrl = objUrl;
+  if (fi !== null) {
+    img.dataset.fi = String(fi);
+    evictedFrames.delete(String(fi));
+  } else {
+    delete img.dataset.fi;
+  }
+  img.src = objUrl;
+  refreshEvictBadge();
 }
 
 export function imageMatchesFrame(frame) {
@@ -256,6 +361,14 @@ export function bindImageEvents() {
     if (!currentFrame()) {
       img.hidden = true;
       els['frame-empty'].style.display = '';
+      return;
+    }
+    // Hard image failure on a history frame: treat like an eviction so the
+    // badge explains the stale pixels instead of showing them silently.
+    const frame = currentFrame();
+    if (frame && !isLiveEdge()) {
+      evictedFrames.add(String(frame.frame_index));
+      refreshEvictBadge();
     }
   });
 }
@@ -279,6 +392,10 @@ export function resetSession(label) {
   state.lastSince = -1;
   playAcc = 0;
   lastLiveRefresh = 0;
+  framesFails = 0;
+  evictedFrames.clear();
+  lastEvictToastFi = null;
+  imgRequestId++; // cancel in-flight image fetches from the old session
   state.sessionLabel = label || '';
   state.selectedRank = null;
   state.sessionPin = null;
@@ -443,16 +560,66 @@ export async function loadServerCapabilities() {
   }
 }
 
-export async function uploadVideoFile(file) {
-  const form = new FormData();
-  form.append('file', file, file.name);
-  const res = await fetch('/api/upload', { method: 'POST', body: form });
-  if (!res.ok) {
-    let detail = '';
-    try { detail = await res.text(); } catch (e) { /* ignore */ }
-    throw new Error('Upload → HTTP ' + res.status + (detail ? ' ' + detail : ''));
+export function uploadVideoFile(file, onProgress) {
+  // XHR (not fetch) so large uploads report progress. onProgress(frac) is
+  // best-effort: servers without a Content-Length simply never call it.
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/upload');
+    xhr.responseType = 'json';
+    if (xhr.upload && onProgress) {
+      xhr.upload.addEventListener('progress', (ev) => {
+        if (ev.lengthComputable && ev.total > 0) {
+          try { onProgress(ev.loaded / ev.total); } catch (e) { /* ignore */ }
+        }
+      });
+    }
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        const data = xhr.response !== undefined && xhr.response !== null ? xhr.response : {};
+        resolve(typeof data === 'object' ? data : {});
+        return;
+      }
+      // FastAPI error bodies arrive parsed as {detail}; responseText throws
+      // under responseType=json, so every access is guarded.
+      let detail = '';
+      try {
+        const r = xhr.response;
+        if (r && typeof r === 'object' && r.detail) detail = String(r.detail);
+        else if (typeof r === 'string' && r) detail = r;
+        else detail = xhr.responseText || '';
+      } catch (e) { /* ignore */ }
+      reject(new Error('Upload → HTTP ' + xhr.status + (detail ? ' ' + detail : '')));
+    };
+    xhr.onerror = () => reject(new Error('Upload failed: network error'));
+    xhr.onabort = () => reject(new Error('Upload cancelled'));
+    const form = new FormData();
+    form.append('file', file, file.name);
+    try {
+      xhr.send(form);
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+// Shared upload wrapper: determinate progress toast + file-meta percent,
+// success toast on completion. Errors propagate to the caller as before.
+export async function uploadWithProgress(file) {
+  const handle = toast('Uploading ' + file.name, 'info', { progress: true, timeoutMs: 0 });
+  setVideoFileMeta('Uploading… 0%');
+  try {
+    const out = await uploadVideoFile(file, (frac) => {
+      handle.setProgress(frac);
+      setVideoFileMeta('Uploading… ' + Math.round(frac * 100) + '%');
+    });
+    handle.dismiss();
+    toast('Upload complete: ' + (file.name || 'video'), 'success');
+    return out;
+  } catch (err) {
+    handle.dismiss();
+    throw err;
   }
-  return res.json();
 }
 
 export function setVideoFileLabel(name) {
@@ -511,9 +678,8 @@ export async function onVideoFileChange() {
   clearRoiAdapt();
   state.uploadedVideoFrames = 0;
   setVideoFileLabel(file.name);
-  setVideoFileMeta('Uploading…');
   try {
-    const out = await uploadVideoFile(file);
+    const out = await uploadWithProgress(file);
     state.uploadedVideoPath = out.path || '';
     state.uploadedVideoName = out.filename || file.name;
     showError('');
@@ -537,9 +703,8 @@ export async function startVideo() {
   if (!videoPath && pending) {
     try {
       setVideoFileLabel(pending.name);
-      setVideoFileMeta('Uploading…');
       state.uploadedVideoFrames = 0;
-      const out = await uploadVideoFile(pending);
+      const out = await uploadWithProgress(pending);
       videoPath = out.path || '';
       state.uploadedVideoPath = videoPath;
       state.uploadedVideoName = out.filename || pending.name;
@@ -782,6 +947,15 @@ export function bindPersistedSelect(id, key) {
 export function bindSessionEvents() {
   els['tab-video'].addEventListener('click', () => setMode('video'));
   els['tab-live'].addEventListener('click', () => setMode('live'));
+  // The status pill doubles as a retry button when polling is failing.
+  if (els['status-pill']) {
+    els['status-pill'].addEventListener('click', () => {
+      pollStatus();
+      scheduleStatus();
+      pollFrames();
+      scheduleFrames();
+    });
+  }
   els['btn-open-replay'].addEventListener('click', () => {
     setMode('video');
     els['btn-browse-video'].focus();

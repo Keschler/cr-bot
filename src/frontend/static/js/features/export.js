@@ -4,7 +4,7 @@
 
 import { state } from '../state/store.js';
 import { els, img } from '../utils/elements.js';
-import { showError } from '../utils/dom.js';
+import { showError, toast } from '../utils/dom.js';
 import { basename } from '../utils/format.js';
 import {
   buildActionsCsv, buildSessionExport, downloadBlob, downloadText, encodeHash,
@@ -42,6 +42,7 @@ export function exportSessionJson() {
     frames: state.history,
   });
   downloadText(JSON.stringify(payload, null, 2), sessionFileStem() + '-session.json', 'application/json');
+  toast('Session exported: ' + state.history.length + ' frames', 'success');
 }
 
 export function exportActionsCsv() {
@@ -58,6 +59,7 @@ export function exportActionsCsv() {
     };
   });
   downloadText(buildActionsCsv(rows), sessionFileStem() + '-actions.csv', 'text/csv;charset=utf-8');
+  toast('Actions exported: ' + entries.length + ' plays', 'success');
 }
 
 export async function saveFrameJpeg() {
@@ -72,6 +74,7 @@ export async function saveFrameJpeg() {
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const blob = await res.blob();
     downloadBlob(blob, sessionFileStem() + '-f' + frame.frame_index + '.jpg');
+    toast('Frame f' + frame.frame_index + ' saved', 'success');
   } catch (err) {
     showError('Frame download failed: ' + String((err && err.message) || err));
   }
@@ -94,6 +97,9 @@ export async function copyDeepLink() {
   const url = currentDeepLink();
   try {
     await navigator.clipboard.writeText(url);
+    showError('');
+    toast('Link copied to clipboard', 'success');
+    return;
   } catch (err) {
     // Clipboard API unavailable (permissions/insecure context): select-and-copy fallback.
     const ta = document.createElement('textarea');
@@ -112,6 +118,7 @@ export async function copyDeepLink() {
     document.body.removeChild(ta);
   }
   showError('');
+  toast('Link copied to clipboard', 'success');
 }
 
 export function bindExportEvents() {

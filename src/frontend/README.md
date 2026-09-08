@@ -54,10 +54,18 @@ uvicorn src.frontend.server:app
 Then open `http://127.0.0.1:8000/` (or the host/port your server binds).
 The page polls `GET /api/status` every 2 s and `GET /api/frames` every
 1 s (playback speed steps the cursor through buffered frames instead of
-changing the poll rate). The center image refreshes from `GET /api/frame/latest`.
+changing the poll rate). Both loops back off exponentially (to 30 s /
+15 s) while the backend is unreachable; the status pill doubles as a
+retry button, and a sticky toast offers Retry with reconnect confirmation.
+Frame images load via fetch: frames evicted from the bounded server
+history (HTTP 204) show a "frame evicted" badge with a one-time toast
+instead of stale pixels, and overlays stay withheld.
 
 UI preferences (overlay toggles, speed, device, checkpoint, transport)
 persist in `localStorage` (`ara-settings-v1`) and are restored on reload.
+Transient confirmations (uploads with progress bar, exports, link copies,
+reconnects) appear as dismissible toasts; blocking form/start errors stay
+in the persistent error bar.
 
 ## Video mode
 
