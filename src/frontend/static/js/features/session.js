@@ -48,8 +48,12 @@ export function frameDelayMs() {
 let playAcc = 0;
 let lastLiveRefresh = 0;
 let pendingResumeFrame = null;
+let pendingLink = null;
 let lastLibrarySave = 0;
 
+export function setPendingDeepLink(link) {
+  pendingLink = link && typeof link === 'object' ? link : null;
+}
 
 export function scheduleFrames() {
   if (state.framesTimer) clearTimeout(state.framesTimer);
@@ -118,6 +122,29 @@ export async function pollFrames() {
           const target = state.history.findIndex((f) => f.frame_index >= pendingResumeFrame);
           pendingResumeFrame = null;
           seek(target >= 0 ? target : state.history.length - 1);
+        }
+      }
+      // A pasted deep link (#f=&r=&v=) jumps once the frames arrive. A link
+      // naming a different replay than the running one is dropped instead of
+      // yanking the cursor somewhere surprising.
+      if (pendingLink && state.history.length) {
+        const last = state.history[state.history.length - 1];
+        const linkVideo = pendingLink.video || null;
+        const curVideo = state.uploadedVideoName || state.sessionLabel || '';
+        if (linkVideo && curVideo && linkVideo !== curVideo) {
+          pendingLink = null;
+        } else if (pendingLink.frame === null || last.frame_index >= pendingLink.frame) {
+          if (pendingLink.rank !== null && pendingLink.rank !== undefined) {
+            state.selectedRank = pendingLink.rank;
+          }
+          const want = pendingLink.frame;
+          pendingLink = null;
+          if (want === null) {
+            renderCurrent();
+          } else {
+            const target = state.history.findIndex((f) => f.frame_index >= want);
+            seek(target >= 0 ? target : state.history.length - 1);
+          }
         }
       }
     }

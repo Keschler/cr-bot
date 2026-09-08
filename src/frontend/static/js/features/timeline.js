@@ -6,6 +6,7 @@ import { state } from '../state/store.js';
 import { els } from '../utils/elements.js';
 import { esc } from '../utils/dom.js';
 import { num } from '../utils/format.js';
+import { encodeHash } from '../utils/share.js';
 import { visualStateOf, actionOf, currentFrame } from './frames.js';
 import { renderLeft, renderRight } from './panels.js';
 import { renderCenter } from './overlay.js';
@@ -274,6 +275,18 @@ export function hideTrackTooltip() {
   els['timeline-tooltip'].hidden = true;
 }
 
+export function writeLocationHash() {
+  // Deep link to the cursor frame (+ inspected rank): cheap replaceState so
+  // scrubbing never spams the browser history. Read back at boot.
+  try {
+    const frame = currentFrame();
+    window.history.replaceState(null, '', encodeHash({
+      frame: frame ? frame.frame_index : null,
+      rank: state.selectedRank,
+      video: state.uploadedVideoName || state.sessionLabel || null,
+    }));
+  } catch (e) { /* file:// or restricted contexts */ }
+}
 
 export function renderCurrent() {
   // A pre-session ROI preview takes over the whole center column: session
@@ -305,6 +318,7 @@ export function seek(i) {
   refreshImage();
   renderCurrent();
   noteCursorMoved(false);
+  writeLocationHash();
 }
 
 let trackDragging = false;

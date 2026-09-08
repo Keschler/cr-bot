@@ -33,6 +33,7 @@ export const els = {};
   'toggle-boxes', 'toggle-grid', 'toggle-labels',
   'frame-wrap', 'center-frame', 'frame-overlay', 'frame-empty', 'history-badge',
   'btn-play', 'btn-prev', 'btn-next', 'time-label', 'speed-select',
+  'btn-export-json', 'btn-export-csv', 'btn-save-frame', 'btn-copy-link',
   'suggestions', 'reason-text', 'reason-entropy', 'reason-mode-probs',
   'reason-hand-stable', 'reason-confidence',
   'timeline-label', 'timeline-track', 'timeline-rail', 'timeline-fill', 'timeline-markers',

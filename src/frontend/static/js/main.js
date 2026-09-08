@@ -19,11 +19,14 @@
  */
 
 import { img } from './utils/elements.js';
+import { decodeHash } from './utils/share.js';
 import {
   setMode, bindImageEvents, bindSessionEvents, applyPersistedSettings,
   loadCheckpoints, loadServerCapabilities, loadGrid, loadRecentSessions,
+  setPendingDeepLink,
   pollStatus, scheduleFrames,
 } from './features/session.js';
+import { bindExportEvents } from './features/export.js';
 import { bindRoiEvents, roiPreviewVisible, drawRoiPreviewBoxes } from './features/roi-editor.js';
 import { bindCorrectionEvents, bindCanvasEvents, loadLabels } from './features/corrections.js';
 import { bindPanelsEvents } from './features/panels.js';
@@ -38,7 +41,9 @@ bindCorrectionEvents();
 bindCanvasEvents();
 bindPanelsEvents();
 bindTimelineEvents();
+bindExportEvents();
 applyPersistedSettings();
+setPendingDeepLink(decodeHash(window.location.hash));
 
 window.addEventListener('resize', () => {
   drawOverlay(currentFrame());

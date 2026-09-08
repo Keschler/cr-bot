@@ -84,6 +84,10 @@ persist in `localStorage` (`ara-settings-v1`) and are restored on reload.
 4. Press **Start** (`POST /api/video/start`).
 5. Scrub history with the transport bar or the bottom timeline.
    Seeks pause playback; polling continues so the timeline stays fresh.
+   The transport bar also holds share actions: **JSON** (session frames +
+   suggestions), **CSV** (confirmed own/foe plays), **Frame** (current
+   frame JPEG), and **Link** (copies a `#f=<frame>&r=<rank>&v=<video>`
+   deep link; opening it jumps back to that frame once frames arrive).
 
 Every video start is recorded in the **Recent replays** list (backed by
 `uploads/sessions.json` via `GET/POST /api/sessions` and

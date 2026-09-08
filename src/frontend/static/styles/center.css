@@ -42,6 +42,7 @@
 }
 #btn-play { min-width: 72px; }
 .time-label { color: var(--muted); font-size: 12px; min-width: 110px; flex: 1; font-variant-numeric: tabular-nums; }
+.share-group { display: flex; gap: 6px; align-items: center; }
 .speed { color: var(--muted); font-size: 12px; display: flex; gap: 6px; align-items: center; }
 .speed select { height: 32px; }
 

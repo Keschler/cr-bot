@@ -9,7 +9,7 @@ import { num, fmtInt, cardIconUrl, handEntries, handName, handCost, suggestionCa
 import { parseCell } from '../utils/geometry.js';
 import { visualStateOf, suggestionsOf, diagnosticsOf, actionOf, topSuggestions } from './frames.js';
 import { unitKeyOf, editKeyOf, draftFor, draftUpdateFor, refreshCorrectionControls } from './corrections.js';
-import { renderCurrent } from './timeline.js';
+import { renderCurrent, writeLocationHash } from './timeline.js';
 
 // Card-art URLs that 404'd: remembered so polls don't re-request (and
 // re-flash) them when the same card reappears.
@@ -515,5 +515,6 @@ export function bindPanelsEvents() {
     const rank = parseInt(btn.dataset.inspect, 10) || 0;
     state.selectedRank = state.selectedRank === rank ? null : rank;
     renderCurrent();
+    writeLocationHash();
   });
 }
