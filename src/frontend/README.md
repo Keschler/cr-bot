@@ -91,7 +91,9 @@ in the persistent error bar.
    Another frame, or uncheck the adapt checkbox).
 4. Press **Start** (`POST /api/video/start`).
 5. Scrub history with the transport bar or the bottom timeline.
-   Seeks pause playback; polling continues so the timeline stays fresh.
+   Seeks pause playback (polling continues so the timeline stays fresh);
+   dragging to the far right — or the ● Live button — resumes live
+   follow instead.
    Keyboard: `Space` play/pause, `←`/`→` or `j`/`l` step (`Shift` = 10),
    `Home`/`End` jump, `e` edit mode, `1`–`3` inspect a suggestion, `?`
    opens the shortcut help, `Esc` closes it. Keys no-op while typing.

@@ -9,7 +9,7 @@
 
 import { state } from '../state/store.js';
 import { els } from '../utils/elements.js';
-import { seek } from './timeline.js';
+import { seek, pausePlayback } from './timeline.js';
 import { scheduleFrames } from './session.js';
 import { setEditMode } from './corrections.js';
 import { toggleInspectRank } from './panels.js';
@@ -65,7 +65,9 @@ export function onShortcutKey(ev) {
     if (!state.history.length) return;
     ev.preventDefault();
     if (state.playing) {
-      seek(state.cursor); // seek pauses (polling continues, cursor sticks)
+      // Pause explicitly: seek-to-edge resumes live follow, so seek() alone
+      // would no-op here when parked at the edge.
+      pausePlayback();
     } else {
       state.playing = true;
       if (els['btn-play']) {

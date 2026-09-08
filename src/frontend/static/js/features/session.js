@@ -12,7 +12,7 @@ import { roiAdaptAvailableFromDims, buildVideoStartPayload } from './roi.js';
 import { clearRoiAdapt, showRoiAdaptAvailable, roiPreviewVisible, syncRoiPreviewClass, drawRoiPreviewBoxes } from './roi-editor.js';
 import { visualStateOf, suggestionsOf, diagnosticsOf, currentFrame, isLiveEdge } from './frames.js';
 import { drawOverlay, renderCenter } from './overlay.js';
-import { renderCurrent, seek } from './timeline.js';
+import { renderCurrent, seek, pausePlayback } from './timeline.js';
 import { hideFloatbar, setCorrectionStatus } from './corrections.js';
 
 /* ---------- status + frames polling (with reconnect backoff) ---------- */
@@ -176,14 +176,17 @@ export function ingestFrames(frames) {
   renderCurrent();
   // A resumed replay jumps back to its saved cursor once the
   // re-analysis has caught up (seek pauses, so the jump sticks).
-  if (pendingResumeFrame !== null && pendingResumeFrame !== undefined) {
-    const last = state.history[state.history.length - 1];
-    if (last && last.frame_index >= pendingResumeFrame) {
-      const target = state.history.findIndex((f) => f.frame_index >= pendingResumeFrame);
-      pendingResumeFrame = null;
-      seek(target >= 0 ? target : state.history.length - 1);
-    }
-  }
+      if (pendingResumeFrame !== null && pendingResumeFrame !== undefined) {
+        const last = state.history[state.history.length - 1];
+        if (last && last.frame_index >= pendingResumeFrame) {
+          const target = state.history.findIndex((f) => f.frame_index >= pendingResumeFrame);
+          pendingResumeFrame = null;
+          seek(target >= 0 ? target : state.history.length - 1);
+          // The jump is for inspection: stay paused even if it lands on the
+          // edge (seek-to-edge otherwise resumes live follow).
+          pausePlayback();
+        }
+      }
   // A pasted deep link (#f=&r=&v=) jumps once the frames arrive. A link
   // naming a different replay than the running one is dropped instead of
   // yanking the cursor somewhere surprising.
@@ -197,14 +200,17 @@ export function ingestFrames(frames) {
       if (pendingLink.rank !== null && pendingLink.rank !== undefined) {
         state.selectedRank = pendingLink.rank;
       }
-      const want = pendingLink.frame;
-      pendingLink = null;
-      if (want === null) {
-        renderCurrent();
-      } else {
-        const target = state.history.findIndex((f) => f.frame_index >= want);
-        seek(target >= 0 ? target : state.history.length - 1);
-      }
+          const want = pendingLink.frame;
+          pendingLink = null;
+          if (want === null) {
+            renderCurrent();
+          } else {
+            const target = state.history.findIndex((f) => f.frame_index >= want);
+            seek(target >= 0 ? target : state.history.length - 1);
+            // Same as resume jumps: a pasted link is for inspection, so
+            // stay paused even when it lands on the edge.
+            pausePlayback();
+          }
     }
   }
 }
@@ -1075,6 +1081,10 @@ export function bindSessionEvents() {
   });
   els['btn-prev'].addEventListener('click', () => seek(state.cursor - 1));
   els['btn-next'].addEventListener('click', () => seek(state.cursor + 1));
+  if (els['btn-go-live']) {
+    // Seeking to the edge resumes live follow (see seek()).
+    els['btn-go-live'].addEventListener('click', () => seek(state.history.length - 1));
+  }
   els['speed-select'].addEventListener('change', () => {
     const v = parseFloat(els['speed-select'].value);
     state.speed = Number.isFinite(v) && v > 0 ? v : 1;

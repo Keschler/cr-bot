@@ -32,7 +32,7 @@ export const els = {};
   'badge-ingame', 'badge-perf', 'badge-arena',
   'toggle-boxes', 'toggle-grid', 'toggle-labels',
   'frame-wrap', 'center-frame', 'frame-overlay', 'frame-empty', 'history-badge',
-  'btn-play', 'btn-prev', 'btn-next', 'time-label', 'speed-select',
+  'btn-play', 'btn-prev', 'btn-next', 'btn-go-live', 'time-label', 'speed-select',
   'btn-export-json', 'btn-export-csv', 'btn-save-frame', 'btn-copy-link',
   'suggestions', 'reason-text', 'reason-entropy', 'reason-mode-probs',
   'reason-hand-stable', 'reason-confidence', 'reason-timing', 'reason-devices',

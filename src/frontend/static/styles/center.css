@@ -41,6 +41,8 @@
   min-width: 40px; padding: 4px 10px;
 }
 #btn-play { min-width: 72px; }
+#btn-go-live { border-color: var(--red); color: var(--red); white-space: nowrap; }
+#btn-go-live[hidden] { display: none; }
 .time-label { color: var(--muted); font-size: 12px; min-width: 110px; flex: 1; font-variant-numeric: tabular-nums; }
 .share-group { display: flex; gap: 6px; align-items: center; }
 .speed { color: var(--muted); font-size: 12px; display: flex; gap: 6px; align-items: center; }

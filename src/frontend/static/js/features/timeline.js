@@ -297,20 +297,34 @@ export function renderCurrent() {
   renderRight(frame);
   renderActionHistory();
   renderTimeline();
+  // The Go-live button only shows while parked behind the edge; at the
+  // edge (or with no session) there is nothing to catch up to.
+  const goLive = els['btn-go-live'];
+  if (goLive) {
+    goLive.hidden = !(state.history.length && state.cursor < state.history.length - 1);
+  }
+}
+
+export function pausePlayback() {
+  state.playing = false;
+  if (els['btn-play']) {
+    els['btn-play'].textContent = 'Play';
+    els['btn-play'].setAttribute('aria-pressed', 'false');
+  }
 }
 
 export function seek(i) {
   if (!state.history.length) return;
-  // A manual seek pauses: otherwise the next arriving frames snap the cursor
-  // back to the live edge and the seek is immediately yanked away.
-  if (state.playing) {
-    state.playing = false;
-    if (els['btn-play']) {
-      els['btn-play'].textContent = 'Play';
-      els['btn-play'].setAttribute('aria-pressed', 'false');
-    }
-  }
   state.cursor = Math.max(0, Math.min(state.history.length - 1, i));
+  const atEdge = state.cursor === state.history.length - 1;
+  // Landing exactly on the live edge resumes follow mode (dragging to the
+  // far right means "go live"); any other seek pauses so newly arriving
+  // frames don't yank the cursor away.
+  state.playing = atEdge;
+  if (els['btn-play']) {
+    els['btn-play'].textContent = atEdge ? 'Pause' : 'Play';
+    els['btn-play'].setAttribute('aria-pressed', String(atEdge));
+  }
   state.selection = null;
   state.dragBox = null;
   state.dragMove = null;
