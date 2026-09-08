@@ -63,6 +63,25 @@ OWN_ACTION_TRACK_FALLBACK_CARDS = {
     "electro-wizard",
 }
 
+# Canonical 2.6 Hog Cycle deck, used to scrub the own-action tracker's raw
+# hand: the classifier labels empty/dealing slots with arbitrary card names
+# (e.g. "skeleton-dragons" sliding in), and anything outside this set cannot
+# be one of our cards, so the tracker reads it as an empty slot (None) and
+# the normal card -> None drop edge fires. Deck-specific by design: sessions
+# with other decks must extend/replace this set or own-play drops stop.
+HOG_26_CYCLE_DECK = frozenset({
+    "hog-rider",
+    "musketeer",
+    "old-musketeer",
+    "cannon",
+    "ice-spirit",
+    "ice-golem",
+    "skeletons",
+    "fireball",
+    "log",
+    "the-log",
+})
+
 FRAME_CONFIRM_TROOPS = {
     "electro-wizard",
 }

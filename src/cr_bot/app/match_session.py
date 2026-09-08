@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 from cr_bot.app.state_builder import build_game_state, card_name
+from cr_bot.domain.constants import HOG_26_CYCLE_DECK
 from cr_bot.domain.frame_analysis import FrameAnalysisResult
 from cr_bot.trackers.enemy_cards import EnemyCardTracker
 from cr_bot.trackers.hand_state_filter import HandStateFilter
@@ -20,6 +21,31 @@ class MatchSessionStep:
     should_emit: bool
     in_game: bool
     finished_enemy_plays: list | None = None
+
+
+def tracker_hand_card(value):
+    """Raw hand value for the own-action tracker: deck card name or None.
+
+    The hand classifier labels empty/dealing slots with arbitrary card names
+    (e.g. "skeleton-dragons" sliding into a just-played slot). Anything
+    outside the session deck cannot be one of our cards, so it reads as an
+    empty slot (None) and the tracker's card -> None drop edge fires. Names
+    are never rewritten, only rejected; "none" still maps to None via
+    card_name(). Keep this on the tracker path only — policy and display
+    use card_name().
+    """
+    name = card_name(value)
+    if name is None or not isinstance(name, str):
+        return name
+    normalized = name
+    for suffix in ("-ev1", "-hero", "-evolution"):
+        if normalized.endswith(suffix):
+            normalized = normalized[: -len(suffix)]
+    if normalized.startswith("evo-"):
+        normalized = normalized[len("evo-"):]
+    if normalized == "the-log":
+        normalized = "log"
+    return name if normalized in HOG_26_CYCLE_DECK else None
 
 
 class MatchSession:
@@ -153,16 +179,32 @@ class MatchSession:
         # The tracker watches for played slots going empty, a transition the
         # hand-state filter deliberately hides from policy/display. Give it a
         # copy of the game state with the raw (unfiltered) hand instead.
+        # Either hand is deck-scrubbed: off-deck classifier output reads as
+        # an empty slot so the drop edge fires.
         tracker_state = game_state
         if isinstance(raw_hand_state, dict):
             try:
                 raw_hand = [
-                    card_name(raw_hand_state.get(f"card_{slot_idx}"))
+                    tracker_hand_card(raw_hand_state.get(f"card_{slot_idx}"))
                     for slot_idx in range(1, 5)
                 ]
                 tracker_state = replace(
                     game_state,
                     hud=replace(game_state.hud, hand_cards=raw_hand),
+                )
+            except (TypeError, ValueError, AttributeError):
+                pass
+        if tracker_state is game_state:
+            try:
+                tracker_state = replace(
+                    game_state,
+                    hud=replace(
+                        game_state.hud,
+                        hand_cards=[
+                            tracker_hand_card(card)
+                            for card in game_state.hud.hand_cards
+                        ],
+                    ),
                 )
             except (TypeError, ValueError, AttributeError):
                 tracker_state = game_state

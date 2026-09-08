@@ -3,6 +3,46 @@
 Vanilla HTML/CSS/JS dashboard for the Arena Replay Analyst. All data comes
 from the real backend API — there are no mocks or bundled fixtures.
 
+## Layout
+
+Backend (`src/frontend/`, `src` layout so tests import both `frontend.*`
+and `src.frontend.*`):
+
+- `app.py` — `create_app()` factory (CORS, routers, static mount) + `app`.
+  `server.py` is a thin back-compat shim re-exporting `app` and handlers.
+- `api/` — one `APIRouter` per domain: `system`, `video`, `live`,
+  `frames`, `roi`, `assets`, `corrections`, `stream` (`deps` shares the
+  session manager).
+- `models/` — `frames` (`FrontendFrame`), `session` (`FrontendSession`
+  store only), `requests` (Pydantic request/response models).
+- `services/` — `paths`, `devices`, `checkpoints`, `uploads`, `card_art`,
+  `session_manager` (background-thread lifecycle + frame JSON).
+- `runners/` — `pump` (frame-pump loop + tracker summarizers), `video`,
+  `live`. `session.py` is a shim re-exporting these for old imports.
+- `corrections/` — what-if label-correction engine (`_common`, `vocab`,
+  `edits`, `observation`, `reevaluate`).
+- `scoring.py` — pure policy-scoring helpers, unchanged.
+- `imaging.py` — JPEG encode + frame-dimension helpers.
+
+No heavy imports (`torch`/`cv2`/`cr_bot`) at module top: they stay lazy
+inside functions so the server imports without GPU/CV deps.
+
+Frontend (`static/`, native ES modules, no bundler — entry
+`<script type="module" src="js/main.js">`):
+
+- `js/main.js` — boot: binds all feature events, runs init loads.
+- `js/state/store.js` — single shared mutable `state` + constants.
+- `js/utils/` — `elements` (DOM/canvas handles), `dom`, `format`,
+  `geometry` (canvas/coordinate mapping).
+- `js/api/client.js` — fetch wrappers.
+- `js/features/` — `frames` (frame accessors), `roi` (pure payload
+  helpers), `roi-editor` (proposal review), `session` (polling, image,
+  video/live controls), `panels` (side panels), `overlay` (canvas
+  layers), `corrections` (drafts, edit mode, gestures), `timeline`
+  (history, markers, `renderCurrent` fan-out).
+- `styles/*.css` — topical stylesheets (`styles.css` is an `@import`
+  shim so the old `<link>` keeps working).
+
 ## Run
 
 From the repository root:
@@ -12,8 +52,20 @@ uvicorn src.frontend.server:app
 ```
 
 Then open `http://127.0.0.1:8000/` (or the host/port your server binds).
-The page polls `GET /api/status` every 2 s and `GET /api/frames` every
-`1 s / speed`. The center image refreshes from `GET /api/frame/latest`.
+The page opens an SSE stream (`GET /api/stream`) for ~0.25 s frame latency
+while a session runs, with `GET /api/frames` polling as fallback and stall
+re-sync. Both loops back off exponentially (to 30 s /
+15 s) while the backend is unreachable; the status pill doubles as a
+retry button, and a sticky toast offers Retry with reconnect confirmation.
+Frame images load via fetch: frames evicted from the bounded server
+history (HTTP 204) show a "frame evicted" badge with a one-time toast
+instead of stale pixels, and overlays stay withheld.
+
+UI preferences (overlay toggles, speed, device, checkpoint, transport)
+persist in `localStorage` (`ara-settings-v1`) and are restored on reload.
+Transient confirmations (uploads with progress bar, exports, link copies,
+reconnects) appear as dismissible toasts; blocking form/start errors stay
+in the persistent error bar.
 
 ## Video mode
 
@@ -39,13 +91,33 @@ The page polls `GET /api/status` every 2 s and `GET /api/frames` every
    Another frame, or uncheck the adapt checkbox).
 4. Press **Start** (`POST /api/video/start`).
 5. Scrub history with the transport bar or the bottom timeline.
-   Pausing stops frame polling; the status poll keeps running.
+   Seeks pause playback (polling continues so the timeline stays fresh);
+   dragging to the far right — or the ● Live button — resumes live
+   follow instead.
+   Keyboard: `Space` play/pause, `←`/`→` or `j`/`l` step (`Shift` = 10),
+   `Home`/`End` jump, `e` edit mode, `1`–`3` inspect a suggestion, `?`
+   opens the shortcut help, `Esc` closes it. Keys no-op while typing.
+   The transport bar also holds share actions: **JSON** (session frames +
+   suggestions), **CSV** (confirmed own/foe plays), **Frame** (current
+   frame JPEG), and **Link** (copies a `#f=<frame>&r=<rank>&v=<video>`
+   deep link; opening it jumps back to that frame once frames arrive).
+
+Every video start is recorded in the **Recent replays** list (backed by
+`uploads/sessions.json` via `GET/POST /api/sessions` and
+`DELETE /api/sessions/{name}`, newest first, capped at 50). **Resume**
+re-runs the replay with its saved parameters and jumps back to the saved
+cursor once analysis catches up. Replays that used adapted ROIs are not
+auto-resumed — re-check Adapt ROIs and Start manually.
 
 ## Live mode
 
 1. Click the **Live** tab (or **Dashboard** in the top bar).
 2. Enter the ADB `serial`, `transport` (`stream` / `screenshot`), pick a
-   checkpoint (defaults to `prototype.pt`) and optional `calibration` profile.
+   checkpoint (prefers `prototype.pt`) and optional `calibration` profile.
+   Leaving calibration blank uses
+   `simulator/physical_lab/calibrations/phone-a-candidate.json` for the ASUS
+   AI2302 (1080×2400). Enter a device-specific JSON path for another layout;
+   relative paths resolve from the repository root.
 3. Press **Start** (`POST /api/live/start`).
 4. Press **Stop** in either mode to call `POST /api/stop`.
 
@@ -69,13 +141,16 @@ and a dedicated device; never enable execute on an unattended phone.
 | POST   | `/api/video/start`  | `{video_path, checkpoint, start_frame, frame_stride, max_frames, device, adapt_rois, roi_set}` |
 | POST   | `/api/live/start`   | `{serial, transport, checkpoint, device, calibration, execute, confirm_live}` |
 | POST   | `/api/stop`         | Stop the current session                             |
+| GET    | `/api/sessions`       | Saved recent replays (newest first, max 50)          |
+| POST   | `/api/sessions`       | Upsert a replay entry `{name, video_path, params, cursor_frame, frame_count}` |
+| DELETE | `/api/sessions/{name}` | Forget one saved replay                             |
 | GET    | `/api/frames?since=N&limit=50` | `{frames: [{frame_index, timestamp_s, in_game, emitted, record: {visual_state, action, result}, suggestions, diagnostics}]}` |
 | GET    | `/api/frame/latest` | Current frame as `image/jpeg`                        |
 | GET    | `/api/frame/{index}` | One history frame as `image/jpeg` (204 if evicted) |
 | GET    | `/api/labels` | Unit-class vocabulary + teams for label correction |
 | POST   | `/api/frame/{index}/reevaluate` | What-if re-score with corrected labels `{updates, deletes, adds}` (404 evicted / 409 no actor / 400 malformed / 422 unbuildable) |
 | DELETE | `/api/frame/{index}/reevaluate` | Revert a frame's what-if correction |
-| GET    | `/api/stream`       | Optional SSE stream (polling `/api/frames` is enough for v1) |
+| GET    | `/api/stream`       | SSE frame stream (UI primary; polling fallback + stall re-sync) |
 
 Fixed ROIs assume `NATIVE_SIZE = [1080, 2400]`. The adapt UI applies only
 when the probed video dims differ.
@@ -84,7 +159,10 @@ when the probed video dims differ.
 YOLO detector and the policy network. Explicit `cpu`/`cuda` override the
 `YOLO_DEVICE` environment; `auto` keeps the existing auto-selection.
 Requesting `cuda` without CUDA in the server environment fails with 400.
-The resolved devices are reported in the session `summary.devices`.
+The resolved devices are reported in the session `summary.devices` and
+shown in the reasoning card, alongside the per-frame pipeline time
+(`diagnostics.timing_ms`, full breakdown on hover). The arena grid also
+shades the river band and bridge columns served by `GET /api/grid`.
 CPU-only installs cannot use `cuda` (see `outputs/venv-gpu` for a CUDA
 build); video throughput is ~3x higher on GPU.
 
@@ -92,7 +170,8 @@ Label correction is a stateless what-if: the DETECTED OBJECTS panel lets
 you relabel a detection's class/team, delete false positives, or draw a
 box for a missed unit, then re-score that frame with the live policy
 (hidden state restored afterwards). The result overwrites only the
-frame's displayed suggestions (badge + Revert); trackers, timeline
+frame's displayed suggestions (badge + Revert); a diff row shows the
+original top action → the corrected one. Trackers, timeline
 markers, history, and live execution are never touched. Frames expose
 their raw `detections` (box + class + team + track) for this; only
 emitted in-game frames within the bounded history can be revised.

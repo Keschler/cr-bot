@@ -5,15 +5,65 @@ It captures the newest phone frame, extracts public game state with computer
 vision, converts it to `PolicyObservationV2`, and lets the policy choose
 `WAIT` or `PLAY(card_slot, (column, row))`.
 
-The primary entry point is the standalone Linux executable documented in
-[`simulator/RUN_PROTOTYPE_LIVE.md`](simulator/RUN_PROTOTYPE_LIVE.md). It bundles
-the Python runtime, CPU PyTorch, visual extractor, KataCR inference, the default
-prototype checkpoint, card assets, ADB, and FFmpeg. Users do not need Python,
-pip, a virtual environment, or a repository checkout.
+The **Arena Replay Analyst** browser frontend brings recorded-video analysis,
+live phone capture, and policy inspection into one workspace. Inspect detected
+objects, cards, elixir, tower health, action history, and policy suggestions;
+scrub the frame timeline, edit labels, and export results.
 
-<img width="1600" height="900" alt="cr-bot-banner-v1-dashboard" src="https://github.com/user-attachments/assets/1d225b86-79a3-4477-b524-2274faa92692" />
+<img src="docs/images/frontend-banner.png" alt="Arena Replay Analyst frontend showing live gameplay, action history, detected objects, and policy suggestions" width="1600" />
+
+## Run the frontend
+
+Complete the [development setup](#development), then run from the repository
+root with the environment activated:
+
+```bash
+uvicorn src.frontend.server:app --reload
+```
+
+Open **http://127.0.0.1:8000/**. The UI is served by the Python backend and uses
+native JavaScript modules; no Node.js installation or frontend build is needed.
+The server loads vision and policy dependencies when analysis starts. Analysis
+also needs the local detector/classifier assets and a policy checkpoint; the
+checkpoint selector prefers `prototype.pt` in the repository root when present.
+
+### Analyze a video
+
+Select **Video** or **Open Replay**, upload a recording, and choose a checkpoint
+and inference device. Set the start frame, frame stride, and frame limit as
+needed. For recordings with a different layout, review and adjust the proposed
+ROIs before starting analysis.
+
+Use the timeline to inspect frames and confirmed own/opponent plays. Toggle
+boxes, grid, and labels, inspect policy suggestions, or edit detections and
+**Re-evaluate** the selected frame. Export frame data as JSON, action history as
+CSV, or the current frame as an image. Recent replays retain the parameters for
+rerunning analysis; they are not complete saved inference caches.
+
+### Connect a live phone
+
+Enable USB debugging, authorize the phone, and use `adb devices` to find its
+serial. ADB must be available on the server; H.264 streaming also needs FFmpeg.
+Select **Live**, enter the serial, and choose a checkpoint, transport
+(H.264 stream or screenshot polling), and inference device (automatic, CPU, or
+CUDA). Press **Start** to begin and **Stop** to end the session.
+
+Leave **Execute actions on device** unchecked to observe and inspect policy
+decisions. To enable taps, check it and **I confirm live control of this device**.
+An empty Calibration field uses the repository's
+[`ASUS AI2302 profile`](simulator/physical_lab/calibrations/phone-a-candidate.json)
+for its 1080×2400 layout. For another device/layout, enter the path to its own
+calibration JSON; relative paths resolve from the repository root.
+
+See the [frontend guide](src/frontend/README.md) for keyboard shortcuts,
+ROI editing, session behavior, and API endpoints.
 
 ## Run the packaged binary
+
+For a standalone command-line workflow, the Linux executable documented in
+[`simulator/RUN_PROTOTYPE_LIVE.md`](simulator/RUN_PROTOTYPE_LIVE.md) bundles the
+Python runtime, CPU PyTorch, visual extractor, KataCR inference, default
+checkpoint, card assets, ADB, and FFmpeg. It does not require a Python setup.
 
 Download `prototype-live-linux-x86_64` from the
 [latest GitHub release](https://github.com/keschler/cr-bot/releases/latest).
@@ -122,11 +172,15 @@ JAX wheels do not support the newer system Python versions:
 git clone https://github.com/Keschler/cr-bot.git
 cd cr-bot
 git submodule update --init vendor/external/KataCR
-python3.12 -m venv .venv
-source .venv/bin/activate
+python3.12 -m venv outputs/venv
+source outputs/venv/bin/activate
 python -m pip install --upgrade pip
 pip install -e .
 ```
+
+Initialize KataCR at the pinned revision before starting analysis. The live
+runtime can fall back to an older checkout under `capture/vendor`; that copy
+may lack the tracker compatibility fixes in `vendor/external/KataCR`.
 
 The source launcher accepts the same options as the packaged executable:
 
@@ -167,7 +221,7 @@ performance notes are in [`simulator/README.md`](simulator/README.md).
 ```text
 cr-bot/
 ├── simulator/
-│   ├── run_prototype_live.py       primary source launcher
+│   ├── run_prototype_live.py       command-line live/video launcher
 │   ├── RUN_PROTOTYPE_LIVE.md       distribution and live-operation guide
 │   ├── prototype_live.spec         one-file PyInstaller build
 │   ├── physical_lab/               phone control, calibration, and safety gates
@@ -177,6 +231,16 @@ cr-bot/
 │   ├── rosters/                    supported opponent roster data
 │   ├── scenarios/                  deterministic simulator scenarios
 │   └── tests/                      simulator-local tests
+├── src/frontend/                  Arena Replay Analyst web application
+│   ├── server.py                   Uvicorn entry point (app compatibility shim)
+│   ├── app.py                      FastAPI factory, routers, and static serving
+│   ├── api/                        session, frame, stream, ROI, and edit endpoints
+│   ├── models/                     requests, analyzed frames, and session state
+│   ├── services/                   workers, checkpoints, uploads, replay library
+│   ├── runners/                    video/live orchestration and shared frame pump
+│   ├── corrections/                edited observations and policy re-evaluation
+│   ├── scoring.py                  policy suggestion scoring
+│   └── static/                     HTML, CSS, and native JavaScript modules
 ├── src/cr_bot/
 │   ├── app/                        frame pipeline and runtime orchestration
 │   ├── vision/                     detector, OCR, and frame extraction
@@ -192,6 +256,7 @@ cr-bot/
 ├── data/                           evaluation inputs and local datasets
 ├── scripts/                        training, evaluation, and debugging scripts
 ├── tests/                          project tests, including tests/simulator/
+├── uploads/                        local uploaded videos and recent-replay metadata
 ├── vendor/external/KataCR/         patched detector dependency
 └── pyproject.toml                  Python package and dependency configuration
 ```
@@ -214,6 +279,50 @@ next-card classification use project-trained MobileNetV3-Small models.
 
 ## Architecture
 
-![Connected systems architecture](docs/architecture.png)
+```mermaid
+flowchart TD
+    UI["Browser: Arena Replay Analyst"]
+    API["FastAPI routes · src/frontend/api"]
+    Session["Session manager + background worker"]
+    Video["Video runner · uploaded recording"]
+    Live["Live runner · ADB stream / screenshots"]
+    Vision["cr_bot vision · KataCR, classifiers, OCR"]
+    Tracking["Frame pipeline + MatchSession · temporal trackers"]
+    Bridge["Policy bridge · PolicyObservationV2"]
+    Actor["PrototypeActor · recurrent policy checkpoint"]
+    Frames["FrontendSession · bounded frame history and suggestions"]
+    Edits["Label corrections · rebuild observation and re-score"]
+    Control["Execute + confirmation + calibration · verified ADB taps"]
+    Phone["Android phone"]
+    Training["Deterministic simulator + RL training"]
 
-Editable diagrams.net source: [`docs/architecture.drawio`](docs/architecture.drawio)
+    UI -->|start / stop / configure| API
+    API --> Session
+    Session --> Video
+    Session --> Live
+    Phone --> Live
+    Video --> Vision
+    Live --> Vision
+    Vision --> Tracking --> Bridge --> Actor
+    Tracking --> Frames
+    Actor --> Frames
+    Frames -->|SSE + polling · JSON and frame images| UI
+    UI -->|edit and re-evaluate via API| Edits
+    Frames --> Edits
+    Edits -->|updated suggestions| UI
+    Actor -->|live PLAY only| Control --> Phone
+    Training -.->|checkpoint| Actor
+```
+
+The browser handles presentation, timeline navigation, overlays, and exports.
+FastAPI manages a shared active session and runs analysis in a background
+worker. Video and live runners share the extraction, tracking, observation,
+and policy components; the command-line launcher also uses the physical-lab
+runtime. The session holds a bounded frame history for inspection, while
+uploaded videos and recent-replay metadata live under `uploads/`.
+
+Label re-evaluation scores an edited frame for inspection. Device execution
+belongs to the live runner and passes through calibration and confirmation
+gates. Simulator training produces policy checkpoints separately from frontend
+inference. Frame index, capture/video timestamp, and match clock remain distinct
+throughout the pipeline.

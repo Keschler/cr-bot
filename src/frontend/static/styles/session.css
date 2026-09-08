@@ -1,0 +1,82 @@
+/* Session setup form (video/live tabs, upload, device selects). */
+.field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; font-size: 13px; min-width: 0; }
+.field span { color: var(--muted); font-size: 12px; }
+.field input, .field select, .speed select {
+  background: #0b1426; color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px;
+  width: 100%; min-width: 0; max-width: 100%;
+}
+.field input[type="file"] { padding: 6px; overflow: hidden; text-overflow: ellipsis; }
+.field input[type="number"] { padding-right: 4px; }
+.field-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
+.field-row.trio { grid-template-columns: minmax(0, 1fr) minmax(0, 0.8fr) minmax(0, 1fr); gap: 6px; }
+.field-row.trio select { text-overflow: ellipsis; }
+.hint { color: var(--muted); font-size: 12px; margin: 0 0 8px; }
+.hint code { color: var(--text); }
+.check { display: flex; gap: 8px; align-items: center; margin: 6px 0; font-size: 13px; }
+.warning {
+  background: #2a1f10; border: 1px solid #5b4a1f; color: #ffd9a0;
+  border-radius: 8px; padding: 8px; font-size: 12px;
+}
+.btn-row { display: flex; gap: 8px; margin-top: 8px; }
+.btn {
+  background: #1b2a47; color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px;
+  padding: 6px 12px; cursor: pointer;
+}
+.btn-primary { background: #1663c7; border-color: #1663c7; }
+.btn:disabled { opacity: 0.5; cursor: default; }
+
+/* ROI adaptation (video format differs from 1080x2400 native). */
+#adapt-notice { margin: 4px 0; }
+/* While a proposed ROI set is under review in the middle player, the
+   overlay canvas takes pointer events for drag-to-adjust gestures. */
+.frame-wrap.roi-preview canvas { pointer-events: auto; }
+#roi-preview-meta { margin-top: 4px; }
+
+/* Custom file picker: native input is visually hidden, the button + name
+   below carry the dark-theme styling. */
+.file-picker {
+  position: relative; display: flex; align-items: center; gap: 8px;
+  background: #0b1426; border: 1px solid var(--border); border-radius: 8px;
+  padding: 4px; min-width: 0;
+}
+.file-picker .btn { height: 26px; padding: 2px 12px; font-size: 12px; flex: none; }
+.file-input-hidden {
+  position: absolute; width: 1px; height: 1px; opacity: 0;
+  overflow: hidden; pointer-events: none;
+}
+.file-name {
+  color: var(--text) !important; font-size: 12px !important;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
+.file-name.is-empty { color: var(--muted) !important; }
+.session-panel .btn-row .btn { flex: 1; height: 32px; }
+.session-panel .field input[type="file"] { font-size: 12px; }
+#video-file-label { margin: 2px 0 6px; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.session-panel .check { margin: 4px 0; font-size: 12px; }
+.session-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.session-head h3 { margin: 0; }
+.session-mini { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.btn-mini { padding: 3px 10px; font-size: 12px; }
+.card-session.collapsed .session-panel { display: none; }
+
+/* Recent replays (session library). */
+.recent-wrap { margin-top: 10px; }
+.recent-wrap h4 {
+  margin: 0 0 6px; font-size: 11px; letter-spacing: 0.08em;
+  color: var(--muted); font-weight: 600;
+}
+.recent-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.recent-list .empty { color: var(--muted); font-size: 12px; }
+.recent-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+  padding: 6px 8px; font-size: 12px;
+}
+.recent-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.recent-main strong {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-weight: 600; max-width: 180px;
+}
+.recent-actions { display: flex; gap: 4px; flex: none; }

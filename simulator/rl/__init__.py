@@ -142,6 +142,15 @@ _TORCH_EXPORTS = {
     "behavior_cloning_loss",
     "compute_gae",
     "ppo_objective",
+    "ModelConfigV4",
+    "RecurrentV4Policy",
+    "V4ActionBatch",
+    "V4ActionHead",
+    "V4Logits",
+    "V4SupervisedWeights",
+    "WAIT_DURATIONS",
+    "count_parameters",
+    "v4_supervised_loss",
 }
 
 _FOUNDATION_EXPORTS = {
@@ -289,6 +298,16 @@ if TORCH_AVAILABLE:
         compute_gae,
         ppo_objective,
     )
+    from .model_v4 import (
+        WAIT_DURATIONS,
+        ModelConfigV4,
+        RecurrentV4Policy,
+        V4ActionBatch,
+        V4ActionHead,
+        V4Logits,
+        count_parameters,
+    )
+    from .losses_v4 import V4SupervisedWeights, v4_supervised_loss
 
     __all__ = [
         "TORCH_AVAILABLE",

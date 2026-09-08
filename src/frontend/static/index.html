@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Arena Replay Analyst v1.2.0</title>
   <link rel="icon" href="data:," />
-  <link rel="stylesheet" href="styles.css?v=28" />
+  <link rel="stylesheet" href="styles.css?v=32" />
 </head>
 <body>
   <header class="topbar">
@@ -27,6 +27,7 @@
     </nav>
 
     <div class="top-right">
+      <button id="btn-help" class="nav-btn" type="button" title="Keyboard shortcuts (?)">?</button>
       <span id="status-pill" class="status-pill is-idle" role="status" title="Backend status">No session</span>
     </div>
   </header>
@@ -91,6 +92,12 @@
           <div class="btn-row">
             <button id="btn-start-video" class="btn btn-primary" type="button">Start</button>
             <button id="btn-stop-video" class="btn" type="button">Stop</button>
+          </div>
+          <div class="recent-wrap">
+            <h4>RECENT REPLAYS</h4>
+            <ul id="recent-sessions" class="recent-list">
+              <li class="empty">No saved replays yet</li>
+            </ul>
           </div>
         </div>
         <div id="panel-live" class="session-panel" hidden>
@@ -247,6 +254,7 @@
         <button id="btn-play" class="btn" type="button" aria-pressed="true">Pause</button>
         <button id="btn-prev" class="btn" type="button" title="Previous frame">|◀</button>
         <button id="btn-next" class="btn" type="button" title="Next frame">▶|</button>
+        <button id="btn-go-live" class="btn btn-mini" type="button" title="Jump to the live edge and follow" hidden>● Live</button>
         <span id="time-label" class="time-label">—</span>
         <label class="speed">Speed
           <select id="speed-select">
@@ -256,6 +264,12 @@
             <option value="2">2x</option>
           </select>
         </label>
+        <div class="share-group" aria-label="Export and share">
+          <button id="btn-export-json" class="btn btn-mini" type="button" title="Download session frames + suggestions as JSON">JSON</button>
+          <button id="btn-export-csv" class="btn btn-mini" type="button" title="Download confirmed plays as CSV">CSV</button>
+          <button id="btn-save-frame" class="btn btn-mini" type="button" title="Download the current frame image">Frame</button>
+          <button id="btn-copy-link" class="btn btn-mini" type="button" title="Copy a link to the current frame">Link</button>
+        </div>
       </div>
     </section>
 
@@ -273,6 +287,8 @@
           <div><dt>Entropy</dt><dd id="reason-entropy">—</dd></div>
           <div><dt>Mode probs</dt><dd id="reason-mode-probs">—</dd></div>
           <div><dt>Hand stable</dt><dd id="reason-hand-stable">—</dd></div>
+          <div><dt>Frame time</dt><dd id="reason-timing">—</dd></div>
+          <div><dt>Devices</dt><dd id="reason-devices">—</dd></div>
         </dl>
         <p class="confidence-line">Confidence <span id="reason-confidence">—</span></p>
       </section>
@@ -299,6 +315,23 @@
     </ul>
   </footer>
 
-  <script src="app.js?v=29"></script>
+  <div id="help-modal" class="modal-backdrop" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="help-title">
+      <h2 id="help-title">Keyboard shortcuts</h2>
+      <table class="help-table">
+        <tr><td><kbd>Space</kbd></td><td>Play / pause</td></tr>
+        <tr><td><kbd>←</kbd> <kbd>→</kbd> or <kbd>j</kbd> <kbd>l</kbd></td><td>Step one frame (hold <kbd>Shift</kbd> for 10)</td></tr>
+        <tr><td><kbd>Home</kbd> / <kbd>End</kbd></td><td>First / last frame</td></tr>
+        <tr><td><kbd>e</kbd></td><td>Toggle label edit mode</td></tr>
+        <tr><td><kbd>1</kbd>–<kbd>3</kbd></td><td>Inspect suggestion 1–3</td></tr>
+        <tr><td><kbd>Delete</kbd> / <kbd>t</kbd></td><td>In edit mode: delete / re-team selected box</td></tr>
+        <tr><td><kbd>?</kbd></td><td>This help</td></tr>
+        <tr><td><kbd>Esc</kbd></td><td>Close help / deselect</td></tr>
+      </table>
+      <button id="btn-help-close" class="btn" type="button">Close</button>
+    </div>
+  </div>
+
+  <script type="module" src="js/main.js?v=32"></script>
 </body>
 </html>

@@ -1,0 +1,134 @@
+:root {
+  --bg: #0b1220;
+  --panel: #111a2e;
+  --panel-2: #0e1628;
+  --border: #22304d;
+  --text: #dbe4f5;
+  --muted: #8fa0bd;
+  --accent: #2ea6ff;
+  --green: #3ddc84;
+  --amber: #ffb454;
+  --red: #ff6b6b;
+  --blue: #3b82f6;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  min-width: 1100px;
+  display: grid;
+  grid-template-rows: 48px auto minmax(0, 1fr) auto;
+  height: 100vh;
+}
+
+/* Header */
+.topbar {
+  grid-row: 1;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 16px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.brand { display: flex; align-items: center; gap: 10px; }
+.brand-dot {
+  width: 22px; height: 22px; border-radius: 50%;
+  border: 3px solid var(--accent);
+  display: inline-block;
+}
+.brand-text { display: flex; flex-direction: column; line-height: 1.1; }
+.brand-version { color: var(--muted); font-size: 12px; }
+
+.topnav { display: flex; align-items: center; gap: 8px; margin: 0 auto; }
+.nav-btn {
+  background: transparent; color: var(--text);
+  border: 1px solid transparent; border-radius: 8px;
+  padding: 6px 10px; cursor: pointer;
+}
+.nav-btn:hover { border-color: var(--border); }
+
+.mode-tabs { display: flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.mode-tab {
+  background: transparent; color: var(--muted);
+  border: 0; padding: 6px 14px; cursor: pointer;
+}
+.mode-tab.is-active { background: #1b2a47; color: var(--text); }
+
+.top-right { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.status-pill {
+  font-size: 12px; padding: 4px 10px; border-radius: 999px;
+  border: 1px solid var(--border); background: #16213a;
+}
+.status-pill.is-idle { color: var(--muted); }
+.status-pill.is-running { color: var(--green); border-color: #1f4d36; }
+.status-pill.is-error { color: var(--red); border-color: #5b2b2b; }
+
+.error-bar {
+  background: #2a1414; color: #ffc9c9;
+  border-bottom: 1px solid #5b2b2b;
+  padding: 8px 16px; font-size: 13px;
+}
+
+.status-pill { cursor: pointer; }
+.status-pill:hover { border-color: var(--accent); }
+
+/* Toast notifications (transient confirmations, retry actions, progress). */
+.toast-stack {
+  position: fixed; right: 16px; bottom: 16px; z-index: 200;
+  display: flex; flex-direction: column; gap: 8px; max-width: 360px;
+}
+.toast {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  padding: 10px 12px; font-size: 13px; color: var(--text);
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55); cursor: pointer;
+}
+.toast-success { border-color: #1f4d36; }
+.toast-success .toast-msg { color: var(--green); }
+.toast-error { border-color: #5b2b2b; }
+.toast-info .toast-msg { color: var(--muted); }
+.toast-msg { flex: 1; min-width: 160px; }
+.toast-action {
+  background: #1b2a47; color: var(--text);
+  border: 1px solid var(--accent); border-radius: 8px;
+  padding: 4px 12px; cursor: pointer; font-size: 12px; flex: none;
+}
+.toast-progress {
+  flex-basis: 100%; height: 6px; border-radius: 3px;
+  background: #2b3a55; overflow: hidden;
+}
+.toast-progress div { height: 100%; width: 0; background: var(--accent); border-radius: 3px; }
+
+/* Help modal (shortcuts reference). */
+.modal-backdrop {
+  position: fixed; inset: 0; z-index: 100;
+  background: rgba(3, 6, 12, 0.7);
+  display: flex; align-items: center; justify-content: center;
+}
+.modal-backdrop[hidden] { display: none; }
+.modal {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  padding: 20px 24px; max-width: 420px; width: calc(100% - 48px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+}
+.modal h2 { margin: 0 0 12px; font-size: 16px; }
+.help-table { border-collapse: collapse; margin-bottom: 16px; font-size: 13px; }
+.help-table td { padding: 3px 10px 3px 0; color: var(--muted); }
+.help-table td:first-child { white-space: nowrap; }
+kbd {
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px;
+  padding: 1px 7px; font-size: 12px; font-family: inherit; color: var(--text);
+}
