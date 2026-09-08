@@ -24,6 +24,14 @@ export function suggestionsOf(frame) {
   return [];
 }
 
+export function originalSuggestionsOf(frame) {
+  // The pre-correction suggestions underneath a what-if (for diff display).
+  if (!frame) return [];
+  if (Array.isArray(frame.suggestions)) return frame.suggestions;
+  if (frame.record && Array.isArray(frame.record.suggestions)) return frame.record.suggestions;
+  return [];
+}
+
 export function diagnosticsOf(frame) {
   if (!frame) return {};
   if (frame.corrected && frame.corrected.diagnostics && typeof frame.corrected.diagnostics === 'object') return frame.corrected.diagnostics;

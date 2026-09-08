@@ -17,6 +17,20 @@
   font-size: 12px;
   margin-bottom: 8px;
 }
+/* What-if diff: original top action → corrected top action. */
+.correction-diff {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  background: rgba(46, 166, 255, 0.08);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+.correction-diff.is-same { color: var(--muted); }
+.diff-before { color: var(--muted); text-decoration: line-through; }
+.diff-arrow { color: var(--accent); }
+.diff-after { color: var(--text); font-weight: 600; }
 .detected li.is-edited { border-left: 3px solid #ffa94d; }
 .detected li.is-deleted { opacity: 0.55; border-left: 3px solid #ff6b6b; }
 .detected li.is-added { border-left: 3px dashed #ffd166; }

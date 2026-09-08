@@ -52,9 +52,9 @@ uvicorn src.frontend.server:app
 ```
 
 Then open `http://127.0.0.1:8000/` (or the host/port your server binds).
-The page polls `GET /api/status` every 2 s and `GET /api/frames` every
-1 s (playback speed steps the cursor through buffered frames instead of
-changing the poll rate). Both loops back off exponentially (to 30 s /
+The page opens an SSE stream (`GET /api/stream`) for ~0.25 s frame latency
+while a session runs, with `GET /api/frames` polling as fallback and stall
+re-sync. Both loops back off exponentially (to 30 s /
 15 s) while the backend is unreachable; the status pill doubles as a
 retry button, and a sticky toast offers Retry with reconnect confirmation.
 Frame images load via fetch: frames evicted from the bounded server
@@ -144,7 +144,7 @@ and a dedicated device; never enable execute on an unattended phone.
 | GET    | `/api/labels` | Unit-class vocabulary + teams for label correction |
 | POST   | `/api/frame/{index}/reevaluate` | What-if re-score with corrected labels `{updates, deletes, adds}` (404 evicted / 409 no actor / 400 malformed / 422 unbuildable) |
 | DELETE | `/api/frame/{index}/reevaluate` | Revert a frame's what-if correction |
-| GET    | `/api/stream`       | Optional SSE stream (polling `/api/frames` is enough for v1) |
+| GET    | `/api/stream`       | SSE frame stream (UI primary; polling fallback + stall re-sync) |
 
 Fixed ROIs assume `NATIVE_SIZE = [1080, 2400]`. The adapt UI applies only
 when the probed video dims differ.
@@ -153,7 +153,10 @@ when the probed video dims differ.
 YOLO detector and the policy network. Explicit `cpu`/`cuda` override the
 `YOLO_DEVICE` environment; `auto` keeps the existing auto-selection.
 Requesting `cuda` without CUDA in the server environment fails with 400.
-The resolved devices are reported in the session `summary.devices`.
+The resolved devices are reported in the session `summary.devices` and
+shown in the reasoning card, alongside the per-frame pipeline time
+(`diagnostics.timing_ms`, full breakdown on hover). The arena grid also
+shades the river band and bridge columns served by `GET /api/grid`.
 CPU-only installs cannot use `cuda` (see `outputs/venv-gpu` for a CUDA
 build); video throughput is ~3x higher on GPU.
 
@@ -161,7 +164,8 @@ Label correction is a stateless what-if: the DETECTED OBJECTS panel lets
 you relabel a detection's class/team, delete false positives, or draw a
 box for a missed unit, then re-score that frame with the live policy
 (hidden state restored afterwards). The result overwrites only the
-frame's displayed suggestions (badge + Revert); trackers, timeline
+frame's displayed suggestions (badge + Revert); a diff row shows the
+original top action → the corrected one. Trackers, timeline
 markers, history, and live execution are never touched. Frames expose
 their raw `detections` (box + class + team + track) for this; only
 emitted in-game frames within the bounded history can be revised.

@@ -5,7 +5,7 @@
 import { state, GRID_COLS, GRID_ROWS } from '../state/store.js';
 import { els, img, canvas, ctx } from '../utils/elements.js';
 import { num, suggestionCardName } from '../utils/format.js';
-import { containRect, toDisplay, parseCell, handSlotRect, gridBounds, cellToDisplay } from '../utils/geometry.js';
+import { containRect, toDisplay, parseCell, handSlotRect, gridBounds, gridSpec, cellToDisplay } from '../utils/geometry.js';
 import { visualStateOf, suggestionsOf, diagnosticsOf, currentFrame, topSuggestions } from './frames.js';
 import { roiPreviewVisible, drawRoiPreviewBoxes } from './roi-editor.js';
 import { imageMatchesFrame } from './session.js';
@@ -175,8 +175,24 @@ export function drawPlayArrow(s, rect, frame) {
 
 export function drawGrid(rect, frame) {
   // Grid lines span the arena-mapped grid bounds, not the full image.
+  // The river band and bridge columns shade in when the backend grid spec
+  // serves them (GET /api/grid river_rows/bridge_cols).
   const gb = gridBounds(rect, frame);
+  const spec = gridSpec();
   ctx.save();
+  if (spec.riverRows) {
+    const lo = Math.min.apply(null, spec.riverRows), hi = Math.max.apply(null, spec.riverRows);
+    ctx.fillStyle = 'rgba(46,166,255,0.10)';
+    ctx.fillRect(gb.x, gb.y + (lo / GRID_ROWS) * gb.h,
+      gb.w, ((hi - lo + 1) / GRID_ROWS) * gb.h);
+  }
+  if (spec.bridgeCols) {
+    ctx.fillStyle = 'rgba(255,180,80,0.12)';
+    for (const c of spec.bridgeCols) {
+      ctx.fillRect(gb.x + (c / GRID_COLS) * gb.w, gb.y,
+        gb.w / GRID_COLS, gb.h);
+    }
+  }
   ctx.strokeStyle = 'rgba(46,166,255,0.35)';
   ctx.lineWidth = 1;
   for (let c = 1; c < GRID_COLS; c++) {

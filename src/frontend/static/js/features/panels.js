@@ -7,7 +7,7 @@ import { els } from '../utils/elements.js';
 import { esc } from '../utils/dom.js';
 import { num, fmtInt, cardIconUrl, handEntries, handName, handCost, suggestionCardName } from '../utils/format.js';
 import { parseCell } from '../utils/geometry.js';
-import { visualStateOf, suggestionsOf, diagnosticsOf, actionOf, topSuggestions } from './frames.js';
+import { visualStateOf, suggestionsOf, originalSuggestionsOf, diagnosticsOf, actionOf, topSuggestions } from './frames.js';
 import { unitKeyOf, editKeyOf, draftFor, draftUpdateFor, refreshCorrectionControls } from './corrections.js';
 import { renderCurrent, writeLocationHash } from './timeline.js';
 
@@ -376,6 +376,13 @@ export function renderRight(frame) {
     badge.className = 'correction-badge';
     badge.textContent = 'Corrected labels · what-if (trackers & timeline unchanged)';
     box.appendChild(badge);
+    const diff = suggestionDiff(frame);
+    if (diff) {
+      const row = document.createElement('div');
+      row.className = 'correction-diff' + (diff.changed ? '' : ' is-same');
+      row.innerHTML = diff.html;
+      box.appendChild(row);
+    }
   }
   const sug = topSuggestions(suggestionsOf(frame));
   const diag = diagnosticsOf(frame);
@@ -461,6 +468,9 @@ export function renderRight(frame) {
     els['reason-entropy'].textContent = '—';
     els['reason-mode-probs'].textContent = '—';
     els['reason-hand-stable'].textContent = '—';
+    els['reason-timing'].textContent = '—';
+    els['reason-timing'].title = '';
+    els['reason-devices'].textContent = '—';
     els['reason-confidence'].textContent = '—';
     els['reason-confidence'].className = '';
     return;
@@ -483,6 +493,11 @@ export function renderRight(frame) {
   } else {
     els['reason-hand-stable'].textContent = '—';
   }
+  const timing = timingText(diag);
+  els['reason-timing'].textContent = timing === null ? '—' : timing;
+  els['reason-timing'].title = timingTitle(diag);
+  const devices = devicesText();
+  els['reason-devices'].textContent = devices === null ? '—' : devices;
   const topP = sug.length ? probFrac(sug[0]) : null;
   const conf = els['reason-confidence'];
   if (topP === null) {
@@ -498,6 +513,57 @@ export function renderRight(frame) {
     conf.textContent = 'Low';
     conf.className = 'is-low';
   }
+}
+
+export function timingText(diag) {
+  // Per-frame pipeline breakdown served as diagnostics.timing_ms
+  // {fetch, normalize, ..., total}. The headline is the total; the full
+  // breakdown is one hover away.
+  const t = diag ? diag.timing_ms : null;
+  if (t && typeof t === 'object') {
+    const total = num(t.total);
+    if (total !== null) return total.toFixed(0) + ' ms total';
+  }
+  return null;
+}
+
+export function timingTitle(diag) {
+  const t = diag ? diag.timing_ms : null;
+  if (!t || typeof t !== 'object') return '';
+  return Object.keys(t).sort()
+    .map((k) => k + ': ' + (num(t[k]) !== null ? num(t[k]).toFixed(1) + 'ms' : String(t[k])))
+    .join(' · ');
+}
+
+export function devicesText() {
+  // Session summary from GET /api/status (runners report resolved devices).
+  const s = state.sessionSummary;
+  const d = s && typeof s.devices === 'object' && s.devices !== null ? s.devices : null;
+  if (!d) return null;
+  const bits = [];
+  for (const k of Object.keys(d).sort()) {
+    if (d[k] !== undefined && d[k] !== null && d[k] !== '') bits.push(k + ' ' + String(d[k]));
+  }
+  return bits.length ? bits.join(' · ') : null;
+}
+
+export function suggestionDiff(frame) {
+  // One-line before → after for the top action under a what-if correction,
+  // so reviewers see what changed before Revert. Null when identical.
+  if (!frame || !frame.corrected) return null;
+  const vs = visualStateOf(frame);
+  const before = topSuggestions(originalSuggestionsOf(frame))[0] || null;
+  const after = topSuggestions(suggestionsOf(frame))[0] || null;
+  const describe = (s) => s
+    ? actionText(s, suggestionCardName(s, vs)) + ' @ ' + probPct(s) : '—';
+  const a = describe(before), b = describe(after);
+  if (a === b) return { changed: false, html: 'Top action unchanged by this correction.' };
+  return {
+    changed: true,
+    html: '<span class="diff-before">' + esc(a) + '</span>' +
+      '<span class="diff-arrow">→</span>' +
+      '<span class="diff-after">' + esc(b) + '</span>',
+  };
 }
 
 export function toggleInspectRank(rank) {

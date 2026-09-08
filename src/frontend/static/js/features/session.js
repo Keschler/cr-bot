@@ -30,12 +30,16 @@ export async function pollStatus() {
       toast('Backend reconnected', 'success');
     }
     statusFails = 0;
+    if (s && typeof s.summary === 'object' && s.summary !== null) {
+      state.sessionSummary = s.summary; // devices/timing inspector source
+    }
     if (s && s.error) {
       setPill('Error: ' + String(s.error).slice(0, 80), 'is-error', String(s.error));
       showError(String(s.error));
       return;
     }
     showError('');
+    if (!s.running) closeStream(); // no producer: don't hold a dead stream
     if (s && s.running) {
       const mode = s.mode || state.mode;
       const n = s.frame_count !== undefined && s.frame_count !== null ? s.frame_count : state.history.length;
@@ -97,10 +101,10 @@ export function setPendingDeepLink(link) {
 export function scheduleFrames() {
   if (state.framesTimer) clearTimeout(state.framesTimer);
   state.framesTimer = setTimeout(async () => {
-    // Always poll so a paused timeline stays fresh; pollFrames only follows
-    // the live edge when playing (follow mode), otherwise the cursor stays
-    // where the user scrubbed and playback stepping advances it below.
-    await pollFrames();
+    // The SSE stream carries increments with ~0.25s latency when healthy;
+    // polling stays as fallback (and re-syncs a silently stalled stream).
+    // Either way the cursor stepping below advances playback at speed.
+    if (!sseActive() || Date.now() - sseLastMsg > 10000) await pollFrames();
     if (state.playing && state.history.length) {
       if (state.cursor < state.history.length - 1) {
         // Step through buffered frames at the selected speed (1 frame per
@@ -131,71 +135,129 @@ export async function pollFrames() {
   try {
     const data = await apiGet('/api/frames?since=' + encodeURIComponent(state.lastSince) + '&limit=50');
     const frames = data && Array.isArray(data.frames) ? data.frames : [];
-    if (frames.length) {
-      // Follow mode: only snap to the new edge when the cursor was already
-      // at the edge (or empty). A scrubbed-back cursor must not be yanked
-      // away by every poll; stepping in scheduleFrames advances it instead.
-      const wasAtEdge = state.cursor < 0 || state.cursor >= state.history.length - 1;
-      const seen = new Set(state.history.map((f) => f.frame_index));
-      for (const f of frames) {
-        if (f === null || f === undefined || f.frame_index === undefined) continue;
-        if (seen.has(f.frame_index)) continue;
-        seen.add(f.frame_index);
-        state.history.push(f);
-      }
-      state.history.sort((a, b) => a.frame_index - b.frame_index);
-      if (state.history.length > 2000) {
-        const removed = state.history.length - 2000;
-        state.history.splice(0, removed);
-        // The splice shifts every retained index: a paused cursor must shift
-        // with it (and clamp), or currentFrame() goes out of bounds and the
-        // panels blank until the next play-follow.
-        state.cursor = Math.max(0, Math.min(state.history.length - 1, state.cursor - removed));
-      }
-      state.lastSince = state.history[state.history.length - 1].frame_index;
-      if (state.cursor < 0 || (state.playing && wasAtEdge)) {
-        state.cursor = state.history.length - 1;
-      }
-      renderCurrent();
-      // A resumed replay jumps back to its saved cursor once the
-      // re-analysis has caught up (seek pauses, so the jump sticks).
-      if (pendingResumeFrame !== null && pendingResumeFrame !== undefined) {
-        const last = state.history[state.history.length - 1];
-        if (last && last.frame_index >= pendingResumeFrame) {
-          const target = state.history.findIndex((f) => f.frame_index >= pendingResumeFrame);
-          pendingResumeFrame = null;
-          seek(target >= 0 ? target : state.history.length - 1);
-        }
-      }
-      // A pasted deep link (#f=&r=&v=) jumps once the frames arrive. A link
-      // naming a different replay than the running one is dropped instead of
-      // yanking the cursor somewhere surprising.
-      if (pendingLink && state.history.length) {
-        const last = state.history[state.history.length - 1];
-        const linkVideo = pendingLink.video || null;
-        const curVideo = state.uploadedVideoName || state.sessionLabel || '';
-        if (linkVideo && curVideo && linkVideo !== curVideo) {
-          pendingLink = null;
-        } else if (pendingLink.frame === null || last.frame_index >= pendingLink.frame) {
-          if (pendingLink.rank !== null && pendingLink.rank !== undefined) {
-            state.selectedRank = pendingLink.rank;
-          }
-          const want = pendingLink.frame;
-          pendingLink = null;
-          if (want === null) {
-            renderCurrent();
-          } else {
-            const target = state.history.findIndex((f) => f.frame_index >= want);
-            seek(target >= 0 ? target : state.history.length - 1);
-          }
-        }
-      }
-    }
+    ingestFrames(frames);
     refreshImage();
     framesFails = 0;
   } catch (err) {
     framesFails++;
     setPill('Frames error: ' + String(err && err.message || err).slice(0, 80), 'is-error');
+  }
+}
+
+// Shared ingest for polling and the SSE stream: dedup, sort, cap, follow,
+// resume/link jumps. Idempotent per frame_index, so stream redeliveries and
+// poll overlap are harmless.
+export function ingestFrames(frames) {
+  if (!Array.isArray(frames) || !frames.length) return;
+  // Follow mode: only snap to the new edge when the cursor was already
+  // at the edge (or empty). A scrubbed-back cursor must not be yanked
+  // away by every poll; stepping in scheduleFrames advances it instead.
+  const wasAtEdge = state.cursor < 0 || state.cursor >= state.history.length - 1;
+  const seen = new Set(state.history.map((f) => f.frame_index));
+  for (const f of frames) {
+    if (f === null || f === undefined || f.frame_index === undefined) continue;
+    if (seen.has(f.frame_index)) continue;
+    seen.add(f.frame_index);
+    state.history.push(f);
+  }
+  state.history.sort((a, b) => a.frame_index - b.frame_index);
+  if (state.history.length > 2000) {
+    const removed = state.history.length - 2000;
+    state.history.splice(0, removed);
+    // The splice shifts every retained index: a paused cursor must shift
+    // with it (and clamp), or currentFrame() goes out of bounds and the
+    // panels blank until the next play-follow.
+    state.cursor = Math.max(0, Math.min(state.history.length - 1, state.cursor - removed));
+  }
+  state.lastSince = state.history[state.history.length - 1].frame_index;
+  if (state.cursor < 0 || (state.playing && wasAtEdge)) {
+    state.cursor = state.history.length - 1;
+  }
+  renderCurrent();
+  // A resumed replay jumps back to its saved cursor once the
+  // re-analysis has caught up (seek pauses, so the jump sticks).
+  if (pendingResumeFrame !== null && pendingResumeFrame !== undefined) {
+    const last = state.history[state.history.length - 1];
+    if (last && last.frame_index >= pendingResumeFrame) {
+      const target = state.history.findIndex((f) => f.frame_index >= pendingResumeFrame);
+      pendingResumeFrame = null;
+      seek(target >= 0 ? target : state.history.length - 1);
+    }
+  }
+  // A pasted deep link (#f=&r=&v=) jumps once the frames arrive. A link
+  // naming a different replay than the running one is dropped instead of
+  // yanking the cursor somewhere surprising.
+  if (pendingLink && state.history.length) {
+    const last = state.history[state.history.length - 1];
+    const linkVideo = pendingLink.video || null;
+    const curVideo = state.uploadedVideoName || state.sessionLabel || '';
+    if (linkVideo && curVideo && linkVideo !== curVideo) {
+      pendingLink = null;
+    } else if (pendingLink.frame === null || last.frame_index >= pendingLink.frame) {
+      if (pendingLink.rank !== null && pendingLink.rank !== undefined) {
+        state.selectedRank = pendingLink.rank;
+      }
+      const want = pendingLink.frame;
+      pendingLink = null;
+      if (want === null) {
+        renderCurrent();
+      } else {
+        const target = state.history.findIndex((f) => f.frame_index >= want);
+        seek(target >= 0 ? target : state.history.length - 1);
+      }
+    }
+  }
+}
+
+/* ---------- SSE stream (primary) with polling fallback ---------- */
+
+let sseSource = null;
+let sseHealthy = false;
+let sseFailed = false;
+let sseLastMsg = 0;
+
+export function sseActive() {
+  return !!(sseSource && sseHealthy);
+}
+
+export function startStream() {
+  // One stream per session: a reconnecting EventSource redelivers from the
+  // connect-time cursor and ingestFrames() dedups, so no frames are lost.
+  // The endpoint defaults since<=0 to the latest frame; pass the live
+  // cursor so a reload mid-session only streams what polling missed.
+  if (sseSource || sseFailed || typeof EventSource === 'undefined') return;
+  let url = null;
+  try {
+    url = '/api/stream?since=' + encodeURIComponent(Math.max(0, state.lastSince));
+    const source = new EventSource(url);
+    sseSource = source;
+    source.onmessage = (ev) => {
+      let frame = null;
+      try { frame = JSON.parse(ev.data); } catch (e) { return; }
+      sseHealthy = true;
+      sseLastMsg = Date.now();
+      ingestFrames([frame]);
+      refreshImage();
+    };
+    source.onerror = () => {
+      // Quiet fallback: the polling loop keeps working and retries the
+      // stream on the next session start.
+      try { source.close(); } catch (e) { /* ignore */ }
+      if (sseSource === source) sseSource = null;
+      sseHealthy = false;
+      sseFailed = true;
+    };
+  } catch (err) {
+    sseFailed = true;
+  }
+}
+
+export function closeStream() {
+  const source = sseSource;
+  sseSource = null;
+  sseHealthy = false;
+  if (source) {
+    try { source.close(); } catch (e) { /* ignore */ }
   }
 }
 
@@ -387,6 +449,7 @@ export function setMode(mode) {
 }
 
 export function resetSession(label) {
+  closeStream();
   state.history = [];
   state.cursor = -1;
   state.lastSince = -1;
@@ -750,7 +813,9 @@ export async function startVideo() {
     resetSession(basename(state.uploadedVideoName || videoPath));
     state.playing = true;
     els['btn-play'].textContent = 'Pause';
+    sseFailed = false;
     scheduleFrames();
+    startStream();
     pollStatus();
     pollFrames();
     saveRecentSession();
@@ -790,7 +855,9 @@ export async function startLive() {
     resetSession(serial);
     state.playing = true;
     els['btn-play'].textContent = 'Pause';
+    sseFailed = false;
     scheduleFrames();
+    startStream();
     pollStatus();
     pollFrames();
   } catch (err) {
@@ -800,6 +867,7 @@ export async function startLive() {
 }
 
 export async function stopSession() {
+  closeStream();
   try {
     await apiPost('/api/stop', {});
   } catch (err) {

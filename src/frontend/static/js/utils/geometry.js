@@ -112,9 +112,18 @@ export function gridSpec() {
   const g = state.gridSpec;
   if (g && num(g.cols) === GRID_COLS && num(g.rows) === GRID_ROWS &&
       [g.x0, g.y0, g.x1, g.y1].every((v) => num(v) !== null)) {
-    return { cols: GRID_COLS, rows: GRID_ROWS, x0: +g.x0, y0: +g.y0, x1: +g.x1, y1: +g.y1 };
+    // River/bridge layout rides along when the backend serves it
+    // (GET /api/grid also returns river_rows/bridge_cols); absent or
+    // malformed values simply disable those layers.
+    const rows = Array.isArray(g.river_rows) ? g.river_rows.map(num).filter((v) => v !== null) : null;
+    const cols = Array.isArray(g.bridge_cols) ? g.bridge_cols.map(num).filter((v) => v !== null) : null;
+    return {
+      cols: GRID_COLS, rows: GRID_ROWS, x0: +g.x0, y0: +g.y0, x1: +g.x1, y1: +g.y1,
+      riverRows: rows && rows.length ? rows : null,
+      bridgeCols: cols && cols.length ? cols : null,
+    };
   }
-  return GRID_SPEC_FALLBACK;
+  return Object.assign({ riverRows: null, bridgeCols: null }, GRID_SPEC_FALLBACK);
 }
 
 export function arenaPxOf(frame) {

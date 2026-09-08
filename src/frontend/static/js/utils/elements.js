@@ -35,7 +35,7 @@ export const els = {};
   'btn-play', 'btn-prev', 'btn-next', 'time-label', 'speed-select',
   'btn-export-json', 'btn-export-csv', 'btn-save-frame', 'btn-copy-link',
   'suggestions', 'reason-text', 'reason-entropy', 'reason-mode-probs',
-  'reason-hand-stable', 'reason-confidence',
+  'reason-hand-stable', 'reason-confidence', 'reason-timing', 'reason-devices',
   'timeline-label', 'timeline-track', 'timeline-rail', 'timeline-fill', 'timeline-markers',
   'timeline-cursor', 'timeline-tooltip',
 ].forEach((id) => { els[id] = $(id); });

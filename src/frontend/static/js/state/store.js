@@ -50,6 +50,7 @@ export const state = {
   selectedRank: null, // inspected suggestion rank (0-based into top-3) or null
   gridSpec: null, // fetched from GET /api/grid; fallback used when missing
   towerMax: null, // {princess, king} from GET /api/grid; fallback consts above
+  sessionSummary: null, // latest GET /api/status summary (devices, timing) for the inspector
   sessionPin: null, // manual session collapse override: true/false or null (auto)
   showAllDetections: false, // expanded detections list (toggled via "+N more")
   addSeq: 1, // stable per-session id source for draft adds ('a:<id>')
