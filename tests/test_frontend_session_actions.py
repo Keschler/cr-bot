@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.frontend import server as frontend_server
+from src.frontend.services import session_manager as session_mgr
 from src.frontend.session import (
     FrontendFrame,
     FrontendSession,
@@ -16,10 +17,10 @@ from src.frontend.session import (
 
 
 def test_frame_at_endpoint_serves_history_jpegs():
-    previous = frontend_server._session
+    previous = session_mgr._session
     session = FrontendSession(mode="video")
     try:
-        frontend_server._session = session
+        session_mgr._session = session
         assert frontend_server.api_frame_at(3).status_code == 204
         session.push(
             FrontendFrame(
@@ -34,7 +35,7 @@ def test_frame_at_endpoint_serves_history_jpegs():
         session.push(FrontendFrame(frame_index=4, timestamp_s=2.0, jpeg_bytes=None))
         assert frontend_server.api_frame_at(4).status_code == 204
     finally:
-        frontend_server._session = previous
+        session_mgr._session = previous
 
 
 def _fake_source(indices):
@@ -648,10 +649,10 @@ def test_reevaluate_endpoints_status_paths():
         api_frame_reevaluate_revert,
     )
 
-    previous = frontend_server._session
+    previous = session_mgr._session
     session = _labeled_session()
     try:
-        frontend_server._session = session
+        session_mgr._session = session
         try:
             api_frame_reevaluate(99, ReevaluateRequest(updates=[]))
         except Exception as error:
@@ -692,4 +693,4 @@ def test_reevaluate_endpoints_status_paths():
         # Revert on a present frame without a correction succeeds.
         assert api_frame_reevaluate_revert(10) == {"frame_index": 10, "reverted": True}
     finally:
-        frontend_server._session = previous
+        session_mgr._session = previous
