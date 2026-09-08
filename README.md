@@ -10,7 +10,7 @@ live phone capture, and policy inspection into one workspace. Inspect detected
 objects, cards, elixir, tower health, action history, and policy suggestions;
 scrub the frame timeline, edit labels, and export results.
 
-![Arena Replay Analyst frontend showing live gameplay, action history, detected objects, and policy suggestions](docs/images/frontend-banner.png)
+<img src="docs/images/frontend-banner.png" alt="Arena Replay Analyst frontend showing live gameplay, action history, detected objects, and policy suggestions" width="1600" />
 
 ## Run the frontend
 
