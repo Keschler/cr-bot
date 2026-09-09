@@ -78,7 +78,6 @@ def v4_supervised_loss(
 
     if masks.mode.shape[:-1] != actions.mode.shape:
         raise ValueError("masks and actions batch/time dimensions must match")
-    is_play = (actions.mode == 1).to(logits.mode.dtype)
     is_wait = (actions.mode == 0).to(logits.mode.dtype)
     n_play = int((actions.mode == 1).sum().item())
     n_wait = int((actions.mode == 0).sum().item())
@@ -99,42 +98,46 @@ def v4_supervised_loss(
 
     play_scale = float(weights.play_upweight)
     if n_play:
-        card_nll = _masked_nll(logits.card, masks.card, actions.card_slot)
-        card_loss = (card_nll * is_play).sum() / max(n_play, 1) * play_scale
+        # Select PLAY rows BEFORE any log-softmax: WAIT rows carry a dummy
+        # card_slot whose masked NLL is +inf (illegal slot, legal others) or
+        # NaN (nothing legal), and ``inf * is_play=0`` / ``nan * 0`` poison
+        # the forward value even though those rows must contribute nothing.
+        # Selection keeps values and gradients on valid PLAY rows identical
+        # to the old masked-then-zeroed formulation.
+        play_rows = (actions.mode == 1).reshape(-1)
+        card_logits = logits.card.reshape(-1, logits.card.shape[-1])[play_rows]
+        card_masks = masks.card.reshape(-1, masks.card.shape[-1])[play_rows]
+        card_targets = actions.card_slot.reshape(-1)[play_rows]
+        card_nll = _masked_nll(card_logits, card_masks, card_targets)
+        card_loss = card_nll.mean() * play_scale
         rows, cols = logits.placement.shape[-2:]
-        flat_logits = logits.placement.reshape(
-            tuple(logits.placement.shape[:-3]) + (masks.card.shape[-1], rows * cols)
-        )
-        flat_mask = masks.placement.reshape(
-            tuple(masks.placement.shape[:-3]) + (masks.card.shape[-1], rows * cols)
-        )
+        cells = rows * cols
+        slots = masks.card.shape[-1]
+        flat_logits = logits.placement.reshape(-1, slots, cells)[play_rows]
+        flat_mask = masks.placement.reshape(-1, slots, cells)[play_rows]
         logp = torch.where(
             flat_mask, flat_logits, torch.full_like(flat_logits, float("-inf"))
         ).log_softmax(dim=-1)
-        slot = actions.card_slot.clamp(0, masks.card.shape[-1] - 1)
-        slot_index = slot.reshape(slot.shape + (1, 1)).expand(
-            slot.shape + (1, rows * cols)
-        )
+        slot = actions.card_slot.reshape(-1)[play_rows].clamp(0, slots - 1)
+        slot_index = slot.reshape(-1, 1, 1).expand(-1, 1, cells)
         selected_logp = logp.gather(-2, slot_index).squeeze(-2)
         if soft_placement is not None:
             if tuple(soft_placement.shape) != tuple(actions.mode.shape) + (rows, cols):
                 raise ValueError("soft_placement must have shape [B, T, R, C]")
-            soft = soft_placement.reshape(tuple(actions.mode.shape) + (rows * cols,))
-            # WAIT rows carry an all-zero soft map; multiplying zero mass by
-            # -inf on illegal cells would yield NaN, so unsupported cells are
-            # excluded before the product.  Mass on an illegal cell (a teacher
-            # bug) still surfaces as +inf instead of being hidden.
+            soft = soft_placement.reshape(-1, cells)[play_rows]
+            # Mass on an illegal cell (a teacher bug) still surfaces as
+            # +inf instead of being hidden.
             safe_logp = torch.where(
                 soft > 0, selected_logp, torch.zeros_like(selected_logp)
             )
             placement_nll = -(soft * safe_logp).sum(dim=-1)
         else:
             cell = (
-                actions.placement[..., 0].clamp(0, rows - 1) * cols
-                + actions.placement[..., 1].clamp(0, cols - 1)
-            ).clamp(0, rows * cols - 1)
+                actions.placement[..., 0].reshape(-1)[play_rows].clamp(0, rows - 1) * cols
+                + actions.placement[..., 1].reshape(-1)[play_rows].clamp(0, cols - 1)
+            ).clamp(0, cells - 1)
             placement_nll = -selected_logp.gather(-1, cell.unsqueeze(-1)).squeeze(-1)
-        placement_loss = (placement_nll * is_play).sum() / max(n_play, 1) * play_scale
+        placement_loss = placement_nll.mean() * play_scale
     else:
         zero = torch.zeros((), device=logits.mode.device, dtype=logits.mode.dtype)
         card_loss, placement_loss = zero, zero

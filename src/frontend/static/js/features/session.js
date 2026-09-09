@@ -843,10 +843,6 @@ export async function startLive() {
     showError('Execute mode requires the confirmation checkbox.');
     return;
   }
-  if (execute && !els['input-calibration'].value.trim()) {
-    showError('Live execution requires a calibration artifact path.');
-    return;
-  }
   try {
     showError('');
     await apiPost('/api/live/start', {

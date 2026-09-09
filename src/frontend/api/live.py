@@ -13,6 +13,7 @@ from ..services.devices import resolve_inference_devices
 from .deps import _start_worker, stop_current_session
 
 router = APIRouter()
+DEFAULT_LIVE_CALIBRATION = "simulator/physical_lab/calibrations/phone-a-candidate.json"
 
 
 @router.post("/api/live/start")
@@ -33,17 +34,14 @@ def api_live_start(request: LiveStartRequest) -> dict[str, Any]:
             status_code=400,
             detail="live execution requires confirm_live=True",
         )
-    if request.execute and not (request.calibration or "").strip():
-        raise HTTPException(
-            status_code=400,
-            detail="live execution requires a calibration artifact path",
-        )
     checkpoint = _resolve_against_repo(request.checkpoint) or _default_checkpoint()
     if not Path(checkpoint).is_file():
         raise HTTPException(
             status_code=404, detail=f"checkpoint file does not exist: {checkpoint}"
         )
-    calibration = _resolve_against_repo(request.calibration)
+    calibration = _resolve_against_repo(
+        (request.calibration or "").strip() or DEFAULT_LIVE_CALIBRATION
+    )
     try:
         session = _start_worker(
             mode="live",

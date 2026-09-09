@@ -128,7 +128,13 @@ class DistillationConfig:
         object.__setattr__(self, "family_mix", mix)
 
 
-def _family_for_index(config: DistillationConfig, index: int) -> str:
+def family_for_index(config: DistillationConfig, index: int) -> str:
+    """Return the stratified tactical family for a dataset index.
+
+    Public so the real-simulator generator shares the exact stratification
+    (and therefore comparable family breakdowns) with the synthetic source.
+    """
+
     draw = (_stable_seed(config.seed, "family", index) % 1000) / 1000.0
     cumulative = 0.0
     total = sum(config.family_mix.values())
@@ -137,6 +143,10 @@ def _family_for_index(config: DistillationConfig, index: int) -> str:
         if draw < cumulative:
             return family
     return TACTICAL_FAMILIES[-1]
+
+
+def _family_for_index(config: DistillationConfig, index: int) -> str:
+    return family_for_index(config, index)
 
 
 def _sample_hand(rng: np.random.Generator, elixir: float) -> tuple[np.ndarray, list[int]]:
@@ -421,6 +431,39 @@ def to_torch_batch(samples: list[DistillationSample]) -> dict[str, object]:
     }
 
 
+def move_batch_to_device(batch: dict[str, object], device: object) -> dict[str, object]:
+    """Move a :func:`to_torch_batch` dict onto ``device`` (tensors only).
+
+    ``masks`` (:class:`ActionMasks`) and ``actions`` (:class:`V4ActionBatch`)
+    are rebuilt via :func:`dataclasses.replace` so the frozen containers
+    keep their validation; non-tensor entries (``families``) pass through.
+    """
+
+    import dataclasses
+
+    import torch
+
+    moved: dict[str, object] = {}
+    for key, value in batch.items():
+        if isinstance(value, torch.Tensor):
+            moved[key] = value.to(device)
+        elif dataclasses.is_dataclass(value) and not isinstance(value, type):
+            moved[key] = dataclasses.replace(
+                value,
+                **{
+                    field.name: (
+                        getattr(value, field.name).to(device)
+                        if isinstance(getattr(value, field.name), torch.Tensor)
+                        else getattr(value, field.name)
+                    )
+                    for field in dataclasses.fields(value)
+                },
+            )
+        else:
+            moved[key] = value
+    return moved
+
+
 __all__ = [
     "GENERATOR_VERSION",
     "PLAYER_DECK",
@@ -428,7 +471,9 @@ __all__ = [
     "TEACHER_VERSION",
     "DistillationConfig",
     "DistillationSample",
+    "family_for_index",
     "generate_dataset",
     "generate_sample",
+    "move_batch_to_device",
     "to_torch_batch",
 ]

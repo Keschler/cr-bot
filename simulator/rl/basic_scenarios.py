@@ -532,6 +532,32 @@ class BasicMechanicsScenarioEnv:
             info=info,
         )
 
+    def fork(self) -> "BasicMechanicsScenarioEnv":
+        """Clone this scenario lane into a fully independent child.
+
+        The inner simulator env is forked (exact logical state, no shared
+        mutable state) and the scenario bookkeeping (decision counters,
+        potential references, threat ledger, audit trail) is copied, so
+        branch rollouts scored from raw simulator snapshots are unaffected
+        by wrapper counters while observations keep working.
+        """
+
+        import copy
+
+        child = BasicMechanicsScenarioEnv(
+            self.environment.fork(), self.config
+        )
+        child._decision_count = self._decision_count
+        child._episode_count = self._episode_count
+        child._last_potential = self._last_potential
+        child._initial_tower_hp = self._initial_tower_hp
+        child._tower_reference_hp = self._tower_reference_hp
+        child._threat_hp = dict(self._threat_hp)
+        child._history_digest = self._history_digest
+        child._sample_metadata = copy.deepcopy(self._sample_metadata)
+        child._latest_metadata = copy.deepcopy(self._latest_metadata)
+        return child
+
     def scenario_audit(self) -> dict[str, object]:
         return {
             "config": self.config.as_dict(),

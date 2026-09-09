@@ -1,7 +1,8 @@
 """V4 Stage-1 proof run: distill a tiny V4 actor and check the stage gate.
 
-Trains a small V4 policy on synthetic simulator-distillation states and
-reports held-out teacher agreement plus the stage-acceptance checklist:
+Trains a small V4 policy on simulator-distillation states (synthetic or
+real-simulator observations) and reports held-out teacher agreement plus the
+stage-acceptance checklist:
 
 * validity: every training/held-out target honors legality;
 * tactical proxy: held-out agreement beats the untrained baseline;
@@ -13,6 +14,8 @@ claim: no sealed full-match suite is involved.  Usage::
 
     outputs/venv/bin/python scripts/run_v4_distillation_proof.py \
         --n-train 3000 --n-heldout 500 --epochs 6 --seed 0
+    PYTHONPATH=src /home/keschler/.venvs/bn/bin/python scripts/run_v4_distillation_proof.py \
+        --generator sim --n-train 3000 --n-heldout 500 --epochs 6 --seed 0
 """
 
 from __future__ import annotations
@@ -43,6 +46,10 @@ from simulator.rl.distillation import (
     DistillationConfig,
     generate_dataset,
     to_torch_batch,
+)
+from simulator.rl.simulator_distillation import (
+    SIM_GENERATOR_VERSION,
+    generate_sim_dataset,
 )
 from simulator.rl.losses_v4 import V4SupervisedWeights, v4_supervised_loss
 from simulator.rl.model_v4 import ModelConfigV4, RecurrentV4Policy, count_parameters
@@ -250,6 +257,14 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--out", type=str, default="")
     parser.add_argument(
+        "--generator",
+        type=str,
+        default="synthetic",
+        choices=("synthetic", "sim"),
+        help="Training-state source: hand-made synthetic features or real "
+        "BasicMechanicsScenarioEnv observations (same sample schema).",
+    )
+    parser.add_argument(
         "--evaluate-only",
         type=str,
         default="",
@@ -263,10 +278,16 @@ def main() -> int:
     started = time.time()
 
     contract = seal_current_contracts(code_revision=_git_revision())
-    train_samples = generate_dataset(DistillationConfig(n_states=args.n_train, seed=args.seed))
-    heldout_samples = generate_dataset(
-        DistillationConfig(n_states=args.n_heldout, seed=args.seed + 10_000)
-    )
+    distill_config = DistillationConfig(n_states=args.n_train, seed=args.seed)
+    heldout_config = DistillationConfig(n_states=args.n_heldout, seed=args.seed + 10_000)
+    if args.generator == "sim":
+        train_samples = generate_sim_dataset(distill_config)
+        heldout_samples = generate_sim_dataset(heldout_config)
+        generator_version = SIM_GENERATOR_VERSION
+    else:
+        train_samples = generate_dataset(distill_config)
+        heldout_samples = generate_dataset(heldout_config)
+        generator_version = "synthetic-v4-distill-0"
     # Validity: every target honors legality (checked at generation, re-asserted).
     for sample in (*train_samples, *heldout_samples):
         target = sample.target
@@ -344,7 +365,7 @@ def main() -> int:
             "lr": args.lr,
             "seed": args.seed,
             "n_params": n_params,
-            "generator": "synthetic-v4-distill-0",
+            "generator": generator_version,
             "evaluate_only": args.evaluate_only,
             "model_dims": {
                 "model_dim": config.model_dim,
@@ -376,11 +397,12 @@ def main() -> int:
     gate = report["stage_gate"]
     report["stage_accepted"] = bool(all(gate.values()))
 
-    out_path = (
-        Path(args.out)
-        if args.out
-        else (REPO_ROOT / "outputs" / "v4" / "distillation_proof.json")
+    default_out = (
+        REPO_ROOT / "outputs" / "v4" / f"distillation_proof_{args.generator}.json"
+        if args.generator == "sim"
+        else REPO_ROOT / "outputs" / "v4" / "distillation_proof.json"
     )
+    out_path = Path(args.out) if args.out else default_out
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(report, indent=2, sort_keys=True))
     if not args.evaluate_only:
