@@ -872,6 +872,115 @@ class SimulatorEnv:
                 player.elixir_milli += gain
                 player.elixir_remainder = remainder
 
+    def fork(self) -> "SimulatorEnv":
+        """Clone this lane into a fully independent child environment.
+
+        The child starts from the exact same logical state as the parent
+        (authoritative ``BattleState``, RNG, elixir, match time, troops,
+        observation memories) but shares no mutable state afterwards:
+        a fresh engine (no shared navigation cache), a deep-copied battle
+        state (including RNG and event history), deep-copied observation
+        memories rebound to the child's event list, a fresh SoA projection
+        buffer, and no shared persistent-observation cache.
+        """
+
+        import copy
+
+        state = self._require_state()
+        try:
+            child_engine = self.engine.clone_for_fork()
+        except AttributeError:
+            child_engine = BattleEngine(
+                self.engine.ruleset,
+                validate_every_tick=self.engine.validate_every_tick,
+            )
+        child = SimulatorEnv(
+            engine=child_engine,
+            decision_interval_us=self.decision_interval_ticks * self.engine.ruleset.tick_us,
+            reward=self.reward_config,
+            expose_privileged_info=self.expose_privileged_info,
+            include_authoritative_state=self.include_authoritative_state,
+            include_replay_hashes=self.include_replay_hashes,
+        )
+        child_state = copy.deepcopy(state)
+        # ``copy.deepcopy`` rebuilds the event list element-wise, so its
+        # O(1) mutation revision drifts from the parent's.  Restore the exact
+        # revision so the fork is logically identical, not just hash-equal.
+        try:
+            child_state.events.mutation_revision = state.events.mutation_revision
+        except AttributeError:
+            pass
+        child.state = child_state
+        child_memories = copy.deepcopy(self._memories)
+        rebound: list[object] = []
+        for memory in child_memories:
+            if hasattr(memory, "_processed_event_list"):
+                try:
+                    memory._processed_event_list = child.state.events
+                except AttributeError:
+                    pass
+            if hasattr(memory, "_processed_event_mutation_revision"):
+                try:
+                    memory._processed_event_mutation_revision = getattr(
+                        child.state.events, "mutation_revision", None
+                    )
+                except AttributeError:
+                    pass
+            rebound.append(memory)
+        child._memories = (rebound[0], rebound[1])  # type: ignore[assignment]
+        child._observation_soa = ObservationSoA()
+        child._persistent_observation_cache = None
+        return child
+
+    def fork_for_search(self) -> "SimulatorEnv":
+        """Lightweight fork for physics-only branch scoring.
+
+        Branch rollouts step ``engine.step`` directly and score from
+        authoritative snapshots; they never build observations, so
+        observation memories, the SoA buffer, reward config, and exposure
+        flags are irrelevant.  Copying them per branch (24× per state) is
+        pure overhead.  This copies only the mutable simulation state
+        (authoritative ``BattleState`` incl. RNG/event history) plus a
+        fast-cloned engine, leaving all observation state behind.
+
+        Isolation and determinism guarantees match :meth:`fork` for the
+        physics path: fresh engine/nav-cache, deep-copied state, restored
+        event mutation revision.  Do NOT use for observation paths.
+        """
+
+        import copy
+
+        state = self._require_state()
+        try:
+            child_engine = self.engine.clone_for_fork()
+        except AttributeError:
+            child_engine = BattleEngine(
+                self.engine.ruleset,
+                validate_every_tick=self.engine.validate_every_tick,
+            )
+        child = object.__new__(SimulatorEnv)
+        child.engine = child_engine
+        child.decision_interval_ticks = self.decision_interval_ticks
+        child.reward_config = self.reward_config
+        child.expose_privileged_info = self.expose_privileged_info
+        child.include_authoritative_state = self.include_authoritative_state
+        child.include_replay_hashes = self.include_replay_hashes
+        child_state = copy.deepcopy(state)
+        try:
+            child_state.events.mutation_revision = state.events.mutation_revision
+        except AttributeError:
+            pass
+        child.state = child_state
+        # Fresh empty observation state, NOT a copy of the parent's history:
+        # branch rollouts never build observations, so copying belief history
+        # per branch is pure overhead.  Empty (not shared) so there is no
+        # shared mutable cache and misuse on an observation path fails
+        # visibly instead of silently aliasing parent beliefs.
+        child._memories = (ObservationMemory(0), ObservationMemory(1))
+        child._observation_soa = ObservationSoA()
+        child._persistent_observation_cache = None
+        return child
+
     def save_state(self) -> dict[str, object]:
         return self._require_state().to_primitive(include_events=True)
 

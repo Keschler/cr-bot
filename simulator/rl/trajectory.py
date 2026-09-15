@@ -131,6 +131,11 @@ class RecurrentSequence:
     uses PyTorch GRU layout ``[layers, batch, hidden]`` and is the state before
     the first observation.  Either can be retained by a rollout collector to
     support burn-in and sequence minibatches later.
+
+    The ``hand_tokens``, ``opp_*``, and ``event_history`` fields are optional
+    V4 actor inputs (hand beliefs and public event history).  The prototype
+    actor trains without them; the V4 PPO smoke retains them so re-evaluation
+    reproduces rollout logits exactly.
     """
 
     raster: torch.Tensor
@@ -140,6 +145,11 @@ class RecurrentSequence:
     reset_mask: torch.Tensor
     hidden_states: torch.Tensor | None = None
     initial_hidden: torch.Tensor | None = None
+    hand_tokens: torch.Tensor | None = None
+    opp_hand_probs: torch.Tensor | None = None
+    opp_out_of_cycle: torch.Tensor | None = None
+    opp_elixir_interval: torch.Tensor | None = None
+    event_history: torch.Tensor | None = None
 
     def __post_init__(self) -> None:
         raster = _require_tensor("raster", self.raster, ndim=5)
@@ -168,6 +178,27 @@ class RecurrentSequence:
             initial_hidden = _require_tensor("initial_hidden", self.initial_hidden, ndim=3)
             if initial_hidden.shape[1] != batch:
                 raise ValueError("initial_hidden must have shape [layers, batch, hidden]")
+        if self.hand_tokens is not None:
+            hand_tokens = _require_tensor("hand_tokens", self.hand_tokens, ndim=4)
+            if hand_tokens.shape[:2] != (batch, time) or hand_tokens.shape[2:] != (4, 16):
+                raise ValueError("hand_tokens must have shape [batch, time, 4, 16]")
+        if self.opp_hand_probs is not None:
+            probs = _require_tensor("opp_hand_probs", self.opp_hand_probs, ndim=3)
+            if probs.shape[:2] != (batch, time):
+                raise ValueError("opp_hand_probs must share sequence batch and time dimensions")
+        if self.opp_out_of_cycle is not None:
+            out = _require_tensor("opp_out_of_cycle", self.opp_out_of_cycle, ndim=3)
+            if out.shape[:2] != (batch, time):
+                raise ValueError("opp_out_of_cycle must share sequence batch and time dimensions")
+            _require_bool("opp_out_of_cycle", out)
+        if self.opp_elixir_interval is not None:
+            interval = _require_tensor("opp_elixir_interval", self.opp_elixir_interval, ndim=3)
+            if interval.shape[:2] != (batch, time) or interval.shape[2] != 2:
+                raise ValueError("opp_elixir_interval must have shape [batch, time, 2]")
+        if self.event_history is not None:
+            history = _require_tensor("event_history", self.event_history, ndim=4)
+            if history.shape[:2] != (batch, time):
+                raise ValueError("event_history must share sequence batch and time dimensions")
 
     @property
     def batch_size(self) -> int:

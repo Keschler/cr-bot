@@ -126,7 +126,11 @@ def test_tick_rollout_matches_decision_stepping() -> None:
 
 
 def test_defense_beats_wait_when_it_connects() -> None:
-    env = _env("ground-defense", "beatdown", 5)
+    # NOTE: the seed is generator-coupled (setup variety intentionally
+    # changes across generator versions): seed 26 yields a clean single
+    # mini-pekka threat with no support troop, where Cannon connects and
+    # must outscore WAIT.  The assertion itself is the scoring invariant.
+    env = _env("ground-defense", "beatdown", 26)
     legal, rule, hand = _search_inputs(
         env, ["cannon", "skeletons", "hog-rider", "musketeer"], 6000
     )

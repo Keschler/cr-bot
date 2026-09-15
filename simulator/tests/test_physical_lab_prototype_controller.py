@@ -596,6 +596,8 @@ def test_runner_dispatches_play_but_never_dispatches_wait() -> None:
         "seen_enemy_cards": [],
         "tower_hp_self": [],
         "tower_hp_enemy": [],
+        "own_king_active": False,
+        "enemy_king_active": False,
         "detection_count": 0,
         "arena_px": [],
     }

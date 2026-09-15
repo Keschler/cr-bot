@@ -31,8 +31,19 @@ BASIC_MECHANICS_SOURCES = (
     "air-defense",
     "spell-situations",
     "kiting-cycling-elixir",
+    "bridge-defense",
 )
 _BASIC_SOURCE_SET = frozenset(BASIC_MECHANICS_SOURCES)
+
+# Phase-1 rehearsal keeps the original five-source rotation so adding a
+# source never remaps existing rehearsal episode indices.
+_REHEARSAL_SOURCES = (
+    "isolated-offense",
+    "ground-defense",
+    "air-defense",
+    "spell-situations",
+    "kiting-cycling-elixir",
+)
 
 
 class BasicScenarioError(ValueError):
@@ -98,7 +109,7 @@ def phase_one_rehearsal_source(episode_index: int) -> str:
 
     if type(episode_index) is not int or episode_index < 0:
         raise BasicScenarioError("episode_index must be a non-negative integer")
-    return BASIC_MECHANICS_SOURCES[episode_index % len(BASIC_MECHANICS_SOURCES)]
+    return _REHEARSAL_SOURCES[episode_index % len(_REHEARSAL_SOURCES)]
 
 
 def basic_scenario_source(
@@ -143,6 +154,7 @@ def _required_target_cards(source: str, deck: Sequence[str]) -> tuple[str, ...]:
         "air-defense": ("musketeer", "fireball"),
         "spell-situations": ("fireball", "log"),
         "kiting-cycling-elixir": ("ice-golem", "cannon", "skeletons"),
+        "bridge-defense": ("cannon", "musketeer"),
     }
     return tuple(card for card in preferences[source] if card in deck)
 
@@ -174,6 +186,11 @@ def _candidate_setup_cards(
     elif source == "spell-situations":
         candidates = bodies
         count = min(3, len(candidates))
+    elif source == "bridge-defense":
+        # Bridge-urgent threats use the same ground pool as ground-defense;
+        # urgency comes from placement (at the bridge) and a short prelude.
+        candidates = ground or bodies
+        count = 1
     else:
         candidates = ground or bodies
         count = 1
@@ -184,9 +201,38 @@ def _candidate_setup_cards(
     # Prefer meaningful threats while varying among the top candidates.  This
     # selects the state, not the learner's response.
     ordered = sorted(candidates, key=lambda card: (-card.elixir_milli, card.card_id))
-    offset = rng.randbelow(min(3, len(ordered)))
+    offset = rng.randbelow(min(5, len(ordered)))
     rotated = ordered[offset:] + ordered[:offset]
     return tuple(card.card_id for card in rotated[:count])
+
+
+def _support_card(
+    environment: Any,
+    opponent_deck: Sequence[str],
+    threat_ids: Sequence[str],
+    rng: DeterministicRng,
+) -> str | None:
+    """Pick one support body to deploy behind the primary threat, if any.
+
+    Support troops (a second body trailing the threat) create the splash /
+    spell-value cross that single-threat setups never produce.  Selection is
+    cost-ordered rotation like the primary threat pick, excluding the threat
+    cards themselves.  Returns None when the deck offers no other troop.
+    """
+
+    try:
+        definitions = [environment.engine.ruleset.card(card) for card in opponent_deck]
+    except (KeyError, ValueError):
+        return None
+    bodies = [
+        card for card in definitions
+        if card.kind == "troop" and card.card_id not in set(threat_ids)
+    ]
+    if not bodies:
+        return None
+    ordered = sorted(bodies, key=lambda card: (-card.elixir_milli, card.card_id))
+    offset = rng.randbelow(min(4, len(ordered)))
+    return ordered[offset].card_id
 
 
 def _put_card_in_hand(state: Any, player: int, card_id: str) -> int:
@@ -213,11 +259,12 @@ def _setup_cell(
     *,
     lane_column: int,
     ordinal: int,
+    anchor_row: int | None = None,
 ) -> tuple[int, int]:
     legal = environment.engine.legal_cells(state, player, card_id)
     if not legal:
         raise BasicScenarioError(f"setup card {card_id!r} has no legal placement")
-    desired_row = 17 if player == 0 else 14
+    desired_row = anchor_row if anchor_row is not None else (17 if player == 0 else 14)
     desired_column = max(0, min(17, lane_column + (ordinal % 3) - 1))
     return min(
         legal,
@@ -229,6 +276,36 @@ def _setup_cell(
             cell[0],
         ),
     )
+
+
+def _trailing_anchor_row(state: Any, opponent: int) -> int:
+    """Cell row just behind the most advanced opponent threat.
+
+    Support deployed here trails the push within interaction range during
+    the capture window.  Falls back to a deep-back row when no threat cell
+    resolves.  Deterministic in the state.
+    """
+
+    try:
+        from ..geometry import position_to_cell
+    except ImportError:  # pragma: no cover - top-level ``rl`` imports
+        from simulator.geometry import position_to_cell
+    best: tuple[int, int] | None = None
+    best_y = -1
+    for entity in state.entities.values():
+        if not entity.alive or entity.owner != opponent or entity.kind == "tower":
+            continue
+        y_mtile = int(getattr(entity, "y_mtile", 0))
+        if y_mtile < best_y:
+            continue
+        cell = position_to_cell(int(getattr(entity, "x_mtile", 0)), y_mtile)
+        if cell is None:
+            continue
+        best_y = y_mtile
+        best = cell
+    if best is None:
+        return 7
+    return max(2, int(best[1]) - 3)
 
 
 def _tower_totals(state: Any) -> tuple[int, int]:
@@ -312,7 +389,7 @@ class BasicMechanicsScenarioEnv:
         target = self.config.target_player
         opponent = 1 - target
         rng = DeterministicRng(_stable_seed(seed, source, target, self._episode_count))
-        lane_column = (3, 14)[rng.randbelow(2)]
+        lane_column = (3, 9, 14)[rng.randbelow(3)]
 
         target_state = state.players[target]
         hand, draw = _shuffled_deck(
@@ -338,13 +415,32 @@ class BasicMechanicsScenarioEnv:
             state.players[opponent].deck,
             rng,
         )
+        # A trailing support body behind the primary threat (deterministic
+        # subset of episodes) creates multi-body answers: splash value,
+        # spell cross, and focus choices single-threat setups never produce.
+        # isolated-offense stays empty and spell-situations already fields
+        # three bodies by design.
+        support_cards: tuple[str, ...] = ()
+        if (
+            source in ("ground-defense", "bridge-defense", "air-defense", "kiting-cycling-elixir")
+            and rng.randbelow(3) == 0
+        ):
+            support = _support_card(
+                self.environment, state.players[opponent].deck, setup_cards, rng
+            )
+            if support is not None:
+                support_cards = (support,)
         setup_placements: list[list[int]] = []
         before_uids = set(state.entities)
+        deployed_support: list[str] = []
         for ordinal, card_id in enumerate(setup_cards):
             state.players[opponent].elixir_milli = self.engine.ruleset.match.max_elixir_milli
             state.players[opponent].elixir_remainder = 0
             state.players[opponent].next_card_cooldown_us = 0
             slot = _put_card_in_hand(state, opponent, card_id)
+            anchor = None
+            if source == "bridge-defense":
+                anchor = 15
             cell = _setup_cell(
                 self.environment,
                 state,
@@ -352,6 +448,7 @@ class BasicMechanicsScenarioEnv:
                 card_id,
                 lane_column=lane_column,
                 ordinal=ordinal,
+                anchor_row=anchor,
             )
             result = self.engine.apply_actions(
                 state,
@@ -363,6 +460,39 @@ class BasicMechanicsScenarioEnv:
                     f"failed to deploy setup card {card_id!r}: {reason}"
                 )
             setup_placements.append([cell[0], cell[1]])
+        if support_cards:
+            # Trail the primary threat closely so support interacts within
+            # the capture window (shared splash/spell answers) instead of
+            # idling in the back rank.
+            anchor_row = _trailing_anchor_row(state, opponent)
+            for extra, card_id in enumerate(support_cards):
+                state.players[opponent].elixir_milli = self.engine.ruleset.match.max_elixir_milli
+                state.players[opponent].elixir_remainder = 0
+                state.players[opponent].next_card_cooldown_us = 0
+                slot = _put_card_in_hand(state, opponent, card_id)
+                try:
+                    cell = _setup_cell(
+                        self.environment,
+                        state,
+                        opponent,
+                        card_id,
+                        lane_column=lane_column,
+                        ordinal=len(setup_cards) + extra,
+                        anchor_row=anchor_row,
+                    )
+                except BasicScenarioError:
+                    continue
+                result = self.engine.apply_actions(
+                    state,
+                    (PlayCardAction(opponent, slot, cell),),
+                )
+                if len(result) != 1 or not result[0].accepted:
+                    # Support is opportunistic enrichment: a rejected support
+                    # deploy keeps the valid single-threat state instead of
+                    # discarding the sequence.  Deterministic per seed.
+                    continue
+                setup_placements.append([cell[0], cell[1]])
+                deployed_support.append(card_id)
 
         decision_ticks = int(
             getattr(
@@ -372,6 +502,11 @@ class BasicMechanicsScenarioEnv:
             )
         )
         prelude_decisions = rng.randbelow(9) if setup_cards else rng.randbelow(3)
+        if source == "bridge-defense":
+            # Bridge-urgent threats arrive at the bridge: a short prelude
+            # keeps the answer-timing boundary tight, unlike the developing
+            # mid-arena threats of ground-defense.
+            prelude_decisions = rng.randbelow(3)
         prelude_ticks = prelude_decisions * max(1, decision_ticks)
         for _ in range(prelude_ticks):
             if state.terminal:
@@ -384,6 +519,7 @@ class BasicMechanicsScenarioEnv:
             "air-defense": (5_000, 10_000),
             "spell-situations": (5_000, 10_000),
             "kiting-cycling-elixir": (3_000, 7_000),
+            "bridge-defense": (5_000, 10_000),
         }
         low, high = target_elixir_ranges[source]
         target_state.elixir_milli = low + rng.randbelow(high - low + 1)
@@ -419,12 +555,13 @@ class BasicMechanicsScenarioEnv:
             **self.config.as_dict(),
             "episode_index": self._episode_count,
             "seed": seed,
-            "lane": "left" if lane_column == 3 else "right",
+            "lane": "left" if lane_column == 3 else ("center" if lane_column == 9 else "right"),
             "target_hand": list(target_state.hand),
             "target_elixir_milli": target_state.elixir_milli,
             "opponent_elixir_milli": opponent_state.elixir_milli,
             "tower_hp_permille": tower_hp_permille,
             "setup_cards": list(setup_cards),
+            "support_cards": list(deployed_support),
             "setup_placements": setup_placements,
             "prelude_ticks": prelude_ticks,
             "threat_uids": sorted(self._threat_hp),
@@ -557,6 +694,22 @@ class BasicMechanicsScenarioEnv:
         child._sample_metadata = copy.deepcopy(self._sample_metadata)
         child._latest_metadata = copy.deepcopy(self._latest_metadata)
         return child
+
+    def fork_for_search(self) -> Any:
+        """Lightweight physics-only fork for branch scoring.
+
+        Delegates to the inner env's fast path and returns the bare
+        simulator child: branch scoring touches only ``.state``,
+        ``.engine`` and ``decision_interval_ticks``.  Scenario bookkeeping
+        (counters, threat ledger, audit trail) is intentionally not copied
+        — scores are computed from raw simulator snapshots.
+        """
+
+        inner = self.environment
+        fork_fast = getattr(inner, "fork_for_search", None)
+        if callable(fork_fast):
+            return fork_fast()
+        return inner.fork()
 
     def scenario_audit(self) -> dict[str, object]:
         return {

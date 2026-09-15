@@ -105,7 +105,7 @@ except ImportError:  # pragma: no cover - top-level ``rl`` imports
     )
 
 
-SEARCH_GENERATOR_VERSION: str = "search-v4-0"
+SEARCH_GENERATOR_VERSION: str = "search-v4-1"
 
 ADOPT_MARGIN_ACTION: float = 0.15
 """Minimum regret(rule) to adopt a different mode/card from search."""
@@ -175,12 +175,20 @@ class SearchDatasetConfig:
     min_transition_share: float = 0.15
     min_sim_share: float = 0.25
     family_min_share: float = 0.08
+    timing_family_weights: Any = None
+    sim_family_mix: Any = None
 
     def __post_init__(self) -> None:
         if type(self.n_states) is not int or self.n_states <= 0:
             raise ValueError("n_states must be a positive integer")
         if type(self.seed) is not int or self.seed < 0:
             raise ValueError("seed must be a non-negative integer")
+        for name in ("timing_family_weights", "sim_family_mix"):
+            value = getattr(self, name)
+            if value is not None and not isinstance(value, dict):
+                raise TypeError(f"{name} must be a dict or None")
+            if isinstance(value, dict):
+                object.__setattr__(self, name, dict(value))
 
 
 def _hash_order(seed: int, key: str) -> int:
@@ -290,22 +298,37 @@ def _predict_records(
     return preds
 
 
-def _new_sim_env(context_ruleset: Any, pool: OpponentPool, seed: int, index: int, distill_seed: int):
-    """Deterministic sim-natural reset (replayable by index)."""
+def _new_sim_env(context_ruleset: Any, pool: OpponentPool, seed: int, index: int, distill_seed: int,
+                 family_mix: dict[str, float] | None = None):
+    """Deterministic sim-natural reset (replayable by index).
+
+    Uses the same executable short-state scenario wrapper as Stage-1
+    sim-natural distillation (setup cards + prelude), so searched sim
+    states carry real threats, spell clusters, and elixir variation
+    instead of empty-arena openings.  Bare resets have no enemies, which
+    starves spell opportunities and makes WAIT trivially optimal.
+    """
 
     try:
         from ..engine import BattleEngine
         from ..env import SimulatorEnv
+        from .basic_scenarios import BasicMechanicsScenarioEnv, BasicScenarioConfig
     except ImportError:  # pragma: no cover
         from simulator.engine import BattleEngine
         from simulator.env import SimulatorEnv
-    distill_config = DistillationConfig(n_states=max(1, index + 1), seed=distill_seed)
+        from simulator.rl.basic_scenarios import BasicMechanicsScenarioEnv, BasicScenarioConfig
+    distill_config = DistillationConfig(n_states=max(1, index + 1), seed=distill_seed,
+                                          family_mix=dict(family_mix) if family_mix else None)
     family = family_for_index(distill_config, index)
     source = FAMILY_TO_SOURCE[family]
     opponent = pool.sample(index, archetype=SOURCE_ARCHETYPE[source], strategy=OPPONENT_STRATEGY)
-    env = SimulatorEnv(
+    base = SimulatorEnv(
         engine=BattleEngine(context_ruleset, validate_every_tick=False),
         decision_interval_us=250_000,
+    )
+    env = BasicMechanicsScenarioEnv(
+        base,
+        BasicScenarioConfig(source=source, target_player=0, decision_limit=64),
     )
     env.reset_v2(
         seed=_stable_seed(seed, "search-sim", family, index),
@@ -349,6 +372,11 @@ def _record_from_env(env: Any, family: str, source: str, context_ruleset: Any) -
     except TeacherError:
         return None
     legal_cards = int(legal_play.reshape(4, -1).any(axis=1).sum())
+    foe_cards = sorted(
+        str(getattr(entity, "card_id", ""))
+        for entity in state.entities.values()
+        if entity.alive and entity.owner == 1 and entity.kind != "tower"
+    )
     return {
         "family": family,
         "raster": np.array(observation.board, dtype=np.float32),
@@ -375,6 +403,7 @@ def _record_from_env(env: Any, family: str, source: str, context_ruleset: Any) -
             "target_hand": list(hand),
             "legal_cards": legal_cards,
             "tick_seconds": round(tick_seconds, 3),
+            "foe_cards": list(foe_cards),
         },
     }
 
@@ -444,17 +473,30 @@ def _search_live(
                 None,
             )
             if match is None:
-                extra = score_branch(
-                    env,
-                    BranchAction(
-                        kind="play",
-                        slot=int(actor_pred["card"]),
-                        row=int(actor_pred["row"]),
-                        col=int(actor_pred["col"]),
-                    ),
-                    horizon=horizon,
+                # The champion's argmax cell is decoded without a card mask,
+                # so on low-elixir states it can name an unaffordable slot
+                # (all--inf placement row argmaxes to (0,0)).  Production
+                # decoding masks illegal slots, so an illegal actor action
+                # carries no outcome: record None (regret consumers skip it)
+                # instead of crashing dataset generation on engine rejection.
+                slot, row, col = (
+                    int(actor_pred["card"]), int(actor_pred["row"]), int(actor_pred["col"])
                 )
-                actor_score = float(extra.score)
+                rows, cols = legal.shape[1], legal.shape[2]
+                if (
+                    0 <= slot < legal.shape[0]
+                    and 0 <= row < rows
+                    and 0 <= col < cols
+                    and bool(legal[slot, row, col])
+                ):
+                    extra = score_branch(
+                        env,
+                        BranchAction(kind="play", slot=slot, row=row, col=col),
+                        horizon=horizon,
+                    )
+                    actor_score = float(extra.score)
+                else:
+                    actor_score = None
             else:
                 actor_score = float(match.score)
     return {"result": result, "actor_score": actor_score}
@@ -650,15 +692,18 @@ def generate_search_dataset(
     """
 
     # Pass 1a: timing pool records (no searching yet).
-    timing_config = TimingConfig(n_states=config.timing_pool_states, seed=config.seed)
+    timing_config = TimingConfig(n_states=config.timing_pool_states, seed=config.seed,
+                                 family_weights=dict(config.timing_family_weights)
+                                 if config.timing_family_weights else None)
     timing_pool = generate_timing_pool(timing_config)
     # Pass 1b: sim-natural records (envs rebuilt for search in pass 2).
     ruleset = load_fixed_ruleset()
     pool = OpponentPool(ruleset, seed=config.seed)
+    sim_mix = dict(config.sim_family_mix) if config.sim_family_mix else None
     sim_records: list[dict[str, Any]] = []
     sim_indices: list[int] = []
     for index in range(config.sim_candidates):
-        env, family, source = _new_sim_env(ruleset, pool, config.seed, index, config.seed)
+        env, family, source = _new_sim_env(ruleset, pool, config.seed, index, config.seed, sim_mix)
         try:
             record = _record_from_env(env, family, source, ruleset)
         finally:
@@ -728,7 +773,16 @@ def generate_search_dataset(
             )
         )
     # Sim states: select indices, then rebuild + search while envs are live.
-    caps = {"spell": 300, "ambiguous": 500, "disagree": 400, "fill": 600}
+    # Caps scale with requested states (ratios fixed at the validated 1500
+    # baseline: spell .20 / ambiguous 1/3 / disagree .2667 / fill .40) so
+    # large targeted datasets keep the same oversampling shape.
+    _cap_scale = max(1.0, config.n_states / 1500.0)
+    caps = {
+        "spell": int(round(300 * _cap_scale)),
+        "ambiguous": int(round(500 * _cap_scale)),
+        "disagree": int(round(400 * _cap_scale)),
+        "fill": int(round(600 * _cap_scale)),
+    }
     counts = dict.fromkeys(caps, 0)
     ordered_sim = sorted(
         sim_records, key=lambda r: _hash_order(config.seed, str(r["provenance"]["state_hash"]))
@@ -758,6 +812,7 @@ def generate_search_dataset(
             seed=config.seed,
             pool_seed=config.seed,
             distill_seed=config.seed,
+            sim_family_mix=sim_mix,
         )
         for record in sim_to_search
     ]
@@ -802,9 +857,38 @@ def generate_search_dataset(
     n_total = min(config.n_states, len(candidates))
     by_adopted = [c for c in candidates if c["adopted"]]
     need_adopted = min(len(by_adopted), int(round(n_total * config.min_adopted_share)))
-    selected: list[dict[str, Any]] = sorted(
-        by_adopted, key=lambda c: _hash_order(config.seed, c["record"]["provenance"]["state_hash"])
-    )[:need_adopted]
+    # High-regret adopted states first (still fully deterministic): the
+    # outcome gap is the training signal, so large-regret outcomes outrank
+    # hash order.  Actor-regret preferred where the champion played legally.
+    def _adopted_key(c: dict[str, Any]) -> tuple[float, int]:
+        search = c["search"]
+        actor_score = search.get("actor_score")
+        if actor_score is not None:
+            regret = float(search["result"].best.score - actor_score)
+        else:
+            regret = float(c["regret_rule"])
+        return (-regret, _hash_order(config.seed, c["record"]["provenance"]["state_hash"]))
+    def _adopted_family(c: dict[str, Any]) -> str:
+        return c["record"]["family"] if not c["sim"] else f"sim:{c['record']['family']}"
+    # Round-robin across families (regret order within family): without a
+    # cap, one high-regret family (e.g. preserve-defense cannon flips) can
+    # dominate the adopted slice and wash out rule behavior the frozen
+    # transition gate still checks.  Priority with diversity.
+    _adopted_by_fam: dict[str, list[dict[str, Any]]] = {}
+    for c in by_adopted:
+        _adopted_by_fam.setdefault(_adopted_family(c), []).append(c)
+    for lst in _adopted_by_fam.values():
+        lst.sort(key=_adopted_key)
+    selected: list[dict[str, Any]] = []
+    while len(selected) < need_adopted:
+        progressed = False
+        for fam in sorted(_adopted_by_fam):
+            lst = _adopted_by_fam[fam]
+            if lst and len(selected) < need_adopted:
+                selected.append(lst.pop(0))
+                progressed = True
+        if not progressed:
+            break
     taken = {id(c) for c in selected}
     rest = sorted(
         [c for c in candidates if id(c) not in taken],
@@ -841,6 +925,21 @@ def generate_search_dataset(
                 selected.append(found)
     stats = _search_stats(selected)
     _assert_search_balance(stats, config, n_total)
+    stats["n_searched"] = len(candidates)
+    stats["adopted_rate_searched"] = (
+        sum(1 for c in candidates if c["adopted"]) / max(1, len(candidates))
+    )
+    stats["mean_regret_searched"] = float(
+        np.mean([c["regret_rule"] for c in candidates])
+    ) if candidates else 0.0
+    stats["timing_family_weights"] = (
+        dict(config.timing_family_weights) if config.timing_family_weights else "default"
+    )
+    stats["sim_family_mix"] = (
+        dict(config.sim_family_mix) if config.sim_family_mix else "default"
+    )
+    stats["horizon"] = int(config.horizon)
+    stats["max_branches"] = int(config.max_branches)
     samples = [
         _to_search_sample(
             c["record"], c["target"], c["search"], c["base"],
@@ -937,6 +1036,7 @@ class SimSearchTask:
     pool_seed: int
     distill_seed: int
     actor_cells: Any = ()
+    sim_family_mix: Any = None
 
 
 def _worker_init() -> None:
@@ -1009,7 +1109,8 @@ def _run_sim_task(task: SimSearchTask) -> dict[str, Any]:
 
     ruleset = load_fixed_ruleset()
     pool = OpponentPool(ruleset, seed=task.pool_seed)
-    env, _, _ = _new_sim_env(ruleset, pool, task.seed, int(task.index), task.distill_seed)
+    mix = dict(task.sim_family_mix) if task.sim_family_mix else None
+    env, _, _ = _new_sim_env(ruleset, pool, task.seed, int(task.index), task.distill_seed, mix)
     try:
         return _search_live(
             env, task.record, task.champ,

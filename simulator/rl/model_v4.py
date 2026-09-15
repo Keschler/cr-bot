@@ -129,6 +129,12 @@ class V4ActionBatch:
         if self.placement.shape[:-1] != self.mode.shape or self.placement.shape[-1] != 2:
             raise ValueError("placement must have shape mode.shape + (2,)")
 
+    @property
+    def prefix_shape(self) -> tuple[int, ...]:
+        """Batch/time prefix shared with trajectory containers."""
+
+        return tuple(self.mode.shape)
+
 
 @dataclass(frozen=True, slots=True)
 class V4Logits:
@@ -322,10 +328,36 @@ class GRUCore(nn.Module):
         )
 
     def forward(self, fused: torch.Tensor, reset_mask: torch.Tensor) -> torch.Tensor:
+        outputs, _ = self.forward_with_hidden(fused, reset_mask, hidden=None)
+        return outputs
+
+    def forward_with_hidden(
+        self,
+        fused: torch.Tensor,
+        reset_mask: torch.Tensor,
+        *,
+        hidden: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Unroll with an explicit initial hidden state.
+
+        ``hidden=None`` reproduces :meth:`forward` exactly (zero start).
+        Returns ``(outputs, final_hidden)`` with hidden in PyTorch GRU
+        layout ``[layers, batch, hidden]`` for rollout carryover.
+        """
+
         batch, time, _ = fused.shape
-        hidden = torch.zeros(
-            self.gru.num_layers, batch, self.gru.hidden_size, device=fused.device, dtype=fused.dtype
-        )
+        if hidden is None:
+            hidden = torch.zeros(
+                self.gru.num_layers, batch, self.gru.hidden_size,
+                device=fused.device, dtype=fused.dtype,
+            )
+        else:
+            if tuple(hidden.shape) != (self.gru.num_layers, batch, self.gru.hidden_size):
+                raise ValueError(
+                    "hidden must have shape [layers, batch, hidden] "
+                    f"({self.gru.num_layers}, {batch}, {self.gru.hidden_size})"
+                )
+            hidden = hidden.to(device=fused.device, dtype=fused.dtype)
         outputs: list[torch.Tensor] = []
         for step in range(time):
             reset = reset_mask[:, step]
@@ -335,7 +367,7 @@ class GRUCore(nn.Module):
                 hidden = cleared
             out, hidden = self.gru(fused[:, step : step + 1], hidden)
             outputs.append(out[:, 0])
-        return torch.stack(outputs, dim=1)
+        return torch.stack(outputs, dim=1), hidden
 
 
 class V4ActionHead(nn.Module):
@@ -475,9 +507,23 @@ class RecurrentV4Policy(nn.Module):
             duration_selected = actions.wait_duration.clamp(0, len(WAIT_DURATIONS) - 1).unsqueeze(-1)
             joint = joint + (duration_logp.gather(-1, duration_selected).squeeze(-1) * is_wait)
         if bool(is_play.any().item()):
-            card_logp = _masked_log_softmax(logits.card, masks.card)
-            card_selected = actions.card_slot.clamp(0, masks.card.shape[-1] - 1).unsqueeze(-1)
-            joint = joint + (card_logp.gather(-1, card_selected).squeeze(-1) * is_play)
+            # Score cards only on PLAY rows with a legal card.  Gathering an
+            # illegal slot's -inf and multiplying by is_play=0 yields NaN in
+            # the forward value (the same ``inf * 0`` family as the frozen
+            # supervised-loss fix); WAIT rows contribute exactly zero.
+            card_row_ok = masks.card.any(dim=-1)
+            if bool((is_play & ~card_row_ok).any().item()):
+                raise ValueError("PLAY target with no legal card")
+            card_term = torch.zeros_like(joint)
+            card_term[is_play] = _masked_log_softmax(
+                logits.card[is_play], masks.card[is_play]
+            ).gather(
+                -1,
+                actions.card_slot[is_play]
+                .clamp(0, masks.card.shape[-1] - 1)
+                .unsqueeze(-1),
+            ).squeeze(-1)
+            joint = joint + card_term
             rows, cols = logits.placement.shape[-2:]
             if tuple(masks.placement.shape[-2:]) != (rows, cols):
                 raise ValueError("placement mask grid must match the spatial map resolution")
@@ -485,17 +531,25 @@ class RecurrentV4Policy(nn.Module):
             prefix = tuple(logits.placement.shape[:-3])
             flat_logits = logits.placement.reshape(prefix + (masks.card.shape[-1], cells))
             flat_mask = masks.placement.reshape(prefix + (masks.card.shape[-1], cells))
-            placement_logp = _masked_log_softmax(flat_logits, flat_mask)
+            # Score only the selected slot on PLAY rows.  Softmax rows are
+            # independent, so this matches the full-map formulation exactly
+            # where that is defined, while staying defined on broke batches
+            # whose unselected slots hold no legal cell.
             slot = actions.card_slot.clamp(0, masks.card.shape[-1] - 1)
             slot_index = slot.reshape(slot.shape + (1, 1)).expand(
                 slot.shape + (1, cells)
             )
-            selected = placement_logp.gather(-2, slot_index).squeeze(-2)
+            selected_logits = flat_logits.gather(-2, slot_index).squeeze(-2)
+            selected_mask = flat_mask.gather(-2, slot_index).squeeze(-2)
+            selected_logp = torch.zeros_like(selected_logits)
+            selected_logp[is_play] = _masked_log_softmax(
+                selected_logits[is_play], selected_mask[is_play]
+            )
             cell_index = (
                 actions.placement[..., 0].clamp(0, rows - 1) * cols
                 + actions.placement[..., 1].clamp(0, cols - 1)
             ).clamp(0, cells - 1).unsqueeze(-1)
-            joint = joint + (selected.gather(-1, cell_index).squeeze(-1) * is_play)
+            joint = joint + (selected_logp.gather(-1, cell_index).squeeze(-1) * is_play)
         return joint
 
     @torch.no_grad()
@@ -540,8 +594,292 @@ class RecurrentV4Policy(nn.Module):
         )
 
 
+    def initial_hidden(
+        self,
+        batch_size: int,
+        *,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+    ) -> torch.Tensor:
+        """Zero GRU state ``[layers, batch, hidden]`` for rollout starts."""
+
+        if type(batch_size) is not int or batch_size <= 0:
+            raise ValueError("batch_size must be a positive integer")
+        gru = self.recurrent.gru
+        return torch.zeros(
+            gru.num_layers,
+            batch_size,
+            gru.hidden_size,
+            device=device,
+            dtype=dtype if dtype is not None else torch.float32,
+        )
+
+    def action_entropy(
+        self, logits: V4Logits, masks: ActionMasks
+    ) -> dict[str, torch.Tensor]:
+        """Joint + per-head entropies, every tensor ``[...]`` over batch/time.
+
+        The joint entropy mirrors the :meth:`log_prob` factorization
+        (duration counts on WAIT rows only; card/placement on PLAY rows
+        only).  Rows whose card map is empty (possible only with
+        inconsistent masks, never from :func:`masks_from_legal_play`)
+        contribute zero card/placement entropy instead of NaN.
+        """
+
+        mode_logp = _masked_log_softmax(logits.mode, masks.mode)
+        mode_probs = mode_logp.exp()
+        entropy_mode = _categorical_entropy_from_probs(mode_probs)
+        duration_logp = F.log_softmax(logits.wait_duration, dim=-1)
+        entropy_duration = _categorical_entropy_from_probs(duration_logp.exp())
+        play_available = masks.card.any(dim=-1)
+        card_logp_safe = torch.where(
+            play_available.unsqueeze(-1),
+            torch.where(
+                masks.card,
+                logits.card,
+                torch.full_like(logits.card, float("-inf")),
+            ),
+            torch.zeros_like(logits.card),
+        )
+        card_probs = torch.softmax(card_logp_safe, dim=-1)
+        entropy_card = torch.where(
+            play_available,
+            _categorical_entropy_from_probs(card_probs),
+            torch.zeros((), device=logits.mode.device, dtype=logits.mode.dtype).expand(
+                card_probs.shape[:-1]
+            ),
+        )
+        rows, cols = logits.placement.shape[-2:]
+        cells = rows * cols
+        slots = masks.card.shape[-1]
+        flat_logits = logits.placement.reshape(
+            logits.placement.shape[:-3] + (slots, cells)
+        )
+        flat_mask = masks.placement.reshape(
+            masks.placement.shape[:-3] + (slots, cells)
+        )
+        map_available = flat_mask.any(dim=-1)
+        placement_logp_safe = torch.where(
+            map_available.unsqueeze(-1),
+            torch.where(
+                flat_mask, flat_logits, torch.full_like(flat_logits, float("-inf"))
+            ),
+            torch.zeros_like(flat_logits),
+        )
+        placement_probs = torch.softmax(placement_logp_safe, dim=-1)
+        entropy_map = torch.where(
+            map_available,
+            _categorical_entropy_from_probs(placement_probs),
+            torch.zeros((), device=logits.mode.device, dtype=logits.mode.dtype).expand(
+                map_available.shape
+            ),
+        )
+        # Joint placement uncertainty is the card entropy plus the expected
+        # map entropy under the card policy (not the greedy card's map).
+        entropy_placement = (card_probs * entropy_map).sum(dim=-1)
+        entropy_placement = torch.where(
+            play_available, entropy_placement, torch.zeros_like(entropy_placement)
+        )
+        # The joint entropy is an expectation over the sampled mode, so it
+        # weights duration by P(WAIT) and card/placement by P(PLAY).
+        wait_prob = mode_probs[..., self.heads.WAIT]
+        play_prob = mode_probs[..., self.heads.PLAY]
+        joint = (
+            entropy_mode
+            + wait_prob * entropy_duration
+            + play_prob * (entropy_card + entropy_placement)
+        )
+        return {
+            "joint": joint,
+            "mode": entropy_mode,
+            "duration": entropy_duration,
+            "card": entropy_card,
+            "placement": entropy_placement,
+        }
+
+    def sample_action(
+        self, logits: V4Logits, masks: ActionMasks
+    ) -> tuple[V4ActionBatch, torch.Tensor, dict[str, torch.Tensor]]:
+        """Sample a masked factorized action (mode, then card, then cell).
+
+        Every sampled action is legal by construction: WAIT is always
+        available, PLAY rows always hold a legal slot, and a legal slot
+        always holds a legal cell (the :func:`masks_from_legal_play`
+        invariant).  A PLAY row with no legal slot is inconsistent input;
+        it fails closed to WAIT.  Returns ``(actions, joint_log_probs,
+        entropy)`` with the joint log-probs exactly equal to a later
+        :meth:`log_prob` call on the returned actions.
+        """
+
+        mode_logp = _masked_log_softmax(logits.mode, masks.mode)
+        mode = torch.distributions.Categorical(logits=mode_logp).sample()
+        play = mode == self.heads.PLAY
+        card_available = masks.card.any(dim=-1)
+        inconsistent = play & ~card_available
+        if bool(inconsistent.any().item()):
+            mode = torch.where(inconsistent, torch.zeros_like(mode), mode)
+            play = mode == self.heads.PLAY
+        duration = torch.distributions.Categorical(
+            logits=logits.wait_duration
+        ).sample()
+        card_slot = torch.zeros(mode.shape, dtype=torch.long, device=mode.device)
+        flat_card = card_slot.reshape(-1)
+        if bool(play.any().item()):
+            play_card_logp = _masked_log_softmax(
+                logits.card[play], masks.card[play]
+            )
+            flat_card[play.reshape(-1)] = torch.distributions.Categorical(
+                logits=play_card_logp
+            ).sample()
+            card_slot = flat_card.reshape(mode.shape)
+        rows, cols = logits.placement.shape[-2:]
+        cells = rows * cols
+        slots = masks.card.shape[-1]
+        flat_logits = logits.placement.reshape(
+            logits.placement.shape[:-3] + (slots, cells)
+        )
+        flat_mask = masks.placement.reshape(
+            masks.placement.shape[:-3] + (slots, cells)
+        )
+        flat_play = play.reshape(-1)
+        placement = torch.zeros(
+            (flat_play.numel(), 2), dtype=torch.long, device=mode.device
+        )
+        if bool(play.any().item()):
+            slot_index = (
+                card_slot[play].reshape(-1, 1, 1).expand(-1, 1, cells)
+            )
+            selected_logits = flat_logits[play].gather(-2, slot_index).squeeze(-2)
+            selected_mask = flat_mask[play].gather(-2, slot_index).squeeze(-2)
+            selected_logp = _masked_log_softmax(selected_logits, selected_mask)
+            flat_cell = torch.distributions.Categorical(
+                logits=selected_logp
+            ).sample()
+            placement[flat_play, 0] = flat_cell // cols
+            placement[flat_play, 1] = flat_cell % cols
+        placement = placement.reshape(mode.shape + (2,))
+        wait_duration = torch.where(
+            play, torch.zeros_like(duration), duration
+        )
+        actions = V4ActionBatch(
+            mode=mode.to(torch.long),
+            card_slot=card_slot.to(torch.long),
+            placement=placement.to(torch.long),
+            wait_duration=wait_duration.to(torch.long),
+        )
+        joint = self.log_prob(logits, masks, actions)
+        entropy = self.action_entropy(logits, masks)
+        return actions, joint, entropy
+
+    def rollout_sample(
+        self,
+        raster: torch.Tensor,
+        global_features: torch.Tensor,
+        entities: torch.Tensor,
+        entity_mask: torch.Tensor,
+        hand_tokens: torch.Tensor,
+        opp_hand_probs: torch.Tensor,
+        opp_out_of_cycle: torch.Tensor,
+        opp_elixir_interval: torch.Tensor,
+        event_history: torch.Tensor,
+        masks: ActionMasks,
+        *,
+        reset_mask: torch.Tensor | None = None,
+        hidden: torch.Tensor | None = None,
+    ) -> tuple[V4Logits, V4ActionBatch, torch.Tensor, dict[str, torch.Tensor], torch.Tensor, torch.Tensor]:
+        """Single-step stochastic rollout: forward, sample, carry hidden.
+
+        Inputs carry a singleton time axis ``[B, 1, ...]``.  Returns
+        ``(logits, actions, joint_log_probs, entropy, recurrent, next_hidden)``
+        where ``recurrent`` is the per-step GRU output ``ht`` (``[B, 1, H]``,
+        critic input) and ``next_hidden`` is the GRU state (``[L, B, H]``,
+        carryover input).  Both are raw; the caller detaches them for
+        storage, mirroring the prototype rollout convention.
+        """
+
+        batch = raster.shape[0]
+        if reset_mask is None:
+            reset_mask = torch.zeros(batch, 1, dtype=torch.bool, device=raster.device)
+        zt, spatial_map, entity_context, hand_queries = self.encoder(
+            raster,
+            global_features,
+            entities,
+            entity_mask,
+            hand_tokens,
+            opp_hand_probs,
+            opp_out_of_cycle,
+            opp_elixir_interval,
+            event_history,
+        )
+        ht, next_hidden = self.recurrent.forward_with_hidden(
+            zt, reset_mask, hidden=hidden
+        )
+        logits = self.heads(zt, ht, entity_context, hand_queries, spatial_map)
+        actions, joint, entropy = self.sample_action(logits, masks)
+        return logits, actions, joint, entropy, ht, next_hidden
+
+
 def count_parameters(policy: RecurrentV4Policy) -> int:
     return sum(int(p.numel()) for p in policy.parameters() if p.requires_grad)
+
+
+def masks_from_legal_play(legal_play: torch.Tensor) -> ActionMasks:
+    """Build factorized masks from a legal-play boolean tensor.
+
+    Mirrors ``distillation.to_torch_batch`` exactly: WAIT is always legal,
+    a card slot is legal iff it holds a legal cell, and PLAY is legal iff
+    any slot is legal.  Accepts ``[..., slots, rows, cols]``.
+    """
+
+    from .trajectory import ActionMasks
+
+    if not isinstance(legal_play, torch.Tensor):
+        raise TypeError("legal_play must be a torch.Tensor")
+    if legal_play.dtype != torch.bool:
+        raise TypeError("legal_play must have dtype torch.bool")
+    if legal_play.ndim < 3:
+        raise ValueError("legal_play must have shape [..., slots, rows, cols]")
+    card_mask = legal_play.flatten(-2).any(dim=-1)
+    mode_mask = torch.stack(
+        (
+            torch.ones_like(card_mask[..., :1]),
+            card_mask.any(dim=-1, keepdim=True),
+        ),
+        dim=-1,
+    ).squeeze(-2)
+    return ActionMasks(mode=mode_mask, card=card_mask, placement=legal_play)
+
+
+def _categorical_entropy_from_probs(probs: torch.Tensor) -> torch.Tensor:
+    """Finite entropy for distributions with zero-probability entries."""
+
+    safe = torch.where(probs > 0, probs, torch.ones_like(probs))
+    return -(probs * safe.log()).sum(dim=-1)
+
+
+class V4ValueHead(nn.Module):
+    """Public-observation value head on V4 recurrent features.
+
+    Mirrors the learner's recurrent value fallback (Linear+GELU+Linear).
+    It reads the actor's ``ht`` but the PPO smoke detaches actor features
+    before the critic, so critic updates never move actor parameters; the
+    privileged critic remains the deferred stronger option.
+    """
+
+    def __init__(self, hidden_dim: int) -> None:
+        super().__init__()
+        if type(hidden_dim) is not int or hidden_dim <= 0:
+            raise ValueError("hidden_dim must be a positive integer")
+        self.value = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, 1),
+        )
+
+    def forward(self, recurrent_features: torch.Tensor) -> torch.Tensor:
+        if recurrent_features.ndim != 3:
+            raise ValueError("recurrent_features must have shape [batch, time, hidden]")
+        return self.value(recurrent_features).squeeze(-1)
 
 
 def to_action_batch(v4_actions: V4ActionBatch) -> ActionBatch:
@@ -565,6 +903,8 @@ __all__ = [
     "V4ActionHead",
     "V4Encoder",
     "V4Logits",
+    "V4ValueHead",
     "count_parameters",
+    "masks_from_legal_play",
     "to_action_batch",
 ]

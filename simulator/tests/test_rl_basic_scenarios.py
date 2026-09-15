@@ -23,6 +23,7 @@ _ARCHETYPE = {
     "air-defense": "air-beatdown",
     "spell-situations": "siege-bait",
     "kiting-cycling-elixir": "defensive-cycle",
+    "bridge-defense": "aggressive-pressure",
 }
 
 

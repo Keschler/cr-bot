@@ -71,7 +71,7 @@ except ImportError:  # pragma: no cover - top-level ``rl`` imports
     from simulator.rl.timing_teacher import TIMING_TEACHER_VERSION, timing_teacher_label
 
 
-TIMING_GENERATOR_VERSION: str = "timing-v4-0"
+TIMING_GENERATOR_VERSION: str = "timing-v4-1"
 
 TIMING_FAMILIES: tuple[str, ...] = (
     "opening-scout",
@@ -198,6 +198,81 @@ def _pick_cell(cells: Any, col: int, row: int) -> tuple[int, int]:
         cells,
         key=lambda cell: (abs(cell[0] - col) + abs(cell[1] - row), cell[1], cell[0]),
     )
+
+
+def _jitter_towers(state: Any, env_seed: int) -> None:
+    """Vary princess-tower HP on raw-env setups like scenario preludes do.
+
+    Wrapped scenarios randomize tower HP to 65-100%; raw-env builders left
+    towers full, collapsing HP-state diversity.  Same band, deterministic.
+    """
+
+    for entity in sorted(state.entities.values(), key=lambda item: item.uid):
+        if entity.kind != "tower" or getattr(entity, "role", "") == "king":
+            continue
+        permille = 650 + (int(env_seed) + int(entity.uid) * 131) % 351
+        entity.hp = max(1, int(entity.max_hp) * permille // 1_000)
+
+
+def _deploy_support(
+    context: _TimingContext,
+    state: Any,
+    engine: Any,
+    deck: Sequence[str],
+    env_seed: int,
+) -> str | None:
+    """Deploy one trailing support body behind the most advanced threat.
+
+    Single-threat setups never produce splash/spell-value answers or focus
+    choices.  The support trails the threat from the back rank so it reads
+    as reinforcement, not a second independent push.  Opponent elixir is
+    restored afterwards; returns the card or None when nothing fits.
+    Never raises: an unsuitable deck simply yields no support.
+    """
+
+    try:
+        foes = _live_enemies(state)
+        if not foes:
+            return None
+        anchor = max(foes, key=lambda e: int(getattr(e, "y_mtile", 0)))
+        half = int(context.ruleset.arena.width_mtile) // 2
+        lane_col = 4 if int(getattr(anchor, "x_mtile", 0)) < half else 13
+        present = {str(getattr(e, "card_id", "")) for e in foes}
+        options = []
+        for card_id in deck:
+            try:
+                definition = context.ruleset.card(card_id)
+            except (KeyError, ValueError):
+                continue
+            if str(getattr(definition, "kind", "")) != "troop":
+                continue
+            if str(card_id) in present:
+                continue
+            options.append(definition)
+        if not options:
+            return None
+        ordered = sorted(options, key=lambda card: (-int(card.elixir_milli or 0), card.card_id))
+        pick = ordered[int(env_seed) % min(3, len(ordered))].card_id
+        player_state = state.players[1]
+        saved_elixir = int(player_state.elixir_milli)
+        saved_remainder = int(player_state.elixir_remainder)
+        try:
+            _deploy(context, state, engine, 1, pick, lane_col, 4 + int(env_seed) % 3)
+        except TeacherError:
+            return None
+        finally:
+            player_state.elixir_milli = saved_elixir
+            player_state.elixir_remainder = saved_remainder
+        return pick
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
+def _prewait(env: Any, env_seed: int, steps: int = 4) -> None:
+    """Advance a raw setup a few WAIT decisions for threat-depth jitter."""
+
+    for _ in range(int(env_seed) % steps):
+        _step_wait(env)
 
 
 def _deploy(
@@ -382,6 +457,11 @@ def _capture(
     else:
         soft = np.zeros((32, 18), dtype=np.float32)
     legal_cards = int(np.asarray(legal_play).reshape(4, -1).any(axis=1).sum())
+    foe_cards = sorted(
+        str(getattr(entity, "card_id", ""))
+        for entity in state.entities.values()
+        if entity.alive and entity.owner == 1 and entity.kind != "tower"
+    )
     return {
         "family": family,
         "raster": np.array(observation.board, dtype=np.float32),
@@ -418,6 +498,7 @@ def _capture(
             "teacher_wait_duration": int(target.wait_duration_idx),
             "play_legal_during_wait": bool(legal_cards > 0),
             "tick_seconds": round(tick_seconds, 3),
+            "foe_cards": list(foe_cards),
         },
     }
 
@@ -434,8 +515,11 @@ def _build_opening(
 ) -> list[dict[str, Any]]:
     env_seed = _stable_seed(config.seed, "timing", "opening-scout", seq_idx)
     env = _new_raw_env(context, tuple(ROSTER_PLAYER_DECK), env_seed)
-    elixir = 9000 + (env_seed % 3) * 500
+    # Scout holds need elixir >= 9.0 (T1); vary rich setpoints above the
+    # line instead of crossing it, or duration-0 WAIT supply collapses.
+    elixir = 9000 + (env_seed % 5) * 250
     _set_elixir(env.state, 0, elixir)
+    _jitter_towers(env.state, env_seed)
     seq_id = f"opening-scout:{seq_idx}"
     captures: list[dict[str, Any]] = []
     for offset in range(4):
@@ -472,8 +556,23 @@ def _build_preserve(
         else:
             _set_elixir(state, 0, 6000 + env_seed % 2001)
     else:
-        _set_hand(state, 0, ["cannon", "skeletons", "hog-rider", "musketeer"])
-        _set_elixir(state, 0, 2400 + env_seed % 500)
+        # Rotating hands keep the family contract (Cannon present plus a
+        # cheap playable answer) while varying the remaining answers.
+        _PRESERVE_HANDS = (
+            ["cannon", "skeletons", "hog-rider", "musketeer"],
+            ["cannon", "ice-spirit", "hog-rider", "ice-golem"],
+            ["cannon", "skeletons", "musketeer", "ice-golem"],
+        )
+        _set_hand(state, 0, list(_PRESERVE_HANDS[seq_idx % len(_PRESERVE_HANDS)]))
+        # Mostly below Cannon affordability (the T5 hold keeps duration-3
+        # WAITs supplied) with some immediately-answerable states for the
+        # timing boundary.
+        if seq_idx % 3 == 2:
+            _set_elixir(state, 0, 3000 + env_seed % 700)
+        else:
+            _set_elixir(state, 0, 2400 + env_seed % 600)
+    if env_seed % 3 == 0:
+        _deploy_support(context, state, engine, tuple(opponent.deck.cards), env_seed)
     engine.validate_state(state)
     seq_id = f"preserve-defense:{seq_idx}"
     captures: list[dict[str, Any]] = []
@@ -507,9 +606,16 @@ def _build_counterpush(
     env = _new_wrapped_env(context, "isolated-offense", opponent.deck.cards, env_seed)
     state, engine = env.state, env.engine
     lane_col = 3 if env_seed % 2 == 0 else 14
-    _deploy(context, state, engine, 0, "musketeer", lane_col, 25 + env_seed % 3)
-    _set_hand(state, 0, ["hog-rider", "skeletons", "ice-spirit", "ice-golem"])
-    _set_elixir(state, 0, 3400 + env_seed % 500)
+    survivor = ("musketeer", "ice-golem", "skeletons")[seq_idx % 3]
+    _deploy(context, state, engine, 0, survivor, lane_col, 25 + env_seed % 3)
+    _PUSH_HANDS = (
+        ["hog-rider", "skeletons", "ice-spirit", "ice-golem"],
+        ["hog-rider", "musketeer", "ice-spirit", "ice-golem"],
+    )
+    _set_hand(state, 0, list(_PUSH_HANDS[seq_idx % len(_PUSH_HANDS)]))
+    # Span Hog affordability (4.0): broke states wait for elixir first
+    # (duration-3 supply), rich states counterpush at once.
+    _set_elixir(state, 0, 2400 + env_seed % 2600)
     engine.validate_state(state)
     seq_id = f"counterpush-save:{seq_idx}"
     captures: list[dict[str, Any]] = []
@@ -562,8 +668,17 @@ def _build_defensive_timing(
         state, engine = env.state, env.engine
         _deploy(context, state, engine, 1, ground[0], 9, 8 + env_seed % 4)
         source = "raw-far-threat"
-    _set_hand(state, 0, ["cannon", "musketeer", "fireball", "log"])
-    _set_elixir(state, 0, 6000 + env_seed % 1001)
+        if env_seed % 5 < 2:
+            _deploy_support(context, state, engine, tuple(opponent.deck.cards), env_seed)
+        _prewait(env, env_seed)
+    _DEFENSIVE_HANDS = (
+        ["cannon", "musketeer", "fireball", "log"],
+        ["cannon", "musketeer", "skeletons", "ice-spirit"],
+        ["cannon", "musketeer", "log", "ice-golem"],
+    )
+    _set_hand(state, 0, list(_DEFENSIVE_HANDS[seq_idx % len(_DEFENSIVE_HANDS)]))
+    _set_elixir(state, 0, 4000 + env_seed % 4001)
+    _jitter_towers(state, env_seed)
     engine.validate_state(state)
     for offset in range(_MAX_SEQ_STEPS):
         foes = [e for e in _live_enemies(state)]
@@ -660,6 +775,8 @@ def _build_hold_utility(
         _deploy(context, state, engine, 1, troops[1], 12, 9)
         _set_hand(state, 0, ["fireball", "log", "cannon", "musketeer"])
         _set_elixir(state, 0, 4000 + env_seed % 2001)
+        _jitter_towers(state, env_seed)
+        _prewait(env, env_seed)
         engine.validate_state(state)
         source = "raw-dispersed"
         for offset in range(_MAX_SEQ_STEPS):
@@ -707,16 +824,22 @@ def _build_hold_utility(
             base_row = 6 + env_seed % 5
         if len(troops) < 2:
             return []
+        # Rotate the clustered pair through the candidate troops so the
+        # spell answer varies (single-target vs swarm, ground vs air).
+        start = env_seed % max(1, len(troops) - 1)
+        pair = troops[start:start + 2]
         env = _new_raw_env(context, tuple(opponent.deck.cards), env_seed)
         state, engine = env.state, env.engine
-        for card in troops[:2]:
-            _deploy(context, state, engine, 1, card, 9, base_row)
+        cluster_col = 7 + env_seed % 5
+        for card in pair:
+            _deploy(context, state, engine, 1, card, cluster_col, base_row)
         if log_play:
             _set_hand(state, 0, ["log", "hog-rider", "musketeer", "cannon"])
             _set_elixir(state, 0, 2000 + env_seed % 500)
         else:
             _set_hand(state, 0, ["fireball", "log", "hog-rider", "musketeer"])
-            _set_elixir(state, 0, 3900 + env_seed % 100)
+            _set_elixir(state, 0, 3900 + env_seed % 1100)
+        _jitter_towers(state, env_seed)
         engine.validate_state(state)
         for offset in range(10):
             if len(_live_enemies(state)) < 2:
@@ -744,7 +867,7 @@ def _build_avoid_overcommit(
     live_hook: Callable[[Any, dict[str, Any], int], None] | None = None,
 ) -> list[dict[str, Any]]:
     env_seed = _stable_seed(config.seed, "timing", "avoid-overcommit", seq_idx)
-    variant = seq_idx % 3 == 2  # threat-arrival variant ends in defense
+    variant = seq_idx % 2 == 0  # threat-arrival variant ends in defense
     source = "ground-defense" if variant else "isolated-offense"
     opponent = context.pool.sample(
         seq_idx, archetype=_FAMILY_ARCHETYPE["avoid-overcommit"], strategy="deterministic-cycle"
@@ -753,8 +876,19 @@ def _build_avoid_overcommit(
     state, engine = env.state, env.engine
     lane_col = 4 if env_seed % 2 == 0 else 13
     _deploy(context, state, engine, 0, "hog-rider", lane_col, 17 + env_seed % 2)
-    _set_hand(state, 0, ["cannon", "musketeer", "skeletons", "ice-golem"])
-    _set_elixir(state, 0, 5000 + env_seed % 1501)
+    if env_seed % 3 == 0:
+        # Committed push WITH trailing support: holding further support is
+        # still correct, but the support-timing boundary (deploy now vs
+        # hold for defense) varies with elixir.
+        _deploy(context, state, engine, 0, "musketeer", lane_col, 20 + env_seed % 3)
+    _AVOID_HANDS = (
+        ["cannon", "musketeer", "skeletons", "ice-golem"],
+        ["cannon", "musketeer", "ice-spirit", "log"],
+    )
+    _set_hand(state, 0, list(_AVOID_HANDS[seq_idx % len(_AVOID_HANDS)]))
+    # Span the T4 8.0 threshold: below it support is overcommit (WAIT),
+    # above it support is correctly timed (PLAY).
+    _set_elixir(state, 0, 4000 + env_seed % 4001)
     engine.validate_state(state)
     seq_id = f"avoid-overcommit:{seq_idx}"
     captures: list[dict[str, Any]] = []

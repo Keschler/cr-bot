@@ -66,7 +66,7 @@ except ImportError:  # pragma: no cover - top-level ``rl`` imports
     from simulator.rl.simulator_teacher import TeacherError, soft_placement_target, teacher_label
 
 
-SIM_GENERATOR_VERSION: str = "sim-v4-distill-0"
+SIM_GENERATOR_VERSION: str = "sim-v4-distill-1"
 """Provenance identity for real-simulator distillation states."""
 
 OPPONENT_STRATEGY: str = "deterministic-cycle"
@@ -83,7 +83,7 @@ FAMILY_TO_SOURCE: dict[str, str] = {
     "kiting-cycle": "kiting-cycling-elixir",
     "low-elixir": "kiting-cycling-elixir",
     "counterpush": "isolated-offense",
-    "bridge-defense": "ground-defense",
+    "bridge-defense": "bridge-defense",
 }
 
 # Opponent archetypes per scenario source, mirroring the basic-scenario test
@@ -95,6 +95,7 @@ SOURCE_ARCHETYPE: dict[str, str] = {
     "air-defense": "air-beatdown",
     "spell-situations": "siege-bait",
     "kiting-cycling-elixir": "defensive-cycle",
+    "bridge-defense": "aggressive-pressure",
 }
 
 _MAX_TEACHER_ATTEMPTS: int = 8

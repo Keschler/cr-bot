@@ -215,8 +215,20 @@ def _train(samples, *, epochs: int, batch_size: int, lr: float, seed: int, devic
 
 def _evaluate_agreement(policy, samples, device) -> dict:
     batch = move_batch_to_device(to_torch_batch(samples), device)
-    metrics = t1._timing_metrics(t1._predict(policy, batch), samples)
-    metrics["transitions"] = t1._transition_metrics(t1._predict(policy, batch), samples)
+    pred = t1._predict(policy, batch)
+    metrics = t1._timing_metrics(pred, samples)
+    try:
+        metrics["transitions"] = t1._transition_metrics(pred, samples)
+    except KeyError:
+        # Sim-natural and mixed search samples carry no timing ``seq_id``;
+        # transition-boundary scoring only applies to timing sequences.
+        metrics["transitions"] = {
+            "n_single_switch": 0,
+            "offset_match": 0,
+            "offset_match_acc": float("nan"),
+            "offset_card_match": 0,
+            "offset_card_match_acc": float("nan"),
+        }
     return metrics
 
 
@@ -378,12 +390,16 @@ def _search_regret_set(
         key = (family, int(seq_idx), int(rec["offset"]))
         if key not in timing_results:
             raise RuntimeError(f"regret search missing result for timing state {key}")
-        results.append({"record": rec, "result": timing_results[key], "sim": False})
+        payload = timing_results[key]
+        search_result = payload["result"] if isinstance(payload, dict) else payload
+        results.append({"record": rec, "result": search_result, "sim": False})
     for rec in sim_recs:
         key = int(rec["sim_index"])
         if key not in sim_results:
             raise RuntimeError(f"regret search missing result for sim index {key}")
-        results.append({"record": rec, "result": sim_results[key], "sim": True})
+        payload = sim_results[key]
+        search_result = payload["result"] if isinstance(payload, dict) else payload
+        results.append({"record": rec, "result": search_result, "sim": True})
     return results, model_preds
 
 
@@ -499,6 +515,45 @@ def main() -> int:
     parser.add_argument("--n-search-heldout", type=int, default=400)
     parser.add_argument("--n-regret-timing", type=int, default=150)
     parser.add_argument("--n-regret-sim", type=int, default=150)
+    parser.add_argument("--max-branches", type=int, default=12,
+                        help="search branches per state for the TRAINING search "
+                        "dataset (production B12; regret eval keeps B24).")
+    parser.add_argument("--horizon", type=int, default=28,
+                        help="search horizon for the TRAINING search dataset "
+                        "(production H28; regret eval keeps H28).")
+    parser.add_argument("--search-timing-pool", type=int, default=1200)
+    parser.add_argument("--search-sim-candidates", type=int, default=1200)
+    parser.add_argument("--search-replay-seqs", type=int, default=260)
+    parser.add_argument("--timing-weights", type=str, default="",
+                        help="JSON dict of timing-family weights for the search "
+                        "pool (empty = defaults).")
+    parser.add_argument("--search-sim-mix", type=str, default="",
+                        help="JSON dict of sim-family mix for search candidates "
+                        "(empty = defaults).")
+    parser.add_argument("--save-search", type=str, default="",
+                        help="Save generated training search samples (+stats) "
+                        "via torch.save for reuse in mix ablations.")
+    parser.add_argument("--load-search", type=str, default="",
+                        help="Load training search samples instead of "
+                        "regenerating (same seed/config required for "
+                        "determinism claims).")
+    parser.add_argument("--timing-repeat", type=int, default=1,
+                        help="Repeat Stage-1 timing train samples this many "
+                        "times in the joint mix (sampling weight, same "
+                        "distribution).")
+    parser.add_argument("--sim-repeat", type=int, default=1,
+                        help="Repeat Stage-1 sim train samples this many times "
+                        "in the joint mix.")
+    parser.add_argument("--timing-add-n", type=int, default=0,
+                        help="Additional UNIQUE timing states (seed "
+                        "--timing-add-seed) appended to the joint mix. "
+                        "Repeats reweight; unique states add diversity for "
+                        "rule-behavior generalization.")
+    parser.add_argument("--timing-add-seed", type=int, default=1)
+    parser.add_argument("--sim-add-n", type=int, default=0,
+                        help="Additional UNIQUE sim states (seed --sim-add-seed) "
+                        "appended to the joint mix.")
+    parser.add_argument("--sim-add-seed", type=int, default=1)
     parser.add_argument("--workers", type=int, default=1,
                         help="process-pool workers for counterfactual search "
                         "(simulator physics only; torch stays in the parent). "
@@ -565,17 +620,47 @@ def main() -> int:
             timing_samples, _ = generate_timing_dataset(
                 TimingConfig(n_states=args.n_train_timing, seed=args.seed)
             )
+            if args.timing_add_n > 0:
+                extra, _ = generate_timing_dataset(
+                    TimingConfig(n_states=args.timing_add_n, seed=args.timing_add_seed)
+                )
+                timing_samples = timing_samples + extra
         with run_stage("train-data-sim", f"n={args.n_train_sim}"):
             sim_samples = generate_sim_dataset(DistillationConfig(n_states=args.n_train_sim, seed=args.seed))
+            if args.sim_add_n > 0:
+                sim_samples = sim_samples + generate_sim_dataset(
+                    DistillationConfig(n_states=args.sim_add_n, seed=args.sim_add_seed)
+                )
         search_progress_started[0] = time.perf_counter()
-        with run_stage("train-data-search", f"n={args.n_search} workers={args.workers}"):
-            search_samples, search_stats = generate_search_dataset(
-                SearchDatasetConfig(n_states=args.n_search, seed=args.seed), champion,
-                workers=args.workers, progress=search_progress,
-            )
+        if args.load_search:
+            with run_stage("train-data-search", f"loaded from {args.load_search}"):
+                payload = torch.load(args.load_search, map_location="cpu", weights_only=False)
+                search_samples, search_stats = payload["samples"], payload["stats"]
+        else:
+            with run_stage("train-data-search", f"n={args.n_search} workers={args.workers}"):
+                timing_weights = json.loads(args.timing_weights) if args.timing_weights else None
+                sim_mix = json.loads(args.search_sim_mix) if args.search_sim_mix else None
+                search_samples, search_stats = generate_search_dataset(
+                    SearchDatasetConfig(
+                        n_states=args.n_search, seed=args.seed,
+                        timing_pool_states=args.search_timing_pool,
+                        sim_candidates=args.search_sim_candidates,
+                        replay_sequences=args.search_replay_seqs,
+                        horizon=args.horizon, max_branches=args.max_branches,
+                        timing_family_weights=timing_weights, sim_family_mix=sim_mix,
+                    ), champion,
+                    workers=args.workers, progress=search_progress,
+                )
+            if args.save_search:
+                torch.save({"samples": search_samples, "stats": search_stats}, args.save_search)
+                print(f"search dataset -> {args.save_search}", flush=True)
 
     if args.ablation == "joint":
-        train_samples = timing_samples + sim_samples + search_samples
+        train_samples = (
+            timing_samples * max(1, args.timing_repeat)
+            + sim_samples * max(1, args.sim_repeat)
+            + search_samples
+        )
         with run_stage("train", f"epochs={args.epochs} samples={len(train_samples)} device={device}"):
             candidate = _train(train_samples, epochs=args.epochs, batch_size=args.batch_size, lr=args.lr, seed=args.seed, device=device)
     elif args.ablation == "search-only":
@@ -708,6 +793,21 @@ def main() -> int:
             "search_teacher": SEARCH_TEACHER_VERSION,
             "horizon": HORIZON_DECISIONS,
             "max_branches": MAX_BRANCHES,
+            "search_horizon": args.horizon if _needs_training_data(args.ablation) else None,
+            "search_max_branches": args.max_branches if _needs_training_data(args.ablation) else None,
+            "search_timing_pool": args.search_timing_pool,
+            "search_sim_candidates": args.search_sim_candidates,
+            "search_replay_seqs": args.search_replay_seqs,
+            "timing_weights": args.timing_weights or "default",
+            "search_sim_mix": args.search_sim_mix or "default",
+            "save_search": args.save_search or None,
+            "load_search": args.load_search or None,
+            "timing_repeat": args.timing_repeat,
+            "sim_repeat": args.sim_repeat,
+            "timing_add_n": args.timing_add_n,
+            "timing_add_seed": args.timing_add_seed,
+            "sim_add_n": args.sim_add_n,
+            "sim_add_seed": args.sim_add_seed,
             "champion_record": CHAMPION_RECORD,
             "sim_reference": SIM_REFERENCE,
         },

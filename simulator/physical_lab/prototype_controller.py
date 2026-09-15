@@ -781,6 +781,31 @@ class VideoFrameSource:
     def close(self) -> None:
         self._capture.release()
 
+    def fast_forward_to(self, frame_index: int) -> None:
+        """Seek the capture near ``frame_index`` to skip sequential discard.
+
+        Positions the decoder at the keyframe at or before ``frame_index``
+        so callers only decode the small remainder. Exact positioning stays
+        with the caller (it must keep checking real frame indices).
+        Never raises: when the backend cannot seek, this is a no-op and the
+        caller falls back to sequential reads.
+        """
+
+        try:
+            target = int(frame_index)
+        except (TypeError, ValueError):
+            return
+        if target <= 0:
+            return
+        try:
+            capture = self._capture
+            settled = capture.set(self._cv2.CAP_PROP_POS_FRAMES, float(target))
+            pos = capture.get(self._cv2.CAP_PROP_POS_FRAMES)
+            if settled and math.isfinite(pos) and pos >= 0:
+                self._read_index = int(pos)
+        except Exception:
+            pass
+
 
 def _array_tensor(torch: Any, value: Any, *, dtype: Any, device: Any) -> Any:
     """Copy one immutable public NumPy snapshot into ``[B=1,T=1,...]``."""
@@ -1613,6 +1638,8 @@ def _summarize_extracted_visual_state(step: Any) -> dict[str, object]:
         "seen_enemy_cards": safe_seen,
         "tower_hp_self": safe_hp_triplet(getattr(hud, "tower_hp_self", None)),
         "tower_hp_enemy": safe_hp_triplet(getattr(hud, "tower_hp_enemy", None)),
+        "own_king_active": bool(getattr(game_state, "own_king_active", False)),
+        "enemy_king_active": bool(getattr(game_state, "enemy_king_active", False)),
         "detection_count": len(detections),
         "arena_px": list(getattr(analysis, "arena_px", ()))
         if isinstance(getattr(analysis, "arena_px", None), (list, tuple))

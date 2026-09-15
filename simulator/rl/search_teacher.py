@@ -28,8 +28,10 @@ from typing import Any, Sequence
 import numpy as np
 
 try:
+    from .actions import PlayCardAction
     from .simulator_teacher import TeacherError, TeacherTarget
 except ImportError:  # pragma: no cover - top-level ``rl`` imports
+    from simulator.actions import PlayCardAction
     from simulator.rl.simulator_teacher import TeacherError, TeacherTarget
 
 
@@ -284,16 +286,45 @@ def candidate_actions(
                 add(cells[round_idx])
         round_idx += 1
     return ordered
-    return ordered
 
 
-def _apply_branch(env: Any, action: BranchAction, player: int) -> tuple[list[int], int]:
+def _fork_child(env: Any) -> Any:
+    """Fork preferring the lightweight physics-only path.
+
+    Branch rollouts never build observations (see :func:`_rollout`), so
+    the search path uses ``fork_for_search`` when available: identical
+    physics state/RNG isolation without copying observation memories.
+    Falls back to full :meth:`fork` for foreign env implementations.
+    """
+
+    fast = getattr(env, "fork_for_search", None)
+    if callable(fast):
+        return fast()
+    return env.fork()
+
+
+def _elixir_costs(hand_keys: Sequence[str], ruleset: Any) -> dict[str, int]:
+    """Resolve elixir costs once per state (not once per PLAY branch)."""
+
+    costs: dict[str, int] = {}
+    for key in dict.fromkeys(hand_keys):
+        if not key:
+            continue
+        try:
+            costs[key] = int(ruleset.card(key).elixir_milli)
+        except (KeyError, ValueError, AttributeError):
+            costs[key] = 0
+    return costs
+
+
+def _apply_branch(
+    env: Any,
+    action: BranchAction,
+    player: int,
+    elixir_costs: dict[str, int] | None = None,
+) -> tuple[list[int], int]:
     """Apply one branch action; return (deployed uids, elixir spent)."""
 
-    try:
-        from .actions import PlayCardAction
-    except ImportError:  # pragma: no cover
-        from simulator.actions import PlayCardAction
     state = env.state
     if action.kind == "wait":
         return [], 0
@@ -307,10 +338,13 @@ def _apply_branch(env: Any, action: BranchAction, player: int) -> tuple[list[int
             f"reason={result[0].reason if result else None}"
         )
     deployed = sorted(set(state.entities) - before)
-    try:
-        cost = int(env.engine.ruleset.card(action.card_key).elixir_milli) if action.card_key else 0
-    except (KeyError, ValueError, AttributeError):
-        cost = 0
+    if elixir_costs is not None:
+        cost = int(elixir_costs.get(action.card_key, 0)) if action.card_key else 0
+    else:
+        try:
+            cost = int(env.engine.ruleset.card(action.card_key).elixir_milli) if action.card_key else 0
+        except (KeyError, ValueError, AttributeError):
+            cost = 0
     return deployed, cost
 
 
@@ -346,15 +380,26 @@ def score_branch(
     *,
     player: int = 0,
     horizon: int = HORIZON_DECISIONS,
+    before_towers: dict[int, tuple[int, int]] | None = None,
+    before_threats: dict[int, tuple[int, int]] | None = None,
+    elixir_costs: dict[str, int] | None = None,
 ) -> BranchScore:
-    """Fork, apply one branch, roll out, and score (child discarded)."""
+    """Fork, apply one branch, roll out, and score (child discarded).
+
+    ``before_towers``/``before_threats``/``elixir_costs`` are hoisted
+    per-state by :func:`search_state` (they are identical for every branch
+    of the same parent state); direct callers may omit them to preserve
+    the original per-branch computation exactly.
+    """
 
     if player != 0:
         raise ValueError("search branching currently supports target_player 0 only")
-    child = env.fork()
-    before_towers = _tower_totals(child.state)
-    before_threats = _threat_health(child.state, owner=1 - player)
-    deployed, cost = _apply_branch(child, action, player)
+    child = _fork_child(env)
+    if before_towers is None:
+        before_towers = _tower_totals(child.state)
+    if before_threats is None:
+        before_threats = _threat_health(child.state, owner=1 - player)
+    deployed, cost = _apply_branch(child, action, player, elixir_costs)
     steps_run = _rollout(child, horizon)
     after_towers = _tower_totals(child.state)
     score, terms = score_outcome(
@@ -395,7 +440,24 @@ def search_state(
         hand_keys=list(hand_keys),
         max_branches=max_branches,
     )
-    scored = [score_branch(env, action, player=player, horizon=horizon) for action in branches]
+    # Hoisted per-state snapshots: the fork is exact, so reading the parent
+    # gives bit-identical values to reading each child before its branch
+    # action, while saving 23/24 tower/threat scans and up to 24
+    # ruleset/card cost resolutions per searched state.
+    parent_towers = _tower_totals(env.state)
+    parent_threats = _threat_health(env.state, owner=1 - player)
+    try:
+        costs = _elixir_costs(list(hand_keys), env.engine.ruleset)
+    except AttributeError:
+        costs = None
+    scored = [
+        score_branch(
+            env, action, player=player, horizon=horizon,
+            before_towers=parent_towers, before_threats=parent_threats,
+            elixir_costs=costs,
+        )
+        for action in branches
+    ]
     order = sorted(range(len(scored)), key=lambda i: (-scored[i].score, i))
     best = order[0]
     second_gap = scored[best].score - scored[order[1]].score if len(order) > 1 else 0.0

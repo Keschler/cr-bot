@@ -66,6 +66,28 @@ class BattleEngine(
         self._navigation_cache_revision = -1
         self._navigation_cache: tuple[NavigationObstacle, ...] = ()
 
+    def clone_for_fork(self) -> "BattleEngine":
+        """Return a fresh engine sharing immutable ruleset-derived data.
+
+        The ruleset object is already hash-verified at load and immutable,
+        so re-reading JSON + re-hashing on every search fork (24× per
+        searched state) is pure overhead.  The narrow numeric columns are
+        read-only in physics loops and safe to share by reference.  Only
+        the navigation cache is fresh mutable state.
+        """
+
+        clone = object.__new__(BattleEngine)
+        clone.ruleset = self.ruleset
+        clone.validate_every_tick = self.validate_every_tick
+        clone._card_collision_radii = self._card_collision_radii
+        clone._tower_collision_radii = self._tower_collision_radii
+        clone._card_masses = self._card_masses
+        clone._card_movement_layers = self._card_movement_layers
+        clone._navigation_cache_state = None
+        clone._navigation_cache_revision = -1
+        clone._navigation_cache = ()
+        return clone
+
 
     def new_battle(
         self,
