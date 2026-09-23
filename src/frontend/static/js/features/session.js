@@ -292,7 +292,7 @@ export function refreshImage() {
       img.dataset.previewFrame = tag;
       img.dataset.src = 'roi-preview';
       delete img.dataset.fi;
-      imgRequestId++; // cancel any in-flight session image fetch
+      cancelFrameImageLoads();
       img.src = url;
     }
     return;
@@ -341,6 +341,14 @@ const evictedFrames = new Set();
 let lastEvictToastFi = null;
 let imgRequestId = 0;
 let lastObjectUrl = null;
+let liveImageRequestId = null;
+let pendingLiveImage = null;
+
+function cancelFrameImageLoads() {
+  imgRequestId++;
+  liveImageRequestId = null;
+  pendingLiveImage = null;
+}
 
 export function refreshEvictBadge() {
   const badge = els['history-badge'];
@@ -358,45 +366,66 @@ export function refreshEvictBadge() {
 }
 
 async function loadFrameImage(url, fi, edge) {
-  const id = ++imgRequestId;
-  let res = null;
-  try {
-    res = await fetch(url, { cache: 'no-store' });
-  } catch (err) {
-    return; // network blip: keep last image; the status loop reports outages
+  // Live metadata can arrive faster than the browser can fetch and decode
+  // JPEGs. Keep the current request alive and retain only the newest follow-up
+  // instead of continually invalidating requests before they can be painted.
+  if (edge && liveImageRequestId !== null) {
+    pendingLiveImage = { url, fi };
+    return;
   }
-  if (id !== imgRequestId) return; // superseded by a newer scrub/poll
-  if (!res.ok || res.status === 204) {
-    if (!edge && fi !== null) {
-      evictedFrames.add(String(fi));
-      if (lastEvictToastFi !== String(fi)) {
-        lastEvictToastFi = String(fi);
-        toast('Frame f' + fi + ' left the server history — showing last image.', 'error');
+  if (!edge) pendingLiveImage = null;
+
+  const id = ++imgRequestId;
+  if (edge) liveImageRequestId = id;
+  try {
+    let res = null;
+    try {
+      res = await fetch(url, { cache: 'no-store' });
+    } catch (err) {
+      return; // network blip: keep last image; the status loop reports outages
+    }
+    if (id !== imgRequestId) return; // superseded by a scrub/preview/session reset
+    if (!res.ok || res.status === 204) {
+      if (!edge && fi !== null) {
+        evictedFrames.add(String(fi));
+        if (lastEvictToastFi !== String(fi)) {
+          lastEvictToastFi = String(fi);
+          toast('Frame f' + fi + ' left the server history — showing last image.', 'error');
+        }
+      }
+      refreshEvictBadge();
+      return;
+    }
+    let blob = null;
+    try {
+      blob = await res.blob();
+    } catch (err) {
+      return;
+    }
+    if (id !== imgRequestId || !blob || !blob.size) return;
+    const objUrl = URL.createObjectURL(blob);
+    if (lastObjectUrl) {
+      try { URL.revokeObjectURL(lastObjectUrl); } catch (e) { /* gone */ }
+    }
+    lastObjectUrl = objUrl;
+    if (fi !== null) {
+      img.dataset.fi = String(fi);
+      evictedFrames.delete(String(fi));
+    } else {
+      delete img.dataset.fi;
+    }
+    img.src = objUrl;
+    refreshEvictBadge();
+  } finally {
+    if (edge && liveImageRequestId === id) {
+      liveImageRequestId = null;
+      const pending = pendingLiveImage;
+      pendingLiveImage = null;
+      if (pending && id === imgRequestId && isLiveEdge()) {
+        void loadFrameImage(pending.url, pending.fi, true);
       }
     }
-    refreshEvictBadge();
-    return;
   }
-  let blob = null;
-  try {
-    blob = await res.blob();
-  } catch (err) {
-    return;
-  }
-  if (id !== imgRequestId || !blob || !blob.size) return;
-  const objUrl = URL.createObjectURL(blob);
-  if (lastObjectUrl) {
-    try { URL.revokeObjectURL(lastObjectUrl); } catch (e) { /* gone */ }
-  }
-  lastObjectUrl = objUrl;
-  if (fi !== null) {
-    img.dataset.fi = String(fi);
-    evictedFrames.delete(String(fi));
-  } else {
-    delete img.dataset.fi;
-  }
-  img.src = objUrl;
-  refreshEvictBadge();
 }
 
 export function imageMatchesFrame(frame) {
@@ -464,7 +493,7 @@ export function resetSession(label) {
   framesFails = 0;
   evictedFrames.clear();
   lastEvictToastFi = null;
-  imgRequestId++; // cancel in-flight image fetches from the old session
+  cancelFrameImageLoads();
   state.sessionLabel = label || '';
   state.selectedRank = null;
   state.sessionPin = null;
