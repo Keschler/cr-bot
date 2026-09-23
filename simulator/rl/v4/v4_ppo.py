@@ -1,30 +1,20 @@
-"""Minimal V4 PPO smoke path: frozen-anchor short-scenario training.
+"""Fixed-decision recurrent PPO for the compact V4 actor.
 
-This module wires the already-validated pieces into the smallest safe PPO
-loop for the 117k-parameter V4 actor; it deliberately does NOT replicate
-the prototype training stack:
+Public histories are synchronized before observation. Each action advances one
+base simulator decision; WAIT duration is explicitly excluded from the runtime
+action distribution. Frozen-anchor targets use the anchor's own recurrent state.
+Collectors save actual successor values before any episode reset, including at
+rollout tails. The critic consumes detached actor features.
 
-* rollout uses :meth:`RecurrentV4Policy.rollout_sample` (masked, fail-closed)
-  with per-lane public estimators, so inputs match distillation exactly;
-* the objective is :func:`objectives.ppo_objective` plus a BC term on
-  frozen-anchor actions (no new loss math);
-* the critic is :class:`V4ValueHead` on detached actor features (actor
-  parameters never move under the value loss; the privileged critic stays
-  the deferred stronger option);
-* opponents are scripted archetype lanes (self-play-lite flagged off until
-  mirrored-V4 opponent quality is validated);
-* rewards are the native short-scenario potentials (validated, anti-exploit
-  history) with tower/crown/wincome components logged separately.
-
-Deliberate simplifications for the smoke (documented follow-ups): full-batch
-updates (no recurrent minibatching), fresh estimator per episode (matches
-distillation inputs exactly; evolving beliefs are a separate project),
-uniform single-step-equivalent GRU carryover with no burn-in.
+Rollouts use full-batch recurrent updates and zero memory at collection starts.
+Frontier starts reconstruct public bookkeeping from event history, but are still
+restart scenarios rather than full-match recurrent prefixes. Full-match evaluation
+preserves recurrent memory throughout the match.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import hashlib
 from typing import Any, Sequence
 
@@ -211,6 +201,18 @@ def load_frozen_anchor(
 # ---------------------------------------------------------------------------
 
 
+V4_RUNTIME_VERSION = "v4-fixed-step-public-history-2"
+
+
+def configure_v4_runtime(policy: RecurrentV4Policy) -> None:
+    """Use the action distribution the fixed-decision simulator executes.
+
+    Supervised duration weights remain checkpoint-compatible, but duration
+    is not an action factor, an entropy bonus, or a BC penalty in this runtime.
+    """
+    policy.config = replace(policy.config, fixed_wait=True)
+
+
 def decode_v4_sim_actions(
     actions: V4ActionBatch, *, player: int = 0
 ) -> list[Any]:
@@ -228,6 +230,8 @@ def decode_v4_sim_actions(
     place = actions.placement.reshape(-1, 2)
     for index in range(int(mode.numel())):
         if int(mode[index]) == 0:
+            if int(actions.wait_duration.reshape(-1)[index]) != 0:
+                raise ValueError("fixed-step runtime requires WAIT duration index 0")
             decoded.append(WaitAction(player))
         else:
             decoded.append(
@@ -258,6 +262,8 @@ class V4RolloutBatch:
     wait_fraction: float = 0.0
     card_histogram: dict[str, float] | None = None
     illegal_attempts: int = 0
+    next_values: torch.Tensor | None = None
+    runtime_version: str = V4_RUNTIME_VERSION
 
 
 def _hand_tokens_partial(hand: Sequence[str], elixir: float) -> np.ndarray:
@@ -306,6 +312,35 @@ def _v4_step_inputs(
     }
 
 
+def post_step_value(policy, critic, env, estimator, hidden, device):
+    """Value of the real successor observation, before any environment reset."""
+    if env.state.terminal and env.state.terminal_reason != "runner_tick_limit":
+        return 0.0
+    estimator.sync_from_env(env, viewer=0)
+    obs = env.observe_v2_for_viewer(0)
+    own = env.state.players[0]
+    packed = _v4_step_inputs(obs, list(own.hand), own.elixir_milli / 1000.0, estimator.snapshot())
+    inputs = {key: torch.as_tensor(value, device=device).unsqueeze(0).unsqueeze(0)
+              for key, value in packed.items() if key not in ("legal_play", "legal_wait")}
+    with torch.no_grad():
+        _, ht, _ = policy.forward_step(inputs, hidden=hidden)
+        return float(critic(ht).reshape(-1)[0].item())
+
+
+def rollout_next_values(values, terminated, truncated, boundary_values):
+    """Shift within episodes only; cuts and rollout tails use saved successors."""
+    result = torch.zeros_like(values)
+    result[:, :-1] = values[:, 1:]
+    needs_successor = truncated.clone()
+    needs_successor[:, -1] = True
+    needs_successor &= ~terminated
+    if not torch.isfinite(boundary_values[needs_successor]).all():
+        raise ValueError("missing post-step bootstrap value at a truncation or rollout tail")
+    result[needs_successor] = boundary_values[needs_successor]
+    result[terminated] = 0.0
+    return result
+
+
 def collect_v4_rollout(
     policy: RecurrentV4Policy,
     critic: V4ValueHead,
@@ -336,10 +371,13 @@ def collect_v4_rollout(
         raise TypeError("deterministic_anchor must be boolean")
     if type(deterministic_policy) is not bool:
         raise TypeError("deterministic_policy must be boolean")
+    configure_v4_runtime(policy)
     policy.eval()
     critic.eval()
     if anchor is not None:
+        configure_v4_runtime(anchor)
         anchor.eval()
+    anchor_hidden = anchor.initial_hidden(n_lanes, device=device) if anchor is not None else None
     hidden = policy.initial_hidden(n_lanes, device=device)
     steps: list[dict[str, torch.Tensor]] = []
     illegal_attempts = 0
@@ -351,7 +389,7 @@ def collect_v4_rollout(
     lane_outcomes: list[list[int]] = [[0, 0, 0] for _ in range(n_lanes)]
     card_counts: dict[int, int] = {}
     with torch.no_grad():
-        for _ in range(n_decisions):
+        for decision_index in range(n_decisions):
             batch_inputs: dict[str, list[np.ndarray]] = {
                 key: [] for key in (
                     "raster", "global_features", "entities", "entity_mask",
@@ -370,6 +408,7 @@ def collect_v4_rollout(
                 player_state = state.players[0]
                 hand = list(player_state.hand)
                 elixir = float(player_state.elixir_milli) / 1000.0
+                lane["estimator"].sync_from_env(env, viewer=0)
                 snapshot = lane["estimator"].snapshot()
                 packed = _v4_step_inputs(observation, hand, elixir, snapshot)
                 for key, value in packed.items():
@@ -413,12 +452,15 @@ def collect_v4_rollout(
             values = critic(ht)
             anchor_actions: V4ActionBatch | None = None
             if anchor is not None:
+                anchor_logits, _, anchor_hidden = anchor.forward_step(
+                    array_inputs, hidden=anchor_hidden, reset_mask=reset_mask
+                )
                 if deterministic_anchor:
-                    anchor_actions = anchor.act_deterministic(logits, masks)
+                    anchor_actions = anchor.act_deterministic(anchor_logits, masks)
                     # Anchor decode runs under no-grad; the learner scores
                     # these actions differentiably at update time.
                 else:
-                    sampled, _, _ = anchor.sample_action(logits, masks)
+                    sampled, _, _ = anchor.sample_action(anchor_logits, masks)
                     anchor_actions = sampled
             sim_actions = decode_v4_sim_actions(
                 V4ActionBatch(
@@ -432,15 +474,17 @@ def collect_v4_rollout(
             rewards: list[float] = []
             terminated: list[bool] = []
             truncated: list[bool] = []
+            boundary_values = [float("nan")] * n_lanes
             for lane_index, lane in enumerate(lanes):
                 env = lane["env"]
                 opponent_action = lane["opponent"].choose_action(env.engine, env.state, 1)
                 result = env.step_v2((sim_actions[lane_index], opponent_action))
                 rewards.append(float(result.rewards[0]))
                 all_rewards.append(float(result.rewards[0]))
-                terminated.append(bool(result.terminated))
+                done = bool(result.terminated) and not bool(result.truncated)
+                terminated.append(done)
                 truncated.append(bool(result.truncated))
-                if bool(result.terminated):
+                if done:
                     winner = result.info.get("winner", None) if isinstance(result.info, dict) else None
                     if winner == 0:
                         episode_wins += 1
@@ -451,6 +495,11 @@ def collect_v4_rollout(
                     else:
                         episode_draws += 1
                         lane_outcomes[lane_index][2] += 1
+                if not done and (result.truncated or decision_index == n_decisions - 1):
+                    boundary_values[lane_index] = post_step_value(
+                        policy, critic, env, lane["estimator"],
+                        next_hidden[:, lane_index:lane_index + 1], device,
+                    )
                 if bool(result.terminated) or bool(result.truncated):
                     seed = int(lane.get("next_seed", 0))
                     lane["env"].reset_v2(seed=seed, decks=lane["decks"], shuffle_decks=True)
@@ -509,6 +558,7 @@ def collect_v4_rollout(
                     "rewards": torch.tensor(rewards, dtype=torch.float32),
                     "terminated": torch.tensor(terminated, dtype=torch.bool),
                     "truncated": torch.tensor(truncated, dtype=torch.bool),
+                    "boundary_values": torch.tensor(boundary_values, dtype=torch.float32),
                     "reset": reset_mask.detach().cpu(),
                 }
             )
@@ -531,6 +581,7 @@ def collect_v4_rollout(
         "episode_draws": episode_draws,
         "episode_win_rate": episode_wins / n_episodes if n_episodes else 0.0,
         "lane_outcomes": lane_outcomes,
+        "runtime_version": V4_RUNTIME_VERSION,
     }
 
 
@@ -628,6 +679,9 @@ def _stack_rollout(
         ).to(device),
         old_head_logits=old_head_logits,
         per_head_entropy=entropies,
+        next_values=rollout_next_values(
+            trajectory.values, trajectory.terminated, trajectory.truncated, stack("boundary_values")
+        ),
     )
 
 
@@ -697,25 +751,17 @@ def update_v4_ppo(
     trajectory = batch.trajectory
     sequence = trajectory.sequence
     device = sequence.raster.device
-    policy.train()
+    # Keep dropout identical to collection while retaining autograd.
+    policy.eval()
     critic.train()
     if batch.recurrent is None:
         raise ValueError("rollout batch lacks stored recurrent features")
-    recurrent = batch.recurrent.to(device)
-    with torch.no_grad():
-        # Bootstrap the final step on mid-rollout cuts only; terminated
-        # episodes bootstrap zero.  Short-scenario horizons terminate
-        # explicitly, so cuts are the only bootstrap path in the smoke.
-        final_live = trajectory.truncated[:, -1] & ~trajectory.terminated[:, -1]
-        bootstrap = critic(recurrent[:, -1:, :].detach()).squeeze(1)
-        final_value = torch.where(
-            final_live, bootstrap, torch.zeros_like(bootstrap)
-        )
-    stored_values = trajectory.values.to(device)
-    next_values = torch.zeros_like(stored_values)
-    if stored_values.shape[1] > 1:
-        next_values[:, :-1] = stored_values[:, 1:]
-    next_values[:, -1] = final_value
+    if batch.runtime_version != V4_RUNTIME_VERSION:
+        raise ValueError("rollout runtime version mismatch; recollect with the current runtime")
+    configure_v4_runtime(policy)
+    if batch.next_values is None:
+        raise ValueError("rollout lacks real successor values; recollect instead of shifting across resets")
+    next_values = batch.next_values.to(device)
     advantages, returns = compute_gae(
         trajectory.rewards.to(device),
         trajectory.values.to(device),
@@ -810,7 +856,8 @@ def update_v4_ppo(
                     final_logits,
                     trajectory.action_masks,
                 ).items():
-                    head_kl[key] = float(value.detach().mean().item())
+                    head_kl[key] = (0.0 if key == "duration" and policy.config.fixed_wait
+                                    else float(value.detach().mean().item()))
             for key, value in head_kl.items():
                 if not np.isfinite(value):
                     reasons.append(f"non-finite per-head KL on {key}")
@@ -829,7 +876,10 @@ def update_v4_ppo(
             # ratio explode mechanically.  It quarantines only alongside
             # movement, which is already covered above.
             per_head["placement_grad_warning"] = placement_ratio
-        post_entropy = policy.action_entropy(logits, trajectory.action_masks)
+        # ``logits`` still holds the pre-update forward pass.  Recompute the
+        # entropy from the post-step logits so the quarantine gate measures the
+        # update that just ran rather than reporting stale pre-update entropy.
+        post_entropy = policy.action_entropy(post_logits, trajectory.action_masks)
         for key, value in post_entropy.items():
             pre = float(batch.per_head_entropy[key].detach().mean().item()) if batch.per_head_entropy is not None and key in batch.per_head_entropy else float("nan")
             post = float(value.detach().mean().item())
@@ -1191,7 +1241,12 @@ def return_distribution(values: torch.Tensor) -> dict[str, float]:
     if int(flat.numel()) == 0:
         raise ValueError("empty tensor has no distribution")
     quantiles = torch.quantile(
-        flat, torch.tensor([0.10, 0.25, 0.50, 0.75, 0.90], dtype=flat.dtype)
+        flat,
+        torch.tensor(
+            [0.10, 0.25, 0.50, 0.75, 0.90],
+            dtype=flat.dtype,
+            device=flat.device,
+        ),
     ).tolist()
     near_zero = float((flat.abs() < 1e-6).float().mean().item())
     return {

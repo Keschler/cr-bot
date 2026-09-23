@@ -208,8 +208,11 @@ def test_play_row_values_match_independent_reference(mixed_batch: dict) -> None:
 
 
 def test_champion_architecture_size_is_pinned() -> None:
-    """The frozen Stage-1 joint champion has 117,767 params; any arch change
-    must be deliberate (update this pin only with a re-frozen champion)."""
+    """Count includes the existing 576-cell bias, now registered before forward.
+
+    The historical 117,767 count omitted that lazily created parameter.
+    Checkpoint tensor shapes and the post-forward architecture are unchanged.
+    """
 
     config = ModelConfigV4(
         model_dim=32,
@@ -221,4 +224,4 @@ def test_champion_architecture_size_is_pinned() -> None:
         transformer_ff_dim=64,
         spatial_head_dim=8,
     )
-    assert count_parameters(RecurrentV4Policy(config)) == 117767
+    assert count_parameters(RecurrentV4Policy(config)) == 118343

@@ -44,7 +44,7 @@ except ImportError:  # pragma: no cover - top-level ``rl`` imports
     )
 
 
-FRONTIER_PPO_VERSION: str = "frontier-ppo-v4-0"
+FRONTIER_PPO_VERSION: str = "frontier-ppo-v4-2"
 FRONTIER_PPO_EPISODE_CAP: int = 128
 
 # Paired-uncertainty reporting for sealed choice-regret.
@@ -269,9 +269,8 @@ def collect_frontier_rollout(
       the tower-differential improvement over the episode.
     * ``step_tower_reward`` (exp4): the same tower-differential objective
       densified per step — each decision pays the differential change
-      since the previous decision (potential shaping with Phi = tower
-      differential; episode totals telescope to the truncation-lump
-      equivalent).  No truncation lump is added in this mode.  Terminal
+      since the previous decision. Undiscounted totals telescope; discounted
+      returns generally differ from the truncation-lump objective.  No truncation lump is added in this mode.  Terminal
       episodes keep the env sparse outcome plus the final delta.
 
     No other shaping exists in any mode.
@@ -284,28 +283,35 @@ def collect_frontier_rollout(
         from .v4_ppo import (
             _stack_rollout,
             _v4_step_inputs,
-            decode_v4_sim_actions,
+            decode_v4_sim_actions, configure_v4_runtime, post_step_value,
         )
     except ImportError:  # pragma: no cover
         from simulator.rl.v4.model_v4 import V4ActionBatch, masks_from_legal_play
         from simulator.rl.v4.v4_ppo import (
             _stack_rollout,
             _v4_step_inputs,
-            decode_v4_sim_actions,
+            decode_v4_sim_actions, configure_v4_runtime, post_step_value,
         )
     from simulator.public_state_estimator import PublicStateEstimator
 
+    if episode_cap < 1 or type(episode_cap) is not int:
+        raise ValueError("episode_cap must be a positive integer")
+    if truncation_reward and step_tower_reward:
+        raise ValueError("choose exactly one tower reward mode")
     if not entries:
         raise ValueError("collect_frontier_rollout requires at least one entry")
     if n_lanes < 1 or type(n_decisions) is not int or n_decisions < 1:
         raise ValueError("n_lanes >= 1 and integer n_decisions >= 1 required")
 
+    configure_v4_runtime(policy)
     policy.eval()
     critic.eval()
     if anchor is not None:
+        configure_v4_runtime(anchor)
         anchor.eval()
     envs = [make_frontier_env() for _ in range(n_lanes)]
     hidden = policy.initial_hidden(n_lanes, device=device)
+    anchor_hidden = anchor.initial_hidden(n_lanes, device=device) if anchor is not None else None
     cursor = int(seed) % len(entries)
     visits = [0] * n_lanes
     lane_entry = [None] * n_lanes
@@ -325,15 +331,15 @@ def collect_frontier_rollout(
     episodes = 0
     episode_lens: list[int] = []
     with torch.no_grad():
-        for _ in range(n_decisions):
+        for decision_index in range(n_decisions):
             for i in range(n_lanes):
                 if needs_entry[i]:
-                    entry = entries[(cursor + i) % len(entries)]
+                    entry = entries[(cursor + i + visits[i] * n_lanes) % len(entries)]
                     load_frontier_state(envs[i], entry["initial_state"])
                     opp = entry["opponent"]
                     lane_opponent[i] = make_opponent(
                         opp,
-                        _stable_seed("frontier-ppo", entry["entry_id"], visits[i]) & 0xFFFFFFFF,
+                        _stable_seed("frontier-ppo", seed, entry["entry_id"], visits[i]) & 0xFFFFFFFF,
                     )
                     estimators[i] = PublicStateEstimator()
                     hidden[:, i : i + 1, :] = 0.0
@@ -356,6 +362,7 @@ def collect_frontier_rollout(
                 state = envs[i].state
                 hand = list(state.players[0].hand[:4])
                 elixir = float(state.players[0].elixir_milli) / 1000.0
+                estimators[i].sync_from_env(envs[i], viewer=0)
                 obs_list.append(_v4_step_inputs(obs, hand, elixir, estimators[i].snapshot()))
                 hands.append(hand)
                 elixirs.append(elixir)
@@ -405,7 +412,11 @@ def collect_frontier_rollout(
                 entropy = policy.action_entropy(logits, masks)
             values = critic(ht)
             if anchor is not None:
-                anchor_actions = anchor.act_deterministic(logits, masks)
+                anchor_logits, _, anchor_hidden = anchor.forward_step(
+                    {k: v.unsqueeze(1) for k, v in array_inputs.items()},
+                    hidden=anchor_hidden, reset_mask=reset_mask,
+                )
+                anchor_actions = anchor.act_deterministic(anchor_logits, masks)
             else:
                 anchor_actions = None
             flat_actions = V4ActionBatch(
@@ -416,13 +427,14 @@ def collect_frontier_rollout(
             )
             decoded = decode_v4_sim_actions(flat_actions, player=0)
             rewards, terminated, truncated = [], [], []
+            boundary_values = [float("nan")] * n_lanes
             for i in range(n_lanes):
                 opp_action = lane_opponent[i].choose_action(envs[i].engine, envs[i].state, 1)
                 result = envs[i].step_v2((decoded[i], opp_action))
                 step_reward = float(result.rewards[0])
                 lane_steps[i] += 1
-                done = bool(result.terminated)
-                cut = (not done) and lane_steps[i] >= episode_cap
+                done = bool(result.terminated) and not bool(result.truncated)
+                cut = (not done) and (result.truncated or lane_steps[i] >= episode_cap)
                 terminated.append(done)
                 truncated.append(cut)
                 if truncation_reward and cut:
@@ -443,6 +455,10 @@ def collect_frontier_rollout(
                     step_reward += (prev_enemy - now[0]) - (prev_own - now[1])
                     lane_towers_prev[i] = now
                 rewards.append(step_reward)
+                if not done and (cut or decision_index == n_decisions - 1):
+                    boundary_values[i] = post_step_value(
+                        policy, critic, envs[i], estimators[i], next_hidden[:, i:i + 1], device,
+                    )
                 if done:
                     winner = result.info.get("winner")
                     if winner == 0:
@@ -513,6 +529,7 @@ def collect_frontier_rollout(
                     "rewards": torch.tensor(rewards, dtype=torch.float32),
                     "terminated": torch.tensor(terminated, dtype=torch.bool),
                     "truncated": torch.tensor(truncated, dtype=torch.bool),
+                    "boundary_values": torch.tensor(boundary_values, dtype=torch.float32),
                     "reset": reset_mask.detach().cpu(),
                 }
             )
@@ -542,6 +559,10 @@ def _policy_argmax_at_entry(
     """Deterministic action of a policy at a sealed entry state."""
 
     import torch
+
+    from .v4_ppo import configure_v4_runtime
+    configure_v4_runtime(policy)
+    policy.eval()
 
     try:
         from .frontier_eval import _observe_inputs
@@ -586,6 +607,19 @@ def _policy_argmax_at_entry(
     )
 
 
+def _entry_continuation_hidden(champion, env, device):
+    """Fresh recurrent state after the first observation, matching entry actions."""
+    import torch
+    from .frontier_eval import _observe_inputs, _step_inputs
+    from .v4_ppo import configure_v4_runtime
+    configure_v4_runtime(champion)
+    champion.eval()
+    current_inputs, _, _, _ = _observe_inputs(env, device)
+    with torch.no_grad():
+        _, _, hidden = champion.forward_step(_step_inputs(current_inputs, device))
+    return hidden
+
+
 def sealed_choice_regret(
     *,
     policy: Any,
@@ -623,11 +657,13 @@ def sealed_choice_regret(
     for entry in entries:
         env = make_frontier_env()
         load_frontier_state(env, entry["initial_state"])
-        hidden0 = torch.as_tensor(entry["hidden0"], device=device).contiguous()
+        hidden0 = _entry_continuation_hidden(champion, env, device)
         a_champ = _policy_argmax_at_entry(champion, entry, device)
         a_pol = _policy_argmax_at_entry(policy, entry, device)
-        same = (a_champ.mode, a_champ.slot, a_champ.row, a_champ.col) == (
-            a_pol.mode, a_pol.slot, a_pol.row, a_pol.col)
+        same = (a_champ.mode == a_pol.mode == 0) or (
+            (a_champ.mode, a_champ.slot, a_champ.row, a_champ.col)
+            == (a_pol.mode, a_pol.slot, a_pol.row, a_pol.col)
+        )
         opp_spec = entry["opponent"]
         vals_champ, vals_pol = [], []
 
@@ -703,6 +739,10 @@ def sealed_rollout_returns(
 
     import torch
 
+    from .v4_ppo import configure_v4_runtime
+    configure_v4_runtime(policy)
+    policy.eval()
+
     try:
         from .model_v4 import masks_from_legal_play
         from .v4_ppo import _v4_step_inputs, decode_v4_sim_actions
@@ -723,7 +763,7 @@ def sealed_rollout_returns(
                 pass
             env = make_frontier_env()
             load_frontier_state(env, entry["initial_state"])
-            hidden = torch.zeros_like(torch.as_tensor(entry["hidden0"], device=device))
+            hidden = policy.initial_hidden(1, device=device)
             opponent = make_opponent(entry["opponent"], replica_seed)
             estimator = PublicStateEstimator()
             total = 0.0
@@ -737,6 +777,7 @@ def sealed_rollout_returns(
                     st = env.state
                     hand = list(st.players[0].hand[:4])
                     elixir = float(st.players[0].elixir_milli) / 1000.0
+                    estimator.sync_from_env(env, viewer=0)
                     tensors = _v4_step_inputs(obs, hand, elixir, estimator.snapshot())
                     F = torch.float32
                     args = {
@@ -832,6 +873,10 @@ def full_match_record(
 
     import torch
 
+    from .v4_ppo import configure_v4_runtime
+    configure_v4_runtime(policy)
+    policy.eval()
+
     from simulator.roster import PLAYER_DECK
 
     try:
@@ -845,6 +890,7 @@ def full_match_record(
     out = []
     for spec in opponent_specs:
         for match_seed in seeds:
+            torch.manual_seed(_stable_seed("full-match", spec["archetype"], match_seed) & 0xFFFFFFFF)
             env = make_frontier_env()
             env.reset_v2(
                 seed=int(match_seed),
@@ -859,6 +905,7 @@ def full_match_record(
             estimator = PublicStateEstimator()
             winner: Any = None
             ran = 0
+            completed = False
             with torch.no_grad():
                 for _ in range(max_decisions):
                     if env.state is None or env.state.terminal:
@@ -867,6 +914,7 @@ def full_match_record(
                     st = env.state
                     hand = list(st.players[0].hand[:4])
                     elixir = float(st.players[0].elixir_milli) / 1000.0
+                    estimator.sync_from_env(env, viewer=0)
                     tensors = _v4_step_inputs(obs, hand, elixir, estimator.snapshot())
                     F = torch.float32
                     args = {
@@ -883,12 +931,7 @@ def full_match_record(
                     masks = masks_from_legal_play(legal)
                     reset = torch.zeros((1, 1), dtype=torch.bool, device=device)
                     if deterministic:
-                        logits, _, _ = policy.forward(
-                            args["raster"], args["global_features"], args["entities"],
-                            args["entity_mask"], args["hand_tokens"], args["opp_hand_probs"],
-                            args["opp_out_of_cycle"], args["opp_elixir_interval"],
-                            args["event_history"], reset,
-                        )
+                        logits, _, hidden = policy.forward_step(args, hidden=hidden, reset_mask=reset)
                         acts = policy.act_deterministic(logits, masks)
                     else:
                         _, acts, _, _, _, nxt = policy.rollout_sample(
@@ -909,7 +952,8 @@ def full_match_record(
                     result = env.step_v2((mine, opp))
                     ran += 1
                     if result.terminated or result.truncated:
-                        winner = result.info.get("winner")
+                        completed = bool(result.terminated) and not bool(result.truncated)
+                        winner = result.info.get("winner") if completed else None
                         break
             out.append(
                 {
@@ -917,7 +961,9 @@ def full_match_record(
                     "seed": int(match_seed),
                     "winner": winner,
                     "decisions": ran,
-                    "result": "win" if winner == 0 else ("loss" if winner == 1 else "draw"),
+                    "result": ("win" if winner == 0 else ("loss" if winner == 1 else "draw")) if completed else "truncated",
+                    "terminated": completed,
+                    "runtime_version": FRONTIER_PPO_VERSION,
                 }
             )
     return out
@@ -936,6 +982,10 @@ def action_logit_margins(
     """
 
     import torch
+
+    from .v4_ppo import configure_v4_runtime
+    configure_v4_runtime(policy)
+    policy.eval()
 
     try:
         from .frontier_eval import _observe_inputs
@@ -1005,9 +1055,22 @@ def action_logit_margins(
             }
         )
 
-    def _summary(vals: list[float]) -> dict[str, float]:
+    def _summary(vals: list[float]) -> dict[str, float | int | None]:
         s = sorted(vals)
         n = len(s)
+        if n == 0:
+            # Placement margins are intentionally absent when every selected
+            # action is WAIT.  Keep the report schema explicit while marking
+            # undefined statistics as null instead of dividing by zero.
+            return {
+                "n": 0,
+                "mean": None,
+                "p10": None,
+                "median": None,
+                "p90": None,
+                "frac_close_lt_010": None,
+                "frac_close_lt_025": None,
+            }
         return {
             "n": n,
             "mean": round(sum(s) / n, 4),

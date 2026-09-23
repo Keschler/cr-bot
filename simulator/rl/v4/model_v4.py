@@ -73,8 +73,11 @@ class ModelConfigV4:
     placement_cols: int = 18
     spatial_head_dim: int = 32
     dropout: float = 0.0
+    fixed_wait: bool = False
 
     def __post_init__(self) -> None:
+        if type(self.fixed_wait) is not bool:
+            raise TypeError("fixed_wait must be boolean")
         for name in (
             "raster_channels",
             "raster_height",
@@ -391,7 +394,9 @@ class V4ActionHead(nn.Module):
             config.spatial_channels, config.spatial_head_dim, kernel_size=1
         )
         self.placement_query = nn.Linear(config.model_dim + joint, config.spatial_head_dim)
-        self.cell_bias: nn.Parameter | None = None
+        # Register before optimizers are constructed; lazy creation left this
+        # trained placement parameter outside optimizer parameter groups.
+        self.cell_bias = nn.Parameter(torch.zeros(config.placement_rows, config.placement_cols))
 
     def _joint(self, zt: torch.Tensor, ht: torch.Tensor) -> torch.Tensor:
         if zt.shape != ht.shape or zt.shape[-1] != self.config.fused_dim:
@@ -401,10 +406,9 @@ class V4ActionHead(nn.Module):
         return torch.cat((zt, ht), dim=-1)
 
     def _cell_bias(self, rows: int, cols: int, device, dtype) -> torch.Tensor:
-        if self.cell_bias is None or tuple(self.cell_bias.shape) != (rows, cols):
-            bias = torch.zeros(rows, cols, device=device, dtype=dtype)
-            self.cell_bias = nn.Parameter(bias)
-        return self.cell_bias
+        if tuple(self.cell_bias.shape) != (rows, cols):
+            raise ValueError("placement grid differs from the configured cell-bias grid")
+        return self.cell_bias.to(device=device, dtype=dtype)
 
     def forward(
         self,
@@ -502,7 +506,7 @@ class RecurrentV4Policy(nn.Module):
         joint = mode_logp.gather(-1, mode_selected).squeeze(-1)
         is_play = actions.mode == V4ActionHead.PLAY
         is_wait = actions.mode == V4ActionHead.WAIT
-        if bool(is_wait.any().item()):
+        if not self.config.fixed_wait and bool(is_wait.any().item()):
             duration_logp = F.log_softmax(logits.wait_duration, dim=-1)
             duration_selected = actions.wait_duration.clamp(0, len(WAIT_DURATIONS) - 1).unsqueeze(-1)
             joint = joint + (duration_logp.gather(-1, duration_selected).squeeze(-1) * is_wait)
@@ -513,7 +517,7 @@ class RecurrentV4Policy(nn.Module):
             # supervised-loss fix); WAIT rows contribute exactly zero.
             card_row_ok = masks.card.any(dim=-1)
             if bool((is_play & ~card_row_ok).any().item()):
-                raise ValueError("PLAY target with no legal card")
+                raise ValueError("PLAY target with no legal action (card)")
             card_term = torch.zeros_like(joint)
             card_term[is_play] = _masked_log_softmax(
                 logits.card[is_play], masks.card[is_play]
@@ -563,7 +567,8 @@ class RecurrentV4Policy(nn.Module):
         mode = torch.where(
             masks.mode, logits.mode, torch.full_like(logits.mode, float("-inf"))
         ).argmax(dim=-1)
-        duration = logits.wait_duration.argmax(dim=-1)
+        duration = (torch.zeros_like(mode) if self.config.fixed_wait
+                    else logits.wait_duration.argmax(dim=-1))
         card = torch.where(
             masks.card, logits.card, torch.full_like(logits.card, float("-inf"))
         ).argmax(dim=-1)
@@ -630,7 +635,8 @@ class RecurrentV4Policy(nn.Module):
         mode_probs = mode_logp.exp()
         entropy_mode = _categorical_entropy_from_probs(mode_probs)
         duration_logp = F.log_softmax(logits.wait_duration, dim=-1)
-        entropy_duration = _categorical_entropy_from_probs(duration_logp.exp())
+        entropy_duration = (torch.zeros_like(entropy_mode) if self.config.fixed_wait
+                            else _categorical_entropy_from_probs(duration_logp.exp()))
         play_available = masks.card.any(dim=-1)
         card_logp_safe = torch.where(
             play_available.unsqueeze(-1),
@@ -719,9 +725,8 @@ class RecurrentV4Policy(nn.Module):
         if bool(inconsistent.any().item()):
             mode = torch.where(inconsistent, torch.zeros_like(mode), mode)
             play = mode == self.heads.PLAY
-        duration = torch.distributions.Categorical(
-            logits=logits.wait_duration
-        ).sample()
+        duration = (torch.zeros_like(mode) if self.config.fixed_wait else
+                    torch.distributions.Categorical(logits=logits.wait_duration).sample())
         card_slot = torch.zeros(mode.shape, dtype=torch.long, device=mode.device)
         flat_card = card_slot.reshape(-1)
         if bool(play.any().item()):
@@ -770,6 +775,20 @@ class RecurrentV4Policy(nn.Module):
         joint = self.log_prob(logits, masks, actions)
         entropy = self.action_entropy(logits, masks)
         return actions, joint, entropy
+
+    def forward_step(self, inputs: dict[str, torch.Tensor], *, hidden=None, reset_mask=None):
+        """Advance recurrent state once without consuming action-sampling RNG."""
+        raster = inputs["raster"]
+        if reset_mask is None:
+            reset_mask = torch.zeros(raster.shape[:2], dtype=torch.bool, device=raster.device)
+        zt, spatial, context, queries = self.encoder(
+            *(inputs[key] for key in (
+                "raster", "global_features", "entities", "entity_mask", "hand_tokens",
+                "opp_hand_probs", "opp_out_of_cycle", "opp_elixir_interval", "event_history",
+            ))
+        )
+        ht, nxt = self.recurrent.forward_with_hidden(zt, reset_mask, hidden=hidden)
+        return self.heads(zt, ht, context, queries, spatial), ht, nxt
 
     def rollout_sample(
         self,

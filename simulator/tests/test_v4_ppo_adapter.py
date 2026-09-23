@@ -427,7 +427,7 @@ def test_decode_v4_sim_actions_types() -> None:
         mode=torch.tensor([0, 1]),
         card_slot=torch.tensor([0, 2]),
         placement=torch.tensor([[0, 0], [17, 3]]),
-        wait_duration=torch.tensor([1, 0]),
+        wait_duration=torch.tensor([0, 0]),
     )
     decoded = decode_v4_sim_actions(actions, player=0)
     assert isinstance(decoded[0], WaitAction) and decoded[0].player == 0

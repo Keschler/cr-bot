@@ -45,7 +45,7 @@ def test_full_match_record_deterministic_micro():
     two = full_match_record(policy=policy, opponent_specs=specs, seeds=[7],
                             device="cpu", deterministic=True, max_decisions=8)
     assert one == two
-    assert one[0]["decisions"] == 8 and one[0]["result"] in ("win", "loss", "draw")
+    assert one[0]["decisions"] == 8 and one[0]["result"] == "truncated"
 
 
 @pytest.mark.skipif(
@@ -315,12 +315,12 @@ def test_frontier_ppo_script_eval_wiring_flags():
     import subprocess
 
     proc = subprocess.run(
-        ["outputs/venv/bin/python", "scripts/run_v4_frontier_ppo.py", "--help"],
+        ["outputs/venv/bin/python", "scripts/run_v4_learning_curve.py", "--help"],
         capture_output=True, text=True, check=True,
     )
     for flag in ("--choice-replicas", "--adaptive-choice-replicas",
                  "--choice-max-replicas", "--choice-se-k",
-                 "--eval-only-checkpoint", "--reference-report"):
+                 "--eval-only-checkpoint", "--updates", "--train-entries", "--sealed-entries"):
         assert flag in proc.stdout, flag
 
 
@@ -376,6 +376,7 @@ def test_sealed_choice_adaptive_replica_handling(monkeypatch):
     import torch
 
     hidden = torch.zeros(4)
+    monkeypatch.setattr(fppo, "_entry_continuation_hidden", lambda *args: hidden)
 
     class _Branch:
         def __init__(self, mode=1, slot=0, row=0, col=0):
