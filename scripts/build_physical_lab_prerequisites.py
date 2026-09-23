@@ -68,11 +68,11 @@ _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPOSITORY_ROOT))
 
-from simulator.physical_lab.artifacts import hash_file
-from simulator.physical_lab.calibration import CalibrationArtifact, CalibrationError
-from simulator.physical_lab.lifecycle import LifecycleState
-from simulator.physical_lab.schema import PhysicalLabError, canonical_hash
-from simulator.physical_lab.screen_state import (
+from simulator.physical_lab.support.artifacts import hash_file
+from simulator.physical_lab.capture.calibration import CalibrationArtifact, CalibrationError
+from simulator.physical_lab.workflow.lifecycle import LifecycleState
+from simulator.physical_lab.support.schema import PhysicalLabError, canonical_hash
+from simulator.physical_lab.capture.screen_state import (
     SCREEN_TEMPLATE_SCHEMA_VERSION,
     ScreenStateDetectionError,
     TemplateLifecycleDetector,

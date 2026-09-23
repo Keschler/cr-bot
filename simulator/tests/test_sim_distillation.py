@@ -14,15 +14,15 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from simulator.rl.distillation import (
+from simulator.rl.v4.distillation import (
     PLAYER_DECK,
     DistillationConfig,
     TACTICAL_FAMILIES,
     to_torch_batch,
 )
-from simulator.rl.model_v4 import WAIT_DURATIONS, ModelConfigV4, RecurrentV4Policy
-from simulator.rl.losses_v4 import v4_supervised_loss
-from simulator.rl.simulator_distillation import (
+from simulator.rl.v4.model_v4 import WAIT_DURATIONS, ModelConfigV4, RecurrentV4Policy
+from simulator.rl.v4.losses_v4 import v4_supervised_loss
+from simulator.rl.v4.simulator_distillation import (
     FAMILY_TO_SOURCE,
     SIM_GENERATOR_VERSION,
     SOURCE_ARCHETYPE,
@@ -30,7 +30,7 @@ from simulator.rl.simulator_distillation import (
     generate_sim_dataset,
     generate_sim_sample,
 )
-from simulator.rl.simulator_teacher import TeacherError
+from simulator.rl.v4.simulator_teacher import TeacherError
 
 
 def _config(n: int = 32, seed: int = 5) -> DistillationConfig:

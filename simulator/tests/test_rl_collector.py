@@ -13,7 +13,7 @@ except ModuleNotFoundError:
 
 
 def test_collector_import_is_safe_without_torch() -> None:
-    module = importlib.import_module("rl.collector")
+    module = importlib.import_module("rl.foundation.collector")
     assert hasattr(module, "CollectorConfig")
     if torch is None:
         with pytest.raises(module.TorchUnavailableError, match="PyTorch"):
@@ -21,7 +21,7 @@ def test_collector_import_is_safe_without_torch() -> None:
 
 
 def test_collector_config_rejects_invalid_rollout_shape() -> None:
-    from rl.collector import CollectorConfig
+    from rl.foundation.collector import CollectorConfig
 
     assert CollectorConfig(horizon=3, target_player=1).horizon == 3
     with pytest.raises(ValueError, match="horizon"):
@@ -37,7 +37,7 @@ def test_collector_config_rejects_invalid_rollout_shape() -> None:
 
 
 def test_collector_defaults_to_actor_controlled_rollouts() -> None:
-    from rl.collector import CollectorConfig
+    from rl.foundation.collector import CollectorConfig
 
     config = CollectorConfig()
 
@@ -47,7 +47,7 @@ def test_collector_defaults_to_actor_controlled_rollouts() -> None:
 
 
 def test_fireball_teacher_label_has_decisive_sparse_card_weight() -> None:
-    from rl.collector import _expert_action_weight
+    from rl.foundation.collector import _expert_action_weight
 
     environment = SimpleNamespace(
         state=SimpleNamespace(
@@ -61,7 +61,7 @@ def test_fireball_teacher_label_has_decisive_sparse_card_weight() -> None:
 
 def test_action_agreement_compares_only_public_decision_fields() -> None:
     from actions import PlayCardAction, WaitAction
-    from rl.collector import _actions_match
+    from rl.foundation.collector import _actions_match
 
     assert _actions_match(WaitAction(0), WaitAction(1))
     assert _actions_match(PlayCardAction(0, 2, (3, 17)), PlayCardAction(1, 2, (3, 17)))
@@ -72,7 +72,7 @@ def test_action_agreement_compares_only_public_decision_fields() -> None:
 def test_public_threat_label_gate_uses_only_visible_observation() -> None:
     from cr_bot.features.channels import GLOBAL_SCALAR_IDX
     from simulator.observation_v2 import ENTITY_TOKEN_FEATURES, PolicyObservationV2
-    from rl.public_counter import public_defensive_threat_observed
+    from rl.foundation.public_counter import public_defensive_threat_observed
 
     board = np.zeros((21, 32, 18), dtype=np.float32)
     global_vector = np.zeros((768,), dtype=np.float32)
@@ -120,7 +120,7 @@ def test_public_threat_label_gate_uses_only_visible_observation() -> None:
 
 
 def test_rollout_stats_can_attribute_terminal_results_to_lanes() -> None:
-    from rl.collector import RolloutStats
+    from rl.foundation.collector import RolloutStats
 
     stats = RolloutStats(
         completed_matches=2,
@@ -141,7 +141,7 @@ requires_torch = pytest.mark.skipif(torch is None, reason="PyTorch is not instal
 @requires_torch
 def test_single_observation_batching_matches_general_stack() -> None:
     from simulator.observation_v2 import PolicyObservationV2
-    from rl.collector import _batch_observations
+    from rl.foundation.collector import _batch_observations
 
     observation = PolicyObservationV2(
         board=np.zeros((21, 32, 18), dtype=np.float32),
@@ -179,7 +179,7 @@ def test_teacher_execution_is_disabled_by_default_and_explicitly_opt_in(
     expert_execution_probability: float,
     expected: bool,
 ) -> None:
-    from rl.collector import CollectorConfig, _expert_should_execute
+    from rl.foundation.collector import CollectorConfig, _expert_should_execute
 
     config = CollectorConfig(
         seed=17,
@@ -191,8 +191,8 @@ def test_teacher_execution_is_disabled_by_default_and_explicitly_opt_in(
 
 @requires_torch
 def test_decode_actions_batches_device_values_before_building_policy_actions() -> None:
-    from rl.collector import _decode_actions
-    from rl.trajectory import ActionBatch
+    from rl.foundation.collector import _decode_actions
+    from rl.foundation.trajectory import ActionBatch
 
     actions = ActionBatch(
         mode=torch.tensor([[0], [1], [1]], dtype=torch.long),
@@ -222,9 +222,9 @@ def test_collector_builds_trajectory_from_v2_environment() -> None:
     # torch dependency is installed.  The repository's default environment
     # intentionally remains NumPy-only.
     from simulator.env import SimulatorEnv
-    from rl.collector import CollectorConfig, RecurrentRolloutCollector
-    from rl.learner import LearnerConfig, RecurrentPPOLearner
-    from rl.model import ModelConfig, RecurrentHybridPolicy
+    from rl.foundation.collector import CollectorConfig, RecurrentRolloutCollector
+    from rl.foundation.learner import LearnerConfig, RecurrentPPOLearner
+    from rl.foundation.model import ModelConfig, RecurrentHybridPolicy
 
     model_config = ModelConfig(
         raster_channels=21,
@@ -266,9 +266,9 @@ def test_nonterminal_truncation_bootstraps_from_pre_reset_observation() -> None:
     from types import MethodType
 
     from simulator.env import SimulatorEnv
-    from rl.collector import CollectorConfig, RecurrentRolloutCollector
-    from rl.learner import LearnerConfig, RecurrentPPOLearner
-    from rl.model import ModelConfig, RecurrentHybridPolicy
+    from rl.foundation.collector import CollectorConfig, RecurrentRolloutCollector
+    from rl.foundation.learner import LearnerConfig, RecurrentPPOLearner
+    from rl.foundation.model import ModelConfig, RecurrentHybridPolicy
 
     model_config = ModelConfig(
         raster_channels=21,
@@ -332,9 +332,9 @@ def test_mixed_terminal_and_truncated_lanes_sanitize_terminal_bootstrap_rows() -
     from dataclasses import replace
 
     from simulator.env import SimulatorEnv
-    from rl.collector import CollectorConfig, RecurrentRolloutCollector
-    from rl.learner import LearnerConfig, RecurrentPPOLearner
-    from rl.model import ModelConfig, RecurrentHybridPolicy
+    from rl.foundation.collector import CollectorConfig, RecurrentRolloutCollector
+    from rl.foundation.learner import LearnerConfig, RecurrentPPOLearner
+    from rl.foundation.model import ModelConfig, RecurrentHybridPolicy
 
     model_config = ModelConfig(
         raster_channels=21,
@@ -401,9 +401,9 @@ def test_mixed_terminal_and_truncated_lanes_sanitize_terminal_bootstrap_rows() -
 @requires_torch
 def test_collector_reports_completed_rollout_steps() -> None:
     from simulator.env import SimulatorEnv
-    from rl.collector import CollectorConfig, RecurrentRolloutCollector
-    from rl.learner import LearnerConfig, RecurrentPPOLearner
-    from rl.model import ModelConfig, RecurrentHybridPolicy
+    from rl.foundation.collector import CollectorConfig, RecurrentRolloutCollector
+    from rl.foundation.learner import LearnerConfig, RecurrentPPOLearner
+    from rl.foundation.model import ModelConfig, RecurrentHybridPolicy
 
     model_config = ModelConfig(
         raster_channels=21,
@@ -445,9 +445,9 @@ def test_collector_reports_completed_rollout_steps() -> None:
 @requires_torch
 def test_collector_records_privileged_and_belief_targets_for_learner_update() -> None:
     from simulator.env import SimulatorEnv
-    from rl.collector import CollectorConfig, RecurrentRolloutCollector
-    from rl.learner import LearnerConfig, RecurrentPPOLearner
-    from rl.model import ModelConfig, RecurrentHybridPolicy
+    from rl.foundation.collector import CollectorConfig, RecurrentRolloutCollector
+    from rl.foundation.learner import LearnerConfig, RecurrentPPOLearner
+    from rl.foundation.model import ModelConfig, RecurrentHybridPolicy
 
     model_config = ModelConfig(
         raster_channels=21,

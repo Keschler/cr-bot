@@ -15,11 +15,11 @@ from simulator.engine import BattleEngine
 from simulator.env import SimulatorEnv
 from simulator.roster import PLAYER_DECK
 from simulator.ruleset import load_fixed_ruleset
-from simulator.rl.basic_scenarios import BasicMechanicsScenarioEnv, BasicScenarioConfig
-from simulator.rl.opponent_pool import OpponentPool
-from simulator.rl.simulator_distillation import build_hand_tokens
-from simulator.rl.simulator_teacher import teacher_label
-from simulator.rl import search_teacher as st
+from simulator.rl.foundation.basic_scenarios import BasicMechanicsScenarioEnv, BasicScenarioConfig
+from simulator.rl.foundation.opponent_pool import OpponentPool
+from simulator.rl.v4.simulator_distillation import build_hand_tokens
+from simulator.rl.v4.simulator_teacher import teacher_label
+from simulator.rl.v4 import search_teacher as st
 
 
 def _env(source: str, archetype: str, seed: int):
@@ -41,13 +41,13 @@ def _env(source: str, archetype: str, seed: int):
 
 
 def _labeled(env):
-    from simulator.rl.timing_curriculum import _set_elixir, _set_hand
+    from simulator.rl.v4.timing_curriculum import _set_elixir, _set_hand
 
     return env, _set_hand, _set_elixir
 
 
 def _search_inputs(env, hand, elixir_milli):
-    from simulator.rl.timing_curriculum import _set_elixir, _set_hand
+    from simulator.rl.v4.timing_curriculum import _set_elixir, _set_hand
 
     _set_hand(env.state, 0, hand)
     _set_elixir(env.state, 0, elixir_milli)

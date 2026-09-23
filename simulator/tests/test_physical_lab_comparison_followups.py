@@ -14,14 +14,14 @@ from simulator.physical_lab import (
     hog_cannon_probe,
     run_simulator_replay,
 )
-from simulator.physical_lab.comparison import (
+from simulator.physical_lab.analysis.comparison import (
     _first_divergence,
     _follow_up,
     _minimized_scenario,
     _stable_sim_event,
     compare_observation_to_replay,
 )
-from simulator.physical_lab.schema import canonical_hash
+from simulator.physical_lab.support.schema import canonical_hash
 
 
 _SUPPORTED_PARAMETERS = (

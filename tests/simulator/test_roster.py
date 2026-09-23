@@ -9,7 +9,7 @@ from simulator.roster import (
     validate_roster_against_catalog,
 )
 from simulator.engine import BASE_HOG_CYCLE_DECK
-from simulator.physical_lab.automation import FIXED_HOG_CYCLE_DECK
+from simulator.physical_lab.workflow.automation import FIXED_HOG_CYCLE_DECK
 
 
 def test_v1_roster_has_fixed_player_deck_and_cutoffs() -> None:

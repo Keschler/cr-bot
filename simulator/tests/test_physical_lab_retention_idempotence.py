@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from simulator.physical_lab.artifacts import ArtifactRef, hash_file, register_retention_records
-from simulator.physical_lab.schema import PhysicalLabError
+from simulator.physical_lab.support.artifacts import ArtifactRef, hash_file, register_retention_records
+from simulator.physical_lab.support.schema import PhysicalLabError
 
 
 def _artifact(path: Path, *, artifact_id: str = "capture-A") -> ArtifactRef:
@@ -68,4 +68,3 @@ def test_retention_registration_rejects_conflicting_reuse(tmp_path: Path) -> Non
             artifacts=[_artifact(second_media)],
             workspace_root=tmp_path,
         )
-

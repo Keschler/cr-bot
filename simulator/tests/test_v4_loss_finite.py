@@ -16,10 +16,10 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from simulator.rl.distillation import to_torch_batch
-from simulator.rl.losses_v4 import V4SupervisedWeights, v4_supervised_loss
-from simulator.rl.model_v4 import ModelConfigV4, RecurrentV4Policy, count_parameters
-from simulator.rl.timing_curriculum import TimingConfig, generate_timing_dataset
+from simulator.rl.v4.distillation import to_torch_batch
+from simulator.rl.v4.losses_v4 import V4SupervisedWeights, v4_supervised_loss
+from simulator.rl.v4.model_v4 import ModelConfigV4, RecurrentV4Policy, count_parameters
+from simulator.rl.v4.timing_curriculum import TimingConfig, generate_timing_dataset
 
 
 def _tiny_policy() -> RecurrentV4Policy:
@@ -85,8 +85,8 @@ def _wait_only_batch(mixed_batch: dict) -> dict:
             out[key] = value  # replaced below
         else:
             out[key] = value[keep]
-    from simulator.rl.model_v4 import V4ActionBatch
-    from simulator.rl.trajectory import ActionMasks
+    from simulator.rl.v4.model_v4 import V4ActionBatch
+    from simulator.rl.foundation.trajectory import ActionMasks
 
     masks = mixed_batch["masks"]
     actions = mixed_batch["actions"]

@@ -15,9 +15,9 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from simulator.rl.distillation import to_torch_batch
-from simulator.rl.model_v4 import ModelConfigV4, RecurrentV4Policy
-from simulator.rl.search_dataset import (
+from simulator.rl.v4.distillation import to_torch_batch
+from simulator.rl.v4.model_v4 import ModelConfigV4, RecurrentV4Policy
+from simulator.rl.v4.search_dataset import (
     ADOPT_MARGIN_ACTION,
     SearchDatasetConfig,
     _adopt_target,
@@ -25,10 +25,10 @@ from simulator.rl.search_dataset import (
     generate_search_dataset,
     load_champion_actor,
 )
-from simulator.rl.search_teacher import BranchAction, BranchScore, SearchResult
-from simulator.rl.simulator_teacher import TeacherTarget
+from simulator.rl.v4.search_teacher import BranchAction, BranchScore, SearchResult
+from simulator.rl.v4.simulator_teacher import TeacherTarget
 from simulator.ruleset import load_fixed_ruleset
-from simulator.rl.opponent_pool import OpponentPool
+from simulator.rl.foundation.opponent_pool import OpponentPool
 
 
 def _random_champion() -> RecurrentV4Policy:

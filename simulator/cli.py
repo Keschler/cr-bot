@@ -720,16 +720,6 @@ def _parser() -> argparse.ArgumentParser:
     )
     evaluate.add_argument("--json-out", type=Path)
 
-    recurrent_prototype = subparsers.add_parser(
-        "recurrent-prototype",
-        help="run the PyTorch public-observation recurrent PPO prototype",
-    )
-    recurrent_prototype.add_argument(
-        "prototype_args",
-        nargs=argparse.REMAINDER,
-        help="arguments forwarded to `python -m simulator.rl.prototype`",
-    )
-
     media_budget = subparsers.add_parser(
         "media-budget",
         help="inspect or enforce the 200 GB workspace cap using registered raw videos",
@@ -844,13 +834,9 @@ def _ruleset_summary(ruleset: object, *, engine_version: str) -> dict[str, Any]:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command == "lab":
-        from .physical_lab.cli import main as physical_lab_main
+        from .physical_lab.workflow.cli import main as physical_lab_main
 
         return physical_lab_main(args.lab_args)
-    if args.command == "recurrent-prototype":
-        from .rl.prototype import main as recurrent_prototype_main
-
-        return recurrent_prototype_main(args.prototype_args)
     if args.ruleset is None:
         # Coverage, simulation, and release/readiness commands target the
         # fixed V1 artifact.  Corpus evaluation keeps the historical default
@@ -878,7 +864,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "benchmark-vector",
                 "train",
                 "evaluate",
-                "recurrent-prototype",
             }
             else "2026-08-04"
         )

@@ -155,9 +155,8 @@ towers, legal mask, actor action and alternatives, label-only teacher action,
 agreement, critic value, return/advantage, PPO ratio/clipping, and per-update
 KL, entropy, clip fraction, value/policy loss, explained variance, advantage
 distribution, gradient norms, per-head gradients, action distributions, and
-teacher/head entropies. `rl.diagnose` compares the last good, regressed, and
-recovery checkpoints on identical state streams/seeds and reports concrete
-category and consequence evidence. The actor remains the environment action
+teacher/head entropies. Compare reference and candidate checkpoints on identical
+state streams and seeds, reporting concrete category and consequence evidence. The actor remains the environment action
 source, and every run is subject to the simulator-exploit audit.
 The retained checkpoint is a reference rather than a strategic oracle, so a
 WAIT/PLAY difference is neutral by itself. `action-too-early` and

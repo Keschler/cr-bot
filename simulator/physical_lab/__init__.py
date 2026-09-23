@@ -7,8 +7,8 @@ are available for a later connected-device session and fail closed when a
 phone is absent.
 """
 
-from .calibration import CalibrationArtifact, CalibrationError
-from .automation import (
+from .capture.calibration import CalibrationArtifact, CalibrationError
+from .workflow.automation import (
     AutonomousPhysicalLab,
     AutonomousPhone,
     AutonomousSessionConfig,
@@ -34,9 +34,9 @@ from .automation import (
     UiProfile,
     bind_spec_to_devices,
 )
-from .artifacts import finalize_retention_records
-from .cache import ReplayCacheError, ReplayCacheSeal, seal_replay_cache
-from .campaign import (
+from .support.artifacts import finalize_retention_records
+from .support.cache import ReplayCacheError, ReplayCacheSeal, seal_replay_cache
+from .workflow.campaign import (
     CAMPAIGN_LEVELS,
     CAMPAIGN_SCHEMA_VERSION,
     CampaignCase,
@@ -53,9 +53,9 @@ from .campaign import (
     materialize_campaign,
     write_campaign_evaluation,
 )
-from .comparison import ComparisonReport, compare_observation_to_replay
-from .fidelity_bridge import build_fidelity_corpus_payload, write_fidelity_corpus_payload
-from .policy_bridge import (
+from .analysis.comparison import ComparisonReport, compare_observation_to_replay
+from .analysis.fidelity_bridge import build_fidelity_corpus_payload, write_fidelity_corpus_payload
+from .sensing.policy_bridge import (
     PlacementCommand,
     PolicyBridgeError,
     dispatch_policy_action,
@@ -65,7 +65,7 @@ from .policy_bridge import (
     observation_v2_from_match_step,
     placement_command_from_policy_action,
 )
-from .extraction import (
+from .sensing.extraction import (
     DEFAULT_CONFIDENCE_THRESHOLD,
     DEFAULT_JOB_TIMEOUT_S,
     DEFAULT_SAMPLE_INTERVAL_S,
@@ -74,12 +74,12 @@ from .extraction import (
     PhysicalExtractionError,
     extract_physical_run,
 )
-from .evaluation import (
+from .analysis import (
     EVALUATION_SCHEMA_VERSION,
     evaluate_stored_cases,
     write_stored_evaluation,
 )
-from .devices import (
+from .capture.devices import (
     ActionReceipt,
     AdbPhoneController,
     AdbScreenCapture,
@@ -98,7 +98,7 @@ from .devices import (
     ScrcpyScreenCapture,
     monotonic_time_us,
 )
-from .lifecycle import (
+from .workflow.lifecycle import (
     LIFECYCLE_PATH,
     LifecycleFailure,
     LifecycleMachine,
@@ -108,12 +108,12 @@ from .lifecycle import (
     LifecycleTransition,
     ScriptedLifecycleDetector,
 )
-from .screen_state import (
+from .capture.screen_state import (
     SCREEN_TEMPLATE_SCHEMA_VERSION,
     ScreenStateDetectionError,
     TemplateLifecycleDetector,
 )
-from .observation import (
+from .sensing import (
     EntityObservation,
     EntitySample,
     NormalizedEvent,
@@ -122,20 +122,20 @@ from .observation import (
     RejectedObservation,
     ingest_extracted_observations,
 )
-from .observation_waiter import (
+from .sensing.waiter import (
     HogBridgeObservationWaiter,
     LiveTrackObservationSource,
     TrackObservation,
 )
-from .planner import (
+from .workflow.planner import (
     PlannedExperiment,
     PriorityInputs,
     hog_cannon_probe,
     plan_from_questions,
     plan_from_readiness,
 )
-from .replay import ReplayAction, SimulatorReplay, build_scenario, run_simulator_replay
-from .runner import (
+from .workflow.replay import ReplayAction, SimulatorReplay, build_scenario, run_simulator_replay
+from .workflow.runner import (
     ActionLogEntry,
     ClockProvenance,
     PhysicalLabRunner,
@@ -143,7 +143,7 @@ from .runner import (
     offline_runner,
     write_run_artifacts,
 )
-from .schema import (
+from .support.schema import (
     DeviceSpec,
     EvidenceSplit,
     EvidenceStatus,
@@ -155,7 +155,7 @@ from .schema import (
     Trigger,
     TriggerType,
 )
-from .sync import (
+from .capture.sync import (
     DeviceClockAlignment,
     SynchronizationError,
     SynchronizationResult,
@@ -163,7 +163,7 @@ from .sync import (
     TimeMapping,
     estimate_clock_alignment,
 )
-from .split import SPLIT_LOCK_SCHEMA_VERSION, SplitLock, assign_capture_group_split
+from .support.split import SPLIT_LOCK_SCHEMA_VERSION, SplitLock, assign_capture_group_split
 
 
 __all__ = [

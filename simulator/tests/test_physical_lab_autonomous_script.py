@@ -13,9 +13,9 @@ from scripts.run_physical_lab_autonomous import (
     _summary_path,
     _validate_preparation,
 )
-from simulator.physical_lab.automation import AutomationError, FIXED_HOG_CYCLE_DECK
-from simulator.physical_lab.devices import AdbPhoneController, sha256_bytes
-from simulator.physical_lab.schema import canonical_hash
+from simulator.physical_lab.workflow.automation import AutomationError, FIXED_HOG_CYCLE_DECK
+from simulator.physical_lab.capture.devices import AdbPhoneController, sha256_bytes
+from simulator.physical_lab.support.schema import canonical_hash
 
 
 def test_single_phone_preparation_constructs_only_the_owned_controller() -> None:

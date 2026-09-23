@@ -43,22 +43,22 @@ import numpy as np
 import torch
 
 from simulator.evaluation import seal_current_contracts
-from simulator.rl.distillation import (
+from simulator.rl.v4.distillation import (
     PLAYER_DECK,
     DistillationConfig,
     to_torch_batch,
 )
-from simulator.rl.losses_v4 import V4SupervisedWeights, v4_supervised_loss
-from simulator.rl.model_v4 import ModelConfigV4, RecurrentV4Policy, count_parameters
-from simulator.rl.simulator_distillation import generate_sim_dataset
-from simulator.rl.timing_curriculum import (
+from simulator.rl.v4.losses_v4 import V4SupervisedWeights, v4_supervised_loss
+from simulator.rl.v4.model_v4 import ModelConfigV4, RecurrentV4Policy, count_parameters
+from simulator.rl.v4.simulator_distillation import generate_sim_dataset
+from simulator.rl.v4.timing_curriculum import (
     TIMING_FAMILIES,
     TIMING_GENERATOR_VERSION,
     TimingConfig,
     generate_timing_dataset,
     generate_timing_natural,
 )
-from simulator.rl.timing_teacher import TIMING_TEACHER_VERSION
+from simulator.rl.v4.timing_teacher import TIMING_TEACHER_VERSION
 
 # Reference card/placement agreement from the sim-natural proof
 # (run_v4_distillation_proof.py --generator sim, seed 0, 2026-09-08).

@@ -13,7 +13,7 @@ except ModuleNotFoundError:
 
 
 def test_learner_import_is_safe_without_torch() -> None:
-    module = importlib.import_module("rl.learner")
+    module = importlib.import_module("rl.foundation.learner")
     assert hasattr(module, "LearnerConfig")
     if torch is None:
         with pytest.raises(module.TorchUnavailableError, match="PyTorch"):
@@ -21,8 +21,8 @@ def test_learner_import_is_safe_without_torch() -> None:
 
 
 def test_learner_config_validates_long_horizon_defaults() -> None:
-    from rl.learner import LearnerConfig
-    from rl.objectives import PPOObjectiveConfig
+    from rl.foundation.learner import LearnerConfig
+    from rl.foundation.objectives import PPOObjectiveConfig
 
     config = LearnerConfig()
     assert config.gamma > 0.99
@@ -44,7 +44,7 @@ requires_torch = pytest.mark.skipif(torch is None, reason="PyTorch is not instal
 
 @requires_torch
 def test_policy_device_auto_uses_visible_accelerator_or_cpu_fallback() -> None:
-    from rl.learner import resolve_policy_device
+    from rl.foundation.learner import resolve_policy_device
 
     assert resolve_policy_device("cpu") == torch.device("cpu")
     selected = resolve_policy_device("auto")
@@ -54,7 +54,7 @@ def test_policy_device_auto_uses_visible_accelerator_or_cpu_fallback() -> None:
 
 @requires_torch
 def test_policy_cpu_thread_cap_preserves_lower_setting_and_skips_accelerator() -> None:
-    from rl.learner import configure_policy_cpu_threads
+    from rl.foundation.learner import configure_policy_cpu_threads
 
     original_threads = torch.get_num_threads()
     try:
@@ -67,7 +67,7 @@ def test_policy_cpu_thread_cap_preserves_lower_setting_and_skips_accelerator() -
 
 
 def _model_config():
-    from rl.model import ModelConfig
+    from rl.foundation.model import ModelConfig
 
     return ModelConfig(
         raster_channels=2,
@@ -91,7 +91,7 @@ def _model_config():
 
 
 def _trajectory(config, *, batch=3, time=4):
-    from rl.trajectory import ActionBatch, ActionMasks, RecurrentSequence, TrajectoryBatch
+    from rl.foundation.trajectory import ActionBatch, ActionMasks, RecurrentSequence, TrajectoryBatch
 
     raster = torch.randn(batch, time, config.raster_channels, config.raster_height, config.raster_width)
     global_features = torch.randn(batch, time, config.global_dim)
@@ -141,7 +141,7 @@ def _trajectory(config, *, batch=3, time=4):
 
 @requires_torch
 def test_sequence_minibatches_preserve_rows_and_hidden_snapshots() -> None:
-    from rl.learner import BeliefTargets, LearnerBatch, iter_sequence_minibatches
+    from rl.foundation.learner import BeliefTargets, LearnerBatch, iter_sequence_minibatches
 
     config = _model_config()
     trajectory = _trajectory(config, batch=5, time=4)
@@ -196,7 +196,7 @@ def test_sequence_minibatches_preserve_rows_and_hidden_snapshots() -> None:
 
 @requires_torch
 def test_compact_entity_tail_handles_empty_sparse_and_interior_masks() -> None:
-    from rl.learner import _compact_entity_tail
+    from rl.foundation.learner import _compact_entity_tail
 
     config = _model_config()
     sequence = _trajectory(config, batch=2, time=3).sequence
@@ -228,13 +228,13 @@ def test_compact_entity_tail_handles_empty_sparse_and_interior_masks() -> None:
 
 @requires_torch
 def test_compact_entity_tail_preserves_policy_logprob_and_gradients() -> None:
-    from rl.learner import (
+    from rl.foundation.learner import (
         _compact_entity_tail,
         _joint_entropy,
         _joint_log_prob_and_entropy,
     )
-    from rl.model import RecurrentHybridPolicy
-    from rl.trajectory import ActionBatch, ActionMasks
+    from rl.foundation.model import RecurrentHybridPolicy
+    from rl.foundation.trajectory import ActionBatch, ActionMasks
 
     config = _model_config()
     trajectory = _trajectory(config, batch=2, time=3)
@@ -353,8 +353,8 @@ def test_compact_entity_tail_preserves_policy_logprob_and_gradients() -> None:
 
 @requires_torch
 def test_dropout_policy_keeps_entity_tail_for_reproducible_evaluation(monkeypatch) -> None:
-    from rl.learner import LearnerConfig, RecurrentPPOLearner, _joint_entropy
-    from rl.model import RecurrentHybridPolicy
+    from rl.foundation.learner import LearnerConfig, RecurrentPPOLearner, _joint_entropy
+    from rl.foundation.model import RecurrentHybridPolicy
 
     config = replace(_model_config(), dropout=0.2)
     policy = RecurrentHybridPolicy(config)
@@ -435,8 +435,8 @@ def test_dropout_policy_keeps_entity_tail_for_reproducible_evaluation(monkeypatc
 
 @requires_torch
 def test_privileged_recurrent_update_belief_loss_and_checkpoint_round_trip(tmp_path) -> None:
-    from rl.learner import BeliefTargets, LearnerBatch, LearnerConfig, RecurrentPPOLearner
-    from rl.model import PrivilegedCritic, RecurrentHybridPolicy
+    from rl.foundation.learner import BeliefTargets, LearnerBatch, LearnerConfig, RecurrentPPOLearner
+    from rl.foundation.model import PrivilegedCritic, RecurrentHybridPolicy
 
     config = _model_config()
     policy = RecurrentHybridPolicy(config)
@@ -489,9 +489,9 @@ def test_privileged_recurrent_update_belief_loss_and_checkpoint_round_trip(tmp_p
 
 @requires_torch
 def test_factor_behavior_cloning_is_not_applied_to_mixed_ppo() -> None:
-    from rl.learner import LearnerBatch, LearnerConfig, RecurrentPPOLearner
-    from rl.model import RecurrentHybridPolicy
-    from rl.trajectory import ActionBatch, ActionMasks
+    from rl.foundation.learner import LearnerBatch, LearnerConfig, RecurrentPPOLearner
+    from rl.foundation.model import RecurrentHybridPolicy
+    from rl.foundation.trajectory import ActionBatch, ActionMasks
 
     config = _model_config()
     trajectory = _trajectory(config, batch=1, time=2)
@@ -550,9 +550,9 @@ def test_factor_behavior_cloning_is_not_applied_to_mixed_ppo() -> None:
 
 @requires_torch
 def test_factor_behavior_cloning_remains_available_for_imitation_only() -> None:
-    from rl.learner import LearnerBatch, LearnerConfig, RecurrentPPOLearner
-    from rl.model import RecurrentHybridPolicy
-    from rl.trajectory import ActionBatch, ActionMasks
+    from rl.foundation.learner import LearnerBatch, LearnerConfig, RecurrentPPOLearner
+    from rl.foundation.model import RecurrentHybridPolicy
+    from rl.foundation.trajectory import ActionBatch, ActionMasks
 
     config = _model_config()
     trajectory = _trajectory(config, batch=1, time=2)
@@ -594,9 +594,9 @@ def test_factor_behavior_cloning_remains_available_for_imitation_only() -> None:
 
 @requires_torch
 def test_rollout_state_resets_hidden_before_next_observation() -> None:
-    from rl.learner import LearnerConfig, RecurrentPPOLearner
-    from rl.model import RecurrentHybridPolicy
-    from rl.trajectory import ActionMasks
+    from rl.foundation.learner import LearnerConfig, RecurrentPPOLearner
+    from rl.foundation.model import RecurrentHybridPolicy
+    from rl.foundation.trajectory import ActionMasks
 
     config = _model_config()
     learner = RecurrentPPOLearner(
@@ -635,7 +635,7 @@ def test_rollout_state_resets_hidden_before_next_observation() -> None:
 
 @requires_torch
 def test_nonfinite_objective_is_rejected_before_ratio_can_overflow() -> None:
-    from rl.objectives import ppo_objective
+    from rl.foundation.objectives import ppo_objective
 
     tensors = {
         "old_log_probs": torch.zeros(1, 1),
@@ -653,8 +653,8 @@ def test_nonfinite_objective_is_rejected_before_ratio_can_overflow() -> None:
 
 @requires_torch
 def test_nonfinite_gradient_skips_optimizer_step_and_is_counted() -> None:
-    from rl.learner import LearnerBatch, LearnerConfig, RecurrentPPOLearner
-    from rl.model import RecurrentHybridPolicy
+    from rl.foundation.learner import LearnerBatch, LearnerConfig, RecurrentPPOLearner
+    from rl.foundation.model import RecurrentHybridPolicy
 
     config = _model_config()
     learner = RecurrentPPOLearner(
@@ -684,7 +684,7 @@ def test_nonfinite_gradient_skips_optimizer_step_and_is_counted() -> None:
 
 @requires_torch
 def test_gradient_norm_accumulates_large_finite_gradients_without_overflow() -> None:
-    from rl.learner import _gradient_norm
+    from rl.foundation.learner import _gradient_norm
 
     parameter = torch.nn.Parameter(torch.zeros(2))
     parameter.grad = torch.tensor([1.0e20, -1.0e20])
@@ -696,8 +696,8 @@ def test_gradient_norm_accumulates_large_finite_gradients_without_overflow() -> 
 
 @requires_torch
 def test_corrupt_checkpoint_is_rejected_before_resume() -> None:
-    from rl.learner import LearnerConfig, RecurrentPPOLearner
-    from rl.model import RecurrentHybridPolicy
+    from rl.foundation.learner import LearnerConfig, RecurrentPPOLearner
+    from rl.foundation.model import RecurrentHybridPolicy
 
     config = _model_config()
     learner = RecurrentPPOLearner(

@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from simulator.rl.frontier import (
+from simulator.rl.v4.frontier import (
     FilterConfig,
     deterioration,
     score_decision,
@@ -12,7 +12,7 @@ from simulator.rl.frontier import (
     signature_of,
     transition,
 )
-from simulator.rl.frontier_eval import (
+from simulator.rl.v4.frontier_eval import (
     ClassifyConfig,
     build_distribution,
     classify_verdict,
@@ -182,10 +182,10 @@ def test_frontier_entry_round_trip():
 
     from simulator.engine.core import BattleEngine
     from simulator.env import SimulatorEnv
-    from simulator.rl.frontier import frontier_model_config
-    from simulator.rl.frontier_eval import reset_to_frontier_entry
-    from simulator.rl.model_v4 import masks_from_legal_play
-    from simulator.rl.v4_ppo import _v4_step_inputs, load_frozen_anchor
+    from simulator.rl.v4.frontier import frontier_model_config
+    from simulator.rl.v4.frontier_eval import reset_to_frontier_entry
+    from simulator.rl.v4.model_v4 import masks_from_legal_play
+    from simulator.rl.v4.v4_ppo import _v4_step_inputs, load_frozen_anchor
     from simulator.public_state_estimator import PublicStateEstimator
     from simulator.ruleset import load_fixed_ruleset
 
@@ -202,7 +202,7 @@ def test_frontier_entry_round_trip():
     assert env.state.state_hash() == entry["provenance"]["state_hash"]
 
     # One PPO-style decision: policy forward + sample, opponent acts, step.
-    from simulator.rl.frontier_eval import _step_inputs, _observe_inputs
+    from simulator.rl.v4.frontier_eval import _step_inputs, _observe_inputs
 
     policy.eval()
     with torch.no_grad():
@@ -238,21 +238,21 @@ CKPT = "outputs/v4/stage2_12k_v2_e12_s12.pt"
 def test_live_replay_branch_harness_micro():
     """End-to-end micro run: collect -> replay -> branches -> one branch."""
 
-    from simulator.rl.frontier import (
+    from simulator.rl.v4.frontier import (
         FilterConfig,
         PoolMatchConfig,
         collect_pool_match,
         frontier_model_config,
         select_candidates,
     )
-    from simulator.rl.frontier_eval import (
+    from simulator.rl.v4.frontier_eval import (
         EvalConfig,
         evaluate_candidate,
         plan_branches,
         replay_to_state,
         run_branch,
     )
-    from simulator.rl.v4_ppo import load_frozen_anchor
+    from simulator.rl.v4.v4_ppo import load_frozen_anchor
 
     policy = load_frozen_anchor(CKPT, frontier_model_config(), device="cpu")
     match = collect_pool_match(

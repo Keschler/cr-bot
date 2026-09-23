@@ -13,7 +13,7 @@ from cr_bot.domain.game_state import (
 )
 from cr_bot.domain.card_metadata import CARD_METADATA
 from simulator.observation import ACTION_MASK_SHAPE
-from simulator.physical_lab.policy_bridge import (
+from simulator.physical_lab.sensing.policy_bridge import (
     PolicyBridgeError,
     dispatch_policy_action,
     observation_from_game_state,
@@ -139,7 +139,7 @@ def test_unrepresentable_detector_effect_is_omitted_and_logged(
         )
     ]
 
-    with caplog.at_level("WARNING", logger="simulator.physical_lab.policy_bridge"):
+    with caplog.at_level("WARNING", logger="simulator.physical_lab.sensing.policy_bridge"):
         observation = observation_v2_from_game_state(
             state,
             arena_px=(0.0, 0.0, 1.0, 1.0),

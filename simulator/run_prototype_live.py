@@ -24,7 +24,7 @@ def _load_controller_main():
     finding the controller inside a one-file executable.
     """
 
-    from simulator.physical_lab.prototype_controller import main
+    from simulator.physical_lab.workflow.prototype_controller import main
 
     return main
 

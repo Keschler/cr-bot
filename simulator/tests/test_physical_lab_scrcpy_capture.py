@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from simulator.physical_lab.devices import (
+from simulator.physical_lab.capture.devices import (
     AdbPhoneController,
     DeviceDisconnectedError,
     Frame,
@@ -13,7 +13,7 @@ from simulator.physical_lab.devices import (
     SCRCPY_LEGAL_MAX_TIME_LIMIT_S,
     ScrcpyScreenCapture,
 )
-import simulator.physical_lab.devices as devices
+import simulator.physical_lab.capture.devices as devices
 
 
 class FakeScrcpyProcess:

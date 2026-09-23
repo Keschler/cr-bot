@@ -4,14 +4,14 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from simulator.rl.model_v4 import (
+from simulator.rl.v4.model_v4 import (
     WAIT_DURATIONS,
     ModelConfigV4,
     RecurrentV4Policy,
     V4ActionBatch,
     count_parameters,
 )
-from simulator.rl.trajectory import ActionMasks
+from simulator.rl.foundation.trajectory import ActionMasks
 
 
 def _small_config() -> ModelConfigV4:

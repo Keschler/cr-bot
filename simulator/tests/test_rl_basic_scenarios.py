@@ -4,7 +4,7 @@ import pytest
 
 from simulator.engine import BattleEngine
 from simulator.env import SimulatorEnv
-from simulator.rl.basic_scenarios import (
+from simulator.rl.foundation.basic_scenarios import (
     BASIC_MECHANICS_SOURCES,
     BASIC_SCENARIO_REWARD_VERSION,
     BasicMechanicsScenarioEnv,
@@ -12,7 +12,7 @@ from simulator.rl.basic_scenarios import (
     BasicScenarioError,
     basic_scenario_source,
 )
-from simulator.rl.opponent_pool import OpponentPool
+from simulator.rl.foundation.opponent_pool import OpponentPool
 from simulator.roster import PLAYER_DECK
 from simulator.ruleset import load_fixed_ruleset
 

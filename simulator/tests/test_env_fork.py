@@ -14,11 +14,11 @@ import pytest
 from simulator.actions import PlayCardAction, WaitAction
 from simulator.engine import BattleEngine
 from simulator.env import SimulatorEnv
-from simulator.rl.basic_scenarios import (
+from simulator.rl.foundation.basic_scenarios import (
     BasicMechanicsScenarioEnv,
     BasicScenarioConfig,
 )
-from simulator.rl.opponent_pool import OpponentPool
+from simulator.rl.foundation.opponent_pool import OpponentPool
 from simulator.roster import PLAYER_DECK
 from simulator.ruleset import load_fixed_ruleset
 

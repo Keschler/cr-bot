@@ -10,10 +10,10 @@ from cr_bot.domain.frame_analysis import FrameAnalysisResult
 from cr_bot.domain.game_state import Action, Detection, Match
 from simulator.observation import PolicyObservationV1
 from simulator.observation_v2 import PolicyObservationV2
-from simulator.physical_lab.automation import AutonomousPhone, CardMatch, UiProfile
-from simulator.physical_lab.calibration import CalibrationArtifact
-from simulator.physical_lab.devices import FakePhoneController, Frame
-from simulator.physical_lab.prototype_controller import (
+from simulator.physical_lab.workflow.automation import AutonomousPhone, CardMatch, UiProfile
+from simulator.physical_lab.capture.calibration import CalibrationArtifact
+from simulator.physical_lab.capture.devices import FakePhoneController, Frame
+from simulator.physical_lab.workflow.prototype_controller import (
     AdbH264FrameSource,
     AdbScreenshotSource,
     CachedAdbPhoneController,

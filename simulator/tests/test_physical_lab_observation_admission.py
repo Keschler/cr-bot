@@ -15,7 +15,7 @@ from simulator.physical_lab import (
     run_simulator_replay,
     seal_replay_cache,
 )
-from simulator.physical_lab.schema import canonical_hash
+from simulator.physical_lab.support.schema import canonical_hash
 
 
 def _raw_observation() -> dict[str, object]:

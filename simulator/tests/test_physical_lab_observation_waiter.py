@@ -4,13 +4,13 @@ from collections import deque
 
 import pytest
 
-from simulator.physical_lab.observation_waiter import (
+from simulator.physical_lab.sensing.waiter import (
     HogBridgeObservationWaiter,
     LiveTrackObservationSource,
     TrackObservation,
 )
-from simulator.physical_lab.devices import Frame
-from simulator.physical_lab.schema import PhysicalLabError
+from simulator.physical_lab.capture.devices import Frame
+from simulator.physical_lab.support.schema import PhysicalLabError
 
 
 def _row(

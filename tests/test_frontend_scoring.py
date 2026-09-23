@@ -74,7 +74,7 @@ def test_masked_log_softmax_shape_mismatch_raises():
 
 
 def _masks(mode, card, placement):
-    from simulator.rl.trajectory import ActionMasks
+    from simulator.rl.foundation.trajectory import ActionMasks
 
     return ActionMasks(mode=_m(mode), card=_m(card), placement=_m(placement))
 
@@ -296,7 +296,7 @@ class _FakePolicy:
         return torch.zeros(1, batch_size, self.hidden_dim)
 
     def forward(self, raster, global_features, entities, entity_mask, **kwargs):
-        from simulator.rl.model import AutoregressiveLogits, RecurrentPolicyOutput
+        from simulator.rl.foundation.model import AutoregressiveLogits, RecurrentPolicyOutput
 
         self.forward_calls += 1
         reset = kwargs.get("reset_mask")

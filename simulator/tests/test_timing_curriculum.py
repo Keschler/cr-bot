@@ -16,10 +16,10 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from simulator.rl.distillation import PLAYER_DECK, to_torch_batch
-from simulator.rl.losses_v4 import v4_supervised_loss
-from simulator.rl.model_v4 import ModelConfigV4, RecurrentV4Policy, WAIT_DURATIONS
-from simulator.rl.timing_curriculum import (
+from simulator.rl.v4.distillation import PLAYER_DECK, to_torch_batch
+from simulator.rl.v4.losses_v4 import v4_supervised_loss
+from simulator.rl.v4.model_v4 import ModelConfigV4, RecurrentV4Policy, WAIT_DURATIONS
+from simulator.rl.v4.timing_curriculum import (
     TIMING_FAMILIES,
     TIMING_GENERATOR_VERSION,
     TimingConfig,
@@ -28,7 +28,7 @@ from simulator.rl.timing_curriculum import (
     generate_timing_natural,
     generate_timing_pool,
 )
-from simulator.rl.timing_teacher import TIMING_TEACHER_VERSION
+from simulator.rl.v4.timing_teacher import TIMING_TEACHER_VERSION
 
 
 def _small_config(**overrides) -> TimingConfig:

@@ -648,8 +648,11 @@ result. A successful subprocess exit alone is not evidence success.
 
 ### Phase 0: software-only lab harness (implemented)
 
-- Experiment schemas and canonical hashing are in `physical_lab/schema.py`.
-- Fake/ADB phone and capture adapters are in `physical_lab/devices.py`.
+- Experiment schemas and canonical hashing are in `physical_lab/support/schema.py`.
+- Fake/ADB phone and capture adapters are in `physical_lab/capture/devices.py`.
+  Observation extraction lives in `physical_lab/sensing/`, run coordination
+  in `physical_lab/workflow/`, and comparisons in `physical_lab/analysis/`.
+  Callers should import these canonical subpackages directly.
 - Lifecycle recovery, hash-verified reviewed screen templates, action logging,
   split locking, clock conversion, timeout handling, cache
   recognition/rejection, observation ingest, differential comparison, and

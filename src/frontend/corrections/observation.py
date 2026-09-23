@@ -10,12 +10,12 @@ from ._common import CorrectionUnprocessableError, _finite_number
 def _live_policy_imports() -> tuple[Any, Any, Any]:
     """Lazily resolve (observation_fn, decide_fn, action_to_dict_fn)."""
     try:
-        from simulator.physical_lab.policy_bridge import (
+        from simulator.physical_lab.sensing.policy_bridge import (
             observation_v2_from_game_state,
         )
     except ImportError:
         try:
-            from physical_lab.policy_bridge import (  # type: ignore
+            from physical_lab.sensing.policy_bridge import (  # type: ignore
                 observation_v2_from_game_state,
             )
         except ImportError as error:
@@ -26,10 +26,10 @@ def _live_policy_imports() -> tuple[Any, Any, Any]:
     if decide_fn is None:
         raise CorrectionUnprocessableError("scored decision entry point is missing")
     try:
-        from simulator.physical_lab.prototype_controller import action_to_dict
+        from simulator.physical_lab.workflow.prototype_controller import action_to_dict
     except ImportError:
         try:
-            from physical_lab.prototype_controller import (  # type: ignore
+            from physical_lab.workflow.prototype_controller import (  # type: ignore
                 action_to_dict,
             )
         except ImportError as error:

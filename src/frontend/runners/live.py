@@ -62,7 +62,7 @@ def run_live_session(
             raise ValueError("yolo_image_size must be a positive integer")
 
         try:
-            from simulator.physical_lab.prototype_controller import (
+            from simulator.physical_lab.workflow.prototype_controller import (
                 AdbH264FrameSource,
                 AdbScreenshotSource,
                 CachedAdbPhoneController,
@@ -76,7 +76,7 @@ def run_live_session(
                 configure_detector_inference_size,
             )
         except ImportError:
-            from physical_lab.prototype_controller import (  # type: ignore
+            from physical_lab.workflow.prototype_controller import (  # type: ignore
                 AdbH264FrameSource,
                 AdbScreenshotSource,
                 CachedAdbPhoneController,
@@ -99,12 +99,12 @@ def run_live_session(
                 "the cr_bot visual extractor is not importable"
             ) from error
         try:
-            from simulator.physical_lab.policy_bridge import (
+            from simulator.physical_lab.sensing.policy_bridge import (
                 dispatch_policy_action,
                 observation_v2_from_match_step,
             )
         except ImportError:
-            from physical_lab.policy_bridge import (  # type: ignore
+            from physical_lab.sensing.policy_bridge import (  # type: ignore
                 dispatch_policy_action,
                 observation_v2_from_match_step,
             )
@@ -129,16 +129,16 @@ def run_live_session(
         if execute:
             # Live taps stay behind calibration + explicit confirmation gates.
             try:
-                from simulator.physical_lab.calibration import CalibrationArtifact
-                from simulator.physical_lab.prototype_controller import (
+                from simulator.physical_lab.capture.calibration import CalibrationArtifact
+                from simulator.physical_lab.workflow.prototype_controller import (
                     _REPOSITORY_ROOT,
                     _default_template_root,
                     _resolve,
                     _validate_live_setup,
                 )
             except ImportError:
-                from physical_lab.calibration import CalibrationArtifact  # type: ignore
-                from physical_lab.prototype_controller import (  # type: ignore
+                from physical_lab.capture.calibration import CalibrationArtifact  # type: ignore
+                from physical_lab.workflow.prototype_controller import (  # type: ignore
                     _REPOSITORY_ROOT,
                     _default_template_root,
                     _resolve,

@@ -5,7 +5,7 @@ from dataclasses import replace
 
 import pytest
 
-from simulator.physical_lab.campaign import (
+from simulator.physical_lab.workflow.campaign import (
     CampaignCase,
     DeckMutation,
     apply_deck_mutations,
@@ -13,9 +13,9 @@ from simulator.physical_lab.campaign import (
     evaluate_campaign,
     load_campaign,
 )
-from simulator.physical_lab.devices import AdbPhoneController
-import simulator.physical_lab.devices as devices_module
-from simulator.physical_lab.schema import PhysicalLabError
+from simulator.physical_lab.capture.devices import AdbPhoneController
+import simulator.physical_lab.capture.devices as devices_module
+from simulator.physical_lab.support.schema import PhysicalLabError
 
 
 def test_default_campaign_is_simple_to_complex_and_derives_fixed_opening_hands() -> None:

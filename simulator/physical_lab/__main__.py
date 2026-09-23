@@ -1,6 +1,6 @@
 """Run the physical-lab helper CLI directly."""
 
-from .cli import main
+from .workflow.cli import main
 
 
 raise SystemExit(main())

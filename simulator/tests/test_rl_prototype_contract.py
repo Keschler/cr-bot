@@ -189,7 +189,7 @@ def test_public_memory_replays_when_a_processed_event_is_rewritten() -> None:
 
 
 def _model_config():
-    from rl.model import ModelConfig
+    from rl.foundation.model import ModelConfig
 
     return ModelConfig(
         raster_channels=21,
@@ -222,7 +222,7 @@ def _model_inputs(observation: PolicyObservationV2):
 
 
 def _action_masks(observation: PolicyObservationV2):
-    from rl.trajectory import ActionMasks
+    from rl.foundation.trajectory import ActionMasks
 
     assert torch is not None
     mode, card, placement = observation.structured_action_masks()
@@ -235,7 +235,7 @@ def _action_masks(observation: PolicyObservationV2):
 
 @requires_torch
 def test_model_actor_path_is_invariant_to_hidden_opponent_state() -> None:
-    from rl.model import RecurrentHybridPolicy
+    from rl.foundation.model import RecurrentHybridPolicy
 
     public_state, private_state = _states_with_private_difference()
     public = _public_observation(public_state)

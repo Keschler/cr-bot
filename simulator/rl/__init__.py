@@ -1,353 +1,160 @@
-"""Optional PyTorch production RL model foundation.
-
-The simulator does not require PyTorch.  ``import rl`` is safe without it and
-exposes ``TORCH_AVAILABLE``.  When PyTorch is absent, importing a model class
-raises :class:`TorchUnavailableError` with installation guidance; when it is
-installed, the model and trajectory classes are re-exported here.
-"""
-
+"""Lazy public exports for shared RL primitives and V4 training."""
 from __future__ import annotations
+import importlib
+from .foundation._compat import TORCH_AVAILABLE, TorchUnavailableError, require_torch
 
-from ._compat import TORCH_AVAILABLE, TorchUnavailableError, require_torch
-from .curriculum import (
-    BCDecision,
-    BCTeacherConfidencePolicy,
-    CurriculumConfigurationError,
-    CurriculumPhase,
-    CurriculumSchedule,
-    STRATEGIC_CURRICULUM_SCHEMA_VERSION,
-    StrategicCurriculum,
-    StrategicCurriculumStage,
-    default_strategic_curriculum,
-)
-from .collector import (
-    BatchStepFn,
-    CollectorConfig,
-    OpponentActionFn,
-    PrivilegedFeatureFn,
-    RecurrentRolloutCollector,
-    RolloutResult,
-    RolloutStepCallback,
-    RolloutStats,
-)
-from .domain_randomization import (
-    DomainRandomizationConfig,
-    DomainRandomizationError,
-    DomainRandomizedEnv,
-    DomainVariantSampler,
-    SimulationVariant,
-)
-from .basic_scenarios import (
-    BASIC_MECHANICS_SOURCES,
-    BASIC_SCENARIO_REWARD_VERSION,
-    BASIC_SCENARIO_SCHEMA_VERSION,
-    BasicMechanicsScenarioEnv,
-    BasicScenarioConfig,
-    BasicScenarioError,
-    basic_scenario_source,
-    phase_one_rehearsal_source,
-)
-from .exploit_audit import (
-    SIMULATION_EXPLOIT_AUDIT_KIND,
-    SIMULATION_EXPLOIT_AUDIT_SCHEMA_VERSION,
-    SimulationExploitAuditError,
-    audit_json_file,
-    audit_replay_hashes,
-    audit_simulation_report,
-)
-from .league import (
-    DeckConditionedOpponentScope,
-    DeckSpec,
-    HistoricalCheckpoint,
-    LeagueConfig,
-    LeagueConfigurationError,
-    LeagueRunState,
-    LeagueMatchRecord,
-    LeagueOrchestrator,
-    LeagueOutcome,
-    LeaguePayoffBook,
-    LeaguePayoffStats,
-    LeagueRatingBook,
-    LeagueSampler,
-    LeagueSamplingError,
-    OpponentSelection,
-    PAYOFF_SCHEMA_VERSION,
-    PFSPOpponentSampler,
-    deterministic_seed,
-)
-from .evaluation_matrix import (
-    EvaluationMatrixConfig,
-    EvaluationMatrixError,
-    EVALUATION_PROVENANCE_SCHEMA_VERSION,
-    MatchResult,
-    MatchSpec,
-    OpponentDeckSpec as EvaluationOpponentDeckSpec,
-    OpponentStrategySpec,
-    evaluate_checkpoint_matrix,
-    run_evaluation_matrix,
-    write_evaluation_matrix_report,
-)
-from .opponent_pool import (
-    ARCHETYPE_NAMES,
-    OpponentDeckSpec,
-    OpponentPool,
-    OpponentPoolError,
-    OpponentScenario,
-    make_opponent_controller,
-)
-from .self_play import (
-    PublicCheckpointController,
-    SELF_PLAY_STRATEGY_PREFIX,
-    SelfPlayConfigurationError,
-    build_self_play_matrix_config,
-    checkpoint_strategy,
-    evaluate_against_checkpoints,
-)
-from .public_counter import (
-    PublicCounterController,
-    StrategicCounterController,
-    public_counter_action,
-    strategic_counter_action,
-)
-from .learner import (
-    BeliefTargets,
-    LearnerBatch,
-    LearnerConfig,
-    PolicyEvaluation,
-    RecurrentPPOLearner,
-    RecurrentRolloutState,
-    RecurrentValueHead,
-    RolloutStep,
-    UpdateMetrics,
-    iter_sequence_minibatches,
-)
+_TORCH_EXPORTS = {'ActionBatch',
+ 'ActionMasks',
+ 'AutoregressiveLogits',
+ 'GRURecurrentCore',
+ 'HybridEncoder',
+ 'MaskedAutoregressivePolicy',
+ 'ModelConfig',
+ 'ModelConfigV4',
+ 'OpponentBeliefHeads',
+ 'OpponentBeliefLogits',
+ 'PPOObjectiveConfig',
+ 'PPOObjectiveResult',
+ 'PrivilegedCritic',
+ 'RecurrentHybridPolicy',
+ 'RecurrentPolicyOutput',
+ 'RecurrentSequence',
+ 'RecurrentV4Policy',
+ 'TrajectoryBatch',
+ 'V4ActionBatch',
+ 'V4ActionHead',
+ 'V4Logits',
+ 'V4SupervisedWeights',
+ 'WAIT_DURATIONS',
+ 'behavior_cloning_loss',
+ 'compute_gae',
+ 'count_parameters',
+ 'ppo_objective',
+ 'v4_supervised_loss'}
 
-_TORCH_EXPORTS = {
-    "ActionBatch",
-    "ActionMasks",
-    "AutoregressiveLogits",
-    "GRURecurrentCore",
-    "HybridEncoder",
-    "MaskedAutoregressivePolicy",
-    "ModelConfig",
-    "OpponentBeliefHeads",
-    "OpponentBeliefLogits",
-    "PrivilegedCritic",
-    "RecurrentHybridPolicy",
-    "RecurrentPolicyOutput",
-    "RecurrentSequence",
-    "TrajectoryBatch",
-    "PPOObjectiveConfig",
-    "PPOObjectiveResult",
-    "behavior_cloning_loss",
-    "compute_gae",
-    "ppo_objective",
-    "ModelConfigV4",
-    "RecurrentV4Policy",
-    "V4ActionBatch",
-    "V4ActionHead",
-    "V4Logits",
-    "V4SupervisedWeights",
-    "WAIT_DURATIONS",
-    "count_parameters",
-    "v4_supervised_loss",
-}
+_LAZY_EXPORTS = {'BatchStepFn': ('foundation.collector', 'BatchStepFn'),
+ 'CollectorConfig': ('foundation.collector', 'CollectorConfig'),
+ 'OpponentActionFn': ('foundation.collector', 'OpponentActionFn'),
+ 'PrivilegedFeatureFn': ('foundation.collector', 'PrivilegedFeatureFn'),
+ 'RecurrentRolloutCollector': ('foundation.collector', 'RecurrentRolloutCollector'),
+ 'RolloutResult': ('foundation.collector', 'RolloutResult'),
+ 'RolloutStepCallback': ('foundation.collector', 'RolloutStepCallback'),
+ 'RolloutStats': ('foundation.collector', 'RolloutStats'),
+ 'DomainRandomizationConfig': ('foundation.domain_randomization', 'DomainRandomizationConfig'),
+ 'DomainRandomizationError': ('foundation.domain_randomization', 'DomainRandomizationError'),
+ 'DomainRandomizedEnv': ('foundation.domain_randomization', 'DomainRandomizedEnv'),
+ 'DomainVariantSampler': ('foundation.domain_randomization', 'DomainVariantSampler'),
+ 'SimulationVariant': ('foundation.domain_randomization', 'SimulationVariant'),
+ 'BASIC_MECHANICS_SOURCES': ('foundation.basic_scenarios', 'BASIC_MECHANICS_SOURCES'),
+ 'BASIC_SCENARIO_REWARD_VERSION': ('foundation.basic_scenarios', 'BASIC_SCENARIO_REWARD_VERSION'),
+ 'BASIC_SCENARIO_SCHEMA_VERSION': ('foundation.basic_scenarios', 'BASIC_SCENARIO_SCHEMA_VERSION'),
+ 'BasicMechanicsScenarioEnv': ('foundation.basic_scenarios', 'BasicMechanicsScenarioEnv'),
+ 'BasicScenarioConfig': ('foundation.basic_scenarios', 'BasicScenarioConfig'),
+ 'BasicScenarioError': ('foundation.basic_scenarios', 'BasicScenarioError'),
+ 'basic_scenario_source': ('foundation.basic_scenarios', 'basic_scenario_source'),
+ 'phase_one_rehearsal_source': ('foundation.basic_scenarios', 'phase_one_rehearsal_source'),
+ 'ARCHETYPE_NAMES': ('foundation.opponent_pool', 'ARCHETYPE_NAMES'),
+ 'OpponentDeckSpec': ('foundation.opponent_pool', 'OpponentDeckSpec'),
+ 'OpponentPool': ('foundation.opponent_pool', 'OpponentPool'),
+ 'OpponentPoolError': ('foundation.opponent_pool', 'OpponentPoolError'),
+ 'OpponentScenario': ('foundation.opponent_pool', 'OpponentScenario'),
+ 'make_opponent_controller': ('foundation.opponent_pool', 'make_opponent_controller'),
+ 'PublicCounterController': ('foundation.public_counter', 'PublicCounterController'),
+ 'StrategicCounterController': ('foundation.public_counter', 'StrategicCounterController'),
+ 'public_counter_action': ('foundation.public_counter', 'public_counter_action'),
+ 'strategic_counter_action': ('foundation.public_counter', 'strategic_counter_action'),
+ 'BeliefTargets': ('foundation.learner', 'BeliefTargets'),
+ 'LearnerBatch': ('foundation.learner', 'LearnerBatch'),
+ 'LearnerConfig': ('foundation.learner', 'LearnerConfig'),
+ 'PolicyEvaluation': ('foundation.learner', 'PolicyEvaluation'),
+ 'RecurrentPPOLearner': ('foundation.learner', 'RecurrentPPOLearner'),
+ 'RecurrentRolloutState': ('foundation.learner', 'RecurrentRolloutState'),
+ 'RecurrentValueHead': ('foundation.learner', 'RecurrentValueHead'),
+ 'RolloutStep': ('foundation.learner', 'RolloutStep'),
+ 'UpdateMetrics': ('foundation.learner', 'UpdateMetrics'),
+ 'iter_sequence_minibatches': ('foundation.learner', 'iter_sequence_minibatches'),
+ 'AutoregressiveLogits': ('foundation.model', 'AutoregressiveLogits'),
+ 'GRURecurrentCore': ('foundation.model', 'GRURecurrentCore'),
+ 'HybridEncoder': ('foundation.model', 'HybridEncoder'),
+ 'MaskedAutoregressivePolicy': ('foundation.model', 'MaskedAutoregressivePolicy'),
+ 'ModelConfig': ('foundation.model', 'ModelConfig'),
+ 'OpponentBeliefHeads': ('foundation.model', 'OpponentBeliefHeads'),
+ 'OpponentBeliefLogits': ('foundation.model', 'OpponentBeliefLogits'),
+ 'PrivilegedCritic': ('foundation.model', 'PrivilegedCritic'),
+ 'RecurrentHybridPolicy': ('foundation.model', 'RecurrentHybridPolicy'),
+ 'RecurrentPolicyOutput': ('foundation.model', 'RecurrentPolicyOutput'),
+ 'ActionBatch': ('foundation.trajectory', 'ActionBatch'),
+ 'ActionMasks': ('foundation.trajectory', 'ActionMasks'),
+ 'RecurrentSequence': ('foundation.trajectory', 'RecurrentSequence'),
+ 'TrajectoryBatch': ('foundation.trajectory', 'TrajectoryBatch'),
+ 'PPOObjectiveConfig': ('foundation.objectives', 'PPOObjectiveConfig'),
+ 'PPOObjectiveResult': ('foundation.objectives', 'PPOObjectiveResult'),
+ 'behavior_cloning_loss': ('foundation.objectives', 'behavior_cloning_loss'),
+ 'compute_gae': ('foundation.objectives', 'compute_gae'),
+ 'ppo_objective': ('foundation.objectives', 'ppo_objective'),
+ 'ModelConfigV4': ('v4.model_v4', 'ModelConfigV4'),
+ 'RecurrentV4Policy': ('v4.model_v4', 'RecurrentV4Policy'),
+ 'V4ActionBatch': ('v4.model_v4', 'V4ActionBatch'),
+ 'V4ActionHead': ('v4.model_v4', 'V4ActionHead'),
+ 'V4Logits': ('v4.model_v4', 'V4Logits'),
+ 'WAIT_DURATIONS': ('v4.model_v4', 'WAIT_DURATIONS'),
+ 'count_parameters': ('v4.model_v4', 'count_parameters'),
+ 'V4SupervisedWeights': ('v4.losses_v4', 'V4SupervisedWeights'),
+ 'v4_supervised_loss': ('v4.losses_v4', 'v4_supervised_loss')}
 
-_FOUNDATION_EXPORTS = {
-    "BASIC_MECHANICS_SOURCES",
-    "BASIC_SCENARIO_REWARD_VERSION",
-    "BASIC_SCENARIO_SCHEMA_VERSION",
-    "BasicMechanicsScenarioEnv",
-    "BasicScenarioConfig",
-    "BasicScenarioError",
-    "basic_scenario_source",
-    "phase_one_rehearsal_source",
-    "BCDecision",
-    "BCTeacherConfidencePolicy",
-    "CurriculumConfigurationError",
-    "CurriculumPhase",
-    "CurriculumSchedule",
-    "STRATEGIC_CURRICULUM_SCHEMA_VERSION",
-    "StrategicCurriculum",
-    "StrategicCurriculumStage",
-    "default_strategic_curriculum",
-    "DeckConditionedOpponentScope",
-    "DeckSpec",
-    "HistoricalCheckpoint",
-    "LeagueConfig",
-    "LeagueConfigurationError",
-    "LeagueRunState",
-    "LeagueMatchRecord",
-    "LeagueOrchestrator",
-    "LeagueOutcome",
-    "LeaguePayoffBook",
-    "LeaguePayoffStats",
-    "LeagueRatingBook",
-    "LeagueSampler",
-    "LeagueSamplingError",
-    "OpponentSelection",
-    "PAYOFF_SCHEMA_VERSION",
-    "PFSPOpponentSampler",
-    "deterministic_seed",
-    "ARCHETYPE_NAMES",
-    "OpponentDeckSpec",
-    "OpponentPool",
-    "OpponentPoolError",
-    "OpponentScenario",
-    "make_opponent_controller",
-    "PublicCheckpointController",
-    "SELF_PLAY_STRATEGY_PREFIX",
-    "SelfPlayConfigurationError",
-    "build_self_play_matrix_config",
-    "checkpoint_strategy",
-    "evaluate_against_checkpoints",
-    "PublicCounterController",
-    "StrategicCounterController",
-    "public_counter_action",
-    "strategic_counter_action",
-    "EvaluationMatrixConfig",
-    "EvaluationMatrixError",
-    "EVALUATION_PROVENANCE_SCHEMA_VERSION",
-    "EvaluationOpponentDeckSpec",
-    "OpponentStrategySpec",
-    "MatchResult",
-    "MatchSpec",
-    "evaluate_checkpoint_matrix",
-    "run_evaluation_matrix",
-    "write_evaluation_matrix_report",
-    "BeliefTargets",
-    "LearnerBatch",
-    "LearnerConfig",
-    "PolicyEvaluation",
-    "RecurrentPPOLearner",
-    "RecurrentRolloutState",
-    "RecurrentValueHead",
-    "RolloutStep",
-    "UpdateMetrics",
-    "iter_sequence_minibatches",
-    "CollectorConfig",
-    "OpponentActionFn",
-    "PrivilegedFeatureFn",
-    "RecurrentRolloutCollector",
-    "RolloutResult",
-    "RolloutStats",
-    "DomainRandomizationConfig",
-    "DomainRandomizationError",
-    "DomainRandomizedEnv",
-    "DomainVariantSampler",
-    "SimulationVariant",
-    "SIMULATION_EXPLOIT_AUDIT_KIND",
-    "SIMULATION_EXPLOIT_AUDIT_SCHEMA_VERSION",
-    "SimulationExploitAuditError",
-    "audit_json_file",
-    "audit_replay_hashes",
-    "audit_simulation_report",
-}
+_LAZY_MODULES = {'foundation': 'foundation',
+ 'v4': 'v4',
+ 'basic_scenarios': 'foundation.basic_scenarios',
+ 'collector': 'foundation.collector',
+ 'diagnostics': 'foundation.diagnostics',
+ 'distillation': 'v4.distillation',
+ 'domain_randomization': 'foundation.domain_randomization',
+ 'frontier': 'v4.frontier',
+ 'frontier_eval': 'v4.frontier_eval',
+ 'frontier_ppo': 'v4.frontier_ppo',
+ 'learner': 'foundation.learner',
+ 'learning_curve': 'v4.learning_curve',
+ 'losses_v4': 'v4.losses_v4',
+ 'model': 'foundation.model',
+ 'model_v4': 'v4.model_v4',
+ 'objectives': 'foundation.objectives',
+ 'opponent_pool': 'foundation.opponent_pool',
+ 'provenance': 'foundation.provenance',
+ 'public_counter': 'foundation.public_counter',
+ 'search_dataset': 'v4.search_dataset',
+ 'search_distillation': 'v4.search_distillation',
+ 'search_teacher': 'v4.search_teacher',
+ 'simulator_distillation': 'v4.simulator_distillation',
+ 'simulator_teacher': 'v4.simulator_teacher',
+ 'timing_curriculum': 'v4.timing_curriculum',
+ 'timing_teacher': 'v4.timing_teacher',
+ 'trajectory': 'foundation.trajectory',
+ 'v4_ppo': 'v4.v4_ppo'}
 
-_PROTOTYPE_EXPORTS = {
-    "PRIVILEGED_FEATURE_DIM",
-    "PROTOTYPE_CHECKPOINT_FORMAT",
-    "PROTOTYPE_SCHEMA_VERSION",
-    "PrototypeConfig",
-    "PrototypeConfigurationError",
-    "evaluate_prototype",
-    "load_prototype_checkpoint",
-    "save_prototype_checkpoint",
-    "train_prototype",
-}
-
-_SHADOW_EXPORTS = {
-    "SHADOW_RUNNER_VERSION",
-    "SHADOW_SCHEMA_VERSION",
-    "ShadowConfigurationError",
-    "ShadowPolicyRunner",
-    "ShadowPrediction",
-    "run_shadow_media",
-}
-
-_GENERALIZED_EXPORTS = {
-    "GENERALIZED_TRAINING_KIND",
-    "GENERALIZED_TRAINING_SCHEMA_VERSION",
-    "GeneralizedTrainingConfig",
-    "GeneralizedTrainingError",
-    "build_heldout_matrix_config",
-    "evaluate_heldout_matrix",
-    "make_scenario_opponent_action",
-    "sample_training_scenarios",
-    "train_generalized",
-}
-
-if TORCH_AVAILABLE:
-    from .model import (
-        AutoregressiveLogits,
-        GRURecurrentCore,
-        HybridEncoder,
-        MaskedAutoregressivePolicy,
-        ModelConfig,
-        OpponentBeliefHeads,
-        OpponentBeliefLogits,
-        PrivilegedCritic,
-        RecurrentHybridPolicy,
-        RecurrentPolicyOutput,
-    )
-    from .trajectory import ActionBatch, ActionMasks, RecurrentSequence, TrajectoryBatch
-    from .objectives import (
-        PPOObjectiveConfig,
-        PPOObjectiveResult,
-        behavior_cloning_loss,
-        compute_gae,
-        ppo_objective,
-    )
-    from .model_v4 import (
-        WAIT_DURATIONS,
-        ModelConfigV4,
-        RecurrentV4Policy,
-        V4ActionBatch,
-        V4ActionHead,
-        V4Logits,
-        count_parameters,
-    )
-    from .losses_v4 import V4SupervisedWeights, v4_supervised_loss
-
-    __all__ = [
-        "TORCH_AVAILABLE",
-        "TorchUnavailableError",
-        "require_torch",
-        *_TORCH_EXPORTS,
-        *_FOUNDATION_EXPORTS,
-        *_PROTOTYPE_EXPORTS,
-        *_SHADOW_EXPORTS,
-        *_GENERALIZED_EXPORTS,
-    ]
-else:
-    __all__ = [
-        "TORCH_AVAILABLE",
-        "TorchUnavailableError",
-        "require_torch",
-        *_TORCH_EXPORTS,
-        *_FOUNDATION_EXPORTS,
-        *_PROTOTYPE_EXPORTS,
-        *_SHADOW_EXPORTS,
-        *_GENERALIZED_EXPORTS,
-    ]
-
+__all__ = ["TORCH_AVAILABLE", "TorchUnavailableError", "require_torch", *_LAZY_EXPORTS]
 
 def __getattr__(name: str):
-    if name in _TORCH_EXPORTS and not TORCH_AVAILABLE:
-        raise TorchUnavailableError(
-            "PyTorch is not installed; install the optional torch dependency "
-            f"before using rl.{name}."
-        )
-    if name in _PROTOTYPE_EXPORTS:
-        from . import prototype
-
-        return getattr(prototype, name)
-    if name in _SHADOW_EXPORTS:
-        from . import shadow
-
-        return getattr(shadow, name)
-    if name in _GENERALIZED_EXPORTS:
-        from . import generalized
-
-        return getattr(generalized, name)
+    if name in _LAZY_EXPORTS:
+        if name in _TORCH_EXPORTS and not TORCH_AVAILABLE:
+            raise TorchUnavailableError(
+                "PyTorch is not installed; install the optional torch dependency "
+                f"before using the rl export {name!r}."
+            )
+        module_name, attribute_name = _LAZY_EXPORTS[name]
+        module = importlib.import_module(f"{__name__}.{module_name}")
+        value = getattr(module, attribute_name)
+        # Cache resolved exports so repeated package-level access has the same
+        # identity and cost as the historical eager re-export.
+        globals()[name] = value
+        return value
+    if name in _LAZY_MODULES:
+        module = importlib.import_module(f"{__name__}.{_LAZY_MODULES[name]}")
+        globals()[name] = module
+        return module
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    """Include lazy public exports in interactive discovery and help()."""
+
+    return sorted(set(globals()) | set(__all__) | set(_LAZY_MODULES))

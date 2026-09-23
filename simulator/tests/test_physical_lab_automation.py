@@ -5,16 +5,16 @@ from types import SimpleNamespace
 
 import pytest
 
-import simulator.physical_lab.automation as automation_module
+import simulator.physical_lab.workflow.automation as automation_module
 from simulator.physical_lab import CardVision, LifecycleState, UiProfile
-from simulator.physical_lab.automation import (
+from simulator.physical_lab.workflow.automation import (
     AutonomousPhysicalLab,
     AutonomousPhone,
     AutomationError,
     FIXED_HOG_CYCLE_DECK,
 )
-from simulator.physical_lab.devices import Frame
-from simulator.physical_lab.devices import ActionReceipt, FakePhoneController
+from simulator.physical_lab.capture.devices import Frame
+from simulator.physical_lab.capture.devices import ActionReceipt, FakePhoneController
 
 
 def _card_frame(*, card_id: str, x: int, y: int, width: int = 250, height: int = 300) -> Frame:

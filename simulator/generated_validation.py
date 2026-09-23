@@ -33,7 +33,7 @@ GENERATED_VALIDATION_SCHEMA_VERSION = 1
 def _code_revision() -> dict[str, Any]:
     """Return Git provenance without making the simulator core import RL."""
 
-    from .rl.provenance import code_revision
+    from .rl.foundation.provenance import code_revision
 
     return code_revision()
 
@@ -41,7 +41,7 @@ def _code_revision() -> dict[str, Any]:
 def _revision_changed(start: Mapping[str, Any], current: Mapping[str, Any]) -> bool:
     """Compare run-boundary provenance without importing RL at module load."""
 
-    from .rl.provenance import revision_changed
+    from .rl.foundation.provenance import revision_changed
 
     return revision_changed(start, current)
 

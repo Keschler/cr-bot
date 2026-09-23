@@ -16,7 +16,7 @@ def test_rl_package_reports_optional_torch_dependency() -> None:
     assert rl.TORCH_AVAILABLE is (torch is not None)
     if torch is None:
         with pytest.raises(rl.TorchUnavailableError, match="PyTorch"):
-            importlib.import_module("rl.model")
+            importlib.import_module("rl.foundation.model")
 
 
 requires_torch = pytest.mark.skipif(torch is None, reason="PyTorch is not installed")
@@ -221,7 +221,7 @@ def test_hand_table_features_stay_outside_the_entity_transformer() -> None:
 @requires_torch
 def test_deterministic_fast_action_matches_full_reference_path() -> None:
     from rl import ActionMasks, ModelConfig, RecurrentHybridPolicy
-    from rl.learner import _deterministic_action
+    from rl.foundation.learner import _deterministic_action
 
     values = {
         field: getattr(_config(), field)
@@ -352,8 +352,8 @@ def test_deterministic_fast_action_matches_full_reference_path() -> None:
 @requires_torch
 def test_inference_compacts_padded_entities_without_changing_actions() -> None:
     from rl import ActionMasks, ModelConfig, RecurrentHybridPolicy
-    from rl.learner import _deterministic_action
-    from rl.model import _inference_entity_tokens
+    from rl.foundation.learner import _deterministic_action
+    from rl.foundation.model import _inference_entity_tokens
 
     config = _config()
     policy = RecurrentHybridPolicy(config).eval()
@@ -421,7 +421,7 @@ def test_inference_compacts_padded_entities_without_changing_actions() -> None:
 @requires_torch
 def test_dense_inference_transformer_layout_preserves_selected_actions() -> None:
     from rl import ActionMasks, ModelConfig, RecurrentHybridPolicy
-    from rl.learner import _deterministic_action
+    from rl.foundation.learner import _deterministic_action
 
     config = _config()
     policy = RecurrentHybridPolicy(config).eval()

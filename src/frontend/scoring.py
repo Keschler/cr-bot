@@ -16,7 +16,7 @@ Design notes:
 * Placement grids use ``[slot, row, column]`` layout with ``row`` in
   ``[0, 32)`` and ``column`` in ``[0, 18)``.  Public ``cell`` coordinates are
   ``(col, row)`` tuples, matching
-  ``simulator.physical_lab.prototype_controller.policy_action_from_batch``.
+  ``simulator.physical_lab.workflow.prototype_controller.policy_action_from_batch``.
 """
 
 from __future__ import annotations
@@ -461,7 +461,7 @@ def decide_with_scores(actor: Any, observation: Any) -> tuple[Any, list[ScoredAc
     import math
 
     import torch
-    from simulator.physical_lab.prototype_controller import observation_to_model_inputs
+    from simulator.physical_lab.workflow.prototype_controller import observation_to_model_inputs
 
     from cr_bot.domain.game_state import Action
 

@@ -178,9 +178,9 @@ def test_offset_source_fast_forward_matches_sequential_skip(tmp_path):
     cv2 = pytest.importorskip("cv2")
     np = pytest.importorskip("numpy")
     try:
-        from simulator.physical_lab.prototype_controller import VideoFrameSource
+        from simulator.physical_lab.workflow.prototype_controller import VideoFrameSource
     except ImportError:
-        from physical_lab.prototype_controller import VideoFrameSource  # type: ignore
+        from physical_lab.workflow.prototype_controller import VideoFrameSource  # type: ignore
     video = tmp_path / "seek.avi"
     writer = cv2.VideoWriter(
         str(video), cv2.VideoWriter_fourcc(*"MJPG"), 10.0, (64, 48)
@@ -556,7 +556,7 @@ def test_reevaluate_move_only_update_repositions():
 def test_reevaluate_forward_stores_correction_and_restores_hidden():
     import torch
 
-    from simulator.rl.model import AutoregressiveLogits, RecurrentPolicyOutput
+    from simulator.rl.foundation.model import AutoregressiveLogits, RecurrentPolicyOutput
     from src.frontend.session import clear_reevaluation, reevaluate_frame
 
     placement = torch.zeros(1, 1, 4, 32, 18)

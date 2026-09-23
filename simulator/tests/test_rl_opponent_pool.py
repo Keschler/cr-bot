@@ -5,14 +5,13 @@ import pytest
 from simulator.actions import PlayCardAction, WaitAction
 from simulator.engine import BattleEngine
 from simulator.ruleset import load_fixed_ruleset
-from simulator.rl.opponent_pool import (
+from simulator.rl.foundation.opponent_pool import (
     ARCHETYPE_NAMES,
     OpponentPool,
     OpponentPoolError,
     RandomLegalController,
     make_opponent_controller,
 )
-from simulator.rl.evaluation_matrix import OpponentDeckSpec as MatrixDeckSpec
 
 
 def test_pool_sampling_is_reproducible_and_covers_named_archetypes() -> None:
@@ -106,25 +105,6 @@ def test_evaluation_variants_preserve_archetype_core_and_are_reproducible() -> N
     assert "variant" in first.tags
     assert first.cards[:2] == ("lava-hound", "balloon")
     assert set(first.cards) <= set(load_fixed_ruleset().interaction_set)
-
-
-def test_unique_pool_decks_are_compatible_with_evaluation_matrix_deck_axis() -> None:
-    pool = OpponentPool(load_fixed_ruleset(), seed=17)
-    decks = pool.sample_decks(12, archetype=None, unique=True)
-
-    matrix_decks = tuple(
-        MatrixDeckSpec(
-            deck_id=deck.deck_id,
-            cards=deck.cards,
-            tags=deck.tags,
-            metadata={"archetype": deck.archetype, "source": deck.source},
-        )
-        for deck in decks
-    )
-
-    assert len(matrix_decks) == 12
-    assert len({deck.deck_id for deck in matrix_decks}) == len(matrix_decks)
-    assert all(len(deck.cards) == 8 for deck in matrix_decks)
 
 
 def test_controller_factory_accepts_strategy_aliases() -> None:

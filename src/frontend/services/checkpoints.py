@@ -19,9 +19,9 @@ def _default_checkpoint() -> str:
     if preferred.is_file():
         return str(preferred)
     try:
-        from simulator.physical_lab.prototype_controller import DEFAULT_CHECKPOINT
+        from simulator.physical_lab.workflow.prototype_controller import DEFAULT_CHECKPOINT
     except ImportError:
-        from physical_lab.prototype_controller import DEFAULT_CHECKPOINT  # type: ignore
+        from physical_lab.workflow.prototype_controller import DEFAULT_CHECKPOINT  # type: ignore
     return str(DEFAULT_CHECKPOINT)
 
 

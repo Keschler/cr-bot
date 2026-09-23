@@ -10,7 +10,7 @@ import pytest
 
 from scripts.build_physical_lab_prerequisites import BuilderError, build_prerequisites, main
 from simulator.physical_lab import CalibrationArtifact, LifecycleState, TemplateLifecycleDetector
-from simulator.physical_lab.artifacts import hash_file
+from simulator.physical_lab.support.artifacts import hash_file
 
 
 def _png_chunk(chunk_type: bytes, payload: bytes) -> bytes:

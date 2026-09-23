@@ -116,23 +116,6 @@ def test_process_backends_preserve_v2_step_results(backend: str) -> None:
         parallel.close()
 
 
-def test_prototype_cli_accepts_process_backend() -> None:
-    from rl.prototype import PrototypeConfig, _parser
-
-    args = _parser().parse_args(
-        [
-            "train",
-            "--env-backend",
-            "process",
-            "--env-workers",
-            "3",
-        ]
-    )
-    config = PrototypeConfig(env_backend=args.env_backend, env_workers=args.env_workers)
-    assert config.env_backend == "process"
-    assert config.env_workers == 3
-
-
 def test_quiescent_wait_fast_forward_matches_reference_across_match_clock() -> None:
     """Batched idle ticks must retain state, events, and public observations."""
 

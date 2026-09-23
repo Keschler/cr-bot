@@ -29,7 +29,7 @@ from typing import Any, Mapping
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from simulator.physical_lab.campaign import (  # noqa: E402
+from simulator.physical_lab.workflow.campaign import (  # noqa: E402
     DEFAULT_CAMPAIGN_ID,
     DEFAULT_CAMPAIGN_ROOT,
     build_default_campaign,
@@ -38,7 +38,7 @@ from simulator.physical_lab.campaign import (  # noqa: E402
     materialize_campaign,
     write_campaign_evaluation,
 )
-from simulator.physical_lab.schema import PhysicalLabError  # noqa: E402
+from simulator.physical_lab.support.schema import PhysicalLabError  # noqa: E402
 from simulator.storage import (  # noqa: E402
     DEFAULT_LOW_WATER_BYTES,
     DEFAULT_MAX_WORKSPACE_BYTES,

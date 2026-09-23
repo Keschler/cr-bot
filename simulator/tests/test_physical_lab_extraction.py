@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from simulator.physical_lab.evaluation import evaluate_stored_cases, write_stored_evaluation
-from simulator.physical_lab.extraction import (
+from simulator.physical_lab.analysis.evaluation import evaluate_stored_cases, write_stored_evaluation
+from simulator.physical_lab.sensing.extraction import (
     _apply_event_identity,
     _canonical_position_mtile,
     _extractor_command,
@@ -14,8 +14,8 @@ from simulator.physical_lab.extraction import (
     _run_action_events,
     _select_primary_view_entities,
 )
-from simulator.physical_lab.identity import KnownCardIdentity, KnownPlacement
-from simulator.physical_lab.replay import action_match_time_us
+from simulator.physical_lab.support.identity import KnownCardIdentity, KnownPlacement
+from simulator.physical_lab.workflow.replay import action_match_time_us
 
 
 def test_extractor_preserves_native_phone_geometry_and_selects_b_profile() -> None:

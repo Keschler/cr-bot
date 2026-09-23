@@ -67,7 +67,7 @@ def _observation(
 
 
 def test_public_counter_uses_public_hand_and_legality_mask() -> None:
-    from simulator.rl.public_counter import PublicCounterController
+    from simulator.rl.foundation.public_counter import PublicCounterController
 
     observation = _observation(
         hand=["hog-rider", "cannon", "musketeer", "skeletons"],
@@ -82,7 +82,7 @@ def test_public_counter_uses_public_hand_and_legality_mask() -> None:
 
 
 def test_public_counter_prioritizes_cannon_for_visible_crossed_troop() -> None:
-    from simulator.rl.public_counter import PublicCounterController
+    from simulator.rl.foundation.public_counter import PublicCounterController
 
     observation = _observation(
         hand=["hog-rider", "cannon", "musketeer", "skeletons"],
@@ -96,7 +96,7 @@ def test_public_counter_prioritizes_cannon_for_visible_crossed_troop() -> None:
 
 
 def test_public_counter_counts_observed_hand_changes_not_proposed_actions() -> None:
-    from simulator.rl.public_counter import PublicCounterController
+    from simulator.rl.foundation.public_counter import PublicCounterController
 
     controller = PublicCounterController()
     first = _observation(
@@ -117,7 +117,7 @@ def test_public_counter_counts_observed_hand_changes_not_proposed_actions() -> N
 
 
 def test_strategic_counter_prioritizes_hog_over_opening_fireball() -> None:
-    from simulator.rl.public_counter import StrategicCounterController
+    from simulator.rl.foundation.public_counter import StrategicCounterController
 
     observation = _observation(
         hand=["fireball", "hog-rider", "cannon", "musketeer"],
@@ -130,7 +130,7 @@ def test_strategic_counter_prioritizes_hog_over_opening_fireball() -> None:
 
 
 def test_strategic_counter_uses_fireball_after_public_tower_damage() -> None:
-    from simulator.rl.public_counter import StrategicCounterController
+    from simulator.rl.foundation.public_counter import StrategicCounterController
 
     opening = _observation(
         hand=["fireball", "hog-rider", "cannon", "musketeer"],
@@ -153,7 +153,7 @@ def test_strategic_counter_uses_fireball_after_public_tower_damage() -> None:
 
 
 def test_strategic_counter_defends_a_crossing_before_attacking() -> None:
-    from simulator.rl.public_counter import StrategicCounterController
+    from simulator.rl.foundation.public_counter import StrategicCounterController
 
     observation = _observation(
         hand=["hog-rider", "cannon", "musketeer", "skeletons"],
@@ -167,7 +167,7 @@ def test_strategic_counter_defends_a_crossing_before_attacking() -> None:
 
 
 def test_strategic_counter_uses_musketeer_for_an_air_crossing() -> None:
-    from simulator.rl.public_counter import StrategicCounterController
+    from simulator.rl.foundation.public_counter import StrategicCounterController
 
     observation = _observation(
         hand=["hog-rider", "cannon", "musketeer", "skeletons"],
@@ -182,7 +182,7 @@ def test_strategic_counter_uses_musketeer_for_an_air_crossing() -> None:
 
 
 def test_strategic_counter_answers_air_even_with_a_live_cannon() -> None:
-    from simulator.rl.public_counter import StrategicCounterController
+    from simulator.rl.foundation.public_counter import StrategicCounterController
 
     # A Cannon can cover a ground escort but cannot answer the air troop.  The
     # ranged answer must therefore not depend on the no-Cannon crossing path.
@@ -201,7 +201,7 @@ def test_strategic_counter_answers_air_even_with_a_live_cannon() -> None:
 
 
 def test_strategic_counter_answers_a_crossed_air_threat_before_near_tower() -> None:
-    from simulator.rl.public_counter import StrategicCounterController
+    from simulator.rl.foundation.public_counter import StrategicCounterController
 
     observation = _observation(
         hand=["hog-rider", "cannon", "musketeer", "skeletons"],
@@ -218,7 +218,7 @@ def test_strategic_counter_answers_a_crossed_air_threat_before_near_tower() -> N
 
 
 def test_strategic_counter_recovers_critical_tower_with_cheap_card() -> None:
-    from simulator.rl.public_counter import StrategicCounterController
+    from simulator.rl.foundation.public_counter import StrategicCounterController
 
     # A live Cannon does not answer every threat, and waiting for an enemy
     # token to reach the deepest threshold can lose the tower first.  The
@@ -239,7 +239,7 @@ def test_strategic_counter_recovers_critical_tower_with_cheap_card() -> None:
 
 
 def test_strategic_counter_counterpushes_after_cannon_is_alive() -> None:
-    from simulator.rl.public_counter import StrategicCounterController
+    from simulator.rl.foundation.public_counter import StrategicCounterController
 
     observation = _observation(
         hand=["hog-rider", "cannon", "musketeer", "skeletons"],

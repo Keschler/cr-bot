@@ -5,16 +5,16 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from simulator.rl.distillation import (
+from simulator.rl.v4.distillation import (
     DistillationConfig,
     TACTICAL_FAMILIES,
     generate_dataset,
     generate_sample,
     to_torch_batch,
 )
-from simulator.rl.losses_v4 import V4SupervisedWeights, v4_supervised_loss
-from simulator.rl.model_v4 import WAIT_DURATIONS, ModelConfigV4, RecurrentV4Policy
-from simulator.rl.simulator_teacher import TeacherError, soft_placement_target, teacher_label
+from simulator.rl.v4.losses_v4 import V4SupervisedWeights, v4_supervised_loss
+from simulator.rl.v4.model_v4 import WAIT_DURATIONS, ModelConfigV4, RecurrentV4Policy
+from simulator.rl.v4.simulator_teacher import TeacherError, soft_placement_target, teacher_label
 
 
 def _config(n: int = 64, seed: int = 5) -> DistillationConfig:

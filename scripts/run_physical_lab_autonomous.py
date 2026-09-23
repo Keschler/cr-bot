@@ -42,7 +42,7 @@ from simulator.physical_lab import (
     extract_physical_run,
     hog_cannon_probe,
 )
-from simulator.physical_lab.automation import (
+from simulator.physical_lab.workflow.automation import (
     AutonomousPhysicalLab,
     AutonomousPhone,
     AutonomousSessionConfig,
@@ -54,12 +54,12 @@ from simulator.physical_lab.automation import (
     UiProfile,
     bind_spec_to_devices,
 )
-from simulator.physical_lab.calibration import CalibrationArtifact
-from simulator.physical_lab.devices import AdbPhoneController, SCRCPY_LEGAL_MAX_TIME_LIMIT_S
-from simulator.physical_lab.artifacts import hash_file, physical_output_root
-from simulator.physical_lab.campaign import CampaignCase, InteractionCampaign, load_campaign
-from simulator.physical_lab.planner import load_plan_line
-from simulator.physical_lab.schema import canonical_hash
+from simulator.physical_lab.capture.calibration import CalibrationArtifact
+from simulator.physical_lab.capture.devices import AdbPhoneController, SCRCPY_LEGAL_MAX_TIME_LIMIT_S
+from simulator.physical_lab.support.artifacts import hash_file, physical_output_root
+from simulator.physical_lab.workflow.campaign import CampaignCase, InteractionCampaign, load_campaign
+from simulator.physical_lab.workflow.planner import load_plan_line
+from simulator.physical_lab.support.schema import canonical_hash
 from simulator.storage import (
     DEFAULT_LOW_WATER_BYTES,
     DEFAULT_MAX_WORKSPACE_BYTES,
@@ -487,7 +487,7 @@ def _load_spec(
         spec,
         metadata={
             **dict(spec.metadata),
-            "autonomous_controller": "physical_lab.automation.v2",
+            "autonomous_controller": "physical_lab.workflow.automation.v2",
             "action_boundary": "reviewed_after_observation_waiter_required",
             "truth_promoted": False,
             **({

@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from simulator.rl.frontier_ppo import (
+from simulator.rl.v4.frontier_ppo import (
     FRONTIER_PPO_EPISODE_CAP,
     build_comparison_summary,
     classify_paired_sign,
@@ -35,8 +35,8 @@ def test_pinned_opponent_decks_stable():
 def test_full_match_record_deterministic_micro():
     import torch
 
-    from simulator.rl.frontier import frontier_model_config
-    from simulator.rl.v4_ppo import load_frozen_anchor
+    from simulator.rl.v4.frontier import frontier_model_config
+    from simulator.rl.v4.v4_ppo import load_frozen_anchor
 
     policy = load_frozen_anchor(CKPT, frontier_model_config(), device="cpu")
     specs = pinned_opponent_decks()[:1]
@@ -55,10 +55,10 @@ def test_full_match_record_deterministic_micro():
 def test_collect_frontier_rollout_shapes_and_rotation():
     import torch
 
-    from simulator.rl.frontier import frontier_model_config
-    from simulator.rl.frontier_ppo import collect_frontier_rollout
-    from simulator.rl.model_v4 import V4ValueHead
-    from simulator.rl.v4_ppo import load_frozen_anchor
+    from simulator.rl.v4.frontier import frontier_model_config
+    from simulator.rl.v4.frontier_ppo import collect_frontier_rollout
+    from simulator.rl.v4.model_v4 import V4ValueHead
+    from simulator.rl.v4.v4_ppo import load_frozen_anchor
 
     policy = load_frozen_anchor(CKPT, frontier_model_config(), device="cpu")
     critic = V4ValueHead(frontier_model_config().gru_hidden_dim)
@@ -88,10 +88,10 @@ def test_collect_frontier_rollout_shapes_and_rotation():
 def test_truncation_reward_bonus_and_flag_off_parity():
     import torch
 
-    from simulator.rl.frontier import frontier_model_config
-    from simulator.rl.frontier_ppo import collect_frontier_rollout
-    from simulator.rl.model_v4 import V4ValueHead
-    from simulator.rl.v4_ppo import load_frozen_anchor
+    from simulator.rl.v4.frontier import frontier_model_config
+    from simulator.rl.v4.frontier_ppo import collect_frontier_rollout
+    from simulator.rl.v4.model_v4 import V4ValueHead
+    from simulator.rl.v4.v4_ppo import load_frozen_anchor
 
     policy = load_frozen_anchor(CKPT, frontier_model_config(), device="cpu")
     critic = V4ValueHead(frontier_model_config().gru_hidden_dim)
@@ -121,10 +121,10 @@ def test_step_tower_reward_telescopes_to_lump():
 
     import torch
 
-    from simulator.rl.frontier import frontier_model_config
-    from simulator.rl.frontier_ppo import collect_frontier_rollout
-    from simulator.rl.model_v4 import V4ValueHead
-    from simulator.rl.v4_ppo import load_frozen_anchor
+    from simulator.rl.v4.frontier import frontier_model_config
+    from simulator.rl.v4.frontier_ppo import collect_frontier_rollout
+    from simulator.rl.v4.model_v4 import V4ValueHead
+    from simulator.rl.v4.v4_ppo import load_frozen_anchor
 
     policy = load_frozen_anchor(CKPT, frontier_model_config(), device="cpu")
     critic = V4ValueHead(frontier_model_config().gru_hidden_dim)
@@ -163,8 +163,8 @@ def test_step_tower_reward_telescopes_to_lump():
 def test_sealed_choice_regret_self_consistent_micro():
     import torch
 
-    from simulator.rl.frontier import frontier_model_config
-    from simulator.rl.v4_ppo import load_frozen_anchor
+    from simulator.rl.v4.frontier import frontier_model_config
+    from simulator.rl.v4.v4_ppo import load_frozen_anchor
 
     policy = load_frozen_anchor(CKPT, frontier_model_config(), device="cpu")
     entries = torch.load(SEALED_PT, map_location="cpu", weights_only=False)[:1]
@@ -184,8 +184,8 @@ def test_sealed_choice_regret_self_consistent_micro():
 def test_sealed_choice_reports_per_replica_values():
     import torch
 
-    from simulator.rl.frontier import frontier_model_config
-    from simulator.rl.v4_ppo import load_frozen_anchor
+    from simulator.rl.v4.frontier import frontier_model_config
+    from simulator.rl.v4.v4_ppo import load_frozen_anchor
 
     policy = load_frozen_anchor(CKPT, frontier_model_config(), device="cpu")
     entries = torch.load(SEALED_PT, map_location="cpu", weights_only=False)[:1]
@@ -331,8 +331,8 @@ def test_frontier_ppo_script_eval_wiring_flags():
 def test_sealed_choice_reports_paired_stats():
     import torch
 
-    from simulator.rl.frontier import frontier_model_config
-    from simulator.rl.v4_ppo import load_frozen_anchor
+    from simulator.rl.v4.frontier import frontier_model_config
+    from simulator.rl.v4.v4_ppo import load_frozen_anchor
 
     policy = load_frozen_anchor(CKPT, frontier_model_config(), device="cpu")
     entries = torch.load(SEALED_PT, map_location="cpu", weights_only=False)[:1]
@@ -354,7 +354,7 @@ def test_sealed_choice_reports_paired_stats():
 
 
 def test_sealed_choice_adaptive_replica_handling(monkeypatch):
-    import simulator.rl.frontier_ppo as fppo
+    import simulator.rl.v4.frontier_ppo as fppo
 
     calls: list[str] = []
     pattern = [0.6, -0.5] * 16  # small edge buried in alternating noise

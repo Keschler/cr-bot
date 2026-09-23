@@ -20,9 +20,9 @@ from simulator.physical_lab import (
     seal_replay_cache,
     write_run_artifacts,
 )
-from simulator.physical_lab.cli import main as physical_lab_main
-from simulator.physical_lab.devices import sha256_bytes
-from simulator.physical_lab.schema import PhysicalLabError
+from simulator.physical_lab.workflow.cli import main as physical_lab_main
+from simulator.physical_lab.capture.devices import sha256_bytes
+from simulator.physical_lab.support.schema import PhysicalLabError
 from simulator.ruleset import load_ruleset
 from simulator.validation import normalized_state_events
 
@@ -111,7 +111,7 @@ def test_run_artifacts_emit_a_sealed_observation_handoff(tmp_path: Path) -> None
     cache_argument = extractor_command.index("--write-replay-cache") + 1
     assert extractor_command[cache_argument].endswith("replay-cache-A.pkl.gz")
     declared_hash = handoff.pop("handoff_hash")
-    from simulator.physical_lab.schema import canonical_hash
+    from simulator.physical_lab.support.schema import canonical_hash
 
     assert declared_hash == canonical_hash(handoff)
 

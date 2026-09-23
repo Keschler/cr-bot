@@ -65,25 +65,25 @@ import torch
 
 import run_v4_timing_proof as t1
 from simulator.evaluation import seal_current_contracts
-from simulator.rl.distillation import (
+from simulator.rl.v4.distillation import (
     DistillationConfig,
     move_batch_to_device,
     to_torch_batch,
 )
-from simulator.rl.losses_v4 import V4SupervisedWeights, v4_supervised_loss
-from simulator.rl.model_v4 import ModelConfigV4, RecurrentV4Policy, count_parameters
-from simulator.rl.simulator_distillation import generate_sim_dataset
-from simulator.rl.search_dataset import (
+from simulator.rl.v4.losses_v4 import V4SupervisedWeights, v4_supervised_loss
+from simulator.rl.v4.model_v4 import ModelConfigV4, RecurrentV4Policy, count_parameters
+from simulator.rl.v4.simulator_distillation import generate_sim_dataset
+from simulator.rl.v4.search_dataset import (
     SearchDatasetConfig,
     generate_search_dataset,
     load_champion_actor,
 )
-from simulator.rl.search_teacher import (
+from simulator.rl.v4.search_teacher import (
     HORIZON_DECISIONS,
     MAX_BRANCHES,
     SEARCH_TEACHER_VERSION,
 )
-from simulator.rl.timing_curriculum import (
+from simulator.rl.v4.timing_curriculum import (
     TimingConfig,
     generate_timing_dataset,
     generate_timing_pool,
@@ -235,7 +235,7 @@ def _evaluate_agreement(policy, samples, device) -> dict:
 def _actor_pred(policy, records, device) -> list[dict[str, int]]:
     """Batched argmax actor actions for regret-set records."""
 
-    from simulator.rl.search_dataset import _record_to_inference_sample
+    from simulator.rl.v4.search_dataset import _record_to_inference_sample
 
     preds: list[dict[str, int]] = []
     policy.eval()
@@ -270,14 +270,14 @@ def _build_regret_set_inner(seed: int, champion, n_timing: int = 150, n_sim: int
     extend the same deterministic streams.
     """
 
-    from simulator.rl.search_dataset import (
+    from simulator.rl.v4.search_dataset import (
         _base_label,
         _new_sim_env,
         _record_from_env,
         _predict_records,
     )
     from simulator.ruleset import load_fixed_ruleset
-    from simulator.rl.opponent_pool import OpponentPool
+    from simulator.rl.foundation.opponent_pool import OpponentPool
 
     timing_config = TimingConfig(n_states=400, seed=seed)
     pool = generate_timing_pool(timing_config)
@@ -325,7 +325,7 @@ def _search_regret_set(
     state's search result with that same state's actor prediction.)
     """
 
-    from simulator.rl.search_dataset import (
+    from simulator.rl.v4.search_dataset import (
         SimSearchTask,
         TimingSearchTask,
         run_search_tasks,
@@ -595,7 +595,7 @@ def main() -> int:
         champion = load_champion_actor(args.champion, config).to(device)
     n_params = count_parameters(champion)
 
-    from simulator.rl.search_dataset import SearchDatasetConfig, generate_search_dataset
+    from simulator.rl.v4.search_dataset import SearchDatasetConfig, generate_search_dataset
 
     def search_progress(done: int, total: int) -> None:
         _log_progress(done, total, what="search", started=search_progress_started[0])

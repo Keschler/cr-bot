@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from rl.domain_randomization import (
+from rl.foundation.domain_randomization import (
     DomainRandomizationConfig,
     DomainRandomizedEnv,
     DomainVariantSampler,

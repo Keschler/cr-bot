@@ -11,14 +11,14 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from simulator.rl.model_v4 import (
+from simulator.rl.v4.model_v4 import (
     ModelConfigV4,
     RecurrentV4Policy,
     V4ValueHead,
     masks_from_legal_play,
 )
-from simulator.rl.trajectory import ActionMasks, RecurrentSequence
-from simulator.rl.v4_ppo import decode_v4_sim_actions, load_frozen_anchor
+from simulator.rl.foundation.trajectory import ActionMasks, RecurrentSequence
+from simulator.rl.v4.v4_ppo import decode_v4_sim_actions, load_frozen_anchor
 
 
 def _tiny_config() -> ModelConfigV4:
@@ -286,7 +286,7 @@ def test_inconsistent_masks_fail_closed_to_wait() -> None:
 
 def test_objective_gradients_finite() -> None:
     torch.manual_seed(8)
-    from simulator.rl.objectives import PPOObjectiveConfig, ppo_objective
+    from simulator.rl.foundation.objectives import PPOObjectiveConfig, ppo_objective
 
     policy = _policy()
     critic = V4ValueHead(64)
@@ -391,8 +391,8 @@ def _lane(source: str, archetype: str, seed: int) -> dict:
     from simulator.engine.match import DeterministicCycleController
     from simulator.env import SimulatorEnv
     from simulator.public_state_estimator import PublicStateEstimator
-    from simulator.rl.basic_scenarios import BasicMechanicsScenarioEnv, BasicScenarioConfig
-    from simulator.rl.opponent_pool import OpponentPool
+    from simulator.rl.foundation.basic_scenarios import BasicMechanicsScenarioEnv, BasicScenarioConfig
+    from simulator.rl.foundation.opponent_pool import OpponentPool
     from simulator.roster import PLAYER_DECK
     from simulator.ruleset import load_fixed_ruleset
 
@@ -421,7 +421,7 @@ def _lane(source: str, archetype: str, seed: int) -> dict:
 
 def test_decode_v4_sim_actions_types() -> None:
     from simulator.actions import PlayCardAction, WaitAction
-    from simulator.rl.model_v4 import V4ActionBatch
+    from simulator.rl.v4.model_v4 import V4ActionBatch
 
     actions = V4ActionBatch(
         mode=torch.tensor([0, 1]),
@@ -456,7 +456,7 @@ def test_load_frozen_anchor_freezes_and_verifies(tmp_path) -> None:
 def test_v4_ppo_dry_run_collect_and_update() -> None:
     """End-to-end wiring proof on live sims: collect, update, stay finite."""
 
-    from simulator.rl.v4_ppo import (
+    from simulator.rl.v4.v4_ppo import (
         collect_v4_rollout,
         load_frozen_anchor,
         update_v4_ppo,
@@ -551,7 +551,7 @@ def _forward_logits(policy, batch: int = 3):
 
 
 def test_per_head_kl_identity_and_shift() -> None:
-    from simulator.rl.v4_ppo import per_head_kl
+    from simulator.rl.v4.v4_ppo import per_head_kl
 
     torch.manual_seed(13)
     policy = _policy()
@@ -596,7 +596,7 @@ def test_per_head_kl_finite_with_illegal_entries() -> None:
     0 * (-inf - -inf) on illegal entries was never guarded.
     """
 
-    from simulator.rl.v4_ppo import per_head_kl
+    from simulator.rl.v4.v4_ppo import per_head_kl
 
     torch.manual_seed(14)
     policy = _policy()
@@ -625,8 +625,8 @@ def test_per_head_kl_finite_with_illegal_entries() -> None:
 
 
 def test_anchor_agreement_metrics() -> None:
-    from simulator.rl.model_v4 import V4ActionBatch
-    from simulator.rl.v4_ppo import _anchor_agreement
+    from simulator.rl.v4.model_v4 import V4ActionBatch
+    from simulator.rl.v4.v4_ppo import _anchor_agreement
 
     post = V4ActionBatch(
         mode=torch.tensor([0, 1, 1, 1]),
@@ -647,8 +647,8 @@ def test_anchor_agreement_metrics() -> None:
 
 
 def test_decode_drift_tracks_duration_flips() -> None:
-    from simulator.rl.model_v4 import V4ActionBatch
-    from simulator.rl.v4_ppo import _decode_drift
+    from simulator.rl.v4.model_v4 import V4ActionBatch
+    from simulator.rl.v4.v4_ppo import _decode_drift
 
     first = V4ActionBatch(
         mode=torch.tensor([0, 0, 1, 0]),
@@ -670,7 +670,7 @@ def test_decode_drift_tracks_duration_flips() -> None:
 
 
 def test_potential_anneal_schedule() -> None:
-    from simulator.rl.v4_ppo import potential_anneal_weight
+    from simulator.rl.v4.v4_ppo import potential_anneal_weight
 
     assert potential_anneal_weight(0.1, 0, 5) == 0.1
     assert potential_anneal_weight(0.1, 4, 5) == 0.0
@@ -684,7 +684,7 @@ def test_potential_anneal_schedule() -> None:
 
 
 def test_deterministic_collect_is_reproducible() -> None:
-    from simulator.rl.v4_ppo import collect_v4_rollout
+    from simulator.rl.v4.v4_ppo import collect_v4_rollout
 
     def run_once() -> list:
         torch.manual_seed(31)
@@ -709,7 +709,7 @@ def test_deterministic_collect_is_reproducible() -> None:
 
 
 def test_monte_carlo_returns_and_distribution() -> None:
-    from simulator.rl.v4_ppo import monte_carlo_returns, return_distribution
+    from simulator.rl.v4.v4_ppo import monte_carlo_returns, return_distribution
 
     rewards = torch.tensor([[1.0, 0.0, 0.0], [0.0, 0.0, 2.0]])
     terminated = torch.tensor(
@@ -731,7 +731,7 @@ def test_monte_carlo_returns_and_distribution() -> None:
 
 
 def test_fit_value_head_learns_linear_target() -> None:
-    from simulator.rl.v4_ppo import V4ValueHead, fit_value_head
+    from simulator.rl.v4.v4_ppo import V4ValueHead, fit_value_head
 
     torch.manual_seed(3)
     critic = V4ValueHead(8)

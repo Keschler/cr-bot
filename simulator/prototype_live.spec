@@ -111,10 +111,10 @@ binaries = [_helper_binary("adb"), _helper_binary("ffmpeg")]
 # policy, and dataset tooling that the live loop never imports.
 hiddenimports = [
     "scripts.run_seed_inference",
-    "simulator.physical_lab.prototype_controller",
-    "simulator.rl.prototype",
-    "simulator.rl._compat",
-    "simulator.rl.provenance",
+    "simulator.physical_lab.workflow.prototype_controller",
+    "simulator.rl.foundation.inference_checkpoint",
+    "simulator.rl.foundation._compat",
+    "simulator.rl.foundation.provenance",
     "katacr.constants.label_list",
     "katacr.build_dataset.utils.split_part",
     "katacr.build_dataset.utils.datapath_manager",

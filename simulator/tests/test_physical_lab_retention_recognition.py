@@ -9,9 +9,9 @@ from types import SimpleNamespace
 import pytest
 
 from simulator.physical_lab import LIFECYCLE_PATH, finalize_retention_records, hog_cannon_probe
-from simulator.physical_lab.artifacts import ArtifactRef, hash_file, register_retention_records
-from simulator.physical_lab.cache import seal_replay_cache
-from simulator.physical_lab.schema import PhysicalLabError, canonical_hash
+from simulator.physical_lab.support.artifacts import ArtifactRef, hash_file, register_retention_records
+from simulator.physical_lab.support.cache import seal_replay_cache
+from simulator.physical_lab.support.schema import PhysicalLabError, canonical_hash
 
 
 def _write_recognized_cache(path: Path) -> None:

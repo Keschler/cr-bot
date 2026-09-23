@@ -33,22 +33,22 @@ from simulator.physical_lab import (
     assign_capture_group_split,
     finalize_retention_records,
 )
-from simulator.physical_lab.artifacts import ArtifactRef, hash_file, register_retention_records
-from simulator.physical_lab.cli import main as physical_lab_main
-from simulator.physical_lab.cli import _adb_runner, _bound_device_specs, _parser, _prepare_command
-from simulator.physical_lab.devices import DeviceInfo, sha256_bytes
-from simulator.physical_lab.devices import AdbPhoneController
-from simulator.physical_lab.cache import ReplayCacheError, seal_replay_cache
-from simulator.physical_lab.planner import load_readiness_questions
-from simulator.physical_lab.observation import ObservationManifest
-from simulator.physical_lab.replay import replay_hash_pair
-from simulator.physical_lab.schema import canonical_hash
-from simulator.physical_lab.automation import (
+from simulator.physical_lab.support.artifacts import ArtifactRef, hash_file, register_retention_records
+from simulator.physical_lab.workflow.cli import main as physical_lab_main
+from simulator.physical_lab.workflow.cli import _adb_runner, _bound_device_specs, _parser, _prepare_command
+from simulator.physical_lab.capture.devices import DeviceInfo, sha256_bytes
+from simulator.physical_lab.capture.devices import AdbPhoneController
+from simulator.physical_lab.support.cache import ReplayCacheError, seal_replay_cache
+from simulator.physical_lab.workflow.planner import load_readiness_questions
+from simulator.physical_lab.sensing.observation import ObservationManifest
+from simulator.physical_lab.workflow.replay import replay_hash_pair
+from simulator.physical_lab.support.schema import canonical_hash
+from simulator.physical_lab.workflow.automation import (
     FIXED_HOG_CYCLE_DECK,
     bind_spec_to_devices,
     AutomationError,
 )
-import simulator.physical_lab.cli as physical_lab_cli
+import simulator.physical_lab.workflow.cli as physical_lab_cli
 
 
 def test_experiment_is_canonical_and_round_trips(tmp_path: Path) -> None:
@@ -250,7 +250,7 @@ def test_one_phone_cli_prepare_returns_to_lobby_after_fixed_order_without_start(
     assert calls == ["configure", "testspiel", "lobby"]
     assert payload["testspiel"]["returned_to_lobby"] is True
     unsigned = {key: value for key, value in payload.items() if key != "manifest_hash"}
-    from simulator.physical_lab.schema import canonical_hash
+    from simulator.physical_lab.support.schema import canonical_hash
 
     assert payload["manifest_hash"] == canonical_hash(unsigned)
 

@@ -203,7 +203,7 @@ cases can then be re-scored with:
 
 ```bash
 PYTHONPATH=.:src outputs/venv-cpu/bin/python -c \
-  'from simulator.physical_lab.cli import main; raise SystemExit(main(["evaluate-stored", "--json-out", "outputs/simulator/fidelity_media/physical_lab/stored-evaluation.json"]))'
+  'from simulator.physical_lab.workflow.cli import main; raise SystemExit(main(["evaluate-stored", "--json-out", "outputs/simulator/fidelity_media/physical_lab/stored-evaluation.json"]))'
 ```
 
 Prepare a selected case, with B hosting fixed deck order:
