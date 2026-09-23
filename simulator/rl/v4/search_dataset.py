@@ -57,11 +57,13 @@ try:
     )
     from .timing_teacher import TIMING_TEACHER_VERSION, timing_teacher_label
     from .search_teacher import (
+        ACTIVE_CONTINUATION_HORIZON,
         HORIZON_DECISIONS,
         MAX_BRANCHES,
         SEARCH_TEACHER_VERSION,
         BranchAction,
         SearchResult,
+        outcome_tested_placement_target,
         score_branch,
         search_state,
     )
@@ -95,17 +97,19 @@ except ImportError:  # pragma: no cover - top-level ``rl`` imports
     )
     from simulator.rl.v4.timing_teacher import TIMING_TEACHER_VERSION, timing_teacher_label
     from simulator.rl.v4.search_teacher import (
+        ACTIVE_CONTINUATION_HORIZON,
         HORIZON_DECISIONS,
         MAX_BRANCHES,
         SEARCH_TEACHER_VERSION,
         BranchAction,
         SearchResult,
+        outcome_tested_placement_target,
         score_branch,
         search_state,
     )
 
 
-SEARCH_GENERATOR_VERSION: str = "search-v4-1"
+SEARCH_GENERATOR_VERSION: str = "search-v4-2"
 
 ADOPT_MARGIN_ACTION: float = 0.15
 """Minimum regret(rule) to adopt a different mode/card from search."""
@@ -177,6 +181,15 @@ class SearchDatasetConfig:
     family_min_share: float = 0.08
     timing_family_weights: Any = None
     sim_family_mix: Any = None
+    # ``wait`` preserves the original Stage-2 labels.  ``active`` enables
+    # paired active continuations and sequential match records; it is opt-in
+    # because it costs more simulator work and is not an expert oracle.
+    continuation_mode: str = "wait"
+    teacher_mode: str | None = None
+    continuation_horizon: int | None = None
+    opponent_strategy: str = "deterministic-cycle"
+    placement_target_mode: str = "tested"
+    active_match_decisions: int = 64
 
     def __post_init__(self) -> None:
         if type(self.n_states) is not int or self.n_states <= 0:
@@ -189,6 +202,44 @@ class SearchDatasetConfig:
                 raise TypeError(f"{name} must be a dict or None")
             if isinstance(value, dict):
                 object.__setattr__(self, name, dict(value))
+        # ``teacher_mode`` is a compatibility spelling used by early Stage-2
+        # experiments.  Keep it as an alias while storing one canonical mode.
+        mode = self.teacher_mode if self.teacher_mode is not None else self.continuation_mode
+        if not isinstance(mode, str):
+            raise TypeError("continuation_mode must be a string")
+        mode = mode.strip().casefold().replace("_", "-")
+        if mode == "active":
+            mode = "active-rule"
+        if mode not in {"wait", "active-rule", "active-policy"}:
+            raise ValueError(
+                "continuation_mode must be wait, active, active-rule, or active-policy"
+            )
+        if mode == "active-policy":
+            raise ValueError("active-policy requires a public controller callback; use search_state directly or active-rule")
+        object.__setattr__(self, "continuation_mode", mode)
+        if self.continuation_horizon is not None:
+            if type(self.continuation_horizon) is not int or self.continuation_horizon < 0:
+                raise ValueError("continuation_horizon must be a non-negative integer or None")
+        if type(self.active_match_decisions) is not int or self.active_match_decisions <= 0:
+            raise ValueError("active_match_decisions must be a positive integer")
+        if self.placement_target_mode not in {"tested", "legacy"}:
+            raise ValueError("placement_target_mode must be tested or legacy")
+        if not isinstance(self.opponent_strategy, str) or not self.opponent_strategy.strip():
+            raise ValueError("opponent_strategy must be a non-empty string")
+
+    @property
+    def is_active(self) -> bool:
+        return self.continuation_mode != "wait"
+
+    @property
+    def effective_horizon(self) -> int:
+        """Resolve the branch horizon, with a longer active default."""
+
+        if self.continuation_horizon is not None:
+            return int(self.continuation_horizon)
+        if self.is_active:
+            return max(int(self.horizon), int(ACTIVE_CONTINUATION_HORIZON))
+        return int(self.horizon)
 
 
 def _hash_order(seed: int, key: str) -> int:
@@ -225,6 +276,27 @@ def _base_label(record: dict[str, Any]) -> TeacherTarget:
 
 
 def _record_to_inference_sample(record: dict[str, Any]) -> DistillationSample:
+    event_history = np.asarray(
+        record.get("event_history", np.zeros((EVENT_HISTORY_LEN, EVENT_DIM), dtype=np.float32)),
+        dtype=np.float32,
+    )
+    if event_history.shape != (EVENT_HISTORY_LEN, EVENT_DIM):
+        raise ValueError("invalid event_history shape")
+    opp_probs = np.asarray(
+        record.get("opp_hand_probs", np.full((BELIEF_CARD_COUNT,), 1.0 / BELIEF_CARD_COUNT)),
+        dtype=np.float32,
+    )
+    if opp_probs.shape != (BELIEF_CARD_COUNT,):
+        raise ValueError("invalid opp_hand_probs shape")
+    opp_out = np.asarray(
+        record.get("opp_out_of_cycle", np.zeros((BELIEF_CARD_COUNT,), dtype=bool)),
+        dtype=bool,
+    )
+    if opp_out.shape != (BELIEF_CARD_COUNT,):
+        raise ValueError("invalid opp_out_of_cycle shape")
+    opp_interval = np.asarray(record.get("opp_elixir_interval", [0.0, 10.0]), dtype=np.float32)
+    if opp_interval.shape != (2,):
+        raise ValueError("invalid opp_elixir_interval shape")
     return DistillationSample(
         family=record["family"],
         raster=np.ascontiguousarray(record["raster"], dtype=np.float32),
@@ -232,10 +304,10 @@ def _record_to_inference_sample(record: dict[str, Any]) -> DistillationSample:
         entity_tokens=np.ascontiguousarray(record["entity_tokens"], dtype=np.float32),
         entity_mask=np.ascontiguousarray(record["entity_mask"], dtype=bool),
         hand_tokens=np.ascontiguousarray(record["hand_tokens"], dtype=np.float32),
-        opp_hand_probs=np.full((BELIEF_CARD_COUNT,), 1.0 / BELIEF_CARD_COUNT, dtype=np.float32),
-        opp_out_of_cycle=np.zeros((BELIEF_CARD_COUNT,), dtype=bool),
-        opp_elixir_interval=np.asarray([0.0, 10.0], dtype=np.float32),
-        event_history=np.zeros((EVENT_HISTORY_LEN, EVENT_DIM), dtype=np.float32),
+        opp_hand_probs=opp_probs,
+        opp_out_of_cycle=opp_out,
+        opp_elixir_interval=opp_interval,
+        event_history=event_history,
         legal_play=np.ascontiguousarray(record["legal_play"], dtype=bool),
         legal_wait=bool(record["legal_wait"]),
         own_elixir=float(record["own_elixir"]),
@@ -245,6 +317,212 @@ def _record_to_inference_sample(record: dict[str, Any]) -> DistillationSample:
     )
 
 
+def group_search_sequences(
+    samples: Sequence[DistillationSample],
+    *,
+    sequence_length: int | None = None,
+) -> list[list[DistillationSample]]:
+    """Group search samples into ordered recurrent trajectories.
+
+    Active records carry a stable ``seq_id`` and ``sequence_offset`` in their
+    provenance.  Samples without a sequence id are independent states and
+    therefore become one step trajectories.  A positive ``sequence_length``
+    optionally windows long trajectories; each window is a complete training
+    sequence and starts with a reset, so no hidden state is fabricated across
+    windows.
+    """
+
+    if sequence_length is not None:
+        if type(sequence_length) is not int or sequence_length < 0:
+            raise ValueError("sequence_length must be a non-negative integer or None")
+        window = int(sequence_length) or None
+    else:
+        window = None
+    grouped: dict[str, list[tuple[int, DistillationSample]]] = {}
+    for index, sample in enumerate(samples):
+        provenance = sample.provenance
+        seq_id = str(provenance.get("seq_id", ""))
+        if not seq_id:
+            # Independent sim-natural records may legitimately have identical
+            # state hashes in a legacy checkpoint.  Their list position keeps
+            # them independent rather than accidentally sharing hidden state.
+            seq_id = f"__independent__:{index}"
+        offset = int(
+            provenance.get(
+                "sequence_offset",
+                provenance.get("offset", index),
+            )
+        )
+        grouped.setdefault(seq_id, []).append((offset, sample))
+    trajectories: list[list[DistillationSample]] = []
+    for seq_id in sorted(grouped):
+        runs: list[list[DistillationSample]] = []
+        previous = None
+        for offset, sample in sorted(grouped[seq_id], key=lambda item: item[0]):
+            # Missing decisions and repeated training examples cannot share GRU state.
+            if previous is None or offset != previous + 1:
+                runs.append([])
+            runs[-1].append(sample)
+            previous = offset
+        for ordered in runs:
+            if window is None:
+                trajectories.append(ordered)
+            else:
+                trajectories.extend(
+                    ordered[start : start + window]
+                    for start in range(0, len(ordered), window)
+                )
+    return trajectories
+
+
+def iter_search_sequence_batches(
+    samples: Sequence[DistillationSample],
+    *,
+    batch_size: int,
+    sequence_length: int | None = None,
+    shuffle: bool = False,
+    seed: int = 0,
+) -> list[list[list[DistillationSample]]]:
+    """Return deterministic batches of equal-length recurrent trajectories.
+
+    Sequences of different lengths are kept in separate batches so padding
+    cannot contribute fabricated labels to the supervised loss.  The return
+    value is a list of batches; each batch is suitable for
+    :func:`to_torch_sequence_batch`.
+    """
+
+    if type(batch_size) is not int or batch_size <= 0:
+        raise ValueError("batch_size must be a positive integer")
+    trajectories = group_search_sequences(samples, sequence_length=sequence_length)
+    by_length: dict[int, list[list[DistillationSample]]] = {}
+    for trajectory in trajectories:
+        if trajectory:
+            by_length.setdefault(len(trajectory), []).append(trajectory)
+    batches: list[list[list[DistillationSample]]] = []
+    for length in sorted(by_length):
+        group = by_length[length]
+        if shuffle:
+            rng = np.random.default_rng(_stable_seed(int(seed), "sequence-order", length))
+            order = rng.permutation(len(group)).tolist()
+            group = [group[int(index)] for index in order]
+        batches.extend(
+            group[start : start + batch_size]
+            for start in range(0, len(group), batch_size)
+        )
+    if shuffle:
+        rng = np.random.default_rng(_stable_seed(int(seed), "batch-order"))
+        order = rng.permutation(len(batches)).tolist()
+        batches = [batches[int(index)] for index in order]
+    return batches
+
+
+def to_torch_sequence_batch(
+    sequences: Sequence[Sequence[DistillationSample]],
+) -> dict[str, object]:
+    """Stack equal-length sample trajectories into ``[B, T, ...]`` tensors."""
+
+    import torch
+
+    from ..foundation.trajectory import ActionMasks
+    from .model_v4 import V4ActionBatch
+
+    if not sequences or any(not sequence for sequence in sequences):
+        raise ValueError("sequences must contain at least one non-empty trajectory")
+    lengths = {len(sequence) for sequence in sequences}
+    if len(lengths) != 1:
+        raise ValueError("all recurrent trajectories in a batch must have equal length")
+    batch = len(sequences)
+    time = next(iter(lengths))
+    first = sequences[0][0]
+    rows, cols = first.legal_play.shape[1], first.legal_play.shape[2]
+
+    def stack(name: str, dtype: torch.dtype) -> torch.Tensor:
+        return torch.stack(
+            [
+                torch.stack(
+                    [torch.as_tensor(getattr(sample, name), dtype=dtype) for sample in sequence]
+                )
+                for sequence in sequences
+            ]
+        )
+
+    raster = stack("raster", torch.float32)
+    glob = stack("global_features", torch.float32)
+    entities = stack("entity_tokens", torch.float32)
+    entity_mask = stack("entity_mask", torch.bool)
+    hand = stack("hand_tokens", torch.float32)
+    probs = stack("opp_hand_probs", torch.float32)
+    out = stack("opp_out_of_cycle", torch.bool)
+    elixir = stack("opp_elixir_interval", torch.float32)
+    events = stack("event_history", torch.float32)
+    legal_play = torch.stack(
+        [
+            torch.stack(
+                [torch.as_tensor(sample.legal_play, dtype=torch.bool) for sample in sequence]
+            )
+            for sequence in sequences
+        ]
+    )
+    mode = torch.tensor(
+        [[sample.target.mode for sample in sequence] for sequence in sequences],
+        dtype=torch.long,
+    )
+    card_mask = legal_play.reshape(batch, time, 4, -1).any(dim=-1)
+    mode_mask = torch.stack(
+        (
+            torch.ones(batch, time, dtype=torch.bool),
+            card_mask.any(dim=-1),
+        ),
+        dim=-1,
+    )
+    masks = ActionMasks(mode=mode_mask, card=card_mask, placement=legal_play)
+    actions = V4ActionBatch(
+        mode=mode,
+        card_slot=torch.tensor(
+            [[sample.target.card_slot for sample in sequence] for sequence in sequences],
+            dtype=torch.long,
+        ),
+        placement=torch.tensor(
+            [
+                [[sample.target.row, sample.target.col] for sample in sequence]
+                for sequence in sequences
+            ],
+            dtype=torch.long,
+        ),
+        wait_duration=torch.tensor(
+            [[sample.target.wait_duration_idx for sample in sequence] for sequence in sequences],
+            dtype=torch.long,
+        ),
+    )
+    soft = torch.stack(
+        [
+            torch.stack(
+                [torch.as_tensor(sample.soft_placement, dtype=torch.float32) for sample in sequence]
+            )
+            for sequence in sequences
+        ]
+    ).reshape(batch, time, rows, cols)
+    reset = torch.zeros(batch, time, dtype=torch.bool)
+    reset[:, 0] = True
+    return {
+        "raster": raster,
+        "global_features": glob,
+        "entities": entities,
+        "entity_mask": entity_mask,
+        "hand_tokens": hand,
+        "opp_hand_probs": probs,
+        "opp_out_of_cycle": out,
+        "opp_elixir_interval": elixir,
+        "event_history": events,
+        "masks": masks,
+        "actions": actions,
+        "soft_placement": soft,
+        "reset_mask": reset,
+        "families": [[sample.family for sample in sequence] for sequence in sequences],
+        "sequence_ids": [
+            str(sequence[0].provenance.get("seq_id", "")) for sequence in sequences
+        ],
+    }
 def _predict_records(
     policy: Any, records: list[dict[str, Any]], device: Any = None
 ) -> list[dict[str, int]]:
@@ -266,23 +544,37 @@ def _predict_records(
         except StopIteration:
             device = torch.device("cpu")
     preds: list[dict[str, int]] = []
+    was_training = policy.training
     policy.eval()
+    active = any(record.get("seq_id", "").startswith("active:") for record in records)
+    hidden = None
+    previous_seq = None
+    previous_offset = None
+    chunk_size = 1 if active else 256
     with torch.no_grad():
-        for start in range(0, len(records), 256):
-            chunk = [_record_to_inference_sample(r) for r in records[start : start + 256]]
+        for start in range(0, len(records), chunk_size):
+            chunk = [_record_to_inference_sample(r) for r in records[start : start + chunk_size]]
             batch = move_batch_to_device(to_torch_batch(chunk), device)
-            logits, _, _ = policy(
-                batch["raster"],
-                batch["global_features"],
-                batch["entities"],
-                batch["entity_mask"],
-                batch["hand_tokens"],
-                batch["opp_hand_probs"],
-                batch["opp_out_of_cycle"],
-                batch["opp_elixir_interval"],
-                batch["event_history"],
-                batch["reset_mask"],
-            )
+            if active:
+                record = records[start]
+                seq = record.get("seq_id")
+                offset = int(record.get("sequence_offset", 0))
+                reset = seq != previous_seq or previous_offset is None or offset != previous_offset + 1
+                batch["reset_mask"].fill_(reset)
+                if reset:
+                    hidden = None
+                previous_seq, previous_offset = seq, offset
+            if active:
+                logits, _, hidden = policy.forward_step(
+                    batch, hidden=hidden, reset_mask=batch["reset_mask"]
+                )
+            else:
+                logits, _, _ = policy(
+                    batch["raster"], batch["global_features"], batch["entities"],
+                    batch["entity_mask"], batch["hand_tokens"], batch["opp_hand_probs"],
+                    batch["opp_out_of_cycle"], batch["opp_elixir_interval"],
+                    batch["event_history"], batch["reset_mask"],
+                )
             _, cols = logits.placement.shape[-2:]
             for i in range(len(chunk)):
                 mode = int(logits.mode[i, 0].argmax())
@@ -294,7 +586,7 @@ def _predict_records(
                 preds.append(
                     {"mode": mode, "card": card, "row": cell // cols, "col": cell % cols}
                 )
-    policy.train()
+    policy.train(was_training)
     return preds
 
 
@@ -338,7 +630,15 @@ def _new_sim_env(context_ruleset: Any, pool: OpponentPool, seed: int, index: int
     return env, family, source
 
 
-def _record_from_env(env: Any, family: str, source: str, context_ruleset: Any) -> dict[str, Any] | None:
+def _record_from_env(
+    env: Any,
+    family: str,
+    source: str,
+    context_ruleset: Any,
+    *,
+    allow_partial_hand: bool = False,
+    public_memory: Any = None,
+) -> dict[str, Any] | None:
     """Observe + label a live reset state (shared by sim build and replay)."""
 
     state = env.state
@@ -350,11 +650,22 @@ def _record_from_env(env: Any, family: str, source: str, context_ruleset: Any) -
         return None
     player_state = state.players[0]
     hand = list(player_state.hand)
-    if len(hand) != 4:
+    if len(hand) != 4 and not allow_partial_hand:
         return None
     elixir = float(player_state.elixir_milli) / 1000.0
     try:
-        hand_tokens = build_hand_tokens(hand, elixir)
+        if len(hand) == 4:
+            hand_tokens = build_hand_tokens(hand, elixir)
+        else:
+            # Match the active continuation encoder's zero rows for cards
+            # waiting on a refill.  The legal mask still protects those
+            # missing slots from accidental actions.
+            hand_tokens = np.zeros((4, HAND_TOKEN_FEATURES.__len__()), dtype=np.float32)
+            for slot, card in enumerate(hand[:4]):
+                row = np.asarray(build_hand_tokens([card] * 4, elixir)[0], dtype=np.float32)
+                row = np.array(row, copy=True)
+                row[2] = np.float32(slot / 3.0)
+                hand_tokens[slot] = row
     except TeacherError:
         return None
     legal_play = np.array(observation.legal_play, dtype=bool)
@@ -394,6 +705,10 @@ def _record_from_env(env: Any, family: str, source: str, context_ruleset: Any) -
         "offset": 0,
         "legal_cards": legal_cards,
         "play_legal": bool(legal_cards > 0),
+        "event_history": np.zeros((EVENT_HISTORY_LEN, EVENT_DIM), dtype=np.float32),
+        "opp_hand_probs": np.full((BELIEF_CARD_COUNT,), 1.0 / BELIEF_CARD_COUNT, dtype=np.float32),
+        "opp_out_of_cycle": np.zeros((BELIEF_CARD_COUNT,), dtype=bool),
+        "opp_elixir_interval": np.asarray([0.0, 10.0], dtype=np.float32),
         "provenance": {
             "generator": SEARCH_GENERATOR_VERSION,
             "timing_family": family,
@@ -417,6 +732,9 @@ def _search_live(
     max_branches: int,
     seed: int,
     actor_cells: Sequence[tuple[int, int, int]] | None = None,
+    continuation_mode: str = "wait",
+    opponent_strategy: str = "deterministic-cycle",
+    learner_controller: Any = None,
 ) -> dict[str, Any]:
     """Run search on a live env and score the actor's action in-set.
 
@@ -444,6 +762,9 @@ def _search_live(
         seed=seed,
         source=str(record["provenance"].get("source", "")),
         family=str(record["family"]),
+        continuation_mode=continuation_mode,
+        opponent_strategy=opponent_strategy,
+        learner_controller=learner_controller,
     )
     if result.state_hash != record["provenance"]["state_hash"]:
         raise TeacherError("replay state hash mismatch; generation is not deterministic")
@@ -491,7 +812,22 @@ def _search_live(
                 ):
                     extra = score_branch(
                         env,
-                        BranchAction(kind="play", slot=slot, row=row, col=col),
+                        BranchAction(
+                            kind="play",
+                            slot=slot,
+                            row=row,
+                            col=col,
+                            card_key=(
+                                _hand_keys(record)[slot]
+                                if slot < len(_hand_keys(record))
+                                else ""
+                            ),
+                        ),
+                        continuation_mode=continuation_mode,
+                        continuation_seed=int(
+                            _stable_seed(seed, "continuation", result.state_hash)
+                        ),
+                        opponent_strategy=opponent_strategy,
                         horizon=horizon,
                     )
                     actor_score = float(extra.score)
@@ -590,11 +926,20 @@ def _to_search_sample(
     regret_rule: float,
     placement_gap: float,
     index: int,
+    placement_target_mode: str = "tested",
 ) -> DistillationSample:
     result: SearchResult = search["result"]
     legal = np.asarray(record["legal_play"], dtype=bool)
     if target.mode == 1:
-        soft = soft_placement_target(target.row, target.col, np.asarray(legal[target.card_slot]))
+        if placement_target_mode == "tested":
+            soft = outcome_tested_placement_target(
+                search["result"],
+                slot=int(target.card_slot),
+                legal=np.asarray(legal[target.card_slot]),
+                fallback=(int(target.row), int(target.col)),
+            )
+        else:
+            soft = soft_placement_target(target.row, target.col, np.asarray(legal[target.card_slot]))
     else:
         soft = np.zeros((32, 18), dtype=np.float32)
     branches = [
@@ -611,6 +956,12 @@ def _to_search_sample(
     ]
     best = result.best
     provenance = dict(record["provenance"])
+    # Active records keep sequence metadata on the live record while timing
+    # records already carry it in provenance.  Materialize both forms here so
+    # torch checkpoints and downstream sequence batching retain the same
+    # recurrent boundaries after serialization.
+    seq_id = str(record.get("seq_id", provenance.get("seq_id", "")))
+    offset = int(record.get("offset", provenance.get("offset", 0)))
     provenance.update(
         {
             "generator": SEARCH_GENERATOR_VERSION,
@@ -639,6 +990,19 @@ def _to_search_sample(
                 else None
             ),
             "placement_gap": round(float(placement_gap), 4),
+            "placement_target_mode": str(placement_target_mode),
+            "seq_id": seq_id,
+            "offset": offset,
+            "sequence_offset": int(record.get("sequence_offset", offset)),
+            "tested_placement_cells": sorted(
+                {
+                    (int(b.action.row), int(b.action.col))
+                    for b in result.branches
+                    if b.action.kind == "play"
+                    and int(b.action.slot) == int(target.card_slot)
+                    and bool(legal[target.card_slot, b.action.row, b.action.col])
+                }
+            ),
         }
     )
     return DistillationSample(
@@ -648,10 +1012,21 @@ def _to_search_sample(
         entity_tokens=np.ascontiguousarray(record["entity_tokens"], dtype=np.float32),
         entity_mask=np.ascontiguousarray(record["entity_mask"], dtype=bool),
         hand_tokens=np.ascontiguousarray(record["hand_tokens"], dtype=np.float32),
-        opp_hand_probs=np.full((BELIEF_CARD_COUNT,), 1.0 / BELIEF_CARD_COUNT, dtype=np.float32),
-        opp_out_of_cycle=np.zeros((BELIEF_CARD_COUNT,), dtype=bool),
-        opp_elixir_interval=np.asarray([0.0, 10.0], dtype=np.float32),
-        event_history=np.zeros((EVENT_HISTORY_LEN, EVENT_DIM), dtype=np.float32),
+        opp_hand_probs=np.asarray(
+            record.get("opp_hand_probs", np.full((BELIEF_CARD_COUNT,), 1.0 / BELIEF_CARD_COUNT)),
+            dtype=np.float32,
+        ),
+        opp_out_of_cycle=np.asarray(
+            record.get("opp_out_of_cycle", np.zeros((BELIEF_CARD_COUNT,), dtype=bool)),
+            dtype=bool,
+        ),
+        opp_elixir_interval=np.asarray(
+            record.get("opp_elixir_interval", [0.0, 10.0]), dtype=np.float32
+        ),
+        event_history=np.asarray(
+            record.get("event_history", np.zeros((EVENT_HISTORY_LEN, EVENT_DIM), dtype=np.float32)),
+            dtype=np.float32,
+        ),
         legal_play=np.ascontiguousarray(record["legal_play"], dtype=bool),
         legal_wait=bool(record["legal_wait"]),
         own_elixir=float(record["own_elixir"]),
@@ -676,6 +1051,231 @@ def _ambiguous(record: dict[str, Any]) -> bool:
     return record["target"].mode == 0 and bool(record["play_legal"])
 
 
+def _sync_public_memory(env: Any, estimator: Any) -> Any:
+    """Synchronize public event memory for active-match records.
+
+    ``sync_from_env`` is the one authoritative adapter.  Keeping this call
+    strict matters: a fallback event translation cannot reproduce public card
+    identity, cycle state, or the estimator's elixir bookkeeping faithfully.
+    """
+
+    sync = getattr(estimator, "sync_from_env", None)
+    if not callable(sync):
+        raise TeacherError("active records require PublicStateEstimator.sync_from_env")
+    snapshot = sync(env, viewer=0)
+    if snapshot is None:
+        raise TeacherError("PublicStateEstimator.sync_from_env returned no snapshot")
+    return snapshot
+
+
+def _active_record_memory(record: dict[str, Any], snapshot: Any, *, match_id: str, offset: int) -> None:
+    """Attach estimator memory and sequence provenance to one record."""
+
+    record["event_history"] = np.asarray(snapshot.event_history, dtype=np.float32)
+    record["opp_hand_probs"] = np.asarray(snapshot.opp_hand_probs, dtype=np.float32)
+    record["opp_out_of_cycle"] = np.asarray(snapshot.opp_out_of_cycle, dtype=bool)
+    record["opp_elixir_interval"] = np.asarray(
+        [snapshot.opp_elixir_lo, snapshot.opp_elixir_hi], dtype=np.float32
+    )
+    record["seq_id"] = str(match_id)
+    record["offset"] = int(offset)
+    record["sequence_offset"] = int(offset)
+    prov = record["provenance"]
+    tick_seconds = float(prov.get("tick_seconds", 0.0))
+    hand = list(record.get("hand_keys", ()))
+    spell_in_hand = any(
+        bool(record["hand_tokens"][slot, _SPELL_COL] > 0.5)
+        for slot in range(min(len(hand), record["hand_tokens"].shape[0]))
+    )
+    phase = "opening" if tick_seconds < 60.0 else ("mid-match" if tick_seconds < 180.0 else "spell-endgame")
+    tags = []
+    if spell_in_hand:
+        tags.append("card-preservation")
+    if int(np.asarray(snapshot.opp_out_of_cycle, dtype=bool).sum()) > 0:
+        tags.append("outcycling")
+    if phase == "spell-endgame":
+        tags.append("spell-endgame")
+    prov.update(
+        {
+            "seq_id": str(match_id),
+            "offset": int(offset),
+            "sequence_offset": int(offset),
+            "active_match": True,
+            "active_match_id": str(match_id),
+            "sequence_offset": int(offset),
+            "active_phase": phase,
+            "strategic_tags": tags,
+            "out_of_cycle_count": int(np.asarray(snapshot.opp_out_of_cycle, dtype=bool).sum()),
+            "opp_elixir_interval": [
+                round(float(snapshot.opp_elixir_lo), 4),
+                round(float(snapshot.opp_elixir_hi), 4),
+            ],
+        }
+    )
+
+
+def _generate_active_records(config: SearchDatasetConfig) -> list[dict[str, Any]]:
+    """Generate sequential public records from active two-sided matches.
+
+    The learner side follows the public rule teacher only to make a stable
+    trajectory.  Each captured state keeps an isolated simulator fork for
+    outcome search; the training target still comes from the public
+    observation and the counterfactual evaluator.  This is a controller
+    baseline, not a claim of expert play.
+    """
+
+    try:
+        from ...actions import WaitAction
+        from ...public_state_estimator import PublicStateEstimator
+        from ..foundation.opponent_pool import make_opponent_controller
+        from .search_teacher import _public_rule_action
+    except ImportError:  # pragma: no cover - top-level ``rl`` imports
+        from simulator.actions import WaitAction
+        from simulator.public_state_estimator import PublicStateEstimator
+        from simulator.rl.foundation.opponent_pool import make_opponent_controller
+        from simulator.rl.v4.search_teacher import _public_rule_action
+    ruleset = load_fixed_ruleset()
+    pool = OpponentPool(ruleset, seed=config.seed)
+    family_mix = dict(config.sim_family_mix) if config.sim_family_mix else None
+    target_records = max(int(config.n_states), 1)
+    match_count = max(
+        1,
+        (target_records + int(config.active_match_decisions) - 1)
+        // int(config.active_match_decisions),
+    )
+    records: list[dict[str, Any]] = []
+    for match_index in range(match_count):
+        env, family, source = _new_sim_env(
+            ruleset, pool, config.seed, match_index, config.seed, family_mix
+        )
+        match_id = f"active:{config.seed}:{match_index}:{family}"
+        estimator = PublicStateEstimator()
+        estimator.reset()
+        controller = make_opponent_controller(
+            config.opponent_strategy,
+            seed=_stable_seed(config.seed, "active-opponent", match_index),
+        )
+        try:
+            for offset in range(int(config.active_match_decisions)):
+                if env.state is None or env.state.terminal or len(records) >= target_records:
+                    break
+                snapshot = _sync_public_memory(env, estimator)
+                record = _record_from_env(
+                    env,
+                    family,
+                    source,
+                    ruleset,
+                    allow_partial_hand=True,
+                )
+                if record is None:
+                    break
+                record["sim_index"] = match_index
+                record["active_state_fork"] = env.fork()
+                _active_record_memory(record, snapshot, match_id=match_id, offset=offset)
+                record["provenance"]["opponent_strategy"] = config.opponent_strategy
+                records.append(record)
+                mine = _public_rule_action(env, 0)
+                opponent = controller.choose_action(env.engine, env.state, 1)
+                if mine is None:
+                    mine = WaitAction(0)
+                env.step_v2((mine, opponent))
+                # Sync after the decision so the next record contains public
+                # deployment/death/damage history from this transition.
+                _sync_public_memory(env, estimator)
+                if env.state is None or env.state.terminal:
+                    break
+        finally:
+            del env
+        if len(records) >= target_records:
+            break
+    return records[:target_records]
+
+
+def _generate_active_search_dataset(
+    config: SearchDatasetConfig,
+    champion: Any,
+    *,
+    progress: Any = None,
+) -> tuple[list[DistillationSample], dict[str, Any]]:
+    """Build the opt-in active sequential Stage-2 dataset in-process."""
+
+    records = _generate_active_records(config)
+    if not records:
+        raise TeacherError("active match generation produced no usable records")
+    preds = _predict_records(champion, records)
+    candidates: list[dict[str, Any]] = []
+    for index, (record, pred) in enumerate(zip(records, preds)):
+        record["champ"] = pred
+        record["base_target"] = _base_label(record)
+        env = record.pop("active_state_fork")
+        try:
+            search = _search_live(
+                env,
+                record,
+                pred,
+                horizon=config.effective_horizon,
+                max_branches=config.max_branches,
+                seed=_stable_seed(config.seed, "active-search", index),
+                continuation_mode=config.continuation_mode,
+                opponent_strategy=config.opponent_strategy,
+            )
+        finally:
+            del env
+        target, adopted, regret, placement_gap = _adopt_target(
+            record, search["result"], record["base_target"]
+        )
+        candidates.append(
+            {
+                "record": record,
+                "target": target,
+                "adopted": adopted,
+                "regret_rule": regret,
+                "placement_gap": placement_gap,
+                "search": search,
+                "base": record["base_target"],
+                "sim": True,
+                "spell": _spell_opp(record),
+                "transition": False,
+            }
+        )
+        if progress is not None:
+            progress(index + 1, len(records))
+    # Active records are already in sequential match order.  Keep the same
+    # deterministic hash order used by legacy selection only for the optional
+    # quota swaps, so paired state order remains reproducible.
+    n_total = min(config.n_states, len(candidates))
+    selected = candidates[:n_total]
+    stats = _search_stats(selected)
+    stats.update(
+        {
+            "n_searched": len(candidates),
+            "active": True,
+            "continuation_mode": config.continuation_mode,
+            "opponent_strategy": config.opponent_strategy,
+            "horizon": int(config.effective_horizon),
+            "max_branches": int(config.max_branches),
+            "active_match_decisions": int(config.active_match_decisions),
+            "n_active_matches": len({c["record"]["seq_id"] for c in selected}),
+            "sequential": True,
+        }
+    )
+    samples = [
+        _to_search_sample(
+            c["record"],
+            c["target"],
+            c["search"],
+            c["base"],
+            c["adopted"],
+            c["regret_rule"],
+            c["placement_gap"],
+            index,
+            config.placement_target_mode,
+        )
+        for index, c in enumerate(selected)
+    ]
+    return samples, stats
+
+
 def generate_search_dataset(
     config: SearchDatasetConfig,
     champion: Any,
@@ -690,6 +1290,12 @@ def generate_search_dataset(
     ``progress``, when given, is called as ``progress(done, total)`` as
     search tasks complete.
     """
+
+    if config.is_active:
+        # Active trajectories retain recurrent history and live simulator
+        # forks, so they are deliberately generated in one process.  The
+        # legacy state/replay path below remains parallelizable and unchanged.
+        return _generate_active_search_dataset(config, champion, progress=progress)
 
     # Pass 1a: timing pool records (no searching yet).
     timing_config = TimingConfig(n_states=config.timing_pool_states, seed=config.seed,
@@ -767,9 +1373,11 @@ def generate_search_dataset(
                 offsets=tuple(int(timing_pool[i]["offset"]) for i in order),
                 records=tuple(timing_pool[i] for i in order),
                 champs=tuple(timing_pool[i]["champ"] for i in order),
-                horizon=config.horizon,
+                horizon=config.effective_horizon,
                 max_branches=config.max_branches,
                 seed=config.seed,
+                continuation_mode=config.continuation_mode,
+                opponent_strategy=config.opponent_strategy,
             )
         )
     # Sim states: select indices, then rebuild + search while envs are live.
@@ -807,12 +1415,14 @@ def generate_search_dataset(
             index=int(record["sim_index"]),
             record=record,
             champ=record["champ"],
-            horizon=config.horizon,
+            horizon=config.effective_horizon,
             max_branches=config.max_branches,
             seed=config.seed,
             pool_seed=config.seed,
             distill_seed=config.seed,
             sim_family_mix=sim_mix,
+            continuation_mode=config.continuation_mode,
+            opponent_strategy=config.opponent_strategy,
         )
         for record in sim_to_search
     ]
@@ -938,12 +1548,18 @@ def generate_search_dataset(
     stats["sim_family_mix"] = (
         dict(config.sim_family_mix) if config.sim_family_mix else "default"
     )
-    stats["horizon"] = int(config.horizon)
+    stats["horizon"] = int(config.effective_horizon)
     stats["max_branches"] = int(config.max_branches)
+    stats["continuation_mode"] = config.continuation_mode
+    stats["opponent_strategy"] = config.opponent_strategy
+    stats["placement_target_mode"] = config.placement_target_mode
+    stats["active"] = False
+    stats["sequential"] = False
     samples = [
         _to_search_sample(
             c["record"], c["target"], c["search"], c["base"],
             c["adopted"], c["regret_rule"], c["placement_gap"], index,
+            config.placement_target_mode,
         )
         for index, c in enumerate(selected)
     ]
@@ -1021,6 +1637,8 @@ class TimingSearchTask:
     max_branches: int
     seed: int
     cells_list: tuple[Any, ...] = ()
+    continuation_mode: str = "wait"
+    opponent_strategy: str = "deterministic-cycle"
 
 
 @dataclass(frozen=True)
@@ -1037,6 +1655,8 @@ class SimSearchTask:
     distill_seed: int
     actor_cells: Any = ()
     sim_family_mix: Any = None
+    continuation_mode: str = "wait"
+    opponent_strategy: str = "deterministic-cycle"
 
 
 def _worker_init() -> None:
@@ -1091,6 +1711,8 @@ def _run_timing_task(task: TimingSearchTask) -> list[tuple[int, dict[str, Any]]]
             env, rec, champ,
             horizon=task.horizon, max_branches=task.max_branches, seed=task.seed,
             actor_cells=cell_lookup.get(int(offset)),
+            continuation_mode=task.continuation_mode,
+            opponent_strategy=task.opponent_strategy,
         )
         found.append((int(offset), search))
 
@@ -1116,6 +1738,8 @@ def _run_sim_task(task: SimSearchTask) -> dict[str, Any]:
             env, task.record, task.champ,
             horizon=task.horizon, max_branches=task.max_branches, seed=task.seed,
             actor_cells=tuple(task.actor_cells) if task.actor_cells else None,
+            continuation_mode=task.continuation_mode,
+            opponent_strategy=task.opponent_strategy,
         )
     finally:
         del env
@@ -1194,6 +1818,9 @@ __all__ = [
     "SimSearchTask",
     "TimingSearchTask",
     "generate_search_dataset",
+    "group_search_sequences",
+    "iter_search_sequence_batches",
     "load_champion_actor",
     "run_search_tasks",
+    "to_torch_sequence_batch",
 ]

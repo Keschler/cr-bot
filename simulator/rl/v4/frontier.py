@@ -26,7 +26,7 @@ except ImportError:  # pragma: no cover - top-level ``rl`` imports
     from simulator.rl.v4.model_v4 import ModelConfigV4
 
 
-FRONTIER_VERSION: str = "frontier-v4-0"
+FRONTIER_VERSION: str = "frontier-v4-2"
 
 CHAMPION_CHECKPOINT: str = "outputs/v4/stage2_12k_v2_e12_s12.pt"
 
@@ -278,6 +278,8 @@ def collect_pool_match(
     base = SimulatorEnv(BattleEngine(ruleset, validate_every_tick=False))
     env = base
     env.reset_v2(seed=match_seed, decks=decks, shuffle_decks=True)
+    from .v4_ppo import configure_v4_runtime
+    configure_v4_runtime(policy)
     estimator = PublicStateEstimator()
     hidden = policy.initial_hidden(1, device=device)
     needs_reset = True
@@ -293,6 +295,7 @@ def collect_pool_match(
             obs = env.observe_v2_for_viewer(0)
             hand = list(state.players[0].hand[:4])
             elixir = float(state.players[0].elixir_milli) / 1000.0
+            estimator.sync_from_env(env, viewer=0)
             snap = estimator.snapshot()
             inputs = _v4_step_inputs(obs, hand, elixir, snap)
             F = torch.float32
@@ -422,6 +425,8 @@ def _rule_disagree(dec: dict[str, Any]) -> float:
         return 1.0
     if int(rule["mode"]) == 1 and int(rule["slot"]) != int(learn["slot"]):
         return 0.5
+    if int(rule["mode"]) == 1 and any(int(rule.get(k, 0)) != int(learn.get(k, 0)) for k in ("row", "col")):
+        return 0.5
     return 0.0
 
 
@@ -529,7 +534,7 @@ def select_candidates(
             break
         if s["state_hash"] in seen_hashes:
             continue
-        if kept and s["t"] - kept[-1]["t"] < cfg.min_spacing:
+        if any(abs(s["t"] - previous["t"]) < cfg.min_spacing for previous in kept):
             continue
         if sig_counts.get(s["signature"], 0) >= cfg.per_signature_cap:
             continue

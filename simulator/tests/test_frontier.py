@@ -139,7 +139,12 @@ def test_headroom_bin_and_horizon_stability():
     assert headroom_bin(0.5, (0.1, 0.3)) == "large"
 
     def v(h, src, reg):
-        return {"state_hash": h, "best_source": src, "regret": reg}
+        actions = {"rule": (1, 0, 5, 10), "policy-top": (1, 1, 7, 15), "wait": (0, 0, 0, 0)}
+        mode, slot, row, col = actions[src]
+        return {
+            "state_hash": h, "best_source": src, "regret": reg,
+            "best_action": {"mode": mode, "slot": slot, "row": row, "col": col},
+        }
 
     reports = {
         64: [v("a", "rule", 0.2), v("b", "policy-top", 0.1), v("c", "rule", -0.05), v("d", "rule", 0.3), v("e", "wait", 0.15)],
@@ -295,3 +300,27 @@ def test_live_replay_branch_harness_micro():
         eval_cfg=EvalConfig(horizon=3, n_replicas=1, max_branches=3), device="cpu",
     )
     assert verdict["class"] in ("solved", "frontier", "hopeless")
+
+
+def test_spacing_is_absolute_against_all_previously_selected_states(monkeypatch):
+    from simulator.rl.v4 import frontier
+    decisions = _decisions()
+    scores = {40: 3.0, 20: 2.0, 42: 1.0}
+    def score(rows, t, cfg):
+        return dict(t=t, score=scores.get(t, 0), state_hash=f'hash{t}',
+                    signature=str(t), rule_disagree=1 if t in scores else 0,
+                    deterioration=1, transition=False)
+    monkeypatch.setattr(frontier, 'score_decision', score)
+    match = {'config': {'archetype': 'beatdown', 'match_index': 0}, 'decisions': decisions}
+    selected = select_candidates(match, FilterConfig(min_spacing=8))
+    assert [c['t'] for c in selected] == [40, 20]
+
+
+def test_lost_position_is_not_solved_even_when_actions_tie():
+    assert classify_verdict({'regret': 0, 'stability': 1, 'best_mean': -2})[0] == 'hopeless'
+
+
+def test_placement_disagreement_can_enter_filter():
+    from simulator.rl.v4.frontier import _rule_disagree
+    assert _rule_disagree({'rule': {'mode': 1, 'slot': 0, 'row': 5, 'col': 2},
+                           'learner': {'mode': 1, 'slot': 0, 'row': 6, 'col': 2}}) == 0.5

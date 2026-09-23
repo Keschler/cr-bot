@@ -2,7 +2,7 @@
 
 Given a real simulator state, the search teacher forks the environment per
 candidate branch (WAIT plus legal card plays at candidate cells), rolls each
-branch forward a short deterministic horizon with a frozen WAIT opponent,
+branch forward with either the legacy WAIT continuation or paired active controllers,
 and scores the resulting simulator outcomes.  It produces the best action,
 per-branch scores, and regrets — outcome-derived supervision that moves
 beyond rule imitation.
@@ -23,19 +23,28 @@ Stage-2 data uses target/viewer 0.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Sequence
+import hashlib
+from typing import Any, Callable, Sequence
 
 import numpy as np
 
 try:
-    from ..actions import PlayCardAction
+    from ...actions import PlayCardAction
     from .simulator_teacher import TeacherError, TeacherTarget
 except ImportError:  # pragma: no cover - top-level ``rl`` imports
     from simulator.actions import PlayCardAction
     from simulator.rl.v4.simulator_teacher import TeacherError, TeacherTarget
 
 
-SEARCH_TEACHER_VERSION: str = "search-v4-0"
+SEARCH_TEACHER_VERSION: str = "search-v4-1"
+
+# ``wait`` is intentionally the compatibility default.  The active modes
+# below are an opt-in continuation teacher: the first action is still
+# evaluated from the exact same fork, then both sides keep making actions for
+# the remainder of the branch.  Keeping the mode explicit makes reports and
+# old checkpoints unambiguous.
+CONTINUATION_MODES: tuple[str, ...] = ("wait", "active", "active-rule", "active-policy")
+ACTIVE_CONTINUATION_HORIZON: int = 64
 
 HORIZON_DECISIONS: int = 28
 """Default rollout horizon per branch (7s of game time).
@@ -60,6 +69,13 @@ W_TOWER_TAKEN: float = 2.0
 W_THREAT_REMOVED: float = 1.0
 W_SURVIVOR: float = 0.25
 W_ELIXIR_SPENT: float = 1.0
+
+
+def _stable_seed(seed: int, *parts: object) -> int:
+    """Derive a process-independent seed for paired active continuations."""
+
+    payload = "\x1f".join((str(seed), *(str(part) for part in parts))).encode()
+    return int.from_bytes(hashlib.sha256(payload).digest()[:8], "big")
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +115,8 @@ class SearchResult:
     branches: list[BranchScore] = field(default_factory=list)
     best_index: int = 0
     second_gap: float = 0.0
+    continuation_mode: str = "wait"
+    opponent_strategy: str = "wait"
 
     @property
     def best(self) -> BranchScore:
@@ -107,6 +125,27 @@ class SearchResult:
     @property
     def branch_count(self) -> int:
         return len(self.branches)
+
+
+def _normalize_continuation_mode(value: str) -> str:
+    """Return a canonical continuation mode or fail closed.
+
+    ``active`` and ``active-rule`` are equivalent aliases.  The shorter name
+    is convenient for the Stage-2 CLI; the longer name documents that the
+    learner side uses the public rule teacher when no policy callback is
+    supplied.
+    """
+
+    if not isinstance(value, str):
+        raise ValueError("continuation_mode must be a string")
+    mode = value.strip().casefold().replace("_", "-")
+    if mode == "active":
+        return "active-rule"
+    if mode not in CONTINUATION_MODES:
+        raise ValueError(
+            f"continuation_mode must be one of {CONTINUATION_MODES}, got {value!r}"
+        )
+    return mode
 
 
 def _tower_totals(state: Any) -> dict[int, tuple[int, int]]:
@@ -134,6 +173,7 @@ def score_outcome(
     after_state: Any,
     deployed_uids: Sequence[int],
     elixir_spent_milli: int,
+    deployed_max_hp: int | None = None,
     player: int = 0,
 ) -> tuple[float, dict[str, float]]:
     """Score a branch outcome from authoritative snapshots.
@@ -160,15 +200,21 @@ def score_outcome(
         removed = 0.0
     survived = 0.0
     if deployed_uids and (removed > 0.0 or dealt > 0.0):
-        current = [
-            after_state.entities[uid]
-            for uid in deployed_uids
-            if uid in after_state.entities and after_state.entities[uid].alive
-        ]
-        if current:
-            survived = sum(max(0, int(e.hp)) for e in current) / max(
-                1, sum(max(1, int(e.max_hp)) for e in current)
-            )
+        # Keep the denominator tied to the units deployed by this branch.
+        # Filtering dead units before summing max HP makes a destroyed swarm
+        # look like a full-health survivor whenever one member remains.
+        recorded_max_hp = 0
+        deployed_current_hp = 0
+        for uid in deployed_uids:
+            entity = after_state.entities.get(uid)
+            if entity is None:
+                continue
+            recorded_max_hp += max(1, int(entity.max_hp))
+            if entity.alive:
+                deployed_current_hp += max(0, int(entity.hp))
+        denominator = int(deployed_max_hp) if deployed_max_hp is not None else recorded_max_hp
+        if denominator:
+            survived = deployed_current_hp / denominator
     spent = max(0, int(elixir_spent_milli)) / 10_000.0
     terms = {
         "tower_dealt": float(dealt),
@@ -288,12 +334,82 @@ def candidate_actions(
     return ordered
 
 
+def tested_placement_target(
+    result: SearchResult,
+    *,
+    slot: int,
+    legal: np.ndarray,
+    fallback: tuple[int, int] | None = None,
+    temperature: float = 0.25,
+) -> np.ndarray:
+    """Build a placement distribution from outcome-tested cells only.
+
+    A common source of accidental label leakage is to turn one selected cell
+    into a small geometric neighborhood.  Those neighboring cells may never
+    have been simulated and therefore have no outcome evidence.  This helper
+    uses the scored branches for ``slot`` as the support of the distribution;
+    scores become a deterministic softmax weight.  If the search did not
+    include that slot, the explicit fallback is represented as a one-hot
+    target.  The fallback is useful for legacy records and is still safe: it
+    never invents neighboring support.
+
+    ``legal`` is checked even though search candidates are already legal.  It
+    keeps this public boundary fail-closed for callers that deserialize or
+    filter branch records before constructing a target.
+    """
+
+    mask = np.asarray(legal, dtype=bool)
+    if mask.ndim != 2:
+        raise ValueError("legal placement mask must be two-dimensional")
+    if type(slot) is not int or not 0 <= slot:
+        raise ValueError("slot must be a non-negative integer")
+    if not np.isfinite(float(temperature)) or float(temperature) <= 0.0:
+        raise ValueError("temperature must be finite and positive")
+    rows, cols = mask.shape
+    tested: dict[tuple[int, int], float] = {}
+    for branch in result.branches:
+        action = branch.action
+        if action.kind != "play" or int(action.slot) != slot:
+            continue
+        cell = (int(action.row), int(action.col))
+        if not (0 <= cell[0] < rows and 0 <= cell[1] < cols and bool(mask[cell])):
+            continue
+        # Duplicate cells can arise when the rule and actor proposals agree;
+        # retaining the best observed score keeps the evidence monotonic.
+        tested[cell] = max(float(branch.score), tested.get(cell, -float("inf")))
+    if not tested:
+        if fallback is None:
+            raise TeacherError(f"search did not test any legal placement for slot {slot}")
+        cell = (int(fallback[0]), int(fallback[1]))
+        if not (0 <= cell[0] < rows and 0 <= cell[1] < cols and bool(mask[cell])):
+            raise TeacherError("fallback placement is not legal")
+        out = np.zeros_like(mask, dtype=np.float32)
+        out[cell] = np.float32(1.0)
+        return out
+    values = np.asarray(list(tested.values()), dtype=np.float64)
+    values = np.exp((values - float(values.max())) / float(temperature))
+    values /= max(float(values.sum()), np.finfo(np.float64).tiny)
+    out = np.zeros((rows, cols), dtype=np.float32)
+    for cell, weight in zip(tested, values):
+        out[cell] = np.float32(weight)
+    # Float32 conversion can leave a tiny normalization error.  Normalize a
+    # second time so the training loss receives a proper probability table.
+    total = float(out.sum())
+    if total <= 0.0:  # pragma: no cover - guarded by tested above
+        raise TeacherError("tested placement distribution has no mass")
+    return out / np.float32(total)
+
+
+# A descriptive alias for callers that prefer the provenance terminology.
+outcome_tested_placement_target = tested_placement_target
+
+
 def _fork_child(env: Any) -> Any:
     """Fork preferring the lightweight physics-only path.
 
-    Branch rollouts never build observations (see :func:`_rollout`), so
-    the search path uses ``fork_for_search`` when available: identical
-    physics state/RNG isolation without copying observation memories.
+    The search path uses ``fork_for_search`` when available: identical
+    physics state/RNG isolation without copying observation memories. Active
+    continuations rebuild public observations from the child event history.
     Falls back to full :meth:`fork` for foreign env implementations.
     """
 
@@ -360,7 +476,7 @@ def _rollout(env: Any, horizon: int) -> int:
 
     ticks_per_decision = int(getattr(env, "decision_interval_ticks", 5) or 5)
     ran = 0
-    for _ in range(horizon):
+    for decision in range(horizon):
         state = env.state
         if state is None or state.terminal:
             break
@@ -374,6 +490,168 @@ def _rollout(env: Any, horizon: int) -> int:
     return ran
 
 
+def _partial_hand_tokens(hand: Sequence[str], elixir: float) -> np.ndarray:
+    """Encode a transient public hand without importing the model stack.
+
+    During an active continuation a card draw can happen between decisions,
+    so the hand can briefly contain fewer than four entries.  The regular
+    distillation encoder intentionally rejects that state.  Missing rows are
+    zero and therefore unavailable to the public rule teacher.
+    """
+
+    try:
+        from .simulator_distillation import build_hand_tokens
+    except ImportError:  # pragma: no cover - top-level ``rl`` imports
+        from simulator.rl.v4.simulator_distillation import build_hand_tokens
+    tokens = np.zeros((4, 16), dtype=np.float32)
+    for slot, card in enumerate(list(hand)[:4]):
+        row = np.asarray(build_hand_tokens([card] * 4, float(elixir))[0], dtype=np.float32)
+        row = np.array(row, copy=True)
+        row[2] = np.float32(slot / 3.0)
+        tokens[slot] = row
+    return tokens
+
+
+def _public_rule_action(env: Any, player: int = 0) -> Any:
+    """Choose one active learner action from the public observation only."""
+
+    try:
+        from ...actions import PlayCardAction, WaitAction
+        from .simulator_teacher import teacher_label
+    except ImportError:  # pragma: no cover - top-level ``rl`` imports
+        from simulator.actions import PlayCardAction, WaitAction
+        from simulator.rl.v4.simulator_teacher import teacher_label
+
+    observation = env.observe_v2_for_viewer(int(player))
+    state = env.state
+    player_state = state.players[int(player)]
+    hand = list(player_state.hand)
+    elixir = float(player_state.elixir_milli) / 1000.0
+    target = teacher_label(
+        hand_tokens=_partial_hand_tokens(hand, elixir),
+        entity_tokens=np.asarray(observation.entity_tokens),
+        entity_mask=np.asarray(observation.entity_mask, dtype=bool),
+        legal_play=np.asarray(observation.legal_play, dtype=bool),
+        legal_wait=bool(observation.legal_wait),
+        own_elixir=elixir,
+    )
+    if int(target.mode) == 0:
+        return WaitAction(int(player))
+    return PlayCardAction(
+        int(player), int(target.card_slot), (int(target.col), int(target.row))
+    )
+
+
+def _active_policy_action(
+    env: Any,
+    observation: Any,
+    player: int,
+    learner_controller: Any,
+) -> Any:
+    """Call a public-policy continuation callback with a small API surface.
+
+    The callback receives ``(observation, player)`` when callable.  A
+    controller object with ``choose_public_action`` is also accepted.  We do
+    not pass authoritative state to this side of the branch, preserving the
+    actor's public information boundary.
+    """
+
+    if learner_controller is None:
+        return _public_rule_action(env, player)
+    chooser = getattr(learner_controller, "choose_public_action", None)
+    if callable(chooser):
+        return chooser(observation, player=int(player))
+    if callable(learner_controller):
+        try:
+            return learner_controller(observation, player=int(player))
+        except TypeError:
+            return learner_controller(observation, int(player))
+    raise TypeError(
+        "learner_controller must be callable or expose choose_public_action(observation, player=...)"
+    )
+
+
+def _active_opponent(
+    *,
+    strategy: str,
+    seed: int,
+    factory: Callable[[str, int], Any] | None = None,
+) -> Any:
+    """Build an isolated deterministic opponent for one branch."""
+
+    if factory is not None:
+        return factory(str(strategy), int(seed))
+    try:
+        from ..foundation.opponent_pool import make_opponent_controller
+    except ImportError:  # pragma: no cover - top-level ``rl`` imports
+        from simulator.rl.foundation.opponent_pool import make_opponent_controller
+    return make_opponent_controller(str(strategy), seed=int(seed))
+
+
+def _rollout_active(
+    env: Any,
+    horizon: int,
+    *,
+    continuation_seed: int = 0,
+    opponent_strategy: str = "deterministic-cycle",
+    learner_controller: Any = None,
+    opponent_factory: Callable[[str, int], Any] | None = None,
+) -> int:
+    """Advance a branch with both players active for ``horizon`` decisions.
+
+    Every branch receives the same ``continuation_seed`` and starts with a
+    fresh opponent controller.  A deterministic controller therefore sees
+    common random numbers across branches, while branch physics still differ
+    only because of the forced first action.  Opponent decisions use the
+    authoritative simulator state; learner continuation uses a public
+    observation or an explicitly supplied public-policy callback.
+    """
+
+    try:
+        from ...actions import WaitAction
+    except ImportError:  # pragma: no cover - top-level ``rl`` imports
+        from simulator.actions import WaitAction
+    if type(horizon) is not int or horizon < 0:
+        raise ValueError("horizon must be a non-negative integer")
+    opponent = _active_opponent(
+        strategy=opponent_strategy,
+        seed=int(continuation_seed),
+        factory=opponent_factory,
+    )
+    from copy import deepcopy
+
+    learner_controller = deepcopy(learner_controller)
+    ran = 0
+    for decision in range(horizon):
+        state = getattr(env, "state", None)
+        if state is None or state.terminal:
+            break
+        observation = env.observe_v2_for_viewer(0)
+        # The forced branch action already occupies the first decision.
+        mine = WaitAction(0) if decision == 0 else _active_policy_action(env, observation, 0, learner_controller)
+        if mine is None:
+            mine = WaitAction(0)
+        opponent_action = opponent.choose_action(env.engine, state, 1)
+        if hasattr(env, "step_v2"):
+            result = env.step_v2((mine, opponent_action))
+            terminated = bool(getattr(result, "terminated", False))
+            truncated = bool(getattr(result, "truncated", False))
+        else:  # pragma: no cover - foreign env compatibility
+            env.step((mine, opponent_action))
+            terminated = bool(getattr(env.state, "terminal", False))
+            truncated = False
+        ran += 1
+        if terminated or truncated or env.state is None or env.state.terminal:
+            break
+    return ran
+
+
+def _continuation_seed(seed: int, state_hash: str) -> int:
+    """Return the paired-randomness seed used by every branch of a state."""
+
+    return int(_stable_seed(int(seed), "continuation", str(state_hash)))
+
+
 def score_branch(
     env: Any,
     action: BranchAction,
@@ -383,6 +661,11 @@ def score_branch(
     before_towers: dict[int, tuple[int, int]] | None = None,
     before_threats: dict[int, tuple[int, int]] | None = None,
     elixir_costs: dict[str, int] | None = None,
+    continuation_mode: str = "wait",
+    continuation_seed: int = 0,
+    opponent_strategy: str = "deterministic-cycle",
+    learner_controller: Any = None,
+    opponent_factory: Callable[[str, int], Any] | None = None,
 ) -> BranchScore:
     """Fork, apply one branch, roll out, and score (child discarded).
 
@@ -394,13 +677,34 @@ def score_branch(
 
     if player != 0:
         raise ValueError("search branching currently supports target_player 0 only")
+    mode = _normalize_continuation_mode(continuation_mode)
+    if mode == "active-policy" and learner_controller is None:
+        raise ValueError("active-policy requires learner_controller")
     child = _fork_child(env)
     if before_towers is None:
         before_towers = _tower_totals(child.state)
     if before_threats is None:
         before_threats = _threat_health(child.state, owner=1 - player)
     deployed, cost = _apply_branch(child, action, player, elixir_costs)
-    steps_run = _rollout(child, horizon)
+    # Snapshot this before the rollout can remove dead entities from the
+    # state's entity map.  The survival denominator must include every unit
+    # deployed by the branch, including units that die later.
+    deployed_max_hp = sum(
+        max(1, int(child.state.entities[uid].max_hp))
+        for uid in deployed
+        if uid in child.state.entities
+    )
+    if mode == "wait":
+        steps_run = _rollout(child, horizon)
+    else:
+        steps_run = _rollout_active(
+            child,
+            horizon,
+            continuation_seed=int(continuation_seed),
+            opponent_strategy=str(opponent_strategy),
+            learner_controller=learner_controller,
+            opponent_factory=opponent_factory,
+        )
     after_towers = _tower_totals(child.state)
     score, terms = score_outcome(
         before_towers=before_towers,
@@ -409,6 +713,7 @@ def score_branch(
         after_state=child.state,
         deployed_uids=deployed,
         elixir_spent_milli=cost,
+        deployed_max_hp=deployed_max_hp,
         player=player,
     )
     return BranchScore(action=action, score=score, terms=terms, steps_run=steps_run)
@@ -427,11 +732,16 @@ def search_state(
     seed: int = 0,
     source: str = "",
     family: str = "",
+    continuation_mode: str = "wait",
+    opponent_strategy: str = "deterministic-cycle",
+    learner_controller: Any = None,
+    opponent_factory: Callable[[str, int], Any] | None = None,
 ) -> SearchResult:
     """Run the full counterfactual search on one live environment state."""
 
     if env.state is None or env.state.terminal:
         raise TeacherError("cannot search a missing or terminal state")
+    mode = _normalize_continuation_mode(continuation_mode)
     state_hash = env.state.state_hash()
     branches = candidate_actions(
         legal_play=np.asarray(legal_play, dtype=bool),
@@ -450,11 +760,20 @@ def search_state(
         costs = _elixir_costs(list(hand_keys), env.engine.ruleset)
     except AttributeError:
         costs = None
+    # One continuation seed is shared by every branch.  Deriving it from the
+    # parent state (rather than the candidate action) is what makes active
+    # branch comparisons paired/common-random-number comparisons.
+    continuation_seed = _continuation_seed(int(seed), state_hash)
     scored = [
         score_branch(
             env, action, player=player, horizon=horizon,
             before_towers=parent_towers, before_threats=parent_threats,
             elixir_costs=costs,
+            continuation_mode=mode,
+            continuation_seed=continuation_seed,
+            opponent_strategy=opponent_strategy,
+            learner_controller=learner_controller,
+            opponent_factory=opponent_factory,
         )
         for action in branches
     ]
@@ -470,10 +789,14 @@ def search_state(
         branches=scored,
         best_index=int(best),
         second_gap=float(second_gap),
+        continuation_mode=mode,
+        opponent_strategy=("wait" if mode == "wait" else str(opponent_strategy)),
     )
 
 
 __all__ = [
+    "ACTIVE_CONTINUATION_HORIZON",
+    "CONTINUATION_MODES",
     "HORIZON_DECISIONS",
     "MAX_BRANCHES",
     "SEARCH_TEACHER_VERSION",
@@ -486,7 +809,10 @@ __all__ = [
     "BranchScore",
     "SearchResult",
     "candidate_actions",
+    "_continuation_seed",
+    "outcome_tested_placement_target",
     "score_branch",
     "score_outcome",
     "search_state",
+    "tested_placement_target",
 ]

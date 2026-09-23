@@ -40,7 +40,7 @@ except ImportError:  # pragma: no cover - top-level ``rl`` imports
     )
 
 
-FRONTIER_EVAL_VERSION: str = "frontier-eval-v4-0"
+FRONTIER_EVAL_VERSION: str = "frontier-eval-v4-3"
 
 # Terminal outcome bonus in continuation value (tower-fraction units).
 WIN_BONUS: float = 2.0
@@ -64,6 +64,14 @@ class EvalConfig:
     n_replicas: int = 4
     max_branches: int = 7
     replica_seed_base: int = 0
+    # ``replica_indices`` lets a caller reserve disjoint discovery and
+    # confirmation replicas while keeping the seed derivation stable.  When
+    # omitted, ``range(n_replicas)`` is used.
+    replica_indices: tuple[int, ...] | None = None
+    # A confirmation pass may freeze the action selected by a discovery pass.
+    # It still evaluates the complete branch set for diagnostics, but records
+    # paired metrics for this action without selecting a new target.
+    frozen_action: dict[str, Any] | None = None
     # Extra opponent specs for the robustness round; None -> collection spec.
     opponent_specs: list[dict[str, Any]] | None = None
 
@@ -153,7 +161,7 @@ def _step_inputs(policy_inputs: dict[str, np.ndarray], device: Any) -> dict[str,
     }
 
 
-def _observe_inputs(env: Any, device: Any) -> tuple[dict[str, np.ndarray], np.ndarray, list[str], float]:
+def _observe_inputs(env: Any, device: Any, estimator: Any = None) -> tuple[dict[str, np.ndarray], np.ndarray, list[str], float]:
     try:
         from .v4_ppo import _v4_step_inputs
     except ImportError:  # pragma: no cover
@@ -164,7 +172,10 @@ def _observe_inputs(env: Any, device: Any) -> tuple[dict[str, np.ndarray], np.nd
     state = env.state
     hand = list(state.players[0].hand[:4])
     elixir = float(state.players[0].elixir_milli) / 1000.0
-    inputs = _v4_step_inputs(obs, hand, elixir, PublicStateEstimator().snapshot())
+    if estimator is None:
+        estimator = PublicStateEstimator()
+    estimator.sync_from_env(env, viewer=0)
+    inputs = _v4_step_inputs(obs, hand, elixir, estimator.snapshot())
     legal = np.array(obs.legal_play, dtype=bool, copy=True)
     return inputs, legal, hand, elixir
 
@@ -174,9 +185,9 @@ def replay_to_state(
 ) -> tuple[Any, Any]:
     """Replay the recorded prefix to reach decision ``t`` exactly.
 
-    Single loop: force both recorded actions per decision while stacking
-    policy inputs; one batched ``policy.forward`` then yields the exact
-    recurrent hidden state at ``t``.  Raises on ``state_hash`` mismatch.
+    Force recorded actions and advance the actor memory once per public
+    observation, including decision ``t``. Supports every GRU layer without
+    retaining a full tensor prefix. Raises on ``state_hash`` mismatch.
     Returns ``(env, hidden)`` with hidden ``[layers, 1, hidden]``.
     """
 
@@ -186,37 +197,28 @@ def replay_to_state(
     if not (0 <= t < len(decisions)):
         raise ValueError(f"candidate t={t} outside recorded prefix len={len(decisions)}")
     env = _fresh_env(match)
-    stacked: list[dict[str, Any]] = []
+    from simulator.public_state_estimator import PublicStateEstimator
+    from .v4_ppo import configure_v4_runtime
+    configure_v4_runtime(policy)
+    policy.eval()
+    estimator = PublicStateEstimator()
+    hidden = policy.initial_hidden(1, device=device)
     with torch.no_grad():
         for i in range(t + 1):
             rec = decisions[i]
-            inputs, _, _, _ = _observe_inputs(env, device)
-            stacked.append(_step_inputs(inputs, device))
+            inputs, _, _, _ = _observe_inputs(env, device, estimator)
+            _, _, hidden = policy.forward_step(_step_inputs(inputs, device), hidden=hidden)
             if i == t:
                 break
-            env.step_v2(
-                (
-                    _recorded_action(rec["learner"], 0),
-                    _recorded_action(rec["opponent"], 1),
-                )
-            )
+            env.step_v2((
+                _recorded_action(rec["learner"], 0),
+                _recorded_action(rec["opponent"], 1),
+            ))
     actual = env.state.state_hash()
     if actual != decisions[t]["state_hash"]:
         raise ValueError(
             f"prefix replay diverged at t={t}: {actual[:12]} != {decisions[t]['state_hash'][:12]}"
         )
-    with torch.no_grad():
-        seq = {k: torch.cat([s[k] for s in stacked], dim=1) for k in stacked[0]}
-        reset = torch.zeros((1, t + 1), dtype=torch.bool, device=device)
-        reset[:, 0] = True
-        _, _, ht = policy.forward(
-            seq["raster"], seq["global_features"], seq["entities"], seq["entity_mask"],
-            seq["hand_tokens"], seq["opp_hand_probs"], seq["opp_out_of_cycle"],
-            seq["opp_elixir_interval"], seq["event_history"], reset,
-        )
-        layers = policy.initial_hidden(1, device=device).shape[0]
-        hidden = ht[:, t : t + 1, :].transpose(0, 1).contiguous()
-        assert hidden.shape[0] == layers, f"hidden layout {tuple(hidden.shape)}"
     return env, hidden
 
 
@@ -247,14 +249,16 @@ def plan_branches(
     tensors = _step_inputs(inputs, device)
     legal_t = torch.as_tensor(legal, device=device).unsqueeze(0).unsqueeze(0)
     masks = masks_from_legal_play(legal_t)
-    reset = torch.zeros((1, 1), dtype=torch.bool, device=device)
     with torch.no_grad():
-        logits, _, _ = policy.forward(
+        # replay_to_state returns memory AFTER the current observation. Reuse
+        # it directly; starting a fresh GRU or advancing it twice is incorrect.
+        zt, spatial, entities, hands = policy.encoder(
             tensors["raster"], tensors["global_features"], tensors["entities"],
             tensors["entity_mask"], tensors["hand_tokens"], tensors["opp_hand_probs"],
             tensors["opp_out_of_cycle"], tensors["opp_elixir_interval"],
-            tensors["event_history"], reset,
+            tensors["event_history"],
         )
+        logits = policy.heads(zt, hidden[-1].unsqueeze(1), entities, hands, spatial)
         mode_p = torch.softmax(logits.mode[0, 0].float(), dim=-1).cpu().numpy()
         card_p = torch.softmax(logits.card[0, 0].float(), dim=-1).cpu().numpy()
         place = torch.softmax(logits.placement[0, 0].float().reshape(4, -1), dim=-1).cpu().numpy()
@@ -371,7 +375,10 @@ def run_branch(
         pass
     before = tower_fracs(child.state)
     opponent = make_opponent(opponent_spec, replica_seed)
-    estimator = PublicStateEstimator()  # unfed, matching collection
+    from .v4_ppo import configure_v4_runtime
+    configure_v4_runtime(policy)
+    policy.eval()
+    estimator = PublicStateEstimator()
     cur_hidden = hidden.detach()
     winner: Any = None
     terminal = False
@@ -382,8 +389,8 @@ def run_branch(
         result = child.step_v2((first, opp))
         ran = 1
         if result.terminated or result.truncated:
-            terminal = bool(result.terminated)
-            winner = result.info.get("winner")
+            terminal = bool(result.terminated) and not bool(result.truncated)
+            winner = result.info.get("winner") if terminal else None
         else:
             for _ in range(horizon - 1):
                 if child.state is None or child.state.terminal:
@@ -392,6 +399,7 @@ def run_branch(
                 st = child.state
                 hand = list(st.players[0].hand[:4])
                 elixir = float(st.players[0].elixir_milli) / 1000.0
+                estimator.sync_from_env(child, viewer=0)
                 tensors = _step_inputs(_v4_step_inputs(obs, hand, elixir, estimator.snapshot()), device)
                 legal = torch.as_tensor(
                     np.array(obs.legal_play, dtype=bool, copy=True), device=device
@@ -417,8 +425,8 @@ def run_branch(
                 result = child.step_v2((mine, opp))
                 ran += 1
                 if result.terminated or result.truncated:
-                    terminal = bool(result.terminated)
-                    winner = result.info.get("winner")
+                    terminal = bool(result.terminated) and not bool(result.truncated)
+                    winner = result.info.get("winner") if terminal else None
                     break
     after = tower_fracs(child.state)
     return {
@@ -432,6 +440,281 @@ def run_branch(
         "terminal": terminal,
         "decisions_run": ran,
     }
+
+
+def action_identity(branch: dict[str, Any] | BranchSpec) -> dict[str, Any]:
+    """Return the complete action identity carried by a branch report.
+
+    ``source`` is provenance only.  Two policy-top branches can have the same
+    source while representing different card/placement decisions, so callers
+    must use this identity (or :func:`action_key`) when freezing a target.
+    """
+
+    if isinstance(branch, BranchSpec):
+        return {
+            "source": str(branch.source),
+            "mode": int(branch.mode),
+            "slot": int(branch.slot),
+            "row": int(branch.row),
+            "col": int(branch.col),
+        }
+    return {
+        "source": str(branch.get("source", "")),
+        "mode": int(branch.get("mode", 0)),
+        "slot": int(branch.get("slot", 0)),
+        "row": int(branch.get("row", 0)),
+        "col": int(branch.get("col", 0)),
+    }
+
+
+def action_key(action: dict[str, Any] | BranchSpec) -> tuple[int, int, int, int]:
+    """Return the source-independent action key ``(mode, slot, row, col)``."""
+
+    value = action_identity(action)
+    return value["mode"], value["slot"], value["row"], value["col"]
+
+
+def _replica_indices(eval_cfg: EvalConfig) -> tuple[int, ...]:
+    if eval_cfg.replica_indices is None:
+        indices = tuple(range(int(eval_cfg.n_replicas)))
+    else:
+        indices = tuple(int(value) for value in eval_cfg.replica_indices)
+    if not indices:
+        raise ValueError("at least one replica is required")
+    if any(value < 0 for value in indices):
+        raise ValueError("replica indices must be non-negative")
+    if len(set(indices)) != len(indices):
+        raise ValueError("replica indices must be unique")
+    return indices
+
+
+def _winning_action(verdict: dict[str, Any]) -> dict[str, Any] | None:
+    """Recover a verdict's exact winning action, including old verdicts.
+
+    New verdicts persist ``best_action`` directly.  For legacy verdicts that
+    only retained ``best_source``, select the highest-mean branch among that
+    source rather than taking the first matching branch.
+    """
+
+    stored = verdict.get("best_action")
+    if isinstance(stored, dict):
+        return action_identity(stored)
+    source = verdict.get("best_source")
+    if source is None:
+        return None
+    candidates = [
+        branch for branch in verdict.get("branches", ())
+        if branch.get("source") == source
+    ]
+    if not candidates:
+        return None
+    best = max(enumerate(candidates), key=lambda item: (float(item[1].get("mean", -float("inf"))), -item[0]))[1]
+    return action_identity(best)
+
+
+def _comparison_identity(verdict: dict[str, Any]) -> tuple[Any, ...] | None:
+    action = _winning_action(verdict)
+    # A source label is provenance, never an action identity.  Legacy reports
+    # that omitted branch coordinates are therefore unavailable for a strict
+    # horizon comparison instead of being counted as agreeing by source.
+    return ("action", *action_key(action)) if action is not None else None
+
+
+def _branch_values_by_replica(branch: dict[str, Any]) -> dict[int, float]:
+    replicas = branch.get("replicas")
+    if isinstance(replicas, list):
+        values: dict[int, float] = {}
+        for position, replica in enumerate(replicas):
+            if not isinstance(replica, dict) or "value" not in replica:
+                continue
+            index = int(replica.get("replica_index", position))
+            values[index] = float(replica["value"])
+        if values:
+            return values
+    return {
+        index: float(value)
+        for index, value in enumerate(branch.get("values", ()))
+    }
+
+
+def fixed_action_metrics(
+    verdict: dict[str, Any],
+    frozen_action: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Compute paired alternative-minus-sim metrics for one fixed action.
+
+    The function is intentionally JSON-safe and keeps the replica indices used
+    in the calculation.  It is shared by frontier generation and the audit so
+    independent confirmation can never silently fall back to a selected
+    action's aggregate mean.
+    """
+
+    if frozen_action is None:
+        return {"available": False, "reason": "frozen action is missing"}
+    target = action_key(frozen_action)
+    branches = list(verdict.get("branches", ()))
+    sim = next((branch for branch in branches if branch.get("source") == "sim"), None)
+    alternative = next((branch for branch in branches if action_key(branch) == target), None)
+    if sim is None or alternative is None:
+        return {
+            "available": False,
+            "reason": "frozen action or sim branch is absent",
+            "frozen_action": action_identity(frozen_action),
+        }
+    sim_values = _branch_values_by_replica(sim)
+    alt_values = _branch_values_by_replica(alternative)
+    indices = sorted(set(sim_values) & set(alt_values))
+    if not indices:
+        return {
+            "available": False,
+            "reason": "frozen action has no paired replicas",
+            "frozen_action": action_identity(frozen_action),
+        }
+    deltas = [alt_values[index] - sim_values[index] for index in indices]
+    mean = float(sum(deltas) / len(deltas))
+    variance = (
+        sum((value - mean) ** 2 for value in deltas) / (len(deltas) - 1)
+        if len(deltas) > 1 else 0.0
+    )
+    se = float(variance / len(deltas)) ** 0.5
+    return {
+        "available": True,
+        "frozen_action": action_identity(frozen_action),
+        "action_source": alternative.get("source"),
+        "replica_indices": indices,
+        "n": len(indices),
+        "deltas": [round(value, 6) for value in deltas],
+        "mean_delta": round(mean, 6),
+        "sd_delta": round(variance ** 0.5, 6),
+        "se_delta": round(se, 6),
+        "lcb95": round(mean - 1.96 * se, 6),
+        "ucb95": round(mean + 1.96 * se, 6),
+        "positive_fraction": round(sum(value > 0.0 for value in deltas) / len(deltas), 6),
+    }
+
+
+def _summary_stats(values: Sequence[float]) -> tuple[float, float]:
+    if not values:
+        return 0.0, 0.0
+    mean = float(sum(values) / len(values))
+    variance = sum((value - mean) ** 2 for value in values) / len(values)
+    return mean, float(variance / len(values)) ** 0.5
+
+
+def merge_independent_confirmation(
+    discovery: dict[str, Any],
+    confirmation: dict[str, Any],
+    *,
+    frozen_action: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Attach an independent held-out evaluation to a discovery verdict.
+
+    Discovery statistics remain the selection/classification statistics.  The
+    confirmation replicas are appended with explicit indices and seeds, while
+    each branch retains discovery/confirmation aggregates separately.  This
+    prevents a downstream learner from mistaking a held-out result for another
+    selected-action sample and makes the independence boundary auditable.
+    """
+
+    if discovery.get("state_hash") != confirmation.get("state_hash"):
+        raise ValueError("cannot merge confirmations for different states")
+    raw_frozen = frozen_action or discovery.get("best_action") or _winning_action(discovery)
+    if raw_frozen is None:
+        raise ValueError("discovery verdict has no winning action to freeze")
+    frozen = action_identity(raw_frozen)
+    discovery_indices = {int(value) for value in discovery.get("replica_indices", ())}
+    confirmation_indices = {int(value) for value in confirmation.get("replica_indices", ())}
+    if not discovery_indices:
+        discovery_indices = {
+            int(replica.get("replica_index", position))
+            for branch in discovery.get("branches", ())
+            for position, replica in enumerate(branch.get("replicas", ()))
+            if isinstance(replica, dict)
+        }
+    if not confirmation_indices:
+        confirmation_indices = {
+            int(replica.get("replica_index", position))
+            for branch in confirmation.get("branches", ())
+            for position, replica in enumerate(branch.get("replicas", ()))
+            if isinstance(replica, dict)
+        }
+    if discovery_indices & confirmation_indices:
+        raise ValueError("discovery and confirmation replicas must be disjoint")
+    confirmation_by_key = {
+        action_key(branch): branch for branch in confirmation.get("branches", ())
+    }
+    merged_branches: list[dict[str, Any]] = []
+    for original in discovery.get("branches", ()):
+        key = action_key(original)
+        held_out = confirmation_by_key.get(key)
+        if held_out is None:
+            raise ValueError(f"confirmation is missing branch action {key}")
+        item = dict(original)
+        discovery_values = [float(value) for value in original.get("values", ())]
+        confirmation_values = [float(value) for value in held_out.get("values", ())]
+        discovery_replicas = list(original.get("replicas", ()))
+        confirmation_replicas = list(held_out.get("replicas", ()))
+        # Legacy verdicts can be merged too; synthesize provenance records for
+        # their compact values using the declared replica index ranges.
+        if not discovery_replicas:
+            discovery_replicas = [
+                {"replica_index": index, "value": value}
+                for index, value in zip(sorted(discovery_indices), discovery_values)
+            ]
+        if not confirmation_replicas:
+            confirmation_replicas = [
+                {"replica_index": index, "value": value}
+                for index, value in zip(sorted(confirmation_indices), confirmation_values)
+            ]
+        all_values = discovery_values + confirmation_values
+        all_replicas = discovery_replicas + confirmation_replicas
+        discovery_mean, discovery_se = _summary_stats(discovery_values)
+        confirmation_mean, confirmation_se = _summary_stats(confirmation_values)
+        all_mean, all_se = _summary_stats(all_values)
+        item["discovery_values"] = [round(value, 5) for value in discovery_values]
+        item["confirmation_values"] = [round(value, 5) for value in confirmation_values]
+        # Keep the historical compact fields scoped to discovery.  Consumers
+        # that have not learned the confirmation schema therefore retain the
+        # same selection semantics; ``all_values`` is explicit opt-in.
+        item["values"] = [round(value, 5) for value in discovery_values]
+        item["discovery_replicas"] = discovery_replicas
+        item["confirmation_replicas"] = confirmation_replicas
+        item["replicas"] = all_replicas
+        item["replica_indices"] = sorted(discovery_indices)
+        item["all_values"] = [round(value, 5) for value in all_values]
+        item["all_replica_indices"] = sorted(discovery_indices | confirmation_indices)
+        # ``mean``/``se`` remain discovery values for backwards-compatible
+        # selection.  The explicit aggregate fields are for diagnostics.
+        item["mean"] = round(discovery_mean, 5)
+        item["se"] = round(discovery_se, 5)
+        item["mean_discovery"] = round(discovery_mean, 5)
+        item["se_discovery"] = round(discovery_se, 5)
+        item["mean_confirmation"] = round(confirmation_mean, 5)
+        item["se_confirmation"] = round(confirmation_se, 5)
+        item["mean_all"] = round(all_mean, 5)
+        item["se_all"] = round(all_se, 5)
+        item["outcomes"] = list(original.get("outcomes", ())) + list(held_out.get("outcomes", ()))
+        merged_branches.append(item)
+    result = dict(discovery)
+    result["branches"] = merged_branches
+    result["best_action"] = frozen if frozen else discovery.get("best_action")
+    result["discovery_replica_indices"] = sorted(discovery_indices)
+    result["confirmation_replica_indices"] = sorted(confirmation_indices)
+    result["discovery_n_replicas"] = len(discovery_indices)
+    result["confirmation_n_replicas"] = len(confirmation_indices)
+    result["frozen_action"] = frozen
+    # Confirmation confidence is held-out only.  Computing it from the
+    # merged branch replica list would reintroduce the discovery samples that
+    # selected the action and make the bound optimistic.
+    result["frozen_confirmation"] = fixed_action_metrics(confirmation, frozen)
+    result["confirmation"] = {
+        "version": FRONTIER_EVAL_VERSION,
+        "replica_indices": sorted(confirmation_indices),
+        "n_replicas": len(confirmation_indices),
+        "frozen_action": frozen,
+        **result["frozen_confirmation"],
+    }
+    return result
 
 
 def evaluate_candidate(
@@ -452,6 +735,7 @@ def evaluate_candidate(
     else:
         mc = match["config"]
         opp_specs = [{"strategy": mc["strategy"], "controller_seed": mc.get("controller_seed", 0)}]
+    replica_indices = _replica_indices(eval_cfg)
     branches = plan_branches(
         env, policy, hidden, candidate,
         max_branches=eval_cfg.max_branches,
@@ -460,19 +744,25 @@ def evaluate_candidate(
     )
     per_branch: dict[int, list[float]] = {i: [] for i in range(len(branches))}
     outcomes: dict[int, list[dict[str, Any]]] = {i: [] for i in range(len(branches))}
-    for r in range(eval_cfg.n_replicas):
+    for replica_position, replica_index in enumerate(replica_indices):
         replica_seed = _stable_seed(
-            "frontier-eval", eval_cfg.replica_seed_base, candidate["state_hash"], r
+            "frontier-eval", eval_cfg.replica_seed_base, candidate["state_hash"], replica_index
         ) & 0xFFFFFFFF
         for i, branch in enumerate(branches):
             out = run_branch(
                 env=env, hidden=hidden, branch=branch,
-                opponent_spec=opp_specs[r % len(opp_specs)],
+                opponent_spec=opp_specs[replica_position % len(opp_specs)],
                 replica_seed=replica_seed,
                 horizon=eval_cfg.horizon, policy=policy, device=device,
             )
             per_branch[i].append(out["value"])
-            outcomes[i].append({k: out[k] for k in ("value", "winner", "terminal", "decisions_run")})
+            outcomes[i].append(
+                {
+                    "replica_index": int(replica_index),
+                    "replica_seed": int(replica_seed),
+                    **{k: out[k] for k in ("value", "winner", "terminal", "decisions_run")},
+                }
+            )
     branch_reports = []
     for i, branch in enumerate(branches):
         vals = per_branch[i]
@@ -484,6 +774,12 @@ def evaluate_candidate(
                 "row": branch.row, "col": branch.col,
                 "mean": round(mean, 5), "se": round((var / len(vals)) ** 0.5, 5),
                 "values": [round(v, 5) for v in vals],
+                # ``values`` remains the compact legacy representation.  The
+                # replica records are the authoritative representation for
+                # held-out confirmation and retain the seed/index provenance.
+                "replica_indices": [int(value) for value in replica_indices],
+                "replicas": outcomes[i],
+                "outcomes": outcomes[i],
             }
         )
     sim_idx = next(i for i, b in enumerate(branches) if b.source == "sim")
@@ -494,11 +790,12 @@ def evaluate_candidate(
     weak_best = max((rep["mean"] for rep in weak_reports), default=None)
     # Per-replica best-alt vs sim (ranking stability with matched seeds).
     stable_hits = 0
-    for r in range(eval_cfg.n_replicas):
-        sim_v = per_branch[sim_idx][r]
-        alt_v = max((per_branch[i][r] for i in range(len(branches)) if i != sim_idx), default=sim_v)
+    for position in range(len(replica_indices)):
+        sim_v = per_branch[sim_idx][position]
+        alt_v = max((per_branch[i][position] for i in range(len(branches)) if i != sim_idx), default=sim_v)
         if alt_v - sim_v > classify_cfg.margin_robust:
             stable_hits += 1
+    best_action = action_identity(best) if best else action_identity(branches[sim_idx])
     verdict = {
         "version": FRONTIER_EVAL_VERSION,
         "match_id": candidate["match_id"],
@@ -509,17 +806,22 @@ def evaluate_candidate(
         "tags": candidate["tags"],
         "filter": candidate["filter"],
         "horizon": eval_cfg.horizon,
-        "n_replicas": eval_cfg.n_replicas,
+        "n_replicas": len(replica_indices),
+        "replica_indices": [int(value) for value in replica_indices],
         "opponent_specs": opp_specs,
         "branches": branch_reports,
         "sim_mean": round(sim_mean, 5),
         "best_mean": round(best["mean"], 5) if best else round(sim_mean, 5),
         "best_source": best["source"] if best else "sim",
+        "best_action": best_action,
         "regret": round((best["mean"] - sim_mean), 5) if best else 0.0,
-        "stability": round(stable_hits / max(1, eval_cfg.n_replicas), 4),
+        "stability": round(stable_hits / max(1, len(replica_indices)), 4),
         "weak_best": round(weak_best, 5) if weak_best is not None else None,
         "competence": round(sim_mean - weak_best, 5) if weak_best is not None else None,
     }
+    if eval_cfg.frozen_action is not None:
+        verdict["frozen_action"] = action_identity(eval_cfg.frozen_action)
+        verdict["frozen_confirmation"] = fixed_action_metrics(verdict, eval_cfg.frozen_action)
     verdict["class"], verdict["class_reason"] = classify_verdict(verdict, classify_cfg)
     return verdict
 
@@ -533,12 +835,12 @@ def classify_verdict(
     regret = float(verdict.get("regret", 0.0))
     stability = float(verdict.get("stability", 0.0))
     best_mean = float(verdict.get("best_mean", 0.0))
+    if best_mean <= cfg.best_floor:
+        return "hopeless", f"lost position (best continuation {best_mean:.3f} <= {cfg.best_floor})"
     if regret < cfg.eps_solve:
         return "solved", f"regret {regret:.3f} < {cfg.eps_solve}"
     if stability < cfg.tau_stability:
         return "hopeless", f"unstable ranking (stability {stability:.2f})"
-    if best_mean <= cfg.best_floor:
-        return "hopeless", f"lost position (best continuation {best_mean:.3f} <= {cfg.best_floor})"
     if regret >= cfg.eps_frontier:
         return "frontier", (
             f"regret {regret:.3f} >= {cfg.eps_frontier}, stability {stability:.2f}, "
@@ -625,21 +927,36 @@ def horizon_stability(
     reports_by_horizon: dict[int, list[dict[str, Any]]],
     reference: int = 256,
 ) -> dict[str, Any]:
-    """Compare candidate rankings across horizons; recommend shortest stable H."""
+    """Compare candidate rankings across horizons; recommend shortest stable H.
+
+    Ranking identity is the complete action key.  ``best_source`` is retained
+    only as a legacy fallback for verdicts produced before exact action
+    identities were persisted.  Missing states and missing action identities
+    are reported as unavailable instead of disappearing from the denominator.
+    """
 
     ref = {v["state_hash"]: v for v in reports_by_horizon.get(reference, [])}
     summary: dict[str, Any] = {"reference": reference, "horizons": {}}
     for horizon in sorted(reports_by_horizon):
         if horizon == reference:
             continue
-        top1 = sign = both = 0
+        top1 = sign = compared = 0
         deltas: list[float] = []
+        candidates = reports_by_horizon[horizon]
+        candidate_hashes = {v.get("state_hash") for v in candidates}
+        unavailable = len(candidate_hashes - set(ref))
+        unavailable += len(set(ref) - candidate_hashes)
         for v in reports_by_horizon[horizon]:
             r = ref.get(v["state_hash"])
             if r is None:
                 continue
-            both += 1
-            top1 += int(v["best_source"] == r["best_source"])
+            short_action = _comparison_identity(v)
+            reference_action = _comparison_identity(r)
+            if short_action is None or reference_action is None:
+                unavailable += 1
+                continue
+            compared += 1
+            top1 += int(short_action == reference_action)
             # One-sided sign: only true +<->- flips count.  Emergence
             # (neutral at short H, signed at long H) is the horizon doing
             # its job — delayed consequences materializing — not instability.
@@ -650,19 +967,183 @@ def horizon_stability(
             sign += int(not ((v_pos and r_neg) or (v_neg and r_pos)))
             deltas.append(abs(float(v["regret"]) - float(r["regret"])))
         summary["horizons"][horizon] = {
-            "n": both,
-            "top1_agree": round(top1 / max(1, both), 4),
-            "sign_agree": round(sign / max(1, both), 4),
+            # ``n`` remains the historical matched-state field.  New callers
+            # should use ``compared`` and ``unavailable`` for gate decisions.
+            "n": compared,
+            "compared": compared,
+            "available": compared,
+            "unavailable": unavailable,
+            "n_candidates": len(candidates),
+            "n_reference": len(ref),
+            "top1_agree": round(top1 / max(1, compared), 4),
+            "sign_agree": round(sign / max(1, compared), 4),
             "mean_abs_regret_delta": round(sum(deltas) / max(1, len(deltas)), 5),
         }
     chosen = reference
     for horizon in sorted(h for h in reports_by_horizon if h != reference):
         s = summary["horizons"][horizon]
-        if s["top1_agree"] >= TOP1_AGREE_FLOOR and s["sign_agree"] >= SIGN_AGREE_FLOOR:
+        if (
+            s["unavailable"] == 0
+            and s["top1_agree"] >= TOP1_AGREE_FLOOR
+            and s["sign_agree"] >= SIGN_AGREE_FLOOR
+        ):
             chosen = horizon
             break
     summary["chosen_horizon"] = chosen
     return summary
+
+
+def _audit_verdict(payload: dict[str, Any]) -> dict[str, Any]:
+    value = payload.get("verdict")
+    return value if isinstance(value, dict) else payload
+
+
+def _audit_state_hash(payload: dict[str, Any]) -> str | None:
+    verdict = _audit_verdict(payload)
+    if verdict.get("state_hash") is not None:
+        return str(verdict["state_hash"])
+    source = payload.get("source")
+    if isinstance(source, dict) and source.get("state_hash") is not None:
+        return str(source["state_hash"])
+    return None
+
+
+def _audit_frozen_action(payload: dict[str, Any]) -> dict[str, Any] | None:
+    verdict = _audit_verdict(payload)
+    confirmation = payload.get("frozen_confirmation")
+    if isinstance(confirmation, dict) and isinstance(confirmation.get("frozen_action"), dict):
+        return action_identity(confirmation["frozen_action"])
+    if isinstance(verdict.get("frozen_action"), dict):
+        return action_identity(verdict["frozen_action"])
+    return _winning_action(verdict)
+
+
+def _payload_fixed_metrics(
+    payload: dict[str, Any], frozen: dict[str, Any]
+) -> dict[str, Any]:
+    explicit = payload.get("frozen_confirmation")
+    if isinstance(explicit, dict):
+        explicit_action = explicit.get("frozen_action")
+        if not isinstance(explicit_action, dict) or action_key(explicit_action) != action_key(frozen):
+            return {"available": False, "reason": "frozen action differs"}
+        # An unavailable held-out comparison must stay unavailable. Falling
+        # back to all search replicas would let discovery samples pass the gate.
+        return explicit
+    return fixed_action_metrics(_audit_verdict(payload), frozen)
+
+
+def fixed_action_horizon_gate(
+    reports_by_horizon: dict[int, list[dict[str, Any]]],
+    *,
+    reference: int = 112,
+    required_horizons: Sequence[int] | None = None,
+    top1_floor: float = TOP1_AGREE_FLOOR,
+    sign_floor: float = SIGN_AGREE_FLOOR,
+    deadzone: float = SIGN_DEADZONE,
+) -> dict[str, Any]:
+    """Gate horizon selection using one frozen action per state.
+
+    ``reports_by_horizon`` accepts raw verdicts or teacher-audit payloads
+    containing ``verdict`` and ``frozen_confirmation``.  The action is frozen
+    from the reference report (or its explicit confirmation field), then the
+    exact same action is looked up at each comparison horizon.  A missing
+    state, action, sim branch, or paired replica is counted as unavailable and
+    fails the gate.  This makes the result safe to call from a shell gate.
+    """
+
+    available_horizons = {int(value) for value in reports_by_horizon}
+    if required_horizons is None:
+        required = tuple(sorted(value for value in available_horizons if value != int(reference)))
+    else:
+        required = tuple(dict.fromkeys(int(value) for value in required_horizons))
+    reference_rows = {
+        state: payload
+        for payload in reports_by_horizon.get(int(reference), ())
+        if (state := _audit_state_hash(payload)) is not None
+    }
+    comparisons: dict[str, Any] = {}
+    if int(reference) not in available_horizons:
+        return {
+            "pass": False,
+            "reference": int(reference),
+            "required_horizons": list(required),
+            "chosen_horizon": None,
+            "reason": "reference horizon is unavailable",
+            "comparisons": comparisons,
+            "horizons": comparisons,
+        }
+
+    for horizon in required:
+        rows = {
+            state: payload
+            for payload in reports_by_horizon.get(horizon, ())
+            if (state := _audit_state_hash(payload)) is not None
+        }
+        compared = 0
+        top1 = 0
+        sign = 0
+        unavailable_states = set(reference_rows) ^ set(rows)
+        unavailable = len(unavailable_states)
+        for state, reference_payload in reference_rows.items():
+            current = rows.get(state)
+            frozen = _audit_frozen_action(reference_payload)
+            current_verdict = _audit_verdict(current) if current is not None else None
+            if current_verdict is None or frozen is None:
+                continue
+            reference_metrics = _payload_fixed_metrics(reference_payload, frozen)
+            current_metrics = _payload_fixed_metrics(current, frozen)
+            if not reference_metrics.get("available") or not current_metrics.get("available"):
+                unavailable += 1
+                continue
+            compared += 1
+            top1 += int(_winning_action(current_verdict) is not None and action_key(_winning_action(current_verdict)) == action_key(frozen))
+            reference_delta = float(reference_metrics["mean_delta"])
+            current_delta = float(current_metrics["mean_delta"])
+            reference_pos = reference_delta > deadzone
+            reference_neg = reference_delta < -deadzone
+            current_pos = current_delta > deadzone
+            current_neg = current_delta < -deadzone
+            sign += int(not ((reference_pos and current_neg) or (reference_neg and current_pos)))
+        top1_agree = top1 / max(1, compared)
+        sign_agree = sign / max(1, compared)
+        passed = (
+            unavailable == 0
+            and compared > 0
+            and top1_agree >= float(top1_floor)
+            and sign_agree >= float(sign_floor)
+        )
+        comparisons[str(horizon)] = {
+            "horizon": horizon,
+            "n_reference": len(reference_rows),
+            "n_candidates": len(rows),
+            "compared": compared,
+            "available": compared,
+            "unavailable": unavailable,
+            "top1_agree": round(top1_agree, 4),
+            "sign_agree": round(sign_agree, 4),
+            "pass": passed,
+        }
+
+    passing = [horizon for horizon in required if comparisons.get(str(horizon), {}).get("pass")]
+    gate_pass = bool(required) and len(passing) == len(required)
+    reason = "ok" if gate_pass else "one or more fixed-action horizon comparisons failed"
+    return {
+        "pass": gate_pass,
+        "reference": int(reference),
+        "required_horizons": list(required),
+        "chosen_horizon": min(passing) if gate_pass else int(reference),
+        "reason": reason,
+        "comparisons": comparisons,
+        "horizons": comparisons,
+    }
+
+
+# A concise alias for shell/runner callers that prefer the shorter name.
+horizon_confidence_gate = fixed_action_horizon_gate
+
+# Public spelling for runners that should not depend on the compatibility
+# underscore used by the legacy helper.
+winning_action = _winning_action
 
 
 # ---------------------------------------------------------------------------
@@ -772,12 +1253,22 @@ def materialize_entries(
                 },
                 "tags": v["tags"],
                 "headroom": v.get("headroom", "unknown"),
-                "verdict": {k: v[k] for k in ("regret", "sim_mean", "best_mean", "best_source", "stability", "competence", "horizon", "n_replicas", "class")},
+                "verdict": {
+                    k: v[k]
+                    for k in (
+                        "regret", "sim_mean", "best_mean", "best_source", "best_action",
+                        "stability", "competence", "horizon", "n_replicas", "class",
+                    )
+                    if k in v
+                },
                 "provenance": {
                     "frontier_version": FRONTIER_VERSION,
                     "eval_version": FRONTIER_EVAL_VERSION,
                     "state_hash": v["state_hash"],
                     "match_seed": match["config"]["match_seed"],
+                    "best_action": v.get("best_action"),
+                    "discovery_replica_indices": v.get("discovery_replica_indices", v.get("replica_indices", [])),
+                    "confirmation_replica_indices": v.get("confirmation_replica_indices", []),
                 },
             }
         )
@@ -845,12 +1336,18 @@ __all__ = [
     "WIN_BONUS",
     "assert_split_disjoint",
     "build_distribution",
+    "action_identity",
+    "action_key",
     "classify_verdict",
     "continuation_value",
     "evaluate_candidate",
     "evaluate_robustness",
     "headroom_bin",
     "horizon_stability",
+    "fixed_action_horizon_gate",
+    "horizon_confidence_gate",
+    "fixed_action_metrics",
+    "merge_independent_confirmation",
     "is_ranking_flip",
     "load_frontier_state",
     "make_opponent",
@@ -859,4 +1356,5 @@ __all__ = [
     "replay_to_state",
     "reset_to_frontier_entry",
     "run_branch",
+    "winning_action",
 ]

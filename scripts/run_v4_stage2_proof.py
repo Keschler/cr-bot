@@ -76,7 +76,9 @@ from simulator.rl.v4.simulator_distillation import generate_sim_dataset
 from simulator.rl.v4.search_dataset import (
     SearchDatasetConfig,
     generate_search_dataset,
+    iter_search_sequence_batches,
     load_champion_actor,
+    to_torch_sequence_batch,
 )
 from simulator.rl.v4.search_teacher import (
     HORIZON_DECISIONS,
@@ -180,17 +182,42 @@ def _log_progress(done: int, total: int, *, what: str, started: float) -> None:
     )
 
 
-def _train(samples, *, epochs: int, batch_size: int, lr: float, seed: int, device) -> Any:
+def _train(
+    samples,
+    *,
+    epochs: int,
+    batch_size: int,
+    lr: float,
+    seed: int,
+    device,
+    sequence_length: int | None = None,
+) -> Any:
+    """Train on ordered trajectories while preserving GRU state within each.
+
+    Every active match is grouped by ``seq_id`` and sorted by its public
+    decision offset.  Independent states remain one step trajectories.  The
+    sequence batcher keeps equal lengths together, avoiding padded labels.
+    """
+
+    if not samples:
+        raise ValueError("cannot train a recurrent policy on an empty dataset")
+    if type(batch_size) is not int or batch_size <= 0:
+        raise ValueError("batch_size must be a positive integer")
     torch.manual_seed(seed)
     policy = RecurrentV4Policy(_proof_config()).to(device)
     optimizer = torch.optim.Adam(policy.parameters(), lr=lr)
     weights = V4SupervisedWeights()
     policy.train()
-    for _ in range(epochs):
-        order = torch.randperm(len(samples))
-        for start in range(0, len(samples), batch_size):
-            chunk = [samples[int(i)] for i in order[start : start + batch_size]]
-            batch = move_batch_to_device(to_torch_batch(chunk), device)
+    for epoch in range(epochs):
+        batches = iter_search_sequence_batches(
+            samples,
+            batch_size=batch_size,
+            sequence_length=sequence_length,
+            shuffle=True,
+            seed=int(seed) + epoch,
+        )
+        for sequences in batches:
+            batch = move_batch_to_device(to_torch_sequence_batch(sequences), device)
             optimizer.zero_grad()
             logits, _, _ = policy(
                 batch["raster"],
@@ -213,12 +240,89 @@ def _train(samples, *, epochs: int, batch_size: int, lr: float, seed: int, devic
     return policy
 
 
+def _predict_sequence_batch(policy, batch) -> dict[str, np.ndarray]:
+    """Decode all ``B*T`` rows from one recurrent sequence batch."""
+
+    policy.eval()
+    with torch.no_grad():
+        logits, _, _ = policy(
+            batch["raster"],
+            batch["global_features"],
+            batch["entities"],
+            batch["entity_mask"],
+            batch["hand_tokens"],
+            batch["opp_hand_probs"],
+            batch["opp_out_of_cycle"],
+            batch["opp_elixir_interval"],
+            batch["event_history"],
+            batch["reset_mask"],
+        )
+        actions = batch["actions"]
+        batch_count, time = logits.mode.shape[:2]
+        flat_count = int(batch_count * time)
+        mode_pred = logits.mode.argmax(-1).reshape(flat_count).detach().cpu().numpy()
+        mode_true = actions.mode.reshape(flat_count).detach().cpu().numpy()
+        card_pred = logits.card.argmax(-1).reshape(flat_count).detach().cpu().numpy()
+        card_true = actions.card_slot.reshape(flat_count).detach().cpu().numpy()
+        dur_pred = logits.wait_duration.argmax(-1).reshape(flat_count).detach().cpu().numpy()
+        dur_true = actions.wait_duration.reshape(flat_count).detach().cpu().numpy()
+        rows, cols = logits.placement.shape[-2:]
+        slots = logits.placement.shape[2]
+        flat = logits.placement.reshape(flat_count, slots, rows * cols)
+        flat_mask = batch["masks"].placement.reshape(flat_count, slots, rows * cols)
+        probs = (
+            torch.where(flat_mask, flat, torch.full_like(flat, float("-inf")))
+            .softmax(dim=-1)
+            .detach()
+            .cpu()
+            .numpy()
+        )
+        sel = np.clip(card_true, 0, slots - 1)
+        pred_cell = probs[np.arange(flat_count), sel].reshape(-1, rows, cols)
+        pred_rows, pred_cols = np.unravel_index(
+            pred_cell.reshape(flat_count, -1).argmax(axis=1), (rows, cols)
+        )
+        true_rows = actions.placement[..., 0].reshape(flat_count).detach().cpu().numpy()
+        true_cols = actions.placement[..., 1].reshape(flat_count).detach().cpu().numpy()
+        soft = batch["soft_placement"].reshape(flat_count, rows, cols).detach().cpu().numpy()
+        mass = (pred_cell * (soft > 0)).sum(axis=(1, 2))
+        hand = batch["hand_tokens"].reshape(flat_count, 4, -1).detach().cpu().numpy()
+    policy.train()
+    return {
+        "mode_pred": mode_pred,
+        "mode_true": mode_true,
+        "card_pred": card_pred,
+        "card_true": card_true,
+        "dur_pred": dur_pred,
+        "dur_true": dur_true,
+        "pred_rows": np.asarray(pred_rows),
+        "pred_cols": np.asarray(pred_cols),
+        "true_rows": np.asarray(true_rows),
+        "true_cols": np.asarray(true_cols),
+        "mass": np.asarray(mass),
+        "hand": hand,
+    }
+
+
 def _evaluate_agreement(policy, samples, device) -> dict:
-    batch = move_batch_to_device(to_torch_batch(samples), device)
-    pred = t1._predict(policy, batch)
-    metrics = t1._timing_metrics(pred, samples)
+    predictions: dict[str, list[np.ndarray]] = {}
+    ordered_samples = []
+    batches = iter_search_sequence_batches(
+        samples,
+        batch_size=128,
+        sequence_length=None,
+        shuffle=False,
+    )
+    for sequences in batches:
+        ordered_samples.extend(sample for sequence in sequences for sample in sequence)
+        batch = move_batch_to_device(to_torch_sequence_batch(sequences), device)
+        decoded = _predict_sequence_batch(policy, batch)
+        for key, value in decoded.items():
+            predictions.setdefault(key, []).append(value)
+    pred = {key: np.concatenate(values) for key, values in predictions.items()}
+    metrics = t1._timing_metrics(pred, ordered_samples)
     try:
-        metrics["transitions"] = t1._transition_metrics(pred, samples)
+        metrics["transitions"] = t1._transition_metrics(pred, ordered_samples)
     except KeyError:
         # Sim-natural and mixed search samples carry no timing ``seq_id``;
         # transition-boundary scoring only applies to timing sequences.
@@ -524,6 +628,29 @@ def main() -> int:
     parser.add_argument("--search-timing-pool", type=int, default=1200)
     parser.add_argument("--search-sim-candidates", type=int, default=1200)
     parser.add_argument("--search-replay-seqs", type=int, default=260)
+    parser.add_argument(
+        "--continuation-mode", "--teacher-mode", dest="continuation_mode",
+        type=str, default="wait",
+        choices=("wait", "active", "active-rule"),
+        help="search continuation: wait-only (legacy) or active two-sided matches",
+    )
+    parser.add_argument(
+        "--continuation-horizon", type=int, default=None,
+        help="active continuation decisions; default is max(--horizon, 64)",
+    )
+    parser.add_argument(
+        "--opponent-strategy", type=str, default="deterministic-cycle",
+        help="active opponent controller strategy from the simulator opponent pool",
+    )
+    parser.add_argument(
+        "--active-match-decisions", type=int, default=64,
+        help="public decisions captured per active match",
+    )
+    parser.add_argument(
+        "--placement-target-mode", type=str, default="tested",
+        choices=("tested", "legacy"),
+        help="placement supervision support: searched cells only or legacy neighborhood",
+    )
     parser.add_argument("--timing-weights", type=str, default="",
                         help="JSON dict of timing-family weights for the search "
                         "pool (empty = defaults).")
@@ -563,12 +690,24 @@ def main() -> int:
                         "simulator execution always stays on CPU.")
     parser.add_argument("--epochs", type=int, default=6)
     parser.add_argument("--batch-size", type=int, default=128)
+    parser.add_argument(
+        "--sequence-length", type=int, default=0,
+        help="optional recurrent window length; 0 keeps each complete sequence",
+    )
     parser.add_argument("--lr", type=float, default=3e-3)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--out", type=str, default="")
     args = parser.parse_args()
     if args.workers < 1:
         parser.error("--workers must be a positive integer")
+    if args.batch_size < 1:
+        parser.error("--batch-size must be a positive integer")
+    if args.sequence_length < 0:
+        parser.error("--sequence-length must be non-negative")
+    if args.continuation_horizon is not None and args.continuation_horizon < 0:
+        parser.error("--continuation-horizon must be non-negative")
+    if args.active_match_decisions < 1:
+        parser.error("--active-match-decisions must be positive")
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
@@ -648,6 +787,11 @@ def main() -> int:
                         replay_sequences=args.search_replay_seqs,
                         horizon=args.horizon, max_branches=args.max_branches,
                         timing_family_weights=timing_weights, sim_family_mix=sim_mix,
+                        continuation_mode=args.continuation_mode,
+                        continuation_horizon=args.continuation_horizon,
+                        opponent_strategy=args.opponent_strategy,
+                        placement_target_mode=args.placement_target_mode,
+                        active_match_decisions=args.active_match_decisions,
                     ), champion,
                     workers=args.workers, progress=search_progress,
                 )
@@ -662,10 +806,18 @@ def main() -> int:
             + search_samples
         )
         with run_stage("train", f"epochs={args.epochs} samples={len(train_samples)} device={device}"):
-            candidate = _train(train_samples, epochs=args.epochs, batch_size=args.batch_size, lr=args.lr, seed=args.seed, device=device)
+            candidate = _train(
+                train_samples, epochs=args.epochs, batch_size=args.batch_size,
+                lr=args.lr, seed=args.seed, device=device,
+                sequence_length=args.sequence_length or None,
+            )
     elif args.ablation == "search-only":
         with run_stage("train", f"epochs={args.epochs} samples={len(search_samples)} device={device}"):
-            candidate = _train(search_samples, epochs=args.epochs, batch_size=args.batch_size, lr=args.lr, seed=args.seed, device=device)
+            candidate = _train(
+                search_samples, epochs=args.epochs, batch_size=args.batch_size,
+                lr=args.lr, seed=args.seed, device=device,
+                sequence_length=args.sequence_length or None,
+            )
     else:
         candidate = champion
 
@@ -680,6 +832,12 @@ def main() -> int:
             SearchDatasetConfig(
                 n_states=args.n_search_heldout, seed=args.seed + 40_000,
                 timing_pool_states=400, sim_candidates=400, replay_sequences=80,
+                horizon=args.horizon, max_branches=args.max_branches,
+                continuation_mode=args.continuation_mode,
+                continuation_horizon=args.continuation_horizon,
+                opponent_strategy=args.opponent_strategy,
+                placement_target_mode=args.placement_target_mode,
+                active_match_decisions=args.active_match_decisions,
             ),
             champion,
             workers=args.workers, progress=search_progress,
@@ -798,6 +956,13 @@ def main() -> int:
             "search_timing_pool": args.search_timing_pool,
             "search_sim_candidates": args.search_sim_candidates,
             "search_replay_seqs": args.search_replay_seqs,
+            "continuation_mode": args.continuation_mode,
+            "continuation_horizon": args.continuation_horizon,
+            "opponent_strategy": args.opponent_strategy,
+            "active_match_decisions": args.active_match_decisions,
+            "placement_target_mode": args.placement_target_mode,
+            "sequence_length": args.sequence_length,
+            "sequence_batch_size": args.batch_size,
             "timing_weights": args.timing_weights or "default",
             "search_sim_mix": args.search_sim_mix or "default",
             "save_search": args.save_search or None,
