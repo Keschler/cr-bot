@@ -13,11 +13,10 @@ What is real here and what is not:
 * real: board raster, global vector, entity tokens/mask, hand order, own
   elixir, tower HP variation, legal masks, prelude dynamics, threat identity
   and placement.  Every tensor comes from the simulator public boundary.
-* still default: opponent belief and event history come from a fresh
-  :class:`PublicStateEstimator` (uniform hand belief, ``[0, 10]`` elixir
-  interval, empty history), exactly like the synthetic defaults.  No
-  privileged state (opponent hand, exact opponent elixir, hidden cooldowns)
-  enters the sample.
+* public history: opponent belief, elixir interval, and event history are
+  reconstructed from the scenario's public event prefix with
+  :class:`PublicStateEstimator`.  No privileged state (opponent hand, exact
+  opponent elixir, hidden cooldowns) enters the sample.
 * fixed scope: the learner deck stays the 2.6 Hog path (paper section 8.2);
   only the opponent deck varies by scenario archetype.
 
@@ -66,7 +65,7 @@ except ImportError:  # pragma: no cover - top-level ``rl`` imports
     from simulator.rl.v4.simulator_teacher import TeacherError, soft_placement_target, teacher_label
 
 
-SIM_GENERATOR_VERSION: str = "sim-v4-distill-1"
+SIM_GENERATOR_VERSION: str = "sim-v4-distill-2"
 """Provenance identity for real-simulator distillation states."""
 
 OPPONENT_STRATEGY: str = "deterministic-cycle"
@@ -261,8 +260,13 @@ def _sample_with_context(
             )
         else:
             soft = np.zeros((config.rows, config.cols), dtype=np.float32)
+        # The scenario setup and prelude have already happened by this point.
+        # Reconstruct the public prefix before snapshotting so the learner sees
+        # the same opponent-cycle, elixir, and event history that a live actor
+        # would receive for this state.  ``sync_from_env`` only consumes public
+        # events; it does not expose the opponent's private hand or elixir.
         estimator = PublicStateEstimator()
-        snapshot = estimator.snapshot()
+        snapshot = estimator.sync_from_env(environment, viewer=context.target_player)
         audit_latest = environment.scenario_audit()["latest"] or {}
         return DistillationSample(
             family=family,

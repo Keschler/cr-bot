@@ -90,6 +90,15 @@ def test_sim_observations_are_real_simulator_tensors() -> None:
     assert len(provenance["target_hand"]) == 4
 
 
+def test_sim_sample_reconstructs_public_scenario_prefix() -> None:
+    """Scenario setup events must reach the V4 public-history features."""
+
+    sample = generate_sim_sample(DistillationConfig(n_states=1, seed=7), 0)
+    assert sample.provenance["setup_cards"]
+    assert bool(np.any(sample.event_history))
+    assert not np.array_equal(sample.opp_elixir_interval, np.array([0.0, 10.0]))
+
+
 def test_sim_hand_tokens_match_observation_contract() -> None:
     sample = generate_sim_sample(_config(), 11)
     hand = sample.provenance["target_hand"]

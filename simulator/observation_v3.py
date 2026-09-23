@@ -42,7 +42,7 @@ from .observation_v2 import (
 )
 
 
-OBSERVATION_V3_SCHEMA_VERSION: Final = "public-v3-1"
+OBSERVATION_V3_SCHEMA_VERSION: Final = "public-v3-2"
 """Version identifier for the public V3 observation contract."""
 
 HAND_SLOTS: Final = 4
@@ -132,6 +132,7 @@ def observation_v3_contract_manifest() -> dict[str, object]:
         },
         "array_order": "C-contiguous snapshots",
         "visibility": "public observation only; no BattleState private fields",
+        "belief_semantics": "metadata-card-ids; observed-four-play-cycle; public-event-elixir-v2",
     }
 
 

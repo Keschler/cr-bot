@@ -51,7 +51,7 @@ def _fake_v1() -> object:
 def test_v3_contract_hash_is_stable() -> None:
     assert calculate_observation_v3_contract_hash() == OBSERVATION_V3_CONTRACT_HASH
     manifest = observation_v3_contract_manifest()
-    assert manifest["schema_version"] == "public-v3-1"
+    assert manifest["schema_version"] == "public-v3-2"
     assert manifest["tensors"]["hand_tokens"]["shape"] == list(HAND_TOKEN_SHAPE)
 
 
@@ -108,15 +108,16 @@ def test_estimator_rejects_time_travel() -> None:
 
 
 def test_cycle_rule_out_requires_full_deck_evidence() -> None:
+    cards = ["hog-rider", "cannon", "musketeer", "skeletons", "ice-golem", "ice-spirit", "fireball", "log"]
     est = PublicStateEstimator(deck_size=8)
-    for index in range(7):
-        est.observe_opponent_spend(
-            tick_seconds=float(index + 1), card_key=f"card-{index}", elixir_cost=2.0
-        )
-    assert not bool(est.out_of_cycle().any())
-    est.observe_opponent_spend(tick_seconds=8.0, card_key="card-7", elixir_cost=2.0)
+    for index, card in enumerate(cards[:7]):
+        est.observe_opponent_spend(tick_seconds=float(index + 1), card_key=card, elixir_cost=0.)
+    assert not est.out_of_cycle()[belief_index("balloon")]
+    est.observe_opponent_spend(tick_seconds=8., card_key="log", elixir_cost=0.)
     out = est.out_of_cycle()
-    assert int(out.sum()) == BELIEF_CARD_COUNT - 8
+    assert int(out.sum()) == BELIEF_CARD_COUNT - 4
+    assert not out[belief_index("hog-rider")]
+    assert out[belief_index("log")]
     assert float(est.hand_belief().sum()) == pytest.approx(1.0)
 
 

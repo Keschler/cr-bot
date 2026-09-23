@@ -19,8 +19,8 @@ such as cycle arithmetic and elixir bounds is appropriate here.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-import hashlib
+from dataclasses import dataclass
+from collections import deque
 from typing import Final
 import numpy as np
 
@@ -34,6 +34,7 @@ from .observation_v3 import (
 )
 
 
+PUBLIC_ESTIMATOR_VERSION: Final = "public-cycle-history-2"
 MAX_ELIXIR: Final = 10.0
 ELIXIR_REGEN_PER_SECOND: Final = 1.0 / 2.8
 EVENT_TYPE_INDEX: Final = {name: index for index, name in enumerate(EVENT_TYPES)}
@@ -44,8 +45,14 @@ def belief_index(card_key: str) -> int:
 
     if not isinstance(card_key, str) or not card_key:
         raise ValueError("card_key must be a non-empty string")
-    digest = hashlib.sha256(card_key.encode("utf-8")).digest()
-    return int.from_bytes(digest[:8], "big") % BELIEF_CARD_COUNT
+    from cr_bot.domain.card_metadata import CARD_METADATA
+    from .observation import policy_card_name
+    canonical = policy_card_name(card_key) or card_key
+    metadata = CARD_METADATA.get(canonical)
+    if metadata is None or not 0 <= int(metadata["id"]) < BELIEF_CARD_COUNT:
+        raise ValueError(f"card is outside the public belief vocabulary: {card_key!r}")
+    return int(metadata["id"])
+
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,11 +99,20 @@ class PublicStateEstimator:
             raise ValueError("deck_size must be a positive integer")
         self._regen = float(elixir_regen_per_second)
         self._deck_size = deck_size
-        self._events: list[PublicEvent] = []
+        self._events: deque[PublicEvent] = deque(maxlen=EVENT_HISTORY_LEN)
         self._seen: dict[int, int] = {}
         self._elixir_lo = 0.0
         self._elixir_hi = MAX_ELIXIR
         self._tick = 0.0
+        self._last_play: dict[int, int] = {}
+        self._plays = 0
+        self._memory = None
+        self._event_source = None
+        self._event_count = 0
+        self._mutation_revision = None
+        self._last_event = None
+        self._synced_tick = 0.0
+        self._cycle_supported = True
 
     def reset(self) -> None:
         self._events.clear()
@@ -104,6 +120,15 @@ class PublicStateEstimator:
         self._elixir_lo = 0.0
         self._elixir_hi = MAX_ELIXIR
         self._tick = 0.0
+        self._last_play.clear()
+        self._plays = 0
+        self._memory = None
+        self._event_source = None
+        self._event_count = 0
+        self._mutation_revision = None
+        self._last_event = None
+        self._synced_tick = 0.0
+        self._cycle_supported = True
 
     @property
     def tick_seconds(self) -> float:
@@ -131,9 +156,11 @@ class PublicStateEstimator:
         self._advance_to(float(tick_seconds))
         index = belief_index(card_key)
         self._seen[index] = self._seen.get(index, 0) + 1
+        self._plays += 1
+        self._last_play[index] = self._plays
         cost = float(elixir_cost)
         self._elixir_hi = max(0.0, self._elixir_hi - cost)
-        self._elixir_lo = max(0.0, min(self._elixir_lo, self._elixir_hi))
+        self._elixir_lo = max(0.0, min(self._elixir_lo - cost, self._elixir_hi))
         self._events.append(
             PublicEvent(event_type="enemy_deploy", tick_seconds=float(tick_seconds), magnitude=cost)
         )
@@ -147,18 +174,21 @@ class PublicStateEstimator:
             self._tick = float(tick_seconds)
 
     def out_of_cycle(self) -> np.ndarray:
-        """Cards definitely outside the opponent deck (deterministic rule).
+        """Known unavailable cards under the standard four-other-play rotation.
 
-        Once ``deck_size`` distinct opponent cards have been observed, every
-        other vocabulary entry is out of cycle.  Before that, nothing is
-        ruled out: absence of evidence is not evidence of absence.
+        Unseen cards remain possible until the whole deck is publicly known.
+        Champion deployments disable the four-play inference conservatively:
+        this adapter does not yet model reduced champion cycles.
         """
-
         mask = np.zeros((BELIEF_CARD_COUNT,), dtype=bool)
-        if len(self._seen) >= self._deck_size:
+        if len(self._seen) == self._deck_size:
             mask[:] = True
             for index in self._seen:
                 mask[index] = False
+        if self._cycle_supported:
+            for index, last in self._last_play.items():
+                if self._plays - last < 4:
+                    mask[index] = True
         mask.setflags(write=False)
         return mask
 
@@ -181,7 +211,7 @@ class PublicStateEstimator:
         """Encode the trailing ring buffer as an ``(16, 8)`` float table."""
 
         table = np.zeros((EVENT_HISTORY_LEN, EVENT_DIM), dtype=np.float32)
-        recent = self._events[-EVENT_HISTORY_LEN:]
+        recent = list(self._events)
         start = EVENT_HISTORY_LEN - len(recent)
         for row, event in enumerate(recent, start=start):
             table[row, EVENT_TYPE_INDEX[event.event_type]] = 1.0
@@ -203,6 +233,70 @@ class PublicStateEstimator:
             opp_out_of_cycle=np.array(out, copy=True),
             event_history=np.array(history, copy=True),
         )
+
+    def sync_from_env(self, env, *, viewer: int = 0) -> EstimatorSnapshot:
+        """Consume public events once, rebuilding on reset or restored history.
+
+        No opponent hand, draw pile, or authoritative elixir is read. Existing
+        ObservationMemory reconstructs phase-aware elixir from public rules,
+        elapsed time and observed spending, including Mirror's effective cost.
+        Tower owner/type are public board facts used to classify damage events.
+        """
+        from .observation import ObservationMemory
+        if type(viewer) is not int or viewer not in (0, 1):
+            raise ValueError("viewer must be 0 or 1")
+        state, rules = env.state, env.engine.ruleset
+        if state is None:
+            raise ValueError("cannot synchronize an environment without state")
+        events = state.events
+        elapsed = state.elapsed_us / 1_000_000.0
+        rewrite = (
+            self._event_source is not events or len(events) < self._event_count
+            or elapsed < self._synced_tick
+            or (self._event_count > 0 and events[self._event_count - 1] != self._last_event)
+            or (len(events) == self._event_count and self._mutation_revision is not None
+                and getattr(events, "mutation_revision", None) != self._mutation_revision)
+            or (self._memory is not None and self._memory.viewer != viewer)
+        )
+        if rewrite:
+            self.reset()
+        if self._memory is None:
+            self._memory = ObservationMemory(viewer)
+        self._memory.update(state, rules)
+        # A complete event-inclusive frontier snapshot contains the prefix;
+        # processing from cursor zero reconstructs exactly the same history.
+        towers = {uid: entity.owner for uid, entity in state.entities.items() if entity.kind == "tower"}
+        for event in events[self._event_count:]:
+            time = max(self._tick, min(elapsed, (event.tick + 1) * rules.tick_us / 1_000_000.0))
+            owner = event.get("player", event.get("owner"))
+            if event.kind == "card_played" and owner in (0, 1):
+                key = event.get("card_id", event.get("card"))
+                card = rules.card(key)
+                cost = event.get("cost_milli", card.elixir_milli) / 1000.0
+                if owner == 1 - viewer:
+                    # Champion cycling needs additional lifecycle inference;
+                    # do not manufacture false four-play certainty for it.
+                    if key in {"archer-queen", "golden-knight", "skeleton-king", "mighty-miner", "monk", "little-prince", "goblinstein", "boss-bandit"}:
+                        self._cycle_supported = False
+                    self.observe_opponent_spend(tick_seconds=time, card_key=key, elixir_cost=cost)
+                else:
+                    self.observe(PublicEvent("own_deploy", time, cost))
+                    self.observe(PublicEvent("action_taken", time, cost))
+            elif event.kind == "damage_applied" and event.get("target_uid") in towers:
+                owner = towers[event.get("target_uid")]
+                name = "own_tower_damaged" if owner == viewer else "enemy_tower_damaged"
+                self.observe(PublicEvent(name, time, float(event.get("damage", 0)) / 1000.0))
+            elif event.kind == "entity_died":
+                self.observe(PublicEvent("unit_died", time, 1.0))
+        self._tick = elapsed
+        estimate = self._memory.opponent_elixir_est
+        self._elixir_lo = self._elixir_hi = estimate
+        self._event_source = events
+        self._event_count = len(events)
+        self._mutation_revision = getattr(events, "mutation_revision", None)
+        self._last_event = events[-1] if events else None
+        self._synced_tick = elapsed
+        return self.snapshot()
 
     def build_observation(
         self,
@@ -226,6 +320,7 @@ class PublicStateEstimator:
 
 
 __all__ = [
+    "PUBLIC_ESTIMATOR_VERSION",
     "ELIXIR_REGEN_PER_SECOND",
     "MAX_ELIXIR",
     "EstimatorSnapshot",

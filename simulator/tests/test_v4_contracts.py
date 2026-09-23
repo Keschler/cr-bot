@@ -34,7 +34,7 @@ def test_sealed_contracts_pin_live_revision() -> None:
     assert first.contract_hash == second.contract_hash
     assert first.engine_version == "reference-0.37.0"
     assert first.ruleset_id == "v1"
-    assert first.observation_schema_version == "public-v3-1"
+    assert first.observation_schema_version == "public-v3-2"
     other = seal_current_contracts(code_revision="rev-b")
     assert other.contract_hash != first.contract_hash
 
