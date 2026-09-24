@@ -48,6 +48,16 @@ channels should be regenerated; changing the trainer cannot repair those inputs.
 PPO quarantine measures entropy after the optimizer update. WAIT-only diagnostics
 return null placement statistics, and return quantiles follow the tensor device.
 
+The follow-up review also corrected frontier record preparation and retention
+sample limits. Prefix caches and completed distillation runs now include dataset
+settings and source match/verdict hashes in their identity, so changed labels or
+sample limits cannot silently reuse old results. Existing caches rebuild; an
+incompatible completed run requires a fresh output directory. PPO policy-movement
+diagnostics and quarantine now measure the candidate after the optimizer step.
+The return helper propagates terminal rewards to preceding actions, and destroyed
+friendly Princess Tower sites become available in both deployment-mask paths.
+Re-evaluate checkpoints after these simulator changes before comparing scores.
+
 Keep older experiment outputs for provenance. Do not mix changed source code with
 an existing frontier manifest or interpret older audit summaries as independent
 confirmation. Use a new output directory for a changed protocol. Saved match
@@ -274,10 +284,12 @@ random starting model cannot establish an improvement over the historical bot.
 The focused runtime/history/curve suite covers successor bootstrapping, frozen
 anchors, public history, active sequence training, schedule independence,
 quarantine, censoring, and artifact integrity. The existing teacher,
-search dataset, distillation, and timing suites passed 34 tests. Broad repository
-validation is currently blocked by unrelated collection imports and an existing
-Tornado damage-schedule failure; see the normal repository test instructions
-rather than interpreting these focused checks as a full-suite pass.
+search dataset, distillation, and timing suites passed 34 tests in that earlier
+validation. The follow-up review adds regression coverage for record preparation,
+cache invalidation, policy movement, terminal returns, placement decoding, and
+destroyed tower deployment. The Tornado assertions now match the pinned single
+damage pulse. Repository-wide test discovery can include local external projects
+and archived worktrees; a focused suite pass does not establish a full-suite pass.
 
 Frontier candidate selection includes placement disagreements and applies minimum
 spacing against every previously selected state, regardless of score order.
