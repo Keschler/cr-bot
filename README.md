@@ -216,6 +216,11 @@ are simulator evidence, not proof of live-game strength.
 Detailed simulator architecture, training commands, evaluation gates, and
 performance notes are in [`simulator/README.md`](simulator/README.md).
 
+For V4 active-search distillation and controlled PPO learning curves, see
+[the V4 training workflow](docs/v4_training.md). It documents public-history
+inputs, fixed-decision WAIT semantics, paired evaluation, and checkpoint
+compatibility.
+
 ## Repository layout
 
 ```text
@@ -224,12 +229,19 @@ cr-bot/
 │   ├── run_prototype_live.py       command-line live/video launcher
 │   ├── RUN_PROTOTYPE_LIVE.md       distribution and live-operation guide
 │   ├── prototype_live.spec         one-file PyInstaller build
-│   ├── physical_lab/               phone control, calibration, and safety gates
-│   ├── rl/                         policy, PPO, curriculum, and evaluation
+│   ├── physical_lab/               phone experiments and live control
+│   │   ├── capture/                devices, calibration, and capture
+│   │   ├── sensing/                screen and policy observations
+│   │   ├── workflow/               campaigns and run coordination
+│   │   ├── analysis/               comparison and fidelity analysis
+│   │   └── support/                shared schemas and artifacts
+│   ├── rl/                         policy and training packages
+│   │   ├── v4/                     current search and V4 training
+│   │   └── foundation/             shared models, environments, and checkpoint reader
 │   ├── engine/                     deterministic battle engine
 │   ├── rulesets/                   versioned card and mechanic definitions
 │   ├── rosters/                    supported opponent roster data
-│   ├── scenarios/                  deterministic simulator scenarios
+│   ├── scenario.py                 canonical scenario schema and loader
 │   └── tests/                      simulator-local tests
 ├── src/frontend/                  Arena Replay Analyst web application
 │   ├── server.py                   Uvicorn entry point (app compatibility shim)

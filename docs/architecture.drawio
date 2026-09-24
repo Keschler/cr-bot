@@ -76,7 +76,7 @@
         <mxCell id="game-state" parent="1" style="shape=document;whiteSpace=wrap;html=1;fillColor=#bbf7d0;strokeColor=#16a34a;strokeWidth=2;fontSize=15;fontStyle=1;fontColor=#166534;" value="GameState&lt;br&gt;public visual state" vertex="1">
           <mxGeometry height="95" width="340" x="1360" y="780" as="geometry" />
         </mxCell>
-        <mxCell id="policy-bridge" parent="1" style="shape=process;whiteSpace=wrap;html=1;fillColor=#ffedd5;strokeColor=#ea580c;strokeWidth=2;fontSize=14;fontStyle=1;fontColor=#9a3412;" value="POLICY BRIDGE&lt;br&gt;physical_lab/policy_bridge.py&lt;br&gt;GameState → feature tensors" vertex="1">
+        <mxCell id="policy-bridge" parent="1" style="shape=process;whiteSpace=wrap;html=1;fillColor=#ffedd5;strokeColor=#ea580c;strokeWidth=2;fontSize=14;fontStyle=1;fontColor=#9a3412;" value="POLICY BRIDGE&lt;br&gt;physical_lab/sensing/policy_bridge.py&lt;br&gt;GameState → feature tensors" vertex="1">
           <mxGeometry height="125" width="260" x="1830" y="235" as="geometry" />
         </mxCell>
         <mxCell id="public-observation" parent="1" style="shape=document;whiteSpace=wrap;html=1;fillColor=#fef3c7;strokeColor=#d97706;strokeWidth=2;fontSize=14;fontStyle=1;fontColor=#92400e;" value="PolicyObservation V1/V2&lt;br&gt;board • global • entities • masks" vertex="1">

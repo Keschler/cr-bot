@@ -336,306 +336,26 @@ entity tokens.
 
 ## Neural policy and training
 
-The mainline policy is a factorized recurrent PPO actor:
+Current search, distillation, PPO, and evaluation code lives in [rl/v4/](rl/v4/).
+Shared models, tensor utilities, opponent pools, and scenario environments live
+in [rl/foundation/](rl/foundation/). See the [V4 training guide](../docs/v4_training.md)
+for the roadmap runners, dataset splits, recurrent context, and evaluation gates.
 
-```text
-public raster/global/entity features
-        -> entity Transformer
-        -> GRU (~256 hidden units)
-        -> mode -> card slot -> card-conditioned placement
-```
+The earlier prototype/generalized training, league, rotation, shadow, diagnosis,
+and benchmark runners have been retired. The `recurrent-prototype` CLI command
+and `rl.legacy` package are removed. Use the V4 scripts under `scripts/` for
+training and evaluation.
 
-Legality masks remove impossible actions only. A separate privileged critic
-may use full simulator state during training. The actor controls every
-ordinary PPO action; counter policies and teachers are explicit opponents,
-baselines, or short-lived auxiliary labels.
+The phone/video frontend still supports deployed public-actor checkpoints through
+[the inference reader](rl/foundation/inference_checkpoint.py). This reader keeps
+checkpoint architecture, engine, ruleset, and public-observation validation; it
+does not expose a training command. This compatibility path does not make old
+checkpoints V4 checkpoints or change the live observation contract.
 
-The current action contract has no learned wait-duration head: `WAIT` advances
-the fixed simulator decision interval. Adding learned timing remains a future
-behavior-changing architecture step.
-
-### PPO regression diagnosis
-
-Use `--diagnostic-trace-out` during training to retain every decision's
-public state, hand/elixir/towers, unit positions, legal mask, actor action and
-alternatives, teacher label/agreement, critic value, return/advantage, and PPO
-ratio/clipping flag. Generalized runs write one trace per segment. Compare
-checkpoints on the exact same state stream with:
-
-```bash
-PYTHONDONTWRITEBYTECODE=1 \
-PYTHONPATH=.:..:../src \
-../capture/.venv-train/bin/python -m rl.diagnose \
-  --good outputs/simulator/training/known-good.pt \
-  --bad outputs/simulator/training/regressed.pt \
-  --recovery outputs/simulator/training/recovery.pt \
-  --archetypes defensive-cycle --strategies deterministic-cycle \
-  --seeds 10000 --max-decisions 1200 --lookahead-decisions 8 \
-  --json-out outputs/simulator/training/ppo-diagnosis.json
-```
-
-The comparator reports per-match suspects, action/head failure categories,
-one-step state differences, approximate follow-on consequences, and aggregate
-update statistics. The actor remains in control; the teacher is label-only.
-Every training/evaluation report also runs the simulator-exploit audit.
-WAIT/PLAY differences are neutral timing divergences by default. The comparator
-emits `action-too-early` or `action-too-late` only when the candidate branch
-takes additional self-tower damage in the counterfactual window; an elixir
-deficit without demonstrated benefit is only a potential overcommitment.
-
-The diagnosis has two layers. A later PPO continuation failed at update 22:
-on identical states, Skeletons at `(3,22)` changed to Hog Rider at `(3,17)`;
-the bounded comparison found 48 divergences and 1,560 follow-on self-tower
-damage despite global KL `0.001057`. The broader full-match trace then showed
-the retained actor's persistent failure is card selection: it makes only six
-Hog plays and no Fireball/Musketeer plays across the common matrix, whereas the
-public teacher makes 26 Hog, 32 Fireball, and 23 Musketeer plays. This is why
-the card head, not a simulator rule, is the current training target.
-
-Generalized training now defaults to `--max-update-approx-kl 0.008`, supports
-`--resume-learning-rate`, `--resume-reset-optimizer`, and
-`--resume-no-belief-loss`, and records the applied resume settings. A targeted
-placement-gradient cap is available only when placement-head evidence justifies
-it. The tested cap and low-rate/reset candidates were not promoted because
-they scored 0/6 or 1/6 on the common matrix; the known-good checkpoint remains
-the baseline. The supervised factor loss exposes `--bc-card-factor-weight`
-(default `1.0`) as a neutral, evidence-gated control for card-head experiments;
-tested non-default candidates were quarantined and did not improve the matrix.
-The disagreement-only label control is likewise diagnostic-only until a
-decision-level improvement is demonstrated.
-
-The runnable neural prototype is in [rl/prototype.py](rl/prototype.py).
-The generalized runner adds curriculum sampling, held-out provenance,
-historical checkpoints, and PFSP bookkeeping:
-
-```bash
-PYTHONDONTWRITEBYTECODE=1 \
-PYTHONPATH=.:..:../src \
-../capture/.venv-train/bin/python -m rl.prototype train \
-  --allow-provisional --updates 1 --envs 2 --horizon 128 \
-  --device auto \
-  --checkpoint-out outputs/simulator/training/recurrent-prototype.pt
-
-PYTHONDONTWRITEBYTECODE=1 \
-PYTHONPATH=.:..:../src \
-../capture/.venv-train/bin/python -m rl.prototype evaluate \
-  --checkpoint outputs/simulator/training/recurrent-prototype.pt \
-  --episodes 1 --policy actor --device auto
-```
-
-Normal evaluation uses the fast actor-only path. Add `--replay-hashes` to
-`rl.generalized evaluate` when a differential replay audit needs per-decision
-state and event-log hashes; that audit mode is intentionally slower.
-
-The generalized trainer enables the KL rollback guard by default. Pass
-`--max-update-approx-kl 0` only for an explicit diagnostic run; ordinary PPO
-should retain the evidence-based bound.
-
-The generalized runner supports explicit public-feature switches including
-`--explicit-hand-features`, `--direct-public-action-features`,
-`--direct-public-card-features`, `--contextual-public-card-features`,
-`--direct-public-mask-features`, `--direct-public-context-features`, and
-`--direct-public-slot-card-features`. The last option is for compatible fresh
-architectures and must not be added when resuming an incompatible checkpoint.
-
-Historical/self-play training can be side-balanced by running matched
-generalized segments with `--target-player 0` and `--target-player 1`. The
-trainer changes only world deck ordering, keeps the public actor contract
-unchanged, and records `target_player`, `actor_player`, and `opponent_player`.
-The self-play matrix uses the fixed prototype player as its learner-side deck;
-checkpoint opponents are separate frozen policies.
-Self-play reports use `held_out=false`; they are training/control evidence,
-not held-out strength evidence.
-
-### Generalized opponent training and held-out evaluation
-
-The generalized runner and evaluation commands below reproduce the RL audit.
-The generated checkpoint and reports are local artifacts; record their code and
-ruleset revisions before using them. The current engine is `reference-0.37.0`;
-new artifacts record engine `reference-0.37.0`.
-
-Evaluate the six-deck held-out smoke audit with the same checkpoint, seed,
-strategy, cap, and exclusion report every time:
-
-```bash
-PYTHONDONTWRITEBYTECODE=1 \
-PYTHONPATH=.:..:../src \
-../capture/.venv-train/bin/python -m rl.generalized evaluate \
-  --checkpoint outputs/simulator/training/generalized-coverage-ppo-v2.pt \
-  --policy actor --device auto --batch-size 6 --seed 0 \
-  --max-decisions 1200 \
-  --archetypes aggressive-pressure,defensive-cycle,beatdown,air-beatdown,siege-bait,random-legal \
-  --strategies deterministic-cycle --seeds 10000 \
-  --training-report outputs/simulator/training/generalized-coverage-ppo-v2.json \
-  --no-match-results \
-  --json-out outputs/simulator/training/generalized-coverage-ppo-v2-heldout-smoke.json
-```
-
-The retained six-deck held-out smoke audit is the reproducible evaluation
-command above; its historical results are not current strength evidence. The
-`deterministic-cycle` archetype is deliberately absent because it is the fixed
-learner deck; evaluate that regression separately.
-The retained historical matrix was `6 × 6 × 4 = 144` matches and recorded
-`8 wins, 0 losses, 0 draws, 0 truncated`, `1 win, 5 losses, 0 draws, 0 truncated`,
-and `1 win, 35 losses, 0 draws, 0 truncated` across its older smoke reports;
-these numbers are provenance only, not current strength evidence.
-
-Training and evaluation artifacts include the Git `code_revision` used to
-produce them, plus whether tracked source was dirty.
-
-Use `--training-report` to prove split exclusions, and require
-`held_out_audit.disjointness_verified=true` before calling a result held out.
-`--no-match-results` keeps large reports compact. When resuming a sidecar whose
-cursor starts at segment 16, use `--segment-offset 16` if sidecar inference is
-unavailable.
-
-The matrix report is schema version 2 with kind
-`recurrent_public_ppo_evaluation_matrix`. `policy_mode=actor` and
-`actor_controls_actions=true` identify neural actor evidence;
-`actor_controls_actions` is `true` only for the neural actor. Counter-policy
-rows are diagnostics, not checkpoint quality.
-
-For robustness evaluation, pass a `DomainRandomizationConfig` as
-`domain_randomization` to `evaluate_checkpoint_matrix`. Such runs are forced
-through the sequential path, record both the declared profile and sampled
-episode variant, and remain separate from baseline throughput and promotion
-evidence.
-
-When `--max-decisions` is omitted, the evaluator derives the complete
-regulation-plus-overtime cap from the ruleset. If that cap is not divisible by
-the checkpoint's training sequence length, evaluation drops only that
-training-only chunking setting; recurrent hidden state is still carried at
-every decision, so full-match evaluation is not artificially truncated.
-
-Every prototype and matrix report includes `simulation_exploit_audit`. To audit
-an existing report and optional full decision trace, run:
-
-```bash
-PYTHONPATH=.:..:../src \
-../capture/.venv-train/bin/python -m rl.exploit_audit \
-  outputs/simulator/training/evaluation.json \
-  --trace outputs/simulator/training/evaluation-trace.json
-```
-
-Matrix reports also include a fail-closed `quality_gate`: only verified
-held-out actor runs with complete matches, zero rejected actions, public-only
-inputs, and a clean exploit audit can pass it. Win rate remains evidence, not
-a gate. Exit status 2 means the artifact is flagged, invalid, or failed this
-gate and must be quarantined before promotion.
-
-`target_play_trace` contains target `PLAY` attempts only. Prototype
-`--trace-out` contains every decision. `tower_hp_before`, `tower_hp_after`, `tower_hp_end`
-distinguish per-decision snapshots from final or cap-time
-snapshots; `crowns_end` reports final world-player crown totals; and
-`troop_positions_end` is likewise terminal/cap-time data, not a continuous
-trajectory.
-
-No checkpoint has earned a strength promotion. The retained
-`prototype-fast-current` checkpoint is the current best provisional baseline:
-6/6 complete matches, 2/6 wins, zero rejected actions, and a clean exploit
-audit on the identical six-cell matrix. The update-22 cap, low-rate/reset,
-fresh, teacher-executed, and joint-loss continuations were quarantined after
-scoring 0/6 or 1/6.
-The isolated card-residual probe also scored 2/6, matching the retained
-baseline; a threat-stratified follow-up was quarantined when an independent
-tracked simulator edit changed during collection.
-
-## RL phases
-
-Apply the gated loop below after every segment. The scripts control only the
-opponent and never choose the learner's move.
-
-1. **Basic mechanics — approximately 1–5M decisions.** Use short generated
-   scenarios. Sample 25% isolated offense/tower pressure, 25% ground defense,
-   20% air defense, 15% spell situations, and 15% kiting/cycling/elixir
-   situations. Randomize lane, card order, elixir, tower HP, troop timing, and
-   placement. Judge success from the resulting game state, not a “correct card”
-   label.
-2. **Scripted curriculum — additional 10–30M decisions.** Sample 20% Phase-1
-   rehearsal, 20% passive/random-legal, 20% simple win-condition, 20%
-   reactive defensive/aggressive, and 20% randomized tempo/placement scripts.
-3. **Meta-deck training — additional 30–100M decisions.** Expand from 5
-   representative archetypes to 20 decks, 50 decks, and the full validated
-   meta pool. Sample 35% uniform archetypes, 30% weakness-prioritized
-   matchups, 20% curriculum rehearsal, and 15% randomized variants. Keep
-   unseen validation decks separate.
-4. **Historical self-play — additional 100–300M decisions.** Sample 30%
-   scripted/meta anchors, 30% PFSP historical policies, 20% newest frozen
-   main, 10% random historical checkpoints, and 10% exploiters/adversarial
-   policies. Train both world sides with matched `--target-player` runs; do
-   not use only latest-policy mirror play.
-5. **Small league — roughly 300M–1B+ cumulative decisions.** Use a main
-   learner, main exploiter, league exploiter, 16–32 frozen historical
-   policies, a payoff matrix, PFSP matchmaking, periodic exploiter resets, and
-   fixed scripted anchors. Add PSRO only for demonstrated non-transitive
-   cycles.
-6. **Frozen evaluation.** Run paired seeds on both sides across unseen decks,
-   controllers, historical checkpoints, and simulator perturbations. Report
-   per-deck outcomes, confidence intervals, tower/crown outcomes, traces,
-   rejected/fallback counts, and regressions.
-
-The default strategic curriculum switches on cumulative learner decisions at
-5M, 35M, 135M, and 435M, serializes the phase percentages as deterministic
-`sampling_mix` slots, and records source counts plus decision cursors per
-segment. Custom schedules without decision boundaries retain segment-cursor
-fallback. A source is opponent/scenario provenance only; it never chooses the
-learner's action. Generalized reports persist the cumulative decision cursor,
-so resume remains correct even if the next run changes lane count or horizon.
-
-Phase 1 is executable, not merely labeled: `BasicMechanicsScenarioEnv`
-constructs deterministic randomized initial states, ends them at the declared
-short horizon, and rewards resulting tower/threat changes without choosing a
-learner card. Every lane records state hashes and sampled setup metadata. Use
-`--no-regression` for an exact 25/25/20/15/15 lane mix and adjust the default
-64-decision horizon with `--basic-scenario-decisions`. These states currently
-require `--env-backend reference`; other backends fail closed until they carry
-the same reset/reward contract. Tower damage and removed setup threats share a
-Princess-Tower-HP reward scale. Each run also probes the same generated setups
-with an all-WAIT learner/opponent canary; a majority of passive wins is flagged
-as reward exploitation and quarantines the checkpoint.
-
-`LeagueOrchestrator` retains directional payoff and rating state, exposes PFSP
-sampling at the current cursor, and fails closed when a configured periodic
-exploiter reset has no callback. The callback owns the actual learner reset;
-the league records the completed reset in its serializable run state.
-
-### Implementation loop for RL scaling and frozen evaluation
-
-```text
-seal manifest and held-out split
-    -> preflight reset/replay/public-boundary/mask/parity checks
-    -> actor-controlled rollout and PPO update
-    -> simulator-exploit audit
-    -> freeze and fingerprint clean checkpoint
-    -> paired, no-adaptation held-out evaluation
-    -> promote, or quarantine/reproduce/fix and repeat
-```
-
-For every loop, record the code/ruleset/engine hashes, observation/action
-contract, architecture, optimizer, device/backend, decks/opponents, seeds,
-budget, split, terminal versus truncated outcomes, action sources, masks,
-rejected/fallback actions, and throughput. Create the held-out split before
-collection and keep ordinary PPO at `expert_execution_probability=0`. If a
-new simulator commit lands during collection or evaluation, quarantine the
-artifact and restart the loop from a sealed manifest on that commit.
-
-The simulator-exploit audit is mandatory. Check reward hacking, truncation
-stalling, reset/terminal errors, stale observations or masks, hidden
-information leaks, collision/navigation/timing loopholes, opponent-controller
-artifacts, illegal-action accounting, and reference/optimized divergence.
-Reward without terminal wins, impossible transitions, action collapse, abnormal
-cap-time behavior, or controller-specific wins are flags.
-
-A flag marks the run `simulation_exploit`/`invalid`. Preserve the smallest
-reproducing seed and trace, quarantine contaminated data, classify and fix the
-engine or harness, add a regression test, regenerate hashes, and rerun
-preflight plus the audit. Resume only from the last clean checkpoint.
-
-After a clean loop, run tests, benchmarks, exploit audit, artifact review, and
-the documentation check, then create exactly one focused git commit and record
-its ID in the run manifest/report. If remediation was needed, commit only the
-simulator/harness fix after its reproducer and rerun are clean. Never promote
-or commit an invalid checkpoint or contaminated training data as a success.
+Legality masks remove impossible actions only. A privileged critic may use full
+simulator state during training; the actor receives public observations. Teacher
+and search outputs supply training targets. Ordinary PPO actions come from the
+actor. WAIT advances the fixed simulator decision interval.
 
 ## Deterministic tick order
 
@@ -702,48 +422,15 @@ There is no single meaningful “overall accuracy” score.
 
 ## Performance
 
-Benchmark the simulator and actor on the same host and batch/workload:
+Benchmark the simulator on the current host from the repository root:
 
 ```bash
-PYTHONPATH=.:..:../src ../capture/.venv-train/bin/python -m simulator \
-  --ruleset v1 benchmark-vector --envs 16 --steps 100 \
-  --backend reference
-PYTHONPATH=.:..:../src ../capture/.venv-train/bin/python -m rl.benchmark_policy \
-  --batch-size 16 --device auto
+PYTHONPATH=.:src outputs/venv/bin/python -m simulator \
+  --ruleset v1 benchmark-vector --envs 16 --steps 100 --backend reference
 ```
 
-The current committed revision measured:
-
-| Path | Throughput |
-| --- | ---: |
-| Simulator, 16 lanes, CPU reference | 2.83k environment steps/s |
-| Actor-only deterministic fast path, batch 16, CPU | 0.84k decisions/s |
-| Actor-only deterministic fast path, batch 16, RTX 2050 | 4.69k decisions/s |
-| Full actor selection, batch 16, RTX 2050 | 3.77k decisions/s |
-| Simulator, 16 lanes, process backend, 4 workers | 503 environment steps/s |
-| Historical end-to-end trainer, RTX 2050, 48 lanes, 8 rollout workers | 590 decisions/s |
-| Committed expert-guided rollout farm, 4 lanes, 4 workers, 20,480 decisions | 88.2 decisions/s |
-| Current memory-bounded PPO, RTX 2050, 2 lanes, 1,536 transitions | 96.4 decisions/s |
-| Current batched matrix evaluation, RTX 2050, 8 lanes, hashes off | 377 decisions/s |
-
-CPU actor parity remains an open performance gate. The 590 decisions/s figure
-is an accepted historical benchmark, not the current two-lane memory-bounded
-configuration. The bounded CUDA run measured 96.4 decisions/s end-to-end over
-1,536 transitions; current batched matrix evaluation measured 377 decisions/s
-over 4,753 decisions. The
-deployment path avoids belief heads and distribution normalization, resolves
-`WAIT` before card/placement decoding, uses a channels-last raster, removes
-masked entity tails, and caps CPU intra-op parallelism at eight threads. The
-single-observation deployment callers also bypass one-element host stacking
-and prepare the raster layout at the observation boundary. Dense CPU entity
-batches use a sequence-first Transformer layout; padded batches retain the
-existing path, repeated empty-entity lanes reuse a version-checked null
-encoding, and padded lanes compact raw entities before projection. The
-PPO/reference forward path and selected-action parity are unchanged. Normal
-evaluation skips the per-decision serialization needed only for replay hashes;
-`--replay-hashes` restores that audit evidence. The vector-backend regression
-checks state, event-log, and replay hashes for both process transports across
-consecutive steps with privileged info disabled.
+Use the V4 roadmap reports for current policy throughput. Historical prototype
+throughput is not a prediction for the current search and training workload.
 
 ## Automation and current limits
 
