@@ -134,7 +134,7 @@ class DeploymentMixin:
         for tower in own_towers:
             if tower.alive or tower.role == "king":
                 continue
-            for cell in _GROUND_CELLS:
+            for cell in _POLICY_GRID_CELLS:
                 if distance_mtile(
                     *cell_center_mtile(cell),
                     tower.x_mtile,
@@ -417,7 +417,7 @@ class DeploymentMixin:
     def _territory_cell(self, state: BattleState, player: int, cell: tuple[int, int]) -> bool:
         if is_basic_deploy_cell(player, cell):
             return True
-        if not is_ground_cell(cell):
+        if not is_spell_cell(cell):
             return False
         col, row = cell
         # Princess loss opens the destroyed site; taking an enemy Princess
@@ -428,6 +428,10 @@ class DeploymentMixin:
                 continue
             if distance_mtile(*cell_center_mtile(cell), tower.x_mtile, tower.y_mtile) <= 2_000:
                 return True
+        # The static ground map excludes tower footprints.  Apply the
+        # destroyed friendly site exception before rejecting those cells.
+        if not is_ground_cell(cell):
+            return False
         enemy = 1 - player
         for tower in self._towers_for(state, enemy):
             if tower.alive or tower.role == "king":
