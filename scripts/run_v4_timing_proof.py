@@ -60,8 +60,9 @@ from simulator.rl.v4.timing_curriculum import (
 )
 from simulator.rl.v4.timing_teacher import TIMING_TEACHER_VERSION
 
-# Reference card/placement agreement from the sim-natural proof
-# (run_v4_distillation_proof.py --generator sim, seed 0, 2026-09-08).
+# Reference card/placement agreement from the historical sim-natural Stage-1
+# proof (seed 0, 2026-09-08). The retired one-off runner is intentionally not
+# part of the current Stage-2 dependency graph.
 SIM_REFERENCE = {
     "card_acc": 0.983,
     "placement_within1": 0.979,
