@@ -2114,15 +2114,16 @@ def _deterministic_action(policy: Any, output: Any, masks: Any) -> tuple[Any, An
         selected_cards = factors.card[play].argmax(dim=-1)
         card_slot[play] = selected_cards
         selected_placement = factors.placement[play]
-        rows = selected_placement.shape[-2]
         cols = selected_placement.shape[-1]
         sample_number = torch.arange(selected_cards.shape[0], device=selected_cards.device)
         selected_logits = selected_placement[sample_number, selected_cards].reshape(
             selected_cards.shape[0], -1
         )
         cells = selected_logits.argmax(dim=-1)
-        placement[play, 0] = torch.div(cells, cols, rounding_mode="floor")
-        placement[play, 1] = cells.remainder(cols)
+        placement[play] = torch.stack(
+            (torch.div(cells, cols, rounding_mode="floor"), cells.remainder(cols)),
+            dim=-1,
+        )
     actions = ActionBatch(mode=mode, card_slot=card_slot, placement=placement)
     log_probs = policy.action_head.log_prob(output.logits, actions, masks)
     entropy = _joint_entropy(policy, output, masks)

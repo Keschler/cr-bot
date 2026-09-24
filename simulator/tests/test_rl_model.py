@@ -844,12 +844,46 @@ def test_sampling_returns_legal_hierarchical_actions_and_diagnostics() -> None:
     if bool(play.any().item()):
         selected_cards = actions.card_slot[play]
         assert masks.card[play].gather(-1, selected_cards.unsqueeze(-1)).all()
-        selected_mask = masks.placement[play, selected_cards]
-        selected_rows = actions.placement[play, 0]
-        selected_cols = actions.placement[play, 1]
+        selected_mask = masks.placement[play][
+            torch.arange(selected_cards.shape[0]), selected_cards
+        ]
+        selected_rows = actions.placement[play][:, 0]
+        selected_cols = actions.placement[play][:, 1]
         assert selected_mask[
             torch.arange(selected_cards.shape[0]), selected_rows, selected_cols
         ].all()
+
+
+@requires_torch
+def test_deterministic_action_decodes_placements_across_batch_and_time() -> None:
+    from rl import RecurrentHybridPolicy
+    from rl.foundation.learner import _deterministic_action
+
+    config = _config()
+    policy = RecurrentHybridPolicy(config).eval()
+    raster, features, entities, entity_mask, reset = _inputs(config)
+    masks = _masks(config)
+    masks.mode[..., 0] = False  # PLAY at every time step except the first.
+    masks.mode[0, 0] = torch.tensor([True, False])
+    with torch.inference_mode():
+        output = policy(
+            raster, features, entities, entity_mask,
+            reset_mask=reset, action_masks=masks, include_beliefs=False,
+        )
+        actions, log_probs, entropy = _deterministic_action(policy, output, masks)
+
+    assert actions.placement.shape == (2, 3, 2)
+    assert torch.isfinite(log_probs).all()
+    assert torch.isfinite(entropy).all()
+    for batch in range(2):
+        for step in range(3):
+            if batch == step == 0:
+                assert actions.mode[batch, step] == policy.action_head.WAIT
+                assert actions.placement[batch, step].tolist() == [0, 0]
+                continue
+            card = int(actions.card_slot[batch, step])
+            row, col = actions.placement[batch, step].tolist()
+            assert masks.placement[batch, step, card, row, col]
 
 
 @requires_torch
