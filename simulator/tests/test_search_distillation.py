@@ -183,3 +183,41 @@ def test_deadline_inside_first_epoch_resumes_from_initial_boundary(tmp_path: Pat
                              context=0, epochs=1, batch_size=1, checkpoint_path=checkpoint)
     assert complete["status"] == "complete"
     assert complete["optimizer_steps"] == 2
+
+
+def test_prepare_records_keeps_corrections_unique_and_caps_retention(tmp_path: Path) -> None:
+    """Exercise real verdict loading/gating; only simulator replay is stubbed."""
+    import json
+    from simulator.rl.v4.search_distillation import prepare_records
+
+    match = {"config": {"archetype": "hog", "match_index": 0},
+             "decisions": [{"t": t, "learner": {"mode": 0}} for t in range(8)]}
+    (tmp_path / "train_hog_0_match.json").write_text(json.dumps(match))
+    entries = []
+    for offset, confirmed_gain in ((2, 0.5), (3, -0.5), (4, -0.5)):
+        entries.append({"entry_id": f"train:hog#0:t{offset}"})
+        verdict = {"discovery_replica_indices": [0, 1],
+                   "confirmation_replica_indices": [2, 3], "branches": [
+            {"source": "sim", "mode": 0, "mean": 0.0, "values": [0.0, 0.0],
+             "confirmation_values": [0.0, 0.0]},
+            {"source": "search", "mode": 1, "slot": 0, "row": 0, "col": 0,
+             "mean": 0.5, "values": [0.5, 0.5],
+             "confirmation_values": [confirmed_gain, confirmed_gain]},
+        ]}
+        (tmp_path / f"train_hog_0_t{offset}_verdict.json").write_text(json.dumps(verdict))
+
+    def replay(_match, offsets, *, context, **_kwargs):
+        return ({t: [{"time": np.asarray(t)}] * (context + 1) for t in offsets},
+                {t: [np.ones((1, 1, 1), dtype=bool)] * (context + 1) for t in offsets},
+                {t: [True] * (context + 1) for t in offsets})
+
+    with patch("simulator.rl.v4.search_distillation._replay_selected_prefixes_with_legal", side_effect=replay):
+        for count in (0, 1, 2):
+            records = prepare_records(tmp_path, entries, context=1, retention_count=count)
+            corrections = [r for r in records if r.is_correction]
+            retention = [r for r in records if not r.is_correction]
+            assert len(corrections) == 1
+            assert corrections[0].key == "train:hog#0:t2"
+            assert corrections[0].correction_action == ActionTarget(1, 0, 0, 0)
+            assert len(retention) == count
+            assert len({r.offset for r in records}) == count + 1

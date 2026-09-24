@@ -798,8 +798,8 @@ def _build_records_impl(
         accepted, target, stats = validated_correction(
             verdict, min_lcb=min_lcb, require_independent=require_independent,
         )
-        selected.setdefault(key, set()).add(offset)
         if accepted and target is not None:
+            selected.setdefault(key, set()).add(offset)
             corrections.append((entry, key, offset, verdict, target, stats))
 
     # Frontier entries are intentionally sparse.  Ordinary replay must draw
@@ -880,9 +880,8 @@ def _build_records_impl(
     # ``CachedPrefix`` historically stored only ``match_id``.  Within one
     # split call this is sufficient and avoids changing the serialized public
     # key format.
-    corrected = {(split, r.match_id, r.offset) for (split, _), r in zip(
-        (key for key, *_rest in corrections), records
-    )}
+    corrected = {(key[0], key[1], offset)
+                 for _entry, key, offset, _verdict, _target, _stats in corrections}
     for key, offsets in selected.items():
         split, match_id = key
         match = by_match[key]
