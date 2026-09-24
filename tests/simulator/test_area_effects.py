@@ -163,7 +163,7 @@ def test_rage_deals_one_impact_pulse_and_refreshes_a_friendly_aura() -> None:
     engine.validate_state(state)
 
 
-def test_tornado_uses_two_damage_pulses_then_pull_only_tail() -> None:
+def test_tornado_uses_one_damage_pulse_then_pull_only_tail() -> None:
     engine = BattleEngine(ROSTER)
     state = engine.new_battle((PLAYER_DECK, PLAYER_DECK), seed=11, shuffle_decks=False)
     target_uid = state.next_uid
@@ -187,31 +187,27 @@ def test_tornado_uses_two_damage_pulses_then_pull_only_tail() -> None:
         raw_effect=raw_effect,
     )
     effect = next(iter(state.effects.values()))
-    assert effect.damage_schedule == (42, 42)
-    assert effect.crown_damage_schedule == (14, 13)
-    assert target.hp == 458
+    assert effect.damage_schedule == (84,)
+    assert effect.crown_damage_schedule == (27,)
+    assert target.hp == 416
     assert target.x_mtile == 10_000
 
-    # The reference clock is 50 ms.  At 0.5 s the second damage pulse and
-    # another deterministic pull occur; the 1.0 s pulse keeps the pull alive
-    # but has no scheduled damage.
-    for _ in range(10):
+    # The pinned April 2025 damage nerf leaves one initial damage pulse.
+    # The 0.55-second refresh only pulls, and the effect ends at 1.05 s.
+    for _ in range(11):
         engine._advance_area_effects(state)
     assert target.hp == 416
     assert target.x_mtile == 9_000
-    for _ in range(10):
-        engine._advance_area_effects(state)
-    assert target.hp == 416
-    assert target.x_mtile == 9_000
-    assert effect.pulses_applied == 3
+    assert effect.pulses_applied == 2
     assert effect.alive is True
 
-    for _ in range(2):
+    for _ in range(10):
         engine._advance_area_effects(state)
+    assert target.hp == 416
     assert effect.alive is False
     pulses = [event for event in state.events if event.kind == "area_effect_pulse"]
-    assert [event.get("damage") for event in pulses] == [42, 42, 0]
-    assert [event.get("pulse_index") for event in pulses] == [0, 1, 2]
+    assert [event.get("damage") for event in pulses] == [84, 0]
+    assert [event.get("pulse_index") for event in pulses] == [0, 1]
     engine.validate_state(state)
 
 

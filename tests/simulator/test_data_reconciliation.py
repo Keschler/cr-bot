@@ -53,8 +53,8 @@ def test_fixed_ruleset_applies_deckshop_core_spell_scalars_without_overriding_of
     assert cards["tornado"]["damage"] == 84
     assert cards["tornado"]["crown_tower_damage"] == 27
     assert cards["tornado"]["area_radius_mtile"] == 5_500
-    assert cards["tornado"]["mechanics"]["persistent_effect"]["damage_schedule"] == [42, 42]
-    assert cards["tornado"]["mechanics"]["persistent_effect"]["crown_damage_schedule"] == [14, 13]
+    assert cards["tornado"]["mechanics"]["persistent_effect"]["damage_schedule"] == [84]
+    assert cards["tornado"]["mechanics"]["persistent_effect"]["crown_damage_schedule"] == [27]
 
 
 def test_official_overrides_are_field_level_and_do_not_mutate_input() -> None:
