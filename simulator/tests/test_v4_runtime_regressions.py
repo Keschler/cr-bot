@@ -252,3 +252,45 @@ def test_return_distribution_quantile_levels_follow_input_device(monkeypatch):
 def test_return_distribution_runs_on_cuda():
     result = return_distribution(torch.arange(8, dtype=torch.float32, device="cuda"))
     assert result["n"] == 8
+
+
+@pytest.mark.parametrize("epochs", [1, 2])
+def test_movement_quarantine_measures_updated_candidate(epochs):
+    from simulator.rl.v4.v4_ppo import _forward_sequence
+    from simulator.rl.foundation.objectives import PPOObjectiveConfig
+
+    net = policy()
+    critic = V4ValueHead(64)
+    batch, _ = collect_v4_rollout(
+        net, critic, None, [_lane("ground-defense", "beatdown", 5)],
+        n_decisions=4, deterministic_policy=True,
+    )
+    config = PPOObjectiveConfig(clip_epsilon=0.1, bc_coef=0.0)
+    report = update_v4_ppo(
+        net, critic, torch.optim.Adam(net.parameters(), lr=0.01),
+        torch.optim.Adam(critic.parameters(), lr=1e-4), batch,
+        ppo_config=config, ppo_epochs=epochs,
+    )
+    trajectory = batch.trajectory
+    with torch.no_grad():
+        logits, _, _ = _forward_sequence(net, trajectory.sequence, "cpu")
+        log_probs = net.log_prob(logits, trajectory.action_masks, trajectory.actions)
+        difference = log_probs - trajectory.old_log_probs
+    assert report.approx_kl == pytest.approx((-difference).mean().item())
+    assert report.mean_abs_log_ratio == pytest.approx(difference.abs().mean().item())
+    assert report.clip_fraction == pytest.approx(
+        ((difference.exp() - 1).abs() > config.clip_epsilon).float().mean().item()
+    )
+    assert report.mean_abs_log_ratio > 0.05
+    assert report.quarantined
+    assert any("mean-abs-log-ratio" in reason for reason in report.quarantine_reasons)
+
+
+def test_monte_carlo_terminal_reward_reaches_prior_actions_without_crossing_resets():
+    from simulator.rl.v4.v4_ppo import monte_carlo_returns
+
+    rewards = torch.tensor([[0., 2., 0., 4.]])
+    terminated = torch.tensor([[False, True, False, True]])
+    returns, stats = monte_carlo_returns(rewards, terminated, gamma=0.5)
+    assert returns.tolist() == [[1., 2., 2., 4.]]
+    assert stats["truncated_tail_fraction"] == 0.0

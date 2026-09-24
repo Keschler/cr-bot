@@ -824,20 +824,35 @@ def update_v4_ppo(
             key: float(value.detach().mean().item())
             for key, value in (batch.per_head_entropy or {}).items()
         }
-        post_logits, _, _ = _forward_sequence(policy, sequence, device)
-        post_decoded = policy.act_deterministic(
-            post_logits, trajectory.action_masks
-        )
+        with torch.no_grad():
+            post_logits, _, _ = _forward_sequence(policy, sequence, device)
+            post_decoded = policy.act_deterministic(
+                post_logits, trajectory.action_masks
+            )
+            # The objective was evaluated before optimizer.step().  Measure
+            # the actual candidate against the collected behavior policy.
+            post_log_probs = policy.log_prob(
+                post_logits, trajectory.action_masks, trajectory.actions
+            )
+            post_log_ratio = post_log_probs - trajectory.old_log_probs.to(device)
+            post_approx_kl = float((-post_log_ratio).mean().item())
+            post_mean_abs_log_ratio = float(post_log_ratio.abs().mean().item())
+            post_clip_fraction = float(
+                ((post_log_ratio.exp() - 1.0).abs() > objective_config.clip_epsilon)
+                .float().mean().item()
+            )
         drift = _decode_drift(pre_decoded, post_decoded)
         placement_ratio = grad_norms.get("placement", 0.0) / max(grad_norms.get("mode", 1e-8), 1e-8)
         reasons: list[str] = []
         if not bool(torch.isfinite(result.total_loss).item()):
             reasons.append("non-finite total loss")
-        if float(result.approx_kl.item()) > 0.03:
-            reasons.append(f"approx-kl {float(result.approx_kl.item()):.4f} above 0.03")
-        if float(result.mean_abs_log_ratio.item()) > 0.05:
+        if not bool(torch.isfinite(post_log_ratio).all().item()):
+            reasons.append("non-finite post-update log ratio")
+        if post_approx_kl > 0.03:
+            reasons.append(f"approx-kl {post_approx_kl:.4f} above 0.03")
+        if post_mean_abs_log_ratio > 0.05:
             reasons.append(
-                f"mean-abs-log-ratio {float(result.mean_abs_log_ratio.item()):.4f} above 0.05"
+                f"mean-abs-log-ratio {post_mean_abs_log_ratio:.4f} above 0.05"
             )
         if drift["mode_flip"] > 0.15:
             reasons.append(f"mode flip {drift['mode_flip']:.3f} above 0.15")
@@ -850,10 +865,9 @@ def update_v4_ppo(
         head_kl: dict[str, float] = {}
         if batch.old_head_logits is not None:
             with torch.no_grad():
-                final_logits, _, _ = _forward_sequence(policy, sequence, device)
                 for key, value in per_head_kl(
                     {k: v.to(device) for k, v in batch.old_head_logits.items()},
-                    final_logits,
+                    post_logits,
                     trajectory.action_masks,
                 ).items():
                     head_kl[key] = (0.0 if key == "duration" and policy.config.fixed_wait
@@ -901,9 +915,9 @@ def update_v4_ppo(
             entropy=float(result.entropy.item()),
             per_head_entropy=per_head,
             behavior_cloning_loss=float(result.behavior_cloning_loss.item()),
-            approx_kl=float(result.approx_kl.item()),
-            mean_abs_log_ratio=float(result.mean_abs_log_ratio.item()),
-            clip_fraction=float(result.clip_fraction.item()),
+            approx_kl=post_approx_kl,
+            mean_abs_log_ratio=post_mean_abs_log_ratio,
+            clip_fraction=post_clip_fraction,
             grad_norms=grad_norms,
             explained_variance=explained,
             mode_flip_fraction=drift["mode_flip"],
@@ -1218,8 +1232,9 @@ def monte_carlo_returns(
         running = rewards[:, step] + float(gamma) * running * (~terminated[:, step]).to(
             rewards.dtype
         )
+        # Keep this reward for earlier actions in the same episode.  The
+        # terminal mask above already prevents bootstrapping across resets.
         out[:, step] = running
-        running = torch.where(terminated[:, step], torch.zeros_like(running), running)
     # Steps biased by the zero bootstrap: nonterminal-final lanes, steps
     # strictly before the cut edge and after the lane's last termination.
     biased = 0
