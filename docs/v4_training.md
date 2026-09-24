@@ -1,4 +1,4 @@
-# V4 controlled training curves
+# V4 training and evaluation
 
 ## Active V4 path
 
@@ -13,9 +13,31 @@ controlled PPO comparison. The budgeted CPU chain is
 historical Stage-2 checkpoint. It still uses `run_v4_timing_proof.py` for
 timing metrics and the simulator-generated timing curriculum; neither is part
 of the new on-policy search-distillation loop. The one-off Stage-1
-distillation-proof runner has been removed. The older V1/V3 RL stack remains
-available to the simulator CLI and live controller, but package exports load
-it only when requested, so importing a V4 module does not initialize it.
+distillation-proof runner has been removed. Earlier public-actor checkpoints
+remain loadable by the live-controller inference reader; the retired V1/V3
+training package and simulator CLI command have been removed.
+
+## Checkpoint and dataset status (September 2026)
+
+There is no promoted V4 checkpoint from the expanded experiments. The local
+`outputs/v4/stage2_12k_v2_e12_s12.pt` is the restored reference checkpoint
+used for the comparisons below; it is an ignored local artifact, not a model
+shipped with the repository. The most recently trained local V4 weights are
+`outputs/v4/targeted_fit_20260920/actor.pt`, a diagnostic fit of 16 selected
+search actions. It fitted 15/16 training targets but matched 0/28 sealed
+targets and did not improve held-out action outcomes overall. Do not promote
+that checkpoint as the new policy.
+
+The expanded PPO comparison used 107 training frontier states, 28 sealed
+states, and 48 full matches per curve. The reference actor scored 11-36-1;
+neither the terminal-reward nor tower-delta eight-update curve established an
+improvement. The later Runpod collection produced 227 training and 93 sealed
+frontier entries from 1,920 and 768 searched candidates, respectively. These
+are search data, not evidence that a new model was trained or validated.
+The generated [PPO report](../outputs/v4/expanded_20260916/REPORT.md) and
+[targeted-fit report](../outputs/v4/targeted_fit_20260920/REPORT.md) contain
+the detailed results and limits. Their files under `outputs/` are local and
+are not part of a fresh checkout.
 
 ## Correctness fixes and artifact compatibility
 
@@ -111,7 +133,8 @@ reached and the truncation semantics are exercised.
 ## Real run
 
 The historical simx12 checkpoint is not checked into this repository. Supply a
-real, compatible V4 checkpoint and both frontier files:
+real, compatible V4 checkpoint and both frontier files. The paths below are
+placeholders for a fresh checkout:
 
 ```bash
 PYTHONPATH=src outputs/venv/bin/python scripts/run_v4_learning_curve.py \
@@ -237,7 +260,8 @@ The legacy wait-only teacher remains available as an ablation.
 This is an outcome-search controller baseline, not an expert Hog 2.6 teacher.
 Coverage statistics should be inspected before a substantial training run;
 longer active horizons alone do not ensure card preservation, outcycling, or
-endgame competence. No new large dataset or pretrained model is included.
+endgame competence. The later frontier collection is a local generated
+dataset; it does not include a newly validated pretrained model.
 
 ## Local validation
 
@@ -263,87 +287,25 @@ replica outcomes. A “solved” label only describes the tested alternatives an
 horizon; it does not establish strategic mastery.
 
 The restored-checkpoint pilot produced a 2/24 full-match win result and six entries
-in each of the training and held-out splits. Its protocol, per-opponent results,
-and artifact locations are in the local generated
+in each of the training and held-out splits. Its protocol and per-opponent results
+are in the local generated
 [baseline report](../outputs/v4/restored_baseline_20260915_reviewed/REPORT.md).
-The sets are too small for a substantial training run; expand discovery before
-using a PPO learning curve to draw conclusions about model quality.
+The expanded frontier and both PPO reward curves have since been run; see the
+status above before planning another experiment.
 
-## Commands for the next experiment
+## Next V4 experiment
 
-From the repository root, set the import path and limit simulator threading:
-
-```bash
-export PYTHONPATH=.:src
-export OMP_NUM_THREADS=1
-export MKL_NUM_THREADS=1
-```
-
-Generate a larger, disjoint train/sealed pilot. This uses 20 train and 8
-sealed matches per opponent archetype, eight paired replicas for candidate
-labels, and three worker processes. A rerun with the same arguments resumes
-the same output directory; changing settings requires a new `--out` path.
-
-```bash
-outputs/venv/bin/python scripts/run_v4_frontier_generation.py \
-  --checkpoint outputs/v4/stage2_12k_v2_e12_s12.pt \
-  --out outputs/v4/frontier_expanded_20260915 \
-  --train-matches-per-archetype 20 \
-  --sealed-matches-per-archetype 8 \
-  --train-pool-seed 20261001 \
-  --sealed-pool-seed 20261002 \
-  --candidates-per-match 16 \
-  --replicas 8 \
-  --branches 7 \
-  --horizon 128 \
-  --max-decisions 1200 \
-  --max-entries-per-split 512 \
-  --workers 3
-```
-
-Before the update run, evaluate update zero on fresh held-out match seeds.
-The six pinned archetypes produce 48 matches with `--eval-matches 8`.
-
-```bash
-outputs/venv/bin/python scripts/run_v4_learning_curve.py \
-  --evaluation-only-checkpoint outputs/v4/stage2_12k_v2_e12_s12.pt \
-  --sealed-entries outputs/v4/frontier_expanded_20260915/frontier_sealed.pt \
-  --updates 0 \
-  --eval-seed-start 30000 \
-  --eval-matches 8 \
-  --eval-max-decisions 1200 \
-  --out outputs/v4/curve_baseline_20260915
-```
-
-Run the controlled PPO curve with the same held-out entries and seeds:
-
-```bash
-outputs/venv/bin/python scripts/run_v4_learning_curve.py \
-  --checkpoint outputs/v4/stage2_12k_v2_e12_s12.pt \
-  --train-entries outputs/v4/frontier_expanded_20260915/frontier_train.pt \
-  --sealed-entries outputs/v4/frontier_expanded_20260915/frontier_sealed.pt \
-  --out outputs/v4/curve_tower_delta_20260915 \
-  --updates 0,1,2,4,8 \
-  --eval-seed-start 30000 \
-  --eval-matches 8 \
-  --eval-max-decisions 1200 \
-  --rollout-decisions 128 \
-  --rollout-lanes 8 \
-  --episode-cap 128 \
-  --reward-mode tower-delta \
-  --choice-replicas 8 \
-  --adaptive-choice-replicas \
-  --choice-max-replicas 32 \
-  --choice-horizon 128 \
-  --actor-lr 3e-4 \
-  --critic-lr 1e-4 \
-  --ppo-epochs 1 \
-  --device cpu
-```
-
-If the tower-delta curve is flat, repeat the last command with a new output
-directory and `--reward-mode terminal`. Compare full-match results and sealed
-choice regret; do not select a checkpoint from training loss alone.
+Audit the search labels with independent paired replicas at multiple horizons,
+then obtain a disjoint development-validation pool. The Runpod collection's
+sealed split is reserved for final evaluation and must not become the
+development-validation split. The search-distillation runner requires both
+`--dataset-root` and `--validation-root`; its four methods compare hard and
+soft search targets with or without conservative retention, and its context
+settings compare zero-start with replayed GRU history. Use fresh output paths
+for a changed protocol, select a candidate on development validation, and
+open sealed states only after that selection. Full-match confirmation follows
+the search-based checks. PPO refinement and architecture sweeps remain later
+work, not completed steps of the current local dataset collection.
 
 ## Package layout and retired runners
 

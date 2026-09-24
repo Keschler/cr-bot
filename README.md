@@ -89,7 +89,7 @@ chmod +x prototype-live-linux-x86_64
 
 ### 2. Test on a video
 
-Use the current best trained policy,
+For the older live-phone prototype, use its released checkpoint,
 [`prototype.pt`](https://github.com/Keschler/cr-bot/releases/download/v0.5/prototype.pt):
 
 ```bash

@@ -15,7 +15,7 @@ while the actor, training loop, evaluation, and simulator throughput improve.
 This permits provisional experiments only; it does not satisfy the fidelity
 gates or authorize a `training_ready` claim.
 
-The best provisional actor is
+The older live-phone prototype actor is
 `outputs/simulator/training/prototype-public-primary-current/prototype.pt`.
 It uses the public hand/current-state card head as the primary card policy,
 fixing the verified stale recurrent cheap-cycle failure. It scores 4/6 on the
@@ -23,10 +23,12 @@ exact matrix and 16/24 (66.7%) on a paired shuffled-hand matrix, versus 2/24
 (8.3%) for the former baseline. Evaluation is actor-controlled and public-only;
 all candidate quality and simulation-exploit gates pass. The checkpoint's
 `evaluation-exact6.json` and `evaluation-summary.json` contain the sealed
-evidence. This is simulator prototype evidence, not live-game strength.
+evidence. This is simulator prototype evidence, not live-game strength or a
+V4 model-quality result. See the [V4 training guide](../docs/v4_training.md)
+for the current V4 checkpoint and dataset status.
 
-The current stable PPO path uses 8 GPU lanes, a 512-decision rollout, recurrent
-minibatches of 8, and a `2e-6` resume learning rate. It completed 69,632 clean
+The retired prototype PPO experiment used 8 GPU lanes, a 512-decision rollout,
+recurrent minibatches of 8, and a `2e-6` resume learning rate. It completed 69,632 clean
 Phase-1 decisions without changing the retained held-out trajectory, at 336
 end-to-end decisions/s with bulky decision traces disabled. Full diagnostics
 measure about 128–145 decisions/s. Set
@@ -39,15 +41,16 @@ remains memory-safe at batch 6.
 From `simulator/`, use the repository training environment:
 
 ```bash
-../capture/.venv-train/bin/python -m pip install -e ..
-PYTHONPATH=.:..:../src ../capture/.venv-train/bin/python -m simulator --help
+../outputs/venv/bin/python -m pip install -e ..
+PYTHONPATH=.:..:../src ../outputs/venv/bin/python -m simulator --help
 ```
 
 Run the focused RL tests and the default suite:
 
 ```bash
-pytest tests/test_rl_model.py tests/test_rl_prototype.py
-pytest --ignore=tests/test_audio_dataset.py --ignore=tests/test_mining_pipeline.py
+PYTHONPATH=.:..:../src ../outputs/venv/bin/python -m pytest \
+  tests/test_v4_model.py tests/test_v4_search_review_fixes.py
+(cd .. && outputs/venv/bin/python -m pytest --ignore=tests/test_audio_dataset.py --ignore=tests/test_mining_pipeline.py)
 ```
 
 The two audio/mining tests are excluded unless the change concerns those
@@ -65,21 +68,21 @@ promote an artifact produced across mixed revisions.
 Inspect the ruleset, run a deterministic match, and verify replay stability:
 
 ```bash
-PYTHONPATH=.:..:../src ../capture/.venv-train/bin/python -m simulator \
+PYTHONPATH=.:..:../src ../outputs/venv/bin/python -m simulator \
   --ruleset v1 ruleset
-PYTHONPATH=.:..:../src ../capture/.venv-train/bin/python -m simulator \
+PYTHONPATH=.:..:../src ../outputs/venv/bin/python -m simulator \
   --ruleset v1 run --seed 7
-PYTHONPATH=.:..:../src ../capture/.venv-train/bin/python -m simulator \
+PYTHONPATH=.:..:../src ../outputs/venv/bin/python -m simulator \
   --ruleset v1 check-determinism --seed 7
 ```
 
 Generate and validate roster scenarios:
 
 ```bash
-PYTHONPATH=.:..:../src ../capture/.venv-train/bin/python -m simulator \
+PYTHONPATH=.:..:../src ../outputs/venv/bin/python -m simulator \
   --ruleset v1 generate-scenarios --per-mechanic 1 \
   --json-out outputs/simulator/generated-roster-scenarios.json
-PYTHONPATH=.:..:../src ../capture/.venv-train/bin/python -m simulator \
+PYTHONPATH=.:..:../src ../outputs/venv/bin/python -m simulator \
   --ruleset v1 validate-generated \
   outputs/simulator/generated-roster-scenarios.json \
   --json-out outputs/simulator/generated-roster-validation.json \
@@ -96,10 +99,10 @@ harness remains available for the later release gate and can be exercised
 offline before connecting devices:
 
 ```bash
-PYTHONPATH=.:..:../src ../capture/.venv-train/bin/python -m simulator lab plan \
+PYTHONPATH=.:..:../src ../outputs/venv/bin/python -m simulator lab plan \
   --hog-cannon-only \
   --json-out outputs/simulator/fidelity_media/physical_lab/plan.jsonl
-PYTHONPATH=.:..:../src ../capture/.venv-train/bin/python -m simulator lab run \
+PYTHONPATH=.:..:../src ../outputs/venv/bin/python -m simulator lab run \
   --experiment outputs/simulator/fidelity_media/physical_lab/plan.jsonl \
   --mode offline \
   --json-out outputs/simulator/fidelity_media/physical_lab/offline-summary.json
@@ -136,7 +139,7 @@ chmod +x dist/prototype-live-linux-x86_64
 
 #### 2. Test on a video
 
-Use the current best trained policy,
+For this older live-phone prototype, use its released checkpoint,
 [`prototype.pt`](https://github.com/Keschler/cr-bot/releases/download/v0.5/prototype.pt):
 
 ```bash
@@ -217,7 +220,7 @@ Run the fail-closed readiness report only on sealed, provenance-carrying
 reports:
 
 ```bash
-PYTHONPATH=.:..:../src ../capture/.venv-train/bin/python -m simulator readiness \
+PYTHONPATH=.:..:../src ../outputs/venv/bin/python -m simulator readiness \
   outputs/sim/calibration-fidelity.json \
   outputs/sim/heldout-fidelity.json \
   --json-out outputs/sim/training-readiness.json \
@@ -295,10 +298,10 @@ within a version; behavior-changing edits require a new version.
 Check roster coverage and source reconciliation with:
 
 ```bash
-PYTHONPATH=.:..:../src ../capture/.venv-train/bin/python -m simulator \
+PYTHONPATH=.:..:../src ../outputs/venv/bin/python -m simulator \
   --ruleset v1 roster --require-coverage \
   --json-out outputs/simulator/roster-contract.json
-PYTHONPATH=.:..:../src ../capture/.venv-train/bin/python -m simulator \
+PYTHONPATH=.:..:../src ../outputs/venv/bin/python -m simulator \
   --ruleset v1 reconcile-data \
   --json-out outputs/simulator/card-data-reconciliation.json
 ```
@@ -437,10 +440,10 @@ throughput is not a prediction for the current search and training workload.
 Recommended checks:
 
 ```bash
-PYTHONPATH=.:..:../src ../capture/.venv-train/bin/python -m simulator \
+PYTHONPATH=.:..:../src ../outputs/venv/bin/python -m simulator \
   --ruleset v1 audit --seeds 16 --max-ticks 6000 \
   --json-out outputs/simulator/audit.json
-PYTHONPATH=.:..:../src ../capture/.venv-train/bin/python -m simulator \
+PYTHONPATH=.:..:../src ../outputs/venv/bin/python -m simulator \
   --ruleset v1 soak --seeds 32 --tick-budget 1000000 \
   --json-out outputs/simulator/soak.json
 ```
