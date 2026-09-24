@@ -165,18 +165,38 @@ def _check_disjoint_entries(train_entries: list[Any], validation_entries: list[A
             raise ValueError(f"train and validation share {field}: {len(overlap)} overlapping values")
 
 
-def _cache_payload(train_records: list[Any], validation_records: list[Any], args: argparse.Namespace) -> dict[str, Any]:
+def _dataset_identity(root: Path) -> dict[str, Any]:
+    root = root.expanduser().resolve()
+    return {
+        "root": str(root),
+        "frontier_sha256": file_sha256(root / "frontier_train.pt"),
+        "sources": {
+            path.name: file_sha256(path)
+            for path in sorted(set(root.glob("*_match.json")) | set(root.glob("*_verdict.json")))
+        },
+    }
+
+
+def _cache_identity(args: argparse.Namespace) -> dict[str, Any]:
+    """Identity of both the replay inputs and the selected training examples."""
     return {
         "version": SEARCH_DISTILLATION_VERSION,
         "context": int(args.context),
         "min_lcb": float(args.min_lcb),
+        "max_corrections": int(args.max_corrections),
         "max_retention": int(args.max_retention),
         "validation_retention": int(args.validation_retention),
         "require_independent": not bool(args.allow_discovery_confidence),
-        "train_root": str(args.dataset_root.expanduser().resolve()),
-        "validation_root": str(args.validation_root.expanduser().resolve()),
-        "train_frontier_sha256": file_sha256(args.dataset_root.expanduser().resolve() / "frontier_train.pt"),
-        "validation_frontier_sha256": file_sha256(args.validation_root.expanduser().resolve() / "frontier_train.pt"),
+        "train": _dataset_identity(args.dataset_root),
+        "validation": _dataset_identity(args.validation_root),
+        "preparation_sha256": file_sha256(REPO_ROOT / "simulator/rl/v4/search_distillation.py"),
+        "runner_sha256": file_sha256(Path(__file__).resolve()),
+    }
+
+
+def _cache_payload(train_records: list[Any], validation_records: list[Any], args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "identity": _cache_identity(args),
         "train_records": train_records,
         "validation_records": validation_records,
     }
@@ -269,23 +289,11 @@ def main(argv: list[str] | None = None) -> int:
     out.mkdir(parents=True, exist_ok=True)
     cache_path = out / "prefix_cache.pt"
     started = time.perf_counter()
-    train_frontier_hash = file_sha256(dataset_root / "frontier_train.pt")
-    validation_frontier_hash = file_sha256(validation_root / "frontier_train.pt")
+    data_identity = _cache_identity(args)
     cached = None
     if cache_path.is_file():
         cached = torch.load(cache_path, map_location="cpu", weights_only=False)
-        cache_matches = bool(
-            cached.get("version") == SEARCH_DISTILLATION_VERSION
-            and int(cached.get("context", -1)) == int(args.context)
-            and np.isclose(float(cached.get("min_lcb", float("nan"))), float(args.min_lcb))
-            and int(cached.get("max_retention", -1)) == int(args.max_retention)
-            and int(cached.get("validation_retention", -1)) == int(args.validation_retention)
-            and bool(cached.get("require_independent", True)) == (not bool(args.allow_discovery_confidence))
-            and cached.get("train_root") == str(dataset_root)
-            and cached.get("validation_root") == str(validation_root)
-            and cached.get("train_frontier_sha256") == train_frontier_hash
-            and cached.get("validation_frontier_sha256") == validation_frontier_hash
-        )
+        cache_matches = cached.get("identity") == data_identity
         if not cache_matches and args.reuse_cache:
             raise ValueError("prefix cache settings do not match this run")
         if cache_matches:
@@ -377,6 +385,7 @@ def main(argv: list[str] | None = None) -> int:
             "checkpoint": str(checkpoint),
             "checkpoint_sha256": model_hash,
             "source_hashes": source_hashes,
+            "data_identity": data_identity,
             "git_revision": git_revision(REPO_ROOT),
             "device": str(device),
             "deadline_epoch": deadline_epoch,
@@ -418,6 +427,7 @@ def main(argv: list[str] | None = None) -> int:
                     "outcome_horizon": int(args.outcome_horizon),
                     "checkpoint_sha256": model_hash,
                     "source_hashes": source_hashes,
+                    "data_identity": data_identity,
                 }
                 existing = {}
                 if run_manifest_path.is_file():
