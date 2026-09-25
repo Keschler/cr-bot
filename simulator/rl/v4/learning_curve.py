@@ -36,10 +36,11 @@ _CLI_PATH = _REPO_ROOT / "scripts" / "run_v4_learning_curve.py"
 _RUNTIME_SOURCE_PATHS = (
     _RUNNER_PATH,
     _CLI_PATH,
-    _REPO_ROOT / "simulator" / "rl" / "v4_ppo.py",
-    _REPO_ROOT / "simulator" / "rl" / "frontier_ppo.py",
-    _REPO_ROOT / "simulator" / "rl" / "frontier.py",
-    _REPO_ROOT / "simulator" / "rl" / "model_v4.py",
+    _REPO_ROOT / "simulator" / "rl" / "v4" / "v4_ppo",
+    _REPO_ROOT / "simulator" / "rl" / "v4" / "frontier_ppo",
+    _REPO_ROOT / "simulator" / "rl" / "v4" / "frontier.py",
+    _REPO_ROOT / "simulator" / "rl" / "v4" / "frontier_eval.py",
+    _REPO_ROOT / "simulator" / "rl" / "v4" / "model_v4.py",
     _REPO_ROOT / "simulator" / "public_state_estimator.py",
     _REPO_ROOT / "simulator" / "observation_v3.py",
 )
@@ -161,7 +162,11 @@ def dirty_source_fingerprint(
     index patches make the dirty state explicit in the provenance record.
     """
 
-    resolved_paths = tuple(sorted({Path(path).expanduser().resolve() for path in paths}, key=str))
+    source_paths: set[Path] = set()
+    for value in paths:
+        path = Path(value).expanduser().resolve()
+        source_paths.update(path.rglob("*.py") if path.is_dir() else (path,))
+    resolved_paths = tuple(sorted(source_paths, key=str))
     file_hashes: dict[str, str] = {}
     for path in resolved_paths:
         if not path.is_file():

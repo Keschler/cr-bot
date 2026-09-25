@@ -10,6 +10,16 @@ from scripts.run_v4_teacher_audit import (
 )
 
 
+def test_audit_source_hashes_cover_ppo_implementations():
+    from scripts.run_v4_teacher_audit import _source_hashes
+
+    paths = _source_hashes()
+    for package in ('v4_ppo', 'frontier_ppo'):
+        selected = [path for path in paths if f'/rl/v4/{package}/' in path]
+        assert len(selected) > 1
+        assert any(path.endswith('/__init__.py') for path in selected)
+
+
 def _record(i: int, *, split: str = "train", archetype: str | None = None) -> dict:
     archetype = archetype or ("beatdown" if i % 2 else "air-beatdown")
     match = f"{archetype}#{i % 8}"

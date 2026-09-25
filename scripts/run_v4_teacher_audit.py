@@ -588,7 +588,8 @@ def _source_hashes() -> dict[str, str]:
         REPO / "simulator/rl/v4/frontier.py",
         REPO / "simulator/rl/v4/frontier_eval.py",
         REPO / "simulator/rl/v4/model_v4.py",
-        REPO / "simulator/rl/v4/v4_ppo.py",
+        *sorted((REPO / "simulator/rl/v4/v4_ppo").rglob("*.py")),
+        *sorted((REPO / "simulator/rl/v4/frontier_ppo").rglob("*.py")),
         REPO / "simulator/public_state_estimator.py",
     ]
     return {str(path): sha256_file(path) for path in paths if path.is_file()}

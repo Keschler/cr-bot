@@ -18,6 +18,29 @@ def test_censored_matches_are_not_draws():
     assert result['candidate']['draws'] == 0
 
 
+def test_source_fingerprint_covers_nested_runtime_changes(tmp_path):
+    from simulator.rl.v4.learning_curve import dirty_source_fingerprint
+
+    package = tmp_path / 'runtime'
+    package.mkdir()
+    implementation = package / 'rollout.py'
+    implementation.write_text('VERSION = 1\n')
+    first = dirty_source_fingerprint([package])
+    implementation.write_text('VERSION = 2\n')
+    second = dirty_source_fingerprint([package])
+    assert first['files'] != second['files']
+
+
+def test_default_source_fingerprint_includes_ppo_packages():
+    from simulator.rl.v4.learning_curve import dirty_source_fingerprint
+
+    files = dirty_source_fingerprint()['files']
+    for package in ('v4_ppo', 'frontier_ppo'):
+        prefix = f'simulator/rl/v4/{package}/'
+        assert prefix + '__init__.py' in files
+        assert len([name for name in files if name.startswith(prefix)]) > 1
+
+
 def test_split_rejects_shared_match_despite_different_states():
     train = [{'provenance': {'state_hash': 'a', 'match_id': 'shared'}}]
     sealed = [{'provenance': {'state_hash': 'b', 'match_id': 'shared'}}]
