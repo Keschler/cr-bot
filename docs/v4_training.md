@@ -321,6 +321,31 @@ work, not completed steps of the current local dataset collection.
 
 ## Package layout and retired runners
 
+Search distillation is organized under `simulator/rl/v4/search_distillation/`:
+
+| Module | Responsibility |
+| --- | --- |
+| `records.py` | Actions, distributions, cached prefixes, and named correction records |
+| `targets.py` | Paired confidence checks and hard/soft search targets |
+| `preparation.py` | Source-match replay and correction/retention selection |
+| `batching.py` | Tensor batches and recurrent forward inputs |
+| `losses.py` | Correction and retention objectives |
+| `evaluation.py` | Validation metrics and paired simulator outcomes |
+| `training.py` | Optimizer loop and epoch-boundary resume |
+| `artifacts.py` | Deadlines, checkpoint writes, and provenance helpers |
+
+The package exports the existing public API, including record classes needed to
+load older serialized caches. Preparation has one implementation; no runtime
+replacement or permissive legacy legality fallback is used. The runner separates
+cache preparation from each experiment's resume/report lifecycle and fingerprints
+every implementation module. Old cache records remain readable, but the changed
+source identity requires a fresh output directory for previously completed runs.
+
+Refactor validation compares deterministic two-epoch runs of all four methods
+against the preceding implementation, with identical weights and training metrics.
+Regression tests also cover old cache class paths, exact training resume, changed
+input rejection, and failure/interruption handling in multi-run sweeps.
+
 `simulator.rl.v4` owns current training and search. Shared opponent pools,
 scenario environments, models, and tensor utilities are in
 `simulator.rl.foundation`. The `simulator.rl.legacy` package and the
