@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 import torch
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -13,10 +14,10 @@ from simulator.rl.v4.search_distillation import (
     hard_factorized_target,
     paired_advantage,
     parse_entry_id,
-    _factorized_kl,
     compute_batch_loss,
     train_one,
 )
+from simulator.rl.v4.search_distillation.losses import _factorized_kl
 from simulator.rl.v4.model_v4 import V4Logits, masks_from_legal_play
 
 
@@ -108,7 +109,7 @@ def test_soft_methods_train_interleaved_correction_and_replay_rows() -> None:
         ],
         legal_play=[np.ones((2, 2, 2), dtype=bool)],
     )
-    with patch("simulator.rl.v4.search_distillation._forward", return_value=(logits, masks)):
+    with patch("simulator.rl.v4.search_distillation.losses._forward", return_value=(logits, masks)):
         for method in ("soft-replay", "soft-kl"):
             if logits.mode.grad is not None:
                 logits.mode.grad.zero_()
@@ -165,10 +166,10 @@ def test_deadline_inside_first_epoch_resumes_from_initial_boundary(tmp_path: Pat
     def loss(student, *_args, **_kwargs):
         return student.weight.sum(), {}
 
-    with patch("simulator.rl.v4.search_distillation._stack_records", return_value={}), \
-         patch("simulator.rl.v4.search_distillation.compute_batch_loss", side_effect=loss), \
-         patch("simulator.rl.v4.search_distillation.evaluate_records", return_value={"n": 0}), \
-         patch("simulator.rl.v4.search_distillation._check_deadline", side_effect=interrupt):
+    with patch("simulator.rl.v4.search_distillation.training._stack_records", return_value={}), \
+         patch("simulator.rl.v4.search_distillation.training.compute_batch_loss", side_effect=loss), \
+         patch("simulator.rl.v4.search_distillation.training.evaluate_records", return_value={"n": 0}), \
+         patch("simulator.rl.v4.search_distillation.training._check_deadline", side_effect=interrupt):
         partial = train_one(anchor, records, records, method="hard-none", seed=0,
                             context=0, epochs=1, batch_size=1, checkpoint_path=checkpoint,
                             deadline_epoch=1.0)
@@ -176,9 +177,9 @@ def test_deadline_inside_first_epoch_resumes_from_initial_boundary(tmp_path: Pat
     assert partial["status"] == "partial"
     assert saved["epoch_completed"] == 0
     assert torch.equal(saved["state_dict"]["weight"], anchor.state_dict()["weight"])
-    with patch("simulator.rl.v4.search_distillation._stack_records", return_value={}), \
-         patch("simulator.rl.v4.search_distillation.compute_batch_loss", side_effect=loss), \
-         patch("simulator.rl.v4.search_distillation.evaluate_records", return_value={"n": 0}):
+    with patch("simulator.rl.v4.search_distillation.training._stack_records", return_value={}), \
+         patch("simulator.rl.v4.search_distillation.training.compute_batch_loss", side_effect=loss), \
+         patch("simulator.rl.v4.search_distillation.training.evaluate_records", return_value={"n": 0}):
         complete = train_one(anchor, records, records, method="hard-none", seed=0,
                              context=0, epochs=1, batch_size=1, checkpoint_path=checkpoint)
     assert complete["status"] == "complete"
@@ -211,7 +212,7 @@ def test_prepare_records_keeps_corrections_unique_and_caps_retention(tmp_path: P
                 {t: [np.ones((1, 1, 1), dtype=bool)] * (context + 1) for t in offsets},
                 {t: [True] * (context + 1) for t in offsets})
 
-    with patch("simulator.rl.v4.search_distillation._replay_selected_prefixes_with_legal", side_effect=replay):
+    with patch("simulator.rl.v4.search_distillation.preparation._replay_selected_prefixes_with_legal", side_effect=replay):
         for count in (0, 1, 2):
             records = prepare_records(tmp_path, entries, context=1, retention_count=count)
             corrections = [r for r in records if r.is_correction]
@@ -221,3 +222,94 @@ def test_prepare_records_keeps_corrections_unique_and_caps_retention(tmp_path: P
             assert corrections[0].correction_action == ActionTarget(1, 0, 0, 0)
             assert len(retention) == count
             assert len({r.offset for r in records}) == count + 1
+
+
+def test_prefix_cache_loads_original_public_class_paths(tmp_path: Path, monkeypatch) -> None:
+    """Existing torch caches must load after the implementation becomes a package."""
+    from simulator.rl.v4.search_distillation import CachedPrefix, CacheConfig
+
+    record = CachedPrefix(
+        key="train:hog#0:t1", match_id="hog#0", offset=1,
+        observations=[{"raster": np.zeros((1, 2, 2), dtype=np.float32)}],
+        legal_play=[np.ones((1, 2, 2), dtype=bool)], legal_wait=[True],
+        recorded_action=ActionTarget(0), correction_action=ActionTarget(1, 0, 1, 1),
+    )
+    target = hard_factorized_target(ActionTarget(1, 0, 1, 1), record.legal_play[0])
+    path = tmp_path / "old_prefix_cache.pt"
+    # Serialize the exact historical module names without retaining binary fixtures.
+    with monkeypatch.context() as patcher:
+        for cls in (ActionTarget, CachedPrefix, CacheConfig, FactorizedTarget):
+            patcher.setattr(cls, "__module__", "simulator.rl.v4.search_distillation")
+        torch.save({"records": [record], "target": target, "config": CacheConfig()}, path)
+    restored = torch.load(path, map_location="cpu", weights_only=False)
+    assert isinstance(restored["records"][0], CachedPrefix)
+    assert restored["records"][0].correction_action == ActionTarget(1, 0, 1, 1)
+    np.testing.assert_array_equal(restored["records"][0].legal_play[0], record.legal_play[0])
+    np.testing.assert_array_equal(restored["target"].placement, target.placement)
+    assert isinstance(restored["config"], CacheConfig)
+
+
+@pytest.mark.parametrize("method", ["hard-none", "hard-replay", "soft-replay", "soft-kl"])
+def test_real_training_resumes_identically_at_epoch_boundary(tmp_path: Path, method: str) -> None:
+    from simulator.rl.v4.distillation import DistillationConfig, generate_sample
+    from simulator.rl.v4.model_v4 import ModelConfigV4, RecurrentV4Policy
+    from simulator.rl.v4.search_distillation import CachedPrefix, DistillationDeadline
+
+    previous_threads = torch.get_num_threads()
+    torch.set_num_threads(1)
+    try:
+        torch.manual_seed(17)
+        anchor = RecurrentV4Policy(ModelConfigV4(
+            model_dim=16, spatial_channels=8, fused_dim=24, gru_hidden_dim=24,
+            transformer_heads=4, transformer_layers=1, transformer_ff_dim=32,
+            spatial_head_dim=8,
+        ))
+        records = []
+        for index in range(2):
+            sample = generate_sample(DistillationConfig(n_states=2, seed=5), index)
+            observation = {name: getattr(sample, name) for name in (
+                "raster", "global_features", "entity_mask", "hand_tokens", "opp_hand_probs",
+                "opp_out_of_cycle", "opp_elixir_interval", "event_history",
+            )}
+            observation["entities"] = sample.entity_tokens
+            target = ActionTarget(sample.target.mode, sample.target.card_slot,
+                                  sample.target.row, sample.target.col)
+            records.append(CachedPrefix(
+                key=f"train:synthetic#0:t{index}", match_id="synthetic#0", offset=index,
+                observations=[observation, observation],
+                legal_play=[sample.legal_play, sample.legal_play], legal_wait=[True, True],
+                recorded_action=ActionTarget(0), correction_action=target,
+                branches=[{"source": "sim", "mode": 0, "mean": 0.0},
+                          {"source": "search", "mode": target.mode, "slot": target.slot,
+                           "row": target.row, "col": target.col, "mean": 0.4}],
+                is_correction=index == 0,
+            ))
+        common = dict(method=method, seed=3, context=1, epochs=2, batch_size=2)
+        full_path = tmp_path / "full.pt"
+        full = train_one(anchor, records, [], checkpoint_path=full_path, **common)
+        resume_path = tmp_path / "resume.pt"
+        checks = 0
+
+        def interrupt(_deadline):
+            nonlocal checks
+            checks += 1
+            if checks == 4:  # First epoch saved; second epoch has not started.
+                raise DistillationDeadline("test epoch boundary")
+
+        with patch("simulator.rl.v4.search_distillation.training._check_deadline", side_effect=interrupt):
+            partial = train_one(anchor, records, [], checkpoint_path=resume_path, **common)
+        assert partial["status"] == "partial"
+        assert torch.load(resume_path, weights_only=False)["epoch_completed"] == 1
+        resumed = train_one(anchor, records, [], checkpoint_path=resume_path, **common)
+        assert resumed["status"] == "complete"
+        assert resumed["resumed_from_epoch"] == 1
+        assert resumed["history"] == full["history"]
+        assert resumed["optimizer_steps"] == full["optimizer_steps"] == 2
+        full_state = torch.load(full_path, weights_only=False)["state_dict"]
+        resume_state = torch.load(resume_path, weights_only=False)["state_dict"]
+        for name in full_state:
+            torch.testing.assert_close(full_state[name], resume_state[name], rtol=0, atol=0)
+        assert any(not torch.equal(full_state[name], value)
+                   for name, value in anchor.state_dict().items())
+    finally:
+        torch.set_num_threads(previous_threads)

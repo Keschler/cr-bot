@@ -72,3 +72,52 @@ def test_changed_inputs_reject_cache_and_completed_run(run_setup, change):
     with pytest.raises(ValueError, match="different data, code, or optimizer settings"):
         runner.main(args)
     assert calls["train"] == 1
+
+
+def test_failed_method_does_not_prevent_remaining_runs(run_setup, monkeypatch):
+    args, _, calls = run_setup
+    original = runner.train_one
+
+    def train(*values, method, **kwargs):
+        if method == "hard-none":
+            raise RuntimeError("fixture failure")
+        return original(*values, method=method, **kwargs)
+
+    monkeypatch.setattr(runner, "train_one", train)
+    assert runner.main(args + ["--methods", "hard-none,soft-kl"]) == 1
+    out = Path(args[args.index("--out") + 1])
+    summary = json.loads((out / "summary.json").read_text())
+    assert summary["manifest"]["status"] == "failed"
+    assert [r["method"] for r in summary["reports"]] == ["soft-kl"]
+    failed = json.loads((out / "runs/context0_hard-none_seed0.json").read_text())
+    assert failed["status"] == "failed"
+    assert "fixture failure" in failed["error"]
+    assert calls["train"] == 1
+
+
+def test_partial_method_stops_remaining_runs(run_setup, monkeypatch):
+    args, _, calls = run_setup
+    original = runner.train_one
+
+    def train(*values, **kwargs):
+        report = original(*values, **kwargs)
+        report["status"] = "partial"
+        return report
+
+    monkeypatch.setattr(runner, "train_one", train)
+    assert runner.main(args + ["--methods", "hard-none,soft-kl"]) == 0
+    out = Path(args[args.index("--out") + 1])
+    summary = json.loads((out / "summary.json").read_text())
+    assert summary["manifest"]["status"] == "partial"
+    assert calls["train"] == 1
+
+
+def test_changed_implementation_rejects_completed_run(run_setup, monkeypatch):
+    args, _, calls = run_setup
+    assert runner.main(args) == 0
+    identity = runner._implementation_identity()
+    assert "preparation.py" in identity and "training.py" in identity
+    monkeypatch.setattr(runner, "_implementation_identity", lambda: {**identity, "training.py": "changed"})
+    with pytest.raises(ValueError, match="different data, code, or optimizer settings"):
+        runner.main(args)
+    assert calls["train"] == 1

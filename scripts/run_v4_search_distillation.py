@@ -9,6 +9,7 @@ Example smoke run::
 
     PYTHONPATH=.:src outputs/venv/bin/python -u scripts/run_v4_search_distillation.py \
       --dataset-root outputs/v4/runpod_frontier_dataset_20260921 \
+      --validation-root /path/to/disjoint-confirmed-validation \
       --checkpoint outputs/v4/stage2_12k_v2_e12_s12.pt \
       --out outputs/v4/search_distillation_smoke \
       --context 32 --methods hard-none,soft-kl --seeds 0 --epochs 1 \
@@ -19,13 +20,13 @@ from __future__ import annotations
 
 import argparse
 import json
+from itertools import product
 import os
 from pathlib import Path
 import sys
 import time
 from typing import Any, Mapping
 
-import numpy as np
 import torch
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -35,11 +36,12 @@ if str(REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from simulator.rl.v4.frontier import frontier_model_config
+from simulator.rl.v4 import search_distillation
+from simulator.rl.v4.search_distillation.artifacts import atomic_torch_save
 from simulator.rl.v4.search_distillation import (
     DEFAULT_CONTEXT,
     DEFAULT_MIN_LCB,
     SEARCH_DISTILLATION_VERSION,
-    DistillationDeadline,
     file_sha256,
     git_revision,
     load_frontier_entries,
@@ -177,6 +179,11 @@ def _dataset_identity(root: Path) -> dict[str, Any]:
     }
 
 
+def _implementation_identity() -> dict[str, str]:
+    package_root = Path(search_distillation.__file__).resolve().parent
+    return {path.name: file_sha256(path) for path in sorted(package_root.glob("*.py"))}
+
+
 def _cache_identity(args: argparse.Namespace) -> dict[str, Any]:
     """Identity of both the replay inputs and the selected training examples."""
     return {
@@ -189,16 +196,8 @@ def _cache_identity(args: argparse.Namespace) -> dict[str, Any]:
         "require_independent": not bool(args.allow_discovery_confidence),
         "train": _dataset_identity(args.dataset_root),
         "validation": _dataset_identity(args.validation_root),
-        "preparation_sha256": file_sha256(REPO_ROOT / "simulator/rl/v4/search_distillation.py"),
+        "implementation_sha256": _implementation_identity(),
         "runner_sha256": file_sha256(Path(__file__).resolve()),
-    }
-
-
-def _cache_payload(train_records: list[Any], validation_records: list[Any], args: argparse.Namespace) -> dict[str, Any]:
-    return {
-        "identity": _cache_identity(args),
-        "train_records": train_records,
-        "validation_records": validation_records,
     }
 
 
@@ -207,17 +206,6 @@ def _atomic_json(path: Path, payload: Any) -> None:
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     try:
         temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-        os.replace(temporary, path)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
-
-
-def _atomic_torch_save(payload: Mapping[str, Any], path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    try:
-        torch.save(dict(payload), temporary)
         os.replace(temporary, path)
     finally:
         if temporary.exists():
@@ -252,6 +240,130 @@ def _run_is_complete(run_manifest: Mapping[str, Any], report_path: Path, checkpo
         and saved_report.get("method") == report.get("method")
         and int(saved_report.get("seed", -1)) == int(report.get("seed", -2))
     )
+
+
+def _load_or_prepare_records(
+    args: argparse.Namespace, data_identity: Mapping[str, Any],
+    effective_deadline: float | None,
+) -> tuple[list[Any], list[Any]] | None:
+    """Reuse matching prefixes or replay disjoint inputs within the budget."""
+    dataset_root = args.dataset_root.expanduser().resolve()
+    validation_root = args.validation_root.expanduser().resolve()
+    out = args.out.expanduser().resolve()
+    cache_path = out / "prefix_cache.pt"
+    cached = None
+    if cache_path.is_file():
+        cached = torch.load(cache_path, map_location="cpu", weights_only=False)
+        cache_matches = cached.get("identity") == data_identity
+        if not cache_matches and args.reuse_cache:
+            raise ValueError("prefix cache settings do not match this run")
+        if cache_matches:
+            train_records = list(cached["train_records"])
+            validation_records = list(cached["validation_records"])
+            print(f"[search-distill] reused {cache_path}", flush=True)
+        else:
+            cached = None
+    if cached is None:
+        train_path = dataset_root / "frontier_train.pt"
+        validation_path = validation_root / "frontier_train.pt"
+        if not train_path.is_file() or not validation_path.is_file():
+            raise FileNotFoundError(
+                "dataset-root and validation-root each require frontier_train.pt"
+            )
+        train_entries = load_frontier_entries(train_path)
+        validation_entries = load_frontier_entries(validation_path)
+        _check_disjoint_entries(train_entries, validation_entries)
+        print(f"[search-distill] replaying prefixes: train entries={len(train_entries)} validation entries={len(validation_entries)} context={args.context}", flush=True)
+        if effective_deadline is not None and time.time() >= effective_deadline:
+            _atomic_json(out / "run_state.json", {
+                "status": "partial", "reason": "deadline_before_prefix_replay",
+                "deadline_epoch": _deadline_from_args(args),
+            })
+            return None
+        train_records = prepare_records(
+            dataset_root, train_entries, context=int(args.context),
+            min_lcb=float(args.min_lcb), retention_count=int(args.max_retention), seed=101,
+            require_independent=not bool(args.allow_discovery_confidence),
+            deadline_epoch=effective_deadline,
+        )
+        validation_records = prepare_records(
+            validation_root, validation_entries, context=int(args.context),
+            min_lcb=float(args.min_lcb), retention_count=int(args.validation_retention), seed=202,
+            require_independent=not bool(args.allow_discovery_confidence),
+            deadline_epoch=effective_deadline,
+        )
+        train_records = _trim_corrections(train_records, int(args.max_corrections))
+        validation_records = _trim_corrections(validation_records, int(args.max_corrections))
+        atomic_torch_save({
+            "identity": data_identity, "train_records": train_records,
+            "validation_records": validation_records,
+        }, cache_path)
+        print(f"[search-distill] prefix cache -> {cache_path}", flush=True)
+
+    return train_records, validation_records
+
+
+def _run_experiment(
+    run_spec: dict[str, Any], *, out: Path, anchor: Any,
+    train_records: list[Any], validation_records: list[Any],
+    device: torch.device, effective_deadline: float | None,
+) -> dict[str, Any] | None:
+    """Resume one matching run, recording success, interruption, or failure."""
+    label = run_spec["label"]
+    method, seed, context = (run_spec[name] for name in ("method", "seed", "context"))
+    report_path = out / f"{label}.json"
+    checkpoint_path = out / "checkpoints" / f"{label}.pt"
+    run_manifest_path = out / "runs" / f"{label}.json"
+    existing = {}
+    if run_manifest_path.is_file():
+        try:
+            existing = json.loads(run_manifest_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            existing = {}
+    if existing and existing.get("spec") != run_spec:
+        raise ValueError(
+            f"existing {label} uses different data, code, or optimizer settings; "
+            "choose a new --out directory"
+        )
+    if existing.get("spec") == run_spec and _run_is_complete(existing, report_path, checkpoint_path, label):
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        print(f"[search-distill] skip completed {label}", flush=True)
+        return report
+    print(f"[search-distill] start {label} device={device}", flush=True)
+    _atomic_json(run_manifest_path, {
+        "status": "running", "spec": run_spec,
+        "started_at": time.time(), "report": str(report_path),
+        "checkpoint": str(checkpoint_path),
+    })
+    try:
+        report = train_one(
+            anchor, train_records, validation_records,
+            method=method, seed=seed, context=context,
+            epochs=run_spec["epochs"], batch_size=run_spec["batch_size"],
+            learning_rate=run_spec["learning_rate"], retention_weight=run_spec["retention_weight"],
+            temperature=run_spec["temperature"], device=device,
+            checkpoint_path=checkpoint_path,
+            deadline_epoch=effective_deadline,
+        )
+    except Exception as exc:
+        _atomic_json(run_manifest_path, {
+            "status": "failed", "spec": run_spec,
+            "error": f"{type(exc).__name__}: {exc}",
+            "finished_at": time.time(), "report": str(report_path),
+            "checkpoint": str(checkpoint_path),
+        })
+        print(f"[search-distill] failed {label}: {type(exc).__name__}: {exc}", flush=True)
+        return None
+    report["label"] = label
+    _atomic_json(report_path, report)
+    report_status = str(report.get("status", "complete"))
+    _atomic_json(run_manifest_path, {
+        "status": report_status, "spec": run_spec,
+        "finished_at": time.time(), "report": str(report_path),
+        "checkpoint": str(checkpoint_path),
+        "optimizer_steps": int(report.get("optimizer_steps", 0)),
+    })
+    return report
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -290,51 +402,10 @@ def main(argv: list[str] | None = None) -> int:
     cache_path = out / "prefix_cache.pt"
     started = time.perf_counter()
     data_identity = _cache_identity(args)
-    cached = None
-    if cache_path.is_file():
-        cached = torch.load(cache_path, map_location="cpu", weights_only=False)
-        cache_matches = cached.get("identity") == data_identity
-        if not cache_matches and args.reuse_cache:
-            raise ValueError("prefix cache settings do not match this run")
-        if cache_matches:
-            train_records = list(cached["train_records"])
-            validation_records = list(cached["validation_records"])
-            print(f"[search-distill] reused {cache_path}", flush=True)
-        else:
-            cached = None
-    if cached is None:
-        train_path = dataset_root / "frontier_train.pt"
-        validation_path = validation_root / "frontier_train.pt"
-        if not train_path.is_file() or not validation_path.is_file():
-            raise FileNotFoundError(
-                "dataset-root and validation-root each require frontier_train.pt"
-            )
-        train_entries = load_frontier_entries(train_path)
-        validation_entries = load_frontier_entries(validation_path)
-        _check_disjoint_entries(train_entries, validation_entries)
-        print(f"[search-distill] replaying prefixes: train entries={len(train_entries)} validation entries={len(validation_entries)} context={args.context}", flush=True)
-        if not budget_available():
-            _atomic_json(out / "run_state.json", {
-                "status": "partial", "reason": "deadline_before_prefix_replay",
-                "deadline_epoch": deadline_epoch,
-            })
-            return 0
-        train_records = prepare_records(
-            dataset_root, train_entries, context=int(args.context),
-            min_lcb=float(args.min_lcb), retention_count=int(args.max_retention), seed=101,
-            require_independent=not bool(args.allow_discovery_confidence),
-            deadline_epoch=effective_deadline,
-        )
-        validation_records = prepare_records(
-            validation_root, validation_entries, context=int(args.context),
-            min_lcb=float(args.min_lcb), retention_count=int(args.validation_retention), seed=202,
-            require_independent=not bool(args.allow_discovery_confidence),
-            deadline_epoch=effective_deadline,
-        )
-        train_records = _trim_corrections(train_records, int(args.max_corrections))
-        validation_records = _trim_corrections(validation_records, int(args.max_corrections))
-        _atomic_torch_save(_cache_payload(train_records, validation_records, args), cache_path)
-        print(f"[search-distill] prefix cache -> {cache_path}", flush=True)
+    prepared = _load_or_prepare_records(args, data_identity, effective_deadline)
+    if prepared is None:
+        return 0
+    train_records, validation_records = prepared
 
     # Outcome evaluation is deliberately explicit and configurable.  Cached
     # observations remain reusable while changing this evaluation budget.
@@ -362,8 +433,6 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     anchor = load_frozen_anchor(str(checkpoint), config=frontier_model_config(), device="cpu")
     reports: list[dict[str, Any]] = []
-    runs_dir = out / "runs"
-    checkpoint_dir = out / "checkpoints"
     expected_labels = [
         f"context{context}_{method}_seed{seed}"
         for context in contexts for method in methods for seed in seeds
@@ -372,7 +441,7 @@ def main(argv: list[str] | None = None) -> int:
     source_hashes = {
         "train_frontier": file_sha256(dataset_root / "frontier_train.pt"),
         "validation_frontier": file_sha256(validation_root / "frontier_train.pt"),
-        "search_distillation": file_sha256(REPO_ROOT / "simulator/rl/v4/search_distillation.py"),
+        "search_distillation": data_identity["implementation_sha256"],
         "runner": file_sha256(Path(__file__).resolve()),
     }
 
@@ -406,90 +475,36 @@ def main(argv: list[str] | None = None) -> int:
 
     stopped_for_deadline = False
     failures = 0
-    for context in contexts:
-        for method in methods:
-            for seed in seeds:
-                label = f"context{context}_{method}_seed{seed}"
-                if not budget_available():
-                    stopped_for_deadline = True
-                    break
-                report_path = out / f"{label}.json"
-                checkpoint_path = checkpoint_dir / f"{label}.pt"
-                run_manifest_path = runs_dir / f"{label}.json"
-                run_spec = {
-                    "version": SEARCH_DISTILLATION_VERSION, "label": label,
-                    "method": method, "seed": int(seed), "context": int(context),
-                    "epochs": int(args.epochs), "batch_size": int(args.batch_size),
-                    "learning_rate": float(args.learning_rate),
-                    "retention_weight": float(args.retention_weight),
-                    "temperature": float(args.temperature),
-                    "outcome_replicas": int(args.outcome_replicas),
-                    "outcome_horizon": int(args.outcome_horizon),
-                    "checkpoint_sha256": model_hash,
-                    "source_hashes": source_hashes,
-                    "data_identity": data_identity,
-                }
-                existing = {}
-                if run_manifest_path.is_file():
-                    try:
-                        existing = json.loads(run_manifest_path.read_text(encoding="utf-8"))
-                    except (OSError, ValueError):
-                        existing = {}
-                if existing and existing.get("spec") != run_spec:
-                    raise ValueError(
-                        f"existing {label} uses different data, code, or optimizer settings; "
-                        "choose a new --out directory"
-                    )
-                if existing.get("spec") == run_spec and _run_is_complete(existing, report_path, checkpoint_path, label):
-                    report = json.loads(report_path.read_text(encoding="utf-8"))
-                    reports.append(report)
-                    print(f"[search-distill] skip completed {label}", flush=True)
-                    write_global("running")
-                    continue
-                print(f"[search-distill] start {label} device={device}", flush=True)
-                _atomic_json(run_manifest_path, {
-                    "status": "running", "spec": run_spec,
-                    "started_at": time.time(), "report": str(report_path),
-                    "checkpoint": str(checkpoint_path),
-                })
-                try:
-                    report = train_one(
-                        anchor, train_records, validation_records,
-                        method=method, seed=seed, context=context,
-                        epochs=int(args.epochs), batch_size=int(args.batch_size),
-                        learning_rate=float(args.learning_rate), retention_weight=float(args.retention_weight),
-                        temperature=float(args.temperature), device=device,
-                        checkpoint_path=checkpoint_path,
-                        deadline_epoch=effective_deadline,
-                    )
-                except Exception as exc:
-                    failures += 1
-                    _atomic_json(run_manifest_path, {
-                        "status": "failed", "spec": run_spec,
-                        "error": f"{type(exc).__name__}: {exc}",
-                        "finished_at": time.time(), "report": str(report_path),
-                        "checkpoint": str(checkpoint_path),
-                    })
-                    print(f"[search-distill] failed {label}: {type(exc).__name__}: {exc}", flush=True)
-                    write_global("running")
-                    continue
-                report["label"] = label
-                reports.append(report)
-                _atomic_json(report_path, report)
-                report_status = str(report.get("status", "complete"))
-                _atomic_json(run_manifest_path, {
-                    "status": report_status, "spec": run_spec,
-                    "finished_at": time.time(), "report": str(report_path),
-                    "checkpoint": str(checkpoint_path),
-                    "optimizer_steps": int(report.get("optimizer_steps", 0)),
-                })
-                write_global("running")
-                if report_status != "complete":
-                    stopped_for_deadline = True
-                    break
-            if stopped_for_deadline:
-                break
-        if stopped_for_deadline:
+    for context, method, seed in product(contexts, methods, seeds):
+        label = f"context{context}_{method}_seed{seed}"
+        if not budget_available():
+            stopped_for_deadline = True
+            break
+        run_spec = {
+            "version": SEARCH_DISTILLATION_VERSION, "label": label,
+            "method": method, "seed": int(seed), "context": int(context),
+            "epochs": int(args.epochs), "batch_size": int(args.batch_size),
+            "learning_rate": float(args.learning_rate),
+            "retention_weight": float(args.retention_weight),
+            "temperature": float(args.temperature),
+            "outcome_replicas": int(args.outcome_replicas),
+            "outcome_horizon": int(args.outcome_horizon),
+            "checkpoint_sha256": model_hash,
+            "source_hashes": source_hashes,
+            "data_identity": data_identity,
+        }
+        report = _run_experiment(
+            run_spec, out=out, anchor=anchor, train_records=train_records,
+            validation_records=validation_records, device=device,
+            effective_deadline=effective_deadline,
+        )
+        if report is None:
+            failures += 1
+        else:
+            reports.append(report)
+        write_global("running")
+        if report is not None and report.get("status", "complete") != "complete":
+            stopped_for_deadline = True
             break
     complete = len({report.get("label") for report in reports if report.get("status") == "complete"}) == len(expected_labels)
     status = "complete" if complete else ("partial" if stopped_for_deadline or deadline_epoch is not None else "failed")
