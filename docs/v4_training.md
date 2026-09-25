@@ -321,6 +321,27 @@ work, not completed steps of the current local dataset collection.
 
 ## Package layout and retired runners
 
+PPO and frontier rollout code also use focused packages. Existing imports from
+`simulator.rl.v4.v4_ppo` and `simulator.rl.v4.frontier_ppo` remain supported,
+including the class names stored in historical Torch artifacts.
+
+| Package | Modules and responsibilities |
+| --- | --- |
+| `v4_ppo/` | `config` and `records` define contracts; `runtime` handles policy inputs and checkpoint loading; `rollout` collects trajectories; `update` runs optimization; `diagnostics` measures the updated candidate; `value` contains return and critic helpers |
+| `frontier_ppo/` | `collection` manages frontier episodes; `environment` builds environments and opponent decks; `actions` decodes and inspects choices; `evaluation` measures paired outcomes and matches; `statistics` aggregates comparisons; `constants` defines protocol defaults |
+
+Post-update diagnostics remain separate from optimization so quarantine observes
+the actual updated policy. Rollout helpers preserve public-history synchronization,
+recurrent resets, successor-value bootstrapping, and the existing reward modes.
+Learning-curve and teacher-audit provenance includes every source module in both
+packages. Use fresh output directories when comparing runs across this refactor.
+Frontier collection stores each environment's episode state in a named lane
+record, keeping reset, opponent, estimator, and reward anchors together.
+Deterministic parity checks against the preceding implementation cover eight
+scenario/frontier and sampled/greedy combinations, including all three frontier
+reward modes and episode cuts. Rollout tensors, two-epoch update reports, actor
+and critic weights, and optimizer states match exactly in those checks.
+
 Search distillation is organized under `simulator/rl/v4/search_distillation/`:
 
 | Module | Responsibility |
