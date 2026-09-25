@@ -354,7 +354,7 @@ def test_sealed_choice_reports_paired_stats():
 
 
 def test_sealed_choice_adaptive_replica_handling(monkeypatch):
-    import simulator.rl.v4.frontier_ppo as fppo
+    import simulator.rl.v4.frontier_ppo.evaluation as fppo
 
     calls: list[str] = []
     pattern = [0.6, -0.5] * 16  # small edge buried in alternating noise

@@ -99,7 +99,7 @@ def entries(count=3):
 
 
 def test_frontier_rotates_entries_and_values_before_reset(monkeypatch):
-    import simulator.rl.v4.frontier_ppo as frontier
+    import simulator.rl.v4.frontier_ppo.collection as frontier
     import simulator.rl.v4.v4_ppo as runtime
     data = entries()
     seen, ticks = [], []
