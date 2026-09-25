@@ -321,6 +321,23 @@ work, not completed steps of the current local dataset collection.
 
 ## Package layout and retired runners
 
+The Stage-2 search dataset builder lives in `simulator/rl/v4/search_dataset/`.
+`config` defines sizing and adoption settings; `records` captures simulator
+states; `inference` loads and queries the champion; `targets` performs search and
+target adoption; `batching` builds recurrent sequences; `workers` executes
+rebuildable search tasks. `active` handles sequential on-policy collection,
+while `generation` orchestrates timing/simulator collection through explicit
+task-building and `selection` stages. Family quotas, selection order, adoption
+thresholds, and recurrent boundaries retain their existing semantics.
+
+Existing imports and serialized configuration/task class names remain resolvable
+through the package exports. This reorganizes the bootstrap/reproduction path;
+it does not turn its teacher labels into independently confirmed frontier labels.
+Refactor checks compare bounded wait-mode and active-mode datasets against the
+preceding implementation: sample arrays, labels, provenance, statistics, and
+recurrent batch tensors match exactly. Regression tests also verify historical
+Torch task/configuration loading and serial-versus-spawned search results.
+
 PPO and frontier rollout code also use focused packages. Existing imports from
 `simulator.rl.v4.v4_ppo` and `simulator.rl.v4.frontier_ppo` remain supported,
 including the class names stored in historical Torch artifacts.
