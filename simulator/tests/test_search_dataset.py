@@ -208,3 +208,46 @@ def test_champion_loader_materializes_lazy_params(tmp_path) -> None:
     loaded = load_champion_actor(str(path), tiny)
     for first, second in zip(policy.parameters(), loaded.parameters()):
         assert torch.equal(first, second)
+
+
+def test_saved_dataset_config_and_tasks_load_from_original_module(tmp_path, monkeypatch) -> None:
+    """The package split must keep existing torch artifacts readable."""
+    from simulator.rl.v4.search_dataset import SimSearchTask, TimingSearchTask
+    from simulator.rl.v4.timing_curriculum import TimingConfig
+
+    config = _tiny_config(seed=31)
+    sim_task = SimSearchTask(2, {"family": "unit"}, None, 2, 2, 31, 31, 31)
+    timing_task = TimingSearchTask(
+        "unit", 1, TimingConfig(n_states=3, seed=31), (0,), ({"family": "unit"},), (None,), 2, 2, 31
+    )
+    path = tmp_path / "existing_search_tasks.pt"
+    with monkeypatch.context() as patcher:
+        for cls in (SearchDatasetConfig, SimSearchTask, TimingSearchTask):
+            patcher.setattr(cls, "__module__", "simulator.rl.v4.search_dataset")
+        torch.save((config, sim_task, timing_task), path)
+    restored = torch.load(path, map_location="cpu", weights_only=False)
+    assert restored == (config, sim_task, timing_task)
+    assert tuple(type(value) for value in restored) == (
+        SearchDatasetConfig, SimSearchTask, TimingSearchTask
+    )
+
+
+def test_spawned_search_matches_serial_results() -> None:
+    """Search task imports and result serialization work in fresh processes."""
+    from simulator.rl.v4.search_dataset import (
+        SimSearchTask, _record_from_env, run_search_tasks,
+    )
+
+    ruleset = load_fixed_ruleset()
+    pool = OpponentPool(ruleset, seed=9)
+    env, family, source = _new_sim_env(ruleset, pool, 9, 3, 9)
+    record = _record_from_env(env, family, source, ruleset)
+    assert record is not None
+    tasks = [SimSearchTask(3, record, None, 2, 2, 9, 9, 9)]
+    expected = run_search_tasks([], tasks, workers=1)
+    try:
+        actual = run_search_tasks([], tasks, workers=2)
+    except PermissionError as exc:
+        pytest.skip(f"process spawning is unavailable: {exc}")
+    assert actual == expected
+    assert actual[1][3]["result"].state_hash == record["provenance"]["state_hash"]
