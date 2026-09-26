@@ -355,6 +355,10 @@ and benchmark runners have been retired. The `recurrent-prototype` CLI command
 and `rl.legacy` package are removed. Use the V4 scripts under `scripts/` for
 training and evaluation.
 
+The retired foundation rollout collector, public counter teachers, and policy
+diagnostics have also been removed. V4 owns rollout, teacher, and diagnostic
+implementations under `rl/v4/`.
+
 The phone/video frontend still supports deployed public-actor checkpoints through
 [the inference reader](rl/foundation/inference_checkpoint.py). This reader keeps
 checkpoint architecture, engine, ruleset, and public-observation validation; it
