@@ -249,16 +249,15 @@ def collect_pool_match(
     from simulator.roster import PLAYER_DECK
     from simulator.ruleset import load_fixed_ruleset
     from simulator.public_state_estimator import PublicStateEstimator
+    from .v4_ppo.runtime import batch_v4_inputs, observe_v4_inputs
 
     try:
         from ..foundation.opponent_pool import OpponentPool
         from .simulator_teacher import teacher_label
-        from .v4_ppo import _v4_step_inputs
         from .model_v4 import masks_from_legal_play
     except ImportError:  # pragma: no cover
         from simulator.rl.foundation.opponent_pool import OpponentPool
         from simulator.rl.v4.simulator_teacher import teacher_label
-        from simulator.rl.v4.v4_ppo import _v4_step_inputs
         from simulator.rl.v4.model_v4 import masks_from_legal_play
 
     ruleset = load_fixed_ruleset()
@@ -292,27 +291,15 @@ def collect_pool_match(
             state = env.state
             if state is None or state.terminal:
                 break
-            obs = env.observe_v2_for_viewer(0)
-            hand = list(state.players[0].hand[:4])
-            elixir = float(state.players[0].elixir_milli) / 1000.0
-            estimator.sync_from_env(env, viewer=0)
-            snap = estimator.snapshot()
-            inputs = _v4_step_inputs(obs, hand, elixir, snap)
-            F = torch.float32
-            raster = torch.as_tensor(inputs["raster"], dtype=F, device=device).unsqueeze(0).unsqueeze(0)
-            glob = torch.as_tensor(inputs["global_features"], dtype=F, device=device).unsqueeze(0).unsqueeze(0)
-            entities = torch.as_tensor(inputs["entities"], dtype=F, device=device).unsqueeze(0).unsqueeze(0)
-            entity_mask = torch.as_tensor(np.asarray(inputs["entity_mask"], dtype=bool), device=device).unsqueeze(0).unsqueeze(0)
-            hand_t = torch.as_tensor(np.asarray(inputs["hand_tokens"], dtype=np.float32), device=device).unsqueeze(0).unsqueeze(0)
-            ohp = torch.as_tensor(np.asarray(inputs["opp_hand_probs"], dtype=np.float32), device=device).unsqueeze(0).unsqueeze(0)
-            ooc = torch.as_tensor(np.asarray(inputs["opp_out_of_cycle"], dtype=bool), device=device).unsqueeze(0).unsqueeze(0)
-            oel = torch.as_tensor(np.asarray(inputs["opp_elixir_interval"], dtype=np.float32), device=device).unsqueeze(0).unsqueeze(0)
-            ehist = torch.as_tensor(np.asarray(inputs["event_history"], dtype=np.float32), device=device).unsqueeze(0).unsqueeze(0)
+            obs, inputs, hand, elixir = observe_v4_inputs(env, estimator)
+            tensors = batch_v4_inputs(inputs, device)
             legal = torch.as_tensor(np.asarray(inputs["legal_play"], dtype=bool), device=device).unsqueeze(0).unsqueeze(0)
             masks = masks_from_legal_play(legal, bool(inputs["legal_wait"]))
             reset_mask = torch.ones((1, 1), dtype=torch.bool, device=device) if needs_reset else torch.zeros((1, 1), dtype=torch.bool, device=device)
             logits, actions, joint_lp, entropy, ht, next_hidden = policy.rollout_sample(
-                raster, glob, entities, entity_mask, hand_t, ohp, ooc, oel, ehist,
+                tensors["raster"], tensors["global_features"], tensors["entities"],
+                tensors["entity_mask"], tensors["hand_tokens"], tensors["opp_hand_probs"],
+                tensors["opp_out_of_cycle"], tensors["opp_elixir_interval"], tensors["event_history"],
                 masks,
                 reset_mask=reset_mask,
                 hidden=hidden,

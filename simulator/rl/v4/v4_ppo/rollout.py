@@ -6,7 +6,7 @@ from typing import Any, Sequence
 import weakref
 import numpy as np
 import torch
-from .runtime import configure_v4_runtime, decode_v4_sim_actions, _v4_step_inputs
+from .runtime import batch_v4_inputs, configure_v4_runtime, decode_v4_sim_actions, _v4_step_inputs, observe_v4_inputs
 from ..model_v4 import RecurrentV4Policy, V4ValueHead, V4ActionBatch, masks_from_legal_play
 from ...foundation.trajectory import ActionMasks, RecurrentSequence, TrajectoryBatch
 from .records import V4RolloutBatch
@@ -21,8 +21,7 @@ def post_step_value(policy, critic, env, estimator, hidden, device):
     obs = env.observe_v2_for_viewer(0)
     own = env.state.players[0]
     packed = _v4_step_inputs(obs, list(own.hand), own.elixir_milli / 1000.0, estimator.snapshot())
-    inputs = {key: torch.as_tensor(value, device=device).unsqueeze(0).unsqueeze(0)
-              for key, value in packed.items() if key not in ("legal_play", "legal_wait")}
+    inputs = batch_v4_inputs(packed, device)
     with torch.no_grad():
         _, ht, _ = policy.forward_step(inputs, hidden=hidden)
         return float(critic(ht).reshape(-1)[0].item())
@@ -61,13 +60,7 @@ def _observe_lanes(
         state = env.state
         if state is None:
             raise RuntimeError("rollout lane lost its authoritative state")
-        observation = env.observe_v2_for_viewer(0)
-        player_state = state.players[0]
-        hand = list(player_state.hand)
-        elixir = float(player_state.elixir_milli) / 1000.0
-        lane["estimator"].sync_from_env(env, viewer=0)
-        snapshot = lane["estimator"].snapshot()
-        packed = _v4_step_inputs(observation, hand, elixir, snapshot)
+        _, packed, _, _ = observe_v4_inputs(env, lane["estimator"])
         for key, value in packed.items():
             if key == "legal_wait":
                 continue

@@ -154,6 +154,31 @@ def _v4_step_inputs(
     }
 
 
+def observe_v4_inputs(env: Any, estimator: Any) -> tuple[Any, dict[str, np.ndarray], list[str], float]:
+    """Observe player zero and update public memory for one V4 decision."""
+
+    observation = env.observe_v2_for_viewer(0)
+    player = env.state.players[0]
+    hand = list(player.hand[:4])
+    elixir = float(player.elixir_milli) / 1000.0
+    estimator.sync_from_env(env, viewer=0)
+    return observation, _v4_step_inputs(observation, hand, elixir, estimator.snapshot()), hand, elixir
+
+
+def batch_v4_inputs(inputs: dict[str, Any], device: Any) -> dict[str, torch.Tensor]:
+    """Add one batch and time dimension to public V4 model features."""
+
+    boolean_keys = {"entity_mask", "opp_out_of_cycle"}
+    return {
+        key: torch.as_tensor(
+            np.asarray(value, dtype=bool if key in boolean_keys else np.float32),
+            device=device,
+        ).unsqueeze(0).unsqueeze(0)
+        for key, value in inputs.items()
+        if key not in ("legal_play", "legal_wait")
+    }
+
+
 def _forward_sequence(
     policy: RecurrentV4Policy, sequence: RecurrentSequence, device: Any
 ) -> tuple[Any, torch.Tensor, torch.Tensor]:

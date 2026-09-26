@@ -55,16 +55,12 @@ def _observe_lanes(lanes: Sequence[_FrontierLane], device: Any):
     """Batch current observations without advancing any environment or memory."""
     import torch
     from ..model_v4 import masks_from_legal_play
-    from ..v4_ppo import _v4_step_inputs
+    from ..v4_ppo.runtime import observe_v4_inputs
 
     obs_list, legals = [], []
     for lane in lanes:
-        obs = lane.env.observe_v2_for_viewer(0)
-        state = lane.env.state
-        hand = list(state.players[0].hand[:4])
-        elixir = float(state.players[0].elixir_milli) / 1000.0
-        lane.estimator.sync_from_env(lane.env, viewer=0)
-        obs_list.append(_v4_step_inputs(obs, hand, elixir, lane.estimator.snapshot()))
+        obs, packed, _, _ = observe_v4_inputs(lane.env, lane.estimator)
+        obs_list.append(packed)
         legals.append(np.array(obs.legal_play, dtype=bool, copy=True))
     BOOL_KEYS = ("entity_mask", "opp_out_of_cycle")
     plain = [

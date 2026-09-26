@@ -145,37 +145,21 @@ def _fresh_env(match: dict[str, Any]) -> Any:
 
 
 def _step_inputs(policy_inputs: dict[str, np.ndarray], device: Any) -> dict[str, Any]:
-    import torch
+    from .v4_ppo.runtime import batch_v4_inputs
 
-    F = torch.float32
-    return {
-        "raster": torch.as_tensor(policy_inputs["raster"], dtype=F, device=device).unsqueeze(0).unsqueeze(0),
-        "global_features": torch.as_tensor(policy_inputs["global_features"], dtype=F, device=device).unsqueeze(0).unsqueeze(0),
-        "entities": torch.as_tensor(policy_inputs["entities"], dtype=F, device=device).unsqueeze(0).unsqueeze(0),
-        "entity_mask": torch.as_tensor(np.asarray(policy_inputs["entity_mask"], dtype=bool), device=device).unsqueeze(0).unsqueeze(0),
-        "hand_tokens": torch.as_tensor(np.asarray(policy_inputs["hand_tokens"], dtype=np.float32), device=device).unsqueeze(0).unsqueeze(0),
-        "opp_hand_probs": torch.as_tensor(np.asarray(policy_inputs["opp_hand_probs"], dtype=np.float32), device=device).unsqueeze(0).unsqueeze(0),
-        "opp_out_of_cycle": torch.as_tensor(np.asarray(policy_inputs["opp_out_of_cycle"], dtype=bool), device=device).unsqueeze(0).unsqueeze(0),
-        "opp_elixir_interval": torch.as_tensor(np.asarray(policy_inputs["opp_elixir_interval"], dtype=np.float32), device=device).unsqueeze(0).unsqueeze(0),
-        "event_history": torch.as_tensor(np.asarray(policy_inputs["event_history"], dtype=np.float32), device=device).unsqueeze(0).unsqueeze(0),
-    }
+    return batch_v4_inputs(policy_inputs, device)
 
 
 def _observe_inputs(env: Any, device: Any, estimator: Any = None) -> tuple[dict[str, np.ndarray], np.ndarray, list[str], float]:
     try:
-        from .v4_ppo import _v4_step_inputs
+        from .v4_ppo.runtime import observe_v4_inputs
     except ImportError:  # pragma: no cover
-        from simulator.rl.v4.v4_ppo import _v4_step_inputs
+        from simulator.rl.v4.v4_ppo.runtime import observe_v4_inputs
     from simulator.public_state_estimator import PublicStateEstimator
 
-    obs = env.observe_v2_for_viewer(0)
-    state = env.state
-    hand = list(state.players[0].hand[:4])
-    elixir = float(state.players[0].elixir_milli) / 1000.0
     if estimator is None:
         estimator = PublicStateEstimator()
-    estimator.sync_from_env(env, viewer=0)
-    inputs = _v4_step_inputs(obs, hand, elixir, estimator.snapshot())
+    obs, inputs, hand, elixir = observe_v4_inputs(env, estimator)
     legal = np.array(obs.legal_play, dtype=bool, copy=True)
     return inputs, legal, hand, elixir
 
@@ -363,10 +347,10 @@ def run_branch(
 
     try:
         from .model_v4 import masks_from_legal_play
-        from .v4_ppo import _v4_step_inputs
+        from .v4_ppo.runtime import observe_v4_inputs
     except ImportError:  # pragma: no cover
         from simulator.rl.v4.model_v4 import masks_from_legal_play
-        from simulator.rl.v4.v4_ppo import _v4_step_inputs
+        from simulator.rl.v4.v4_ppo.runtime import observe_v4_inputs
     from simulator.public_state_estimator import PublicStateEstimator
 
     child = env.fork()  # full fork: continuation builds observations
@@ -397,12 +381,7 @@ def run_branch(
             for _ in range(horizon - 1):
                 if child.state is None or child.state.terminal:
                     break
-                obs = child.observe_v2_for_viewer(0)
-                st = child.state
-                hand = list(st.players[0].hand[:4])
-                elixir = float(st.players[0].elixir_milli) / 1000.0
-                estimator.sync_from_env(child, viewer=0)
-                packed = _v4_step_inputs(obs, hand, elixir, estimator.snapshot())
+                obs, packed, _, _ = observe_v4_inputs(child, estimator)
                 tensors = _step_inputs(packed, device)
                 legal = torch.as_tensor(
                     np.array(obs.legal_play, dtype=bool, copy=True), device=device

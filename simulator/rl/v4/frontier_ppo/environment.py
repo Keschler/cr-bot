@@ -46,15 +46,6 @@ def pinned_opponent_decks(
 
 def entry_input_tensors(inputs: dict[str, Any], device: Any) -> dict[str, Any]:
     """Add batch/time dimensions, preserving boolean masks and float features."""
-    import numpy as np
-    import torch
+    from ..v4_ppo.runtime import batch_v4_inputs
 
-    boolean_keys = {"entity_mask", "opp_out_of_cycle"}
-    return {
-        key: torch.as_tensor(
-            np.asarray(value, dtype=bool if key in boolean_keys else np.float32),
-            device=device,
-        ).unsqueeze(0).unsqueeze(0)
-        for key, value in inputs.items()
-        if key not in ("legal_play", "legal_wait")
-    }
+    return batch_v4_inputs(inputs, device)

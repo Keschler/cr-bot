@@ -138,7 +138,8 @@ def sealed_rollout_returns(
     policy.eval()
 
     from ..model_v4 import masks_from_legal_play
-    from ..v4_ppo import _v4_step_inputs, decode_v4_sim_actions
+    from ..v4_ppo import decode_v4_sim_actions
+    from ..v4_ppo.runtime import observe_v4_inputs
     from simulator.public_state_estimator import PublicStateEstimator
 
     out = []
@@ -163,12 +164,7 @@ def sealed_rollout_returns(
                 for _ in range(horizon):
                     if env.state is None or env.state.terminal:
                         break
-                    obs = env.observe_v2_for_viewer(0)
-                    st = env.state
-                    hand = list(st.players[0].hand[:4])
-                    elixir = float(st.players[0].elixir_milli) / 1000.0
-                    estimator.sync_from_env(env, viewer=0)
-                    tensors = _v4_step_inputs(obs, hand, elixir, estimator.snapshot())
+                    obs, tensors, _, _ = observe_v4_inputs(env, estimator)
                     args = entry_input_tensors(tensors, device)
                     legal = torch.as_tensor(
                         np.array(obs.legal_play, dtype=bool, copy=True), device=device).unsqueeze(0).unsqueeze(0)
@@ -231,7 +227,8 @@ def full_match_record(
     from simulator.roster import PLAYER_DECK
 
     from ..model_v4 import masks_from_legal_play
-    from ..v4_ppo import _v4_step_inputs, decode_v4_sim_actions
+    from ..v4_ppo import decode_v4_sim_actions
+    from ..v4_ppo.runtime import observe_v4_inputs
     from simulator.public_state_estimator import PublicStateEstimator
 
     out = []
@@ -257,12 +254,7 @@ def full_match_record(
                 for _ in range(max_decisions):
                     if env.state is None or env.state.terminal:
                         break
-                    obs = env.observe_v2_for_viewer(0)
-                    st = env.state
-                    hand = list(st.players[0].hand[:4])
-                    elixir = float(st.players[0].elixir_milli) / 1000.0
-                    estimator.sync_from_env(env, viewer=0)
-                    tensors = _v4_step_inputs(obs, hand, elixir, estimator.snapshot())
+                    obs, tensors, _, _ = observe_v4_inputs(env, estimator)
                     args = entry_input_tensors(tensors, device)
                     legal = torch.as_tensor(
                         np.array(obs.legal_play, dtype=bool, copy=True), device=device).unsqueeze(0).unsqueeze(0)
