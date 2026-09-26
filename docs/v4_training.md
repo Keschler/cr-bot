@@ -257,6 +257,9 @@ Add these flags to the existing `scripts/run_v4_stage2_proof.py` workflow:
 Active mode captures sequential states from two-sided controller play, starting
 from the existing mechanics scenarios. Each candidate receives the same opponent
 seed, and both sides continue playing after the forced initial decision.
+Branch scoring charges every accepted learner card play through the continuation.
+Independent confirmation needs at least two paired replicas to estimate a
+confidence bound; one replica cannot certify a correction.
 The learner continuation uses the public rule teacher. A custom public policy
 callback is supported by `search_state(..., continuation_mode="active-policy",
 learner_controller=...)`; the dataset CLI exposes the implemented rule mode.

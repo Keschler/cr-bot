@@ -281,6 +281,12 @@ The object-based Python engine remains the reference oracle. Optimized
 backends must preserve canonical state and public-event hashes across reviewed
 scenarios, randomized streams, save/reload boundaries, and long seeded matches.
 
+Formal paired evaluation uses a durable manifest registry at
+`outputs/simulator/evaluation/manifest_registry.json` by default. Once a
+cell set is issued, it cannot be issued for another challenger; retiring it
+also prevents reuse after a process restart. The stratified bootstrap requires a stratum
+label for each block when reporting macro-averaged match improvement.
+
 ## Ruleset and truth contract
 
 The fixed V1 player deck is:
