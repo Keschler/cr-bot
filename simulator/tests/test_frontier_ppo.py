@@ -213,10 +213,11 @@ def test_paired_delta_stats_known_values():
 
 
 def test_paired_delta_stats_degenerate_cases():
-    assert paired_delta_stats([]) == {"mean": 0.0, "std": 0.0, "se": 0.0, "n": 0}
+    assert paired_delta_stats([]) == {"mean": 0.0, "std": None, "se": None, "n": 0}
     single = paired_delta_stats([0.5])
     assert single["mean"] == pytest.approx(0.5)
-    assert single["std"] == 0.0 and single["se"] == 0.0
+    assert single["std"] is None and single["se"] is None
+    assert classify_paired_sign(single["mean"], single["se"], same_action=False) == "unresolved"
     zeros = paired_delta_stats([0.0, 0.0, 0.0, 0.0])
     assert zeros["mean"] == 0.0 and zeros["std"] == 0.0 and zeros["se"] == 0.0
 
@@ -418,3 +419,41 @@ def test_sealed_choice_replica_count_validation():
     with pytest.raises(ValueError):
         sealed_choice_regret(policy=object(), champion=object(),
                              entries=[entry], n_replicas=8, max_replicas=4)
+
+
+@pytest.mark.parametrize("adaptive,cap,expected_n,expected_sign", [
+    (False, 8, 1, "unresolved"), (True, 1, 1, "unresolved"),
+    (True, 8, 2, "improved"),
+])
+def test_single_replica_cannot_establish_improvement(monkeypatch, adaptive, cap, expected_n, expected_sign):
+    from types import SimpleNamespace
+    import json
+    import simulator.rl.v4.frontier_ppo.evaluation as evaluation
+
+    champion, policy = object(), object()
+    monkeypatch.setattr(evaluation, "make_frontier_env", object)
+    monkeypatch.setattr(evaluation, "load_frontier_state", lambda *args: None)
+    monkeypatch.setattr(evaluation, "_entry_continuation_hidden", lambda *args: None)
+    monkeypatch.setattr(evaluation, "_policy_argmax_at_entry", lambda net, *args:
+                        SimpleNamespace(mode=1, slot=0, row=int(net is policy), col=0))
+    monkeypatch.setattr(evaluation, "run_branch", lambda **kw:
+                        {"value": .01 if kw["branch"].source == "p" else 0.0})
+    row = evaluation.sealed_choice_regret(
+        policy=policy, champion=champion,
+        entries=[{"entry_id": "singleton", "initial_state": {}, "opponent": {}}],
+        n_replicas=1, adaptive_replicas=adaptive, max_replicas=cap,
+    )[0]
+    assert row["n_replicas"] == expected_n
+    assert row["sign"] == expected_sign
+    assert row["replicas_extended"] == (expected_n > 1)
+    if expected_n == 1:
+        assert row["paired_se"] is None and row["paired_std"] is None
+    json.dumps(row, allow_nan=False)
+
+
+def test_summary_does_not_trust_old_singleton_confidence_label():
+    row = _synthetic_choice_row("old", .01, "improved")
+    row.update(paired_deltas=[.01], n_replicas=1)
+    summary = summarize_choice_regret([row])
+    assert summary["n_improved"] == 0
+    assert summary["n_unresolved"] == 1

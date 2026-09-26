@@ -509,6 +509,54 @@ def test_v4_ppo_dry_run_collect_and_update() -> None:
     assert bool(torch.isfinite(torch.tensor(report.advantages_std)))
 
 
+def test_v4_rollout_continues_recurrent_state_across_batches(monkeypatch) -> None:
+    from simulator.rl.v4.v4_ppo import collect_v4_rollout, _forward_sequence
+
+    torch.manual_seed(23)
+    policy = RecurrentV4Policy(_tiny_config())
+    anchor = RecurrentV4Policy(_tiny_config())
+    critic = V4ValueHead(64)
+    # A WAIT advances the same episode, so the second batch must start from
+    # the first batch's final actor and anchor states.
+    with torch.no_grad():
+        policy.heads.mode_head.weight.zero_()
+        policy.heads.mode_head.bias[:] = torch.tensor([80.0, -80.0])
+    lane = _lane("ground-defense", "beatdown", 5)
+    first, _ = collect_v4_rollout(
+        policy, critic, anchor, [lane], n_decisions=1,
+        deterministic_policy=True,
+    )
+    actor_hidden = lane["v4_policy_hidden"].clone()
+    anchor_hidden = lane["v4_anchor_hidden"].clone()
+    assert not lane["needs_reset"]
+    assert torch.count_nonzero(actor_hidden) > 0
+    assert torch.count_nonzero(anchor_hidden) > 0
+
+    seen_anchor_hidden = []
+    original_forward = anchor.forward_step
+
+    def record_anchor_forward(inputs, *, hidden=None, reset_mask=None):
+        seen_anchor_hidden.append(hidden.detach().clone())
+        return original_forward(inputs, hidden=hidden, reset_mask=reset_mask)
+
+    monkeypatch.setattr(anchor, "forward_step", record_anchor_forward)
+    second, _ = collect_v4_rollout(
+        policy, critic, anchor, [lane], n_decisions=1,
+        deterministic_policy=True,
+    )
+    sequence = second.trajectory.sequence
+    assert not bool(sequence.reset_mask[0, 0])
+    torch.testing.assert_close(sequence.initial_hidden, actor_hidden)
+    torch.testing.assert_close(seen_anchor_hidden[0], anchor_hidden)
+    with torch.no_grad():
+        logits, recurrent, _ = _forward_sequence(policy, sequence, "cpu")
+        log_probs = policy.log_prob(logits, second.trajectory.action_masks,
+                                    second.trajectory.actions)
+    torch.testing.assert_close(recurrent, second.recurrent)
+    torch.testing.assert_close(log_probs, second.trajectory.old_log_probs)
+    torch.testing.assert_close(first.next_values[0, 0], second.trajectory.values[0, 0])
+
+
 def test_log_prob_finite_on_broke_wait_rows() -> None:
     """WAIT rows naming an illegal dummy slot must score finite, not NaN.
 
@@ -676,7 +724,8 @@ def test_potential_anneal_schedule() -> None:
     assert potential_anneal_weight(0.1, 4, 5) == 0.0
     assert potential_anneal_weight(0.1, 2, 5) == 0.05
     assert potential_anneal_weight(0.1, 2, 5, anneal=False) == 0.1
-    assert potential_anneal_weight(0.0, 0, 1) == 0.0
+    assert potential_anneal_weight(0.1, 0, 1) == 0.0
+    assert potential_anneal_weight(0.1, 0, 1, anneal=False) == 0.1
     with pytest.raises(ValueError, match="non-negative integer"):
         potential_anneal_weight(0.1, -1, 5)
     with pytest.raises(ValueError, match="finite non-negative"):

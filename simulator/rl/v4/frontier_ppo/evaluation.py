@@ -110,8 +110,8 @@ def sealed_choice_regret(
                 # equals delta; sign is the confidence label at se_k SEs.
                 "paired_deltas": [round(v, 5) for v in diffs],
                 "paired_mean": round(paired_mean, 5),
-                "paired_std": round(stats["std"], 5),
-                "paired_se": round(stats["se"], 5),
+                "paired_std": round(stats["std"], 5) if stats["std"] is not None else None,
+                "paired_se": round(stats["se"], 5) if stats["se"] is not None else None,
                 "n_replicas": len(vals_champ),
                 "replicas_extended": extended,
                 "sign": sign,
@@ -172,7 +172,7 @@ def sealed_rollout_returns(
                     args = entry_input_tensors(tensors, device)
                     legal = torch.as_tensor(
                         np.array(obs.legal_play, dtype=bool, copy=True), device=device).unsqueeze(0).unsqueeze(0)
-                    masks = masks_from_legal_play(legal)
+                    masks = masks_from_legal_play(legal, bool(tensors["legal_wait"]))
                     reset = torch.zeros((1, 1), dtype=torch.bool, device=device)
                     _, acts, _, _, _, nxt = policy.rollout_sample(
                         args["raster"], args["global_features"], args["entities"],
@@ -266,7 +266,7 @@ def full_match_record(
                     args = entry_input_tensors(tensors, device)
                     legal = torch.as_tensor(
                         np.array(obs.legal_play, dtype=bool, copy=True), device=device).unsqueeze(0).unsqueeze(0)
-                    masks = masks_from_legal_play(legal)
+                    masks = masks_from_legal_play(legal, bool(tensors["legal_wait"]))
                     reset = torch.zeros((1, 1), dtype=torch.bool, device=device)
                     if deterministic:
                         logits, _, hidden = policy.forward_step(args, hidden=hidden, reset_mask=reset)

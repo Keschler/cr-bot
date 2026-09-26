@@ -49,6 +49,29 @@ def _require_bool(name: str, value: torch.Tensor) -> None:
         raise TypeError(f"{name} must use dtype torch.bool")
 
 
+def _validate_valid_mask(
+    valid_mask: torch.Tensor | None,
+    shape: tuple[int, int],
+) -> torch.Tensor | None:
+    """Validate and normalize an optional transition validity mask."""
+
+    if valid_mask is None:
+        return None
+    _require_bool("valid_mask", valid_mask)
+    if valid_mask.shape != shape:
+        raise ValueError("valid_mask must match the PPO tensor shapes")
+    return valid_mask
+
+
+def _masked_mean(value: torch.Tensor, weights: torch.Tensor | None) -> torch.Tensor:
+    """Average only active transitions while retaining a zero-loss graph."""
+
+    if weights is None:
+        return value.mean()
+    denominator = weights.sum().clamp_min(1.0)
+    return (value * weights).sum() / denominator
+
+
 @dataclass(frozen=True, slots=True)
 class PPOObjectiveConfig:
     """Numerical coefficients for one recurrent PPO update."""
@@ -100,8 +123,14 @@ def compute_gae(
     *,
     gamma: float,
     gae_lambda: float,
+    valid_mask: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Compute advantages/returns with separate terminal and truncation flags."""
+    """Compute advantages/returns with separate terminal and truncation flags.
+
+    ``valid_mask`` excludes fixed-width rollout padding from both the return
+    recursion and its resulting targets.  It is deliberately optional so
+    existing callers retain the ordinary dense trajectory behavior.
+    """
 
     _require_torch()
     for name, value in (
@@ -118,6 +147,7 @@ def compute_gae(
         raise ValueError("rewards, values, and next_values must have identical shapes")
     if terminated.shape != shape or truncated.shape != shape:
         raise ValueError("episode flags must have the same shape as values")
+    valid_mask = _validate_valid_mask(valid_mask, tuple(shape))
     if not 0.0 < float(gamma) <= 1.0:
         raise ValueError("gamma must be in (0, 1]")
     if not 0.0 <= float(gae_lambda) <= 1.0:
@@ -127,12 +157,41 @@ def compute_gae(
     running = torch.zeros(shape[0], dtype=values.dtype, device=values.device)
     terminal_float = terminated.to(dtype=values.dtype)
     boundary = terminated | truncated
+    active = (
+        torch.ones(shape, dtype=values.dtype, device=values.device)
+        if valid_mask is None
+        else valid_mask.to(device=values.device, dtype=values.dtype)
+    )
     for timestep in range(shape[1] - 1, -1, -1):
-        delta = rewards[:, timestep] + float(gamma) * (1.0 - terminal_float[:, timestep]) * next_values[:, timestep]
+        if timestep + 1 < shape[1]:
+            next_active = active[:, timestep + 1]
+        else:
+            # The final next-value is the explicit bootstrap for this
+            # transition, so it belongs to the current row's validity.
+            next_active = active[:, timestep]
+        # ``next_values`` is an explicit per-transition successor estimate.
+        # In particular, a valid time-limit transition may be followed by an
+        # invalid fixed-width padding row while still requiring its real
+        # boundary bootstrap.  Preserve that bootstrap while suppressing an
+        # accidental nonterminal value copied from an invalid successor row.
+        successor_active = torch.maximum(
+            next_active,
+            truncated[:, timestep].to(dtype=values.dtype),
+        )
+        delta = (
+            rewards[:, timestep]
+            + float(gamma)
+            * (1.0 - terminal_float[:, timestep])
+            * next_values[:, timestep]
+            * successor_active
+        )
         delta = delta - values[:, timestep]
         running = delta + float(gamma * gae_lambda) * (~boundary[:, timestep]).to(values.dtype) * running
+        running = running * active[:, timestep]
         advantages[:, timestep] = running
     returns = advantages + values
+    if valid_mask is not None:
+        returns = returns * active
     _require_finite("advantages", advantages)
     _require_finite("returns", returns)
     return advantages, returns
@@ -173,6 +232,7 @@ def ppo_objective(
     old_values: torch.Tensor | None = None,
     behavior_cloning_log_probs: torch.Tensor | None = None,
     behavior_cloning_weights: torch.Tensor | None = None,
+    valid_mask: torch.Tensor | None = None,
     config: PPOObjectiveConfig = PPOObjectiveConfig(),
 ) -> PPOObjectiveResult:
     """Compute one clipped PPO objective over a recurrent minibatch."""
@@ -200,9 +260,23 @@ def ppo_objective(
         if old_values.shape != shape:
             raise ValueError("old_values must match PPO objective tensor shapes")
 
+    valid_mask = _validate_valid_mask(valid_mask, tuple(shape))
+    valid_weights = (
+        None
+        if valid_mask is None
+        else valid_mask.to(device=values.device, dtype=values.dtype)
+    )
+
     if config.normalize_advantage:
-        centered = advantages - advantages.mean()
-        advantages_for_loss = centered / advantages.std(unbiased=False).clamp_min(1e-8)
+        if valid_weights is None:
+            centered = advantages - advantages.mean()
+            advantages_for_loss = centered / advantages.std(unbiased=False).clamp_min(1e-8)
+        else:
+            denominator = valid_weights.sum().clamp_min(1.0)
+            mean = (advantages * valid_weights).sum() / denominator
+            centered = advantages - mean
+            variance = (centered.square() * valid_weights).sum() / denominator
+            advantages_for_loss = centered / variance.sqrt().clamp_min(1e-8)
     else:
         advantages_for_loss = advantages
 
@@ -216,7 +290,7 @@ def ppo_objective(
         1.0 + float(config.clip_epsilon),
     )
     surrogate = torch.minimum(ratio * advantages_for_loss, clipped_ratio * advantages_for_loss)
-    policy_loss = -surrogate.mean()
+    policy_loss = -_masked_mean(surrogate, valid_weights)
 
     if config.value_clip_epsilon is None:
         value_error = (values - returns).square()
@@ -230,17 +304,24 @@ def ppo_objective(
             (values - returns).square(),
             (clipped_values - returns).square(),
         )
-    value_loss = 0.5 * value_error.mean()
-    entropy_mean = entropy.mean()
+    value_loss = 0.5 * _masked_mean(value_error, valid_weights)
+    entropy_mean = _masked_mean(entropy, valid_weights)
 
     if behavior_cloning_log_probs is None:
         bc_loss = torch.zeros((), dtype=values.dtype, device=values.device)
     else:
         if behavior_cloning_log_probs.shape != shape:
             raise ValueError("behavior-cloning log probabilities must match PPO tensor shapes")
+        effective_bc_weights = behavior_cloning_weights
+        if valid_weights is not None:
+            effective_bc_weights = (
+                valid_weights
+                if effective_bc_weights is None
+                else effective_bc_weights * valid_weights
+            )
         bc_loss = behavior_cloning_loss(
             behavior_cloning_log_probs,
-            behavior_cloning_weights,
+            effective_bc_weights,
         )
 
     total_loss = (
@@ -255,13 +336,18 @@ def ppo_objective(
         value_loss=value_loss,
         entropy=entropy_mean,
         behavior_cloning_loss=bc_loss,
-        approx_kl=(old_log_probs - new_log_probs).mean(),
+        approx_kl=_masked_mean(old_log_probs - new_log_probs, valid_weights),
         # The signed sampled-log-ratio mean is useful as the conventional PPO
         # diagnostic, but it can hide large movement when some actions become
         # more likely and others become less likely.  Keep a conservative
         # absolute movement metric for update guards and regression diagnosis.
-        mean_abs_log_ratio=(old_log_probs - new_log_probs).abs().mean(),
-        clip_fraction=(torch.abs(ratio - 1.0) > float(config.clip_epsilon)).to(torch.float32).mean(),
+        mean_abs_log_ratio=_masked_mean(
+            (old_log_probs - new_log_probs).abs(), valid_weights
+        ),
+        clip_fraction=_masked_mean(
+            (torch.abs(ratio - 1.0) > float(config.clip_epsilon)).to(torch.float32),
+            valid_weights,
+        ),
     )
     for name, value in (
         ("PPO total loss", result.total_loss),

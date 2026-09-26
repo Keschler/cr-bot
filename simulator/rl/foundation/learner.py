@@ -559,6 +559,9 @@ def _slice_trajectory(
         "returns": None
         if trajectory.returns is None
         else trajectory.returns[indices, time_slice],
+        "valid_mask": None
+        if trajectory.valid_mask is None
+        else trajectory.valid_mask[indices, time_slice],
     }
     return TrajectoryBatch(**fields)
 
@@ -980,6 +983,15 @@ if TORCH_AVAILABLE:
             else:
                 old_values = old_values.to(device=self.device, dtype=torch.float32)
 
+            valid_mask = trajectory.valid_mask
+            if valid_mask is not None:
+                valid_mask = valid_mask.to(device=self.device, dtype=torch.bool)
+                # Stored rollout values for padding are normally already
+                # neutralized by the collector.  Keep the invariant here as
+                # well for externally assembled trajectories, so their GAE
+                # and value targets cannot inherit a padding estimate.
+                old_values = old_values.masked_fill(~valid_mask, 0.0)
+
             advantages = trajectory.advantages
             returns = trajectory.returns
             if (advantages is None) != (returns is None):
@@ -994,10 +1006,14 @@ if TORCH_AVAILABLE:
                     trajectory.truncated.to(self.device),
                     gamma=self.config.gamma,
                     gae_lambda=self.config.gae_lambda,
+                    valid_mask=valid_mask,
                 )
             else:
                 advantages = advantages.to(device=self.device, dtype=old_values.dtype)
                 returns = returns.to(device=self.device, dtype=old_values.dtype)
+                if valid_mask is not None:
+                    advantages = advantages.masked_fill(~valid_mask, 0.0)
+                    returns = returns.masked_fill(~valid_mask, 0.0)
 
             prepared_trajectory = replace(
                 trajectory,
@@ -1153,6 +1169,7 @@ if TORCH_AVAILABLE:
                     behavior_cloning_weights=None
                     if batch.behavior_cloning_weights is None
                     else batch.behavior_cloning_weights.to(self.device),
+                    valid_mask=trajectory.valid_mask,
                     config=self.config.objective_config(),
                 )
                 factor_bc_loss = (
@@ -1163,11 +1180,16 @@ if TORCH_AVAILABLE:
                         batch.behavior_cloning_weights,
                         actions=behavior_cloning_actions,
                         card_factor_weight=self.config.bc_card_factor_weight,
+                        valid_mask=trajectory.valid_mask,
                     )
                     if self.config.imitation_only or diagnostics
                     else evaluation.output.recurrent_features.new_zeros(())
                 )
-                belief_loss = _belief_loss(evaluation.output, batch.belief_targets)
+                belief_loss = _belief_loss(
+                    evaluation.output,
+                    batch.belief_targets,
+                    valid_mask=trajectory.valid_mask,
+                )
                 # The factorized loss was introduced for supervised warm-starts.
                 # In mixed actor-controlled PPO it class-balances the rare PLAY
                 # labels and can move the mode/card/placement heads far more than
@@ -1611,6 +1633,9 @@ def _move_learner_batch(
         if trajectory.advantages is None
         else _to_device(trajectory.advantages, device),
         returns=None if trajectory.returns is None else _to_device(trajectory.returns, device),
+        valid_mask=None
+        if trajectory.valid_mask is None
+        else _to_device(trajectory.valid_mask, device, dtype=torch.bool),
     )
     targets = batch.belief_targets
     moved_targets = None
@@ -1808,6 +1833,7 @@ def _factor_behavior_cloning_loss(
     *,
     actions: Any | None = None,
     card_factor_weight: float = 1.0,
+    valid_mask: Any | None = None,
 ) -> Any:
     """Balance teacher gradients across mode, card, and placement factors.
 
@@ -1837,6 +1863,12 @@ def _factor_behavior_cloning_loss(
         raise ValueError("behavior-cloning weights must be non-negative")
     if not bool(torch.isfinite(weights).all().item()):
         raise FloatingPointError("behavior-cloning weights are non-finite")
+    if valid_mask is not None:
+        if not isinstance(valid_mask, torch.Tensor) or valid_mask.shape != weights.shape:
+            raise ValueError("valid_mask must match behavior-cloning weights")
+        if valid_mask.dtype != torch.bool:
+            raise TypeError("valid_mask must use dtype torch.bool")
+        weights = weights * valid_mask.to(dtype=weights.dtype, device=weights.device)
 
     factors = policy.action_head.masked_log_probs(output.logits, trajectory.action_masks)
     target_actions = trajectory.actions if actions is None else actions
@@ -1906,30 +1938,68 @@ def _categorical_entropy(log_probs: Any) -> Any:
     return -(probabilities * safe_logs).sum(dim=-1)
 
 
-def _belief_loss(output: Any, targets: BeliefTargets | None) -> Any:
+def _belief_loss(
+    output: Any,
+    targets: BeliefTargets | None,
+    *,
+    valid_mask: Any | None = None,
+) -> Any:
     if targets is None:
         return output.recurrent_features.new_zeros(())
     if output.belief_logits is None:
         raise ValueError("policy output does not contain opponent-belief logits")
     losses: list[Any] = []
     logits = output.belief_logits
+    weights = None
+    if valid_mask is not None:
+        reference = next(
+            value
+            for value in (
+                logits.enemy_elixir,
+                logits.enemy_hand,
+                logits.enemy_next_card,
+            )
+            if value is not None
+        )
+        if not isinstance(valid_mask, torch.Tensor) or valid_mask.shape != reference.shape[:2]:
+            raise ValueError("valid_mask must match belief target batch and time dimensions")
+        if valid_mask.dtype != torch.bool:
+            raise TypeError("valid_mask must use dtype torch.bool")
+        weights = valid_mask.to(
+            device=reference.device,
+            dtype=reference.dtype,
+        )
+
+    def masked_loss(loss: Any) -> Any:
+        if weights is None:
+            return loss.mean()
+        expanded = weights
+        while expanded.ndim < loss.ndim:
+            expanded = expanded.unsqueeze(-1)
+        denominator = expanded.expand_as(loss).sum().clamp_min(1.0)
+        return (loss * expanded).sum() / denominator
+
     if targets.enemy_elixir is not None:
         losses.append(
-            F.mse_loss(
+            masked_loss(F.mse_loss(
                 logits.enemy_elixir,
                 targets.enemy_elixir.to(device=logits.enemy_elixir.device, dtype=logits.enemy_elixir.dtype),
-            )
+                reduction="none",
+            ))
         )
     if targets.enemy_hand is not None:
         losses.append(
-            F.binary_cross_entropy_with_logits(
+            masked_loss(F.binary_cross_entropy_with_logits(
                 logits.enemy_hand,
                 targets.enemy_hand.to(device=logits.enemy_hand.device, dtype=logits.enemy_hand.dtype),
-            )
+                reduction="none",
+            ))
         )
     if targets.enemy_next_card is not None:
         target = targets.enemy_next_card.to(device=logits.enemy_next_card.device, dtype=torch.long)
         valid = target != -100
+        if valid_mask is not None:
+            valid &= valid_mask.to(device=valid.device, dtype=torch.bool)
         if bool(valid.any().item()):
             losses.append(
                 F.cross_entropy(

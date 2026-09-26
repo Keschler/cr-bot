@@ -29,7 +29,11 @@ def potential_anneal_weight(
         raise TypeError("anneal must be boolean")
     if not anneal:
         return float(initial_weight)
-    return max(0.0, float(initial_weight) * (1.0 - update / max(1, n_updates - 1)))
+    # With one scheduled update, that update is also the final update and
+    # must already use the sparse terminal objective.
+    if n_updates == 1:
+        return 0.0
+    return max(0.0, float(initial_weight) * (1.0 - update / (n_updates - 1)))
 
 
 def monte_carlo_returns(
@@ -180,4 +184,3 @@ def fit_value_head(
     if best["state"] is not None:
         critic.load_state_dict(best["state"])
     return {"history": history, "best": best}
-

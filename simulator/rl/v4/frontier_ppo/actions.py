@@ -30,7 +30,7 @@ def _policy_argmax_at_entry(
     inputs, legal, _, _ = _observe_inputs(env, device)
     tensors = entry_input_tensors(inputs, device)
     legal_t = torch.as_tensor(legal, device=device).unsqueeze(0).unsqueeze(0)
-    masks = masks_from_legal_play(legal_t)
+    masks = masks_from_legal_play(legal_t, bool(inputs["legal_wait"]))
     reset = torch.zeros((1, 1), dtype=torch.bool, device=device)
     with torch.no_grad():
         logits, _, _ = policy.forward(
@@ -90,7 +90,7 @@ def action_logit_margins(
         inputs, legal, _, _ = _observe_inputs(env, device)
         tensors = entry_input_tensors(inputs, device)
         legal_t = torch.as_tensor(legal, device=device).unsqueeze(0).unsqueeze(0)
-        masks = masks_from_legal_play(legal_t)
+        masks = masks_from_legal_play(legal_t, bool(inputs["legal_wait"]))
         reset = torch.zeros((1, 1), dtype=torch.bool, device=device)
         with torch.no_grad():
             logits, _, _ = policy.forward(
@@ -104,15 +104,18 @@ def action_logit_margins(
                 torch.full_like(logits.mode[0, 0], float("-inf")),
             )
             mode_p = torch.softmax(mode_logp, dim=-1).cpu().numpy().reshape(-1)
-            card_logp = torch.where(
-                masks.card, logits.card[0, 0].float(),
-                torch.full_like(logits.card[0, 0], float("-inf")),
-            )
-            card_p = torch.softmax(card_logp, dim=-1).cpu().numpy().reshape(-1)
             mode_sorted = sorted(float(v) for v in mode_p)
             mode_margin = mode_sorted[-1] - (mode_sorted[-2] if len(mode_sorted) > 1 else 0.0)
-            card_sorted = sorted(float(v) for v in card_p)
-            card_margin = card_sorted[-1] - (card_sorted[-2] if len(card_sorted) > 1 else 0.0)
+            # The card distribution is undefined when no card can be played.
+            card_margin = None
+            if bool(masks.card.any().item()):
+                card_logp = torch.where(
+                    masks.card, logits.card[0, 0].float(),
+                    torch.full_like(logits.card[0, 0], float("-inf")),
+                )
+                card_p = torch.softmax(card_logp, dim=-1).cpu().numpy().reshape(-1)
+                card_sorted = sorted(float(v) for v in card_p)
+                card_margin = card_sorted[-1] - (card_sorted[-2] if len(card_sorted) > 1 else 0.0)
             chosen_mode = int(mode_p.argmax())
             placement_margin = None
             if chosen_mode == 1:
@@ -131,7 +134,7 @@ def action_logit_margins(
                 "entry_id": entry["entry_id"],
                 "chosen_mode": chosen_mode,
                 "mode_margin": round(float(mode_margin), 4),
-                "card_margin": round(float(card_margin), 4),
+                "card_margin": round(float(card_margin), 4) if card_margin is not None else None,
                 "placement_margin": round(float(placement_margin), 4) if placement_margin is not None else None,
             }
         )
@@ -166,7 +169,7 @@ def action_logit_margins(
         "version": FRONTIER_PPO_VERSION,
         "per_entry": per_entry,
         "mode": _summary([e["mode_margin"] for e in per_entry]),
-        "card": _summary([e["card_margin"] for e in per_entry]),
+        "card": _summary([e["card_margin"] for e in per_entry if e["card_margin"] is not None]),
         "placement": _summary([e["placement_margin"] for e in per_entry if e["placement_margin"] is not None]),
         "n_play": sum(1 for e in per_entry if e["chosen_mode"] == 1),
         "n_wait": sum(1 for e in per_entry if e["chosen_mode"] == 0),

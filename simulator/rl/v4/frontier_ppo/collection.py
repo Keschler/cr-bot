@@ -85,7 +85,10 @@ def _observe_lanes(lanes: Sequence[_FrontierLane], device: Any):
     legal = torch.stack(
         [torch.as_tensor(lg, dtype=torch.bool) for lg in legals]
     ).to(device).unsqueeze(1)
-    masks = masks_from_legal_play(legal)
+    legal_wait = torch.tensor(
+        [bool(ob["legal_wait"]) for ob in obs_list], dtype=torch.bool, device=device
+    ).unsqueeze(1)
+    masks = masks_from_legal_play(legal, legal_wait)
     return array_inputs, legals, masks
 
 

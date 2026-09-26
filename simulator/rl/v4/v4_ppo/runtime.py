@@ -165,7 +165,7 @@ def _forward_sequence(
     ):
         if getattr(sequence, name) is None:
             raise ValueError(f"sequence lacks retained V4 field {name!r}")
-    logits, zt, ht = policy(
+    zt, spatial_map, entity_context, hand_queries = policy.encoder(
         sequence.raster.to(device),
         sequence.global_features.to(device),
         sequence.entities.to(device),
@@ -175,11 +175,12 @@ def _forward_sequence(
         sequence.opp_out_of_cycle.to(device),
         sequence.opp_elixir_interval.to(device),
         sequence.event_history.to(device),
-        sequence.reset_mask.to(device),
     )
-    hidden = policy.initial_hidden(sequence.batch_size, device=device)
-    _, next_hidden = policy.recurrent.forward_with_hidden(
+    hidden = sequence.initial_hidden
+    if hidden is not None:
+        hidden = hidden.to(device)
+    ht, next_hidden = policy.recurrent.forward_with_hidden(
         zt, sequence.reset_mask.to(device), hidden=hidden
     )
+    logits = policy.heads(zt, ht, entity_context, hand_queries, spatial_map)
     return logits, ht, next_hidden
-

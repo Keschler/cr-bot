@@ -294,3 +294,30 @@ def test_monte_carlo_terminal_reward_reaches_prior_actions_without_crossing_rese
     returns, stats = monte_carlo_returns(rewards, terminated, gamma=0.5)
     assert returns.tolist() == [[1., 2., 2., 4.]]
     assert stats["truncated_tail_fraction"] == 0.0
+
+
+def test_no_legal_card_margin_is_null_and_json_finite(monkeypatch):
+    import json
+    import numpy as np
+    import simulator.rl.v4.frontier_eval as frontier_eval
+
+    observe = frontier_eval._observe_inputs
+    def no_plays(*args, **kwargs):
+        inputs, legal, third, fourth = observe(*args, **kwargs)
+        return inputs, np.zeros_like(legal), third, fourth
+    monkeypatch.setattr(frontier_eval, "_observe_inputs", no_plays)
+    report = action_logit_margins(policy(), entries(1), device="cpu")
+    assert report["per_entry"][0]["card_margin"] is None
+    assert report["card"]["n"] == 0
+    assert report["card"]["mean"] is None
+    assert report["n_wait"] == 1
+    json.dumps(report, allow_nan=False)
+
+
+def test_explained_variance_reports_worse_than_constant_predictions():
+    from simulator.rl.v4.v4_ppo.diagnostics import _explained_variance
+
+    returns = torch.tensor([-1., 1.])
+    assert _explained_variance(returns, -returns) == pytest.approx(-3.)
+    assert _explained_variance(returns, returns) == pytest.approx(1.)
+    assert _explained_variance(returns, torch.zeros_like(returns)) == pytest.approx(0.)

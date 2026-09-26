@@ -399,6 +399,83 @@ def test_mixed_terminal_and_truncated_lanes_sanitize_terminal_bootstrap_rows() -
 
 
 @requires_torch
+def test_frozen_lane_padding_is_marked_invalid_and_has_neutral_targets() -> None:
+    from dataclasses import replace
+
+    from simulator.env import SimulatorEnv
+    from rl.foundation.collector import CollectorConfig, RecurrentRolloutCollector
+    from rl.foundation.learner import LearnerConfig, RecurrentPPOLearner
+    from rl.foundation.model import ModelConfig, RecurrentHybridPolicy
+
+    model_config = ModelConfig(
+        raster_channels=21,
+        raster_height=32,
+        raster_width=18,
+        global_dim=768,
+        entity_dim=32,
+        max_entities=128,
+        model_dim=8,
+        encoder_dim=8,
+        transformer_heads=2,
+        transformer_layers=1,
+        transformer_ff_dim=16,
+        gru_hidden_dim=8,
+        card_slots=4,
+        belief_card_count=128,
+        placement_rows=32,
+        placement_cols=18,
+    )
+    learner = RecurrentPPOLearner(
+        RecurrentHybridPolicy(model_config),
+        config=LearnerConfig(update_epochs=1, sequence_minibatch_size=1),
+    )
+    environments = [
+        SimulatorEnv(decision_interval_us=1_000_000),
+        SimulatorEnv(decision_interval_us=1_000_000),
+    ]
+    for lane, environment in enumerate(environments):
+        environment.reset(seed=80 + lane, shuffle_decks=False)
+
+    def batch_step(actions):
+        results = []
+        for lane, environment in enumerate(environments):
+            step = environment.step_v2(actions[lane])
+            if lane == 0:
+                step = replace(step, terminated=True, truncated=False)
+            results.append(step)
+        return results
+
+    collector = RecurrentRolloutCollector(
+        learner,
+        CollectorConfig(
+            horizon=3,
+            shuffle_decks=False,
+            freeze_completed_lanes=True,
+        ),
+        batch_step=batch_step,
+    )
+    result = collector.collect(environments)
+
+    torch.testing.assert_close(
+        result.trajectory.valid_mask,
+        torch.tensor([[True, False, False], [True, True, True]]),
+    )
+    torch.testing.assert_close(
+        result.trajectory.values[0, 1:],
+        torch.zeros(2),
+    )
+    prepared = learner.prepare_batch(result.learner_batch)
+    torch.testing.assert_close(
+        prepared.trajectory.advantages[0, 1:],
+        torch.zeros(2),
+    )
+    torch.testing.assert_close(
+        prepared.trajectory.returns[0, 1:],
+        torch.zeros(2),
+    )
+
+
+@requires_torch
 def test_collector_reports_completed_rollout_steps() -> None:
     from simulator.env import SimulatorEnv
     from rl.foundation.collector import CollectorConfig, RecurrentRolloutCollector

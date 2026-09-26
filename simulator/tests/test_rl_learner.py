@@ -652,6 +652,66 @@ def test_nonfinite_objective_is_rejected_before_ratio_can_overflow() -> None:
 
 
 @requires_torch
+def test_valid_mask_excludes_frozen_padding_from_gae_and_value_gradients() -> None:
+    from rl.foundation.objectives import PPOObjectiveConfig, compute_gae, ppo_objective
+
+    values = torch.tensor([[2.0, 7.0]], requires_grad=True)
+    next_values = torch.zeros_like(values)
+    rewards = torch.zeros_like(values)
+    terminated = torch.ones_like(values, dtype=torch.bool)
+    truncated = torch.zeros_like(terminated)
+    valid_mask = torch.tensor([[True, False]])
+
+    advantages, returns = compute_gae(
+        rewards,
+        values.detach(),
+        next_values,
+        terminated,
+        truncated,
+        gamma=0.99,
+        gae_lambda=0.95,
+        valid_mask=valid_mask,
+    )
+    torch.testing.assert_close(advantages, torch.tensor([[-2.0, 0.0]]))
+    torch.testing.assert_close(returns, torch.zeros_like(returns))
+
+    # A live time-limit transition may be immediately followed by padding;
+    # its explicit successor value still belongs in the bootstrap target.
+    boundary_advantages, boundary_returns = compute_gae(
+        torch.zeros_like(values.detach()),
+        torch.tensor([[2.0, 7.0]]),
+        torch.tensor([[5.0, 0.0]]),
+        torch.zeros_like(terminated),
+        torch.tensor([[True, True]]),
+        gamma=0.99,
+        gae_lambda=0.95,
+        valid_mask=valid_mask,
+    )
+    torch.testing.assert_close(
+        boundary_advantages,
+        torch.tensor([[0.99 * 5.0 - 2.0, 0.0]]),
+    )
+    torch.testing.assert_close(boundary_returns, torch.tensor([[0.99 * 5.0, 0.0]]))
+
+    result = ppo_objective(
+        old_log_probs=torch.zeros_like(values),
+        new_log_probs=torch.zeros_like(values),
+        advantages=advantages,
+        values=values,
+        returns=returns,
+        entropy=torch.zeros_like(values),
+        old_values=values.detach(),
+        valid_mask=valid_mask,
+        config=PPOObjectiveConfig(normalize_advantage=False),
+    )
+    result.total_loss.backward()
+
+    assert values.grad is not None
+    assert values.grad[0, 0].abs() > 0
+    assert values.grad[0, 1] == 0
+
+
+@requires_torch
 def test_nonfinite_gradient_skips_optimizer_step_and_is_counted() -> None:
     from rl.foundation.learner import LearnerBatch, LearnerConfig, RecurrentPPOLearner
     from rl.foundation.model import RecurrentHybridPolicy

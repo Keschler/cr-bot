@@ -520,6 +520,11 @@ if TORCH_AVAILABLE:
             belief_next_steps: list[torch.Tensor] = []
             behavior_cloning_weight_steps: list[torch.Tensor] = []
             behavior_cloning_action_steps: list[ActionBatch] = []
+            # Fixed-width collection may keep a completed lane alive while
+            # sibling lanes continue.  These rows are tensor padding only;
+            # retain an explicit validity mask so PPO can exclude them from
+            # GAE, value, policy, entropy, and auxiliary losses.
+            valid_steps: list[torch.Tensor] = []
             # A nonterminal truncation resets the environment for collection,
             # but its value target is still V(s) at the final pre-reset state.
             # Keep those evaluations by rollout timestep so the learner can
@@ -528,6 +533,12 @@ if TORCH_AVAILABLE:
 
             for _time in range(self.config.horizon):
                 observations = [item[target_player] for item in current_observations]
+                valid_step = torch.as_tensor(
+                    [not frozen for frozen in frozen_lanes],
+                    dtype=torch.bool,
+                    device=self.learner.device,
+                )
+                valid_steps.append(valid_step)
                 raster, global_features, entities, entity_mask, masks = _batch_observations(
                     observations,
                     device=self.learner.device,
@@ -712,6 +723,12 @@ if TORCH_AVAILABLE:
                             device=self.learner.device,
                         )
                     )
+                # Keep the stored behavior log-probability neutral for
+                # synthetic padding as well.  The explicit validity mask is
+                # what excludes the re-evaluated differentiable outputs.
+                stored_log_probs = stored_log_probs * valid_step.reshape(-1, 1).to(
+                    dtype=stored_log_probs.dtype
+                )
                 policy_diagnostics: list[Mapping[str, Any] | None] = [None] * batch_size
                 if self.config.diagnostics:
                     from .diagnostics import build_policy_diagnostics
@@ -739,7 +756,12 @@ if TORCH_AVAILABLE:
                     )
                 )
                 log_prob_steps.append(stored_log_probs[:, 0])
-                value_steps.append(step.values[:, 0])
+                # Store neutral critic/log-probability values for synthetic
+                # rows as an additional invariant.  The validity mask below
+                # is still required because PPO re-evaluates the sequence and
+                # must mask the resulting differentiable outputs as well.
+                valid_float = valid_step.to(dtype=step.values.dtype)
+                value_steps.append(step.values[:, 0] * valid_float)
 
                 # The simulator needs Python actions, but decoding one lane
                 # at a time would synchronize the accelerator once for every
@@ -1072,6 +1094,7 @@ if TORCH_AVAILABLE:
                 truncated=torch.stack(truncated_steps, dim=1),
                 old_log_probs=torch.stack(log_prob_steps, dim=1),
                 values=torch.stack(value_steps, dim=1),
+                valid_mask=torch.stack(valid_steps, dim=1),
             )
             privileged_features = (
                 torch.stack(privileged_steps, dim=1) if privileged_steps else None

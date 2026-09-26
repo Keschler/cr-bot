@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, Sequence
+import weakref
 import numpy as np
 import torch
 from .runtime import configure_v4_runtime, decode_v4_sim_actions, _v4_step_inputs
@@ -54,6 +55,7 @@ def _observe_lanes(
     }
     reset_rows: list[bool] = []
     legal_list: list[np.ndarray] = []
+    legal_wait_rows: list[bool] = []
     for lane in lanes:
         env = lane["env"]
         state = env.state
@@ -71,6 +73,7 @@ def _observe_lanes(
                 continue
             batch_inputs[key].append(value)
         legal_list.append(packed["legal_play"])
+        legal_wait_rows.append(bool(packed["legal_wait"]))
         reset_rows.append(bool(lane.get("needs_reset", True)))
         lane["needs_reset"] = False
     array_inputs = {
@@ -82,7 +85,8 @@ def _observe_lanes(
     array_inputs["entity_mask"] = array_inputs["entity_mask"].to(torch.bool)
     array_inputs["opp_out_of_cycle"] = array_inputs["opp_out_of_cycle"].to(torch.bool)
     legal = torch.as_tensor(np.stack(legal_list)).unsqueeze(1).to(device)
-    masks = masks_from_legal_play(legal)
+    legal_wait = torch.tensor(legal_wait_rows, dtype=torch.bool, device=device).unsqueeze(1)
+    masks = masks_from_legal_play(legal, legal_wait)
     reset_mask = torch.tensor(reset_rows, dtype=torch.bool, device=device).reshape(-1, 1)
     return array_inputs, masks, reset_mask
 
@@ -123,8 +127,23 @@ def collect_v4_rollout(
     if anchor is not None:
         configure_v4_runtime(anchor)
         anchor.eval()
-    anchor_hidden = anchor.initial_hidden(n_lanes, device=device) if anchor is not None else None
-    hidden = policy.initial_hidden(n_lanes, device=device)
+    def lane_hidden(key: str, model: RecurrentV4Policy) -> torch.Tensor:
+        zero = model.initial_hidden(1, device=device)
+        states = []
+        for lane in lanes:
+            owner = lane.get(f"{key}_owner")
+            saved = lane.get(key) if owner is not None and owner() is model else None
+            if saved is None:
+                states.append(zero)
+            else:
+                if not isinstance(saved, torch.Tensor) or saved.shape != zero.shape:
+                    raise ValueError(f"invalid {key} in rollout lane")
+                states.append(saved.detach().to(device=device, dtype=zero.dtype))
+        return torch.cat(states, dim=1)
+
+    anchor_hidden = lane_hidden("v4_anchor_hidden", anchor) if anchor is not None else None
+    hidden = lane_hidden("v4_policy_hidden", policy)
+    first_hidden = hidden.detach().clone()
     steps: list[dict[str, torch.Tensor]] = []
     illegal_attempts = 0
     wait_count = 0
@@ -270,7 +289,12 @@ def collect_v4_rollout(
                     "reset": reset_mask.detach().cpu(),
                 }
             )
-    first_hidden = policy.initial_hidden(n_lanes, device=torch.device("cpu"))
+    for lane_index, lane in enumerate(lanes):
+        lane["v4_policy_hidden"] = hidden[:, lane_index:lane_index + 1].detach().clone()
+        lane["v4_policy_hidden_owner"] = weakref.ref(policy)
+        if anchor is not None and anchor_hidden is not None:
+            lane["v4_anchor_hidden"] = anchor_hidden[:, lane_index:lane_index + 1].detach().clone()
+            lane["v4_anchor_hidden_owner"] = weakref.ref(anchor)
     batch = _stack_rollout(steps, first_hidden, n_lanes, n_decisions, device)
     total_actions = n_lanes * n_decisions
     histogram = (
@@ -327,9 +351,8 @@ def _stack_rollout(
         reset_mask=torch.stack(
             [row["reset"].squeeze(1) for row in steps], dim=1
         ).to(device, dtype=torch.bool),
-        # Smoke episodes reset explicitly and re-evaluate from the stored
-        # initial state; per-step hidden snapshots and burn-in windows are
-        # the documented follow-up, not smoke requirements.
+        # The first state can be nonzero when this batch continues an episode
+        # started by an earlier collect_v4_rollout call.
         initial_hidden=first_hidden.to(device),
         hand_tokens=stacked_input("hand_tokens"),
         opp_hand_probs=stacked_input("opp_hand_probs"),
@@ -391,4 +414,3 @@ def _stack_rollout(
             trajectory.values, trajectory.terminated, trajectory.truncated, stack("boundary_values")
         ),
     )
-

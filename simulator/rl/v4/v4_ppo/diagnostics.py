@@ -221,7 +221,7 @@ def _explained_variance(returns: torch.Tensor, values: torch.Tensor) -> float:
     if not bool(torch.isfinite(variance).item()) or float(variance.item()) <= 0.0:
         return 0.0
     residual = (returns - values).var(unbiased=False)
-    return max(0.0, 1.0 - float(residual.item()) / float(variance.item()))
+    return 1.0 - float(residual.item()) / float(variance.item())
 
 
 def build_update_report(

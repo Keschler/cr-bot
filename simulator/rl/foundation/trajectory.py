@@ -211,7 +211,14 @@ class RecurrentSequence:
 
 @dataclass(frozen=True, slots=True)
 class TrajectoryBatch:
-    """Recurrent PPO storage without any optimization behavior."""
+    """Recurrent PPO storage without any optimization behavior.
+
+    ``valid_mask`` marks transitions which came from a live environment.  A
+    collector may keep a completed lane in a fixed-width batch while sibling
+    lanes continue; those synthetic padding rows remain useful for tensor
+    shapes and recurrent replay, but must not contribute to PPO or auxiliary
+    losses.
+    """
 
     sequence: RecurrentSequence
     action_masks: ActionMasks
@@ -223,6 +230,7 @@ class TrajectoryBatch:
     values: torch.Tensor | None = None
     advantages: torch.Tensor | None = None
     returns: torch.Tensor | None = None
+    valid_mask: torch.Tensor | None = None
 
     def __post_init__(self) -> None:
         prefix = self.sequence.raster.shape[:2]
@@ -238,6 +246,7 @@ class TrajectoryBatch:
             ("values", self.values),
             ("advantages", self.advantages),
             ("returns", self.returns),
+            ("valid_mask", self.valid_mask),
         ):
             if value is None:
                 continue
@@ -246,6 +255,8 @@ class TrajectoryBatch:
                 raise ValueError(f"{name} must have shape [batch, time]")
         _require_bool("terminated", self.terminated)
         _require_bool("truncated", self.truncated)
+        if self.valid_mask is not None:
+            _require_bool("valid_mask", self.valid_mask)
 
     @property
     def batch_size(self) -> int:

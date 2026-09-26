@@ -7,10 +7,10 @@ from typing import Any, Sequence
 from .constants import CATASTROPHIC_DELTA, PAIRED_SIGN_K, TRIM_FRACTION
 
 
-def paired_delta_stats(diffs: Sequence[float]) -> dict[str, float]:
+def paired_delta_stats(diffs: Sequence[float]) -> dict[str, float | int | None]:
     """Mean / sample-std / standard-error of paired replica deltas.
 
-    Uses the sample standard deviation (ddof=1); ``n < 2`` yields std=se=0.
+    Uses the sample standard deviation (ddof=1); ``n < 2`` has unknown uncertainty (std=se=None).
     """
     import math
     import statistics
@@ -18,16 +18,16 @@ def paired_delta_stats(diffs: Sequence[float]) -> dict[str, float]:
     vals = [float(v) for v in diffs]
     n = len(vals)
     if n == 0:
-        return {"mean": 0.0, "std": 0.0, "se": 0.0, "n": 0}
+        return {"mean": 0.0, "std": None, "se": None, "n": 0}
     mean = sum(vals) / n
     if n < 2:
-        return {"mean": mean, "std": 0.0, "se": 0.0, "n": n}
+        return {"mean": mean, "std": None, "se": None, "n": n}
     std = statistics.stdev(vals)
     return {"mean": mean, "std": std, "se": std / math.sqrt(n), "n": n}
 
 
 def classify_paired_sign(
-    mean: float, se: float, *, same_action: bool, k: float = PAIRED_SIGN_K
+    mean: float, se: float | None, *, same_action: bool, k: float = PAIRED_SIGN_K
 ) -> str:
     """Confidence label for one state's paired delta.
 
@@ -38,6 +38,8 @@ def classify_paired_sign(
     """
     if same_action:
         return "same"
+    if se is None:
+        return "unresolved"
     if mean - k * se > 0:
         return "improved"
     if mean + k * se < 0:
@@ -47,9 +49,8 @@ def classify_paired_sign(
 
 def _sign_of_entry(entry: dict[str, Any], k: float = PAIRED_SIGN_K) -> str:
     """Read a stored entry's sign, recomputing from paired stats if needed."""
-    sign = entry.get("sign")
-    if sign in ("same", "improved", "regressed", "unresolved"):
-        return sign
+    # Raw replicas take precedence over labels stored by older versions that
+    # incorrectly treated a singleton as a zero-uncertainty estimate.
     diffs = entry.get("paired_deltas")
     if diffs is not None:
         stats = paired_delta_stats([float(v) for v in diffs])
@@ -59,6 +60,11 @@ def _sign_of_entry(entry: dict[str, Any], k: float = PAIRED_SIGN_K) -> str:
         )
     if entry.get("same_action"):
         return "same"
+    if entry.get("n_replicas", 2) < 2:
+        return "unresolved"
+    sign = entry.get("sign")
+    if sign in ("improved", "regressed", "unresolved"):
+        return sign
     return "unresolved"
 
 
