@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import subprocess
+import sys
+
 import numpy as np
 import pytest
 
@@ -39,8 +42,9 @@ def test_sealed_contracts_pin_live_revision() -> None:
     assert other.contract_hash != first.contract_hash
 
 
-def test_manifest_samples_side_swaps_after_freeze() -> None:
+def test_manifest_samples_side_swaps_after_freeze(tmp_path) -> None:
     pools = _pools()
+    registry = tmp_path / "manifest_registry.json"
     manifest = sample_sealed_manifest(
         challenger_hash="challenger-1",
         contract_hash="contract-1",
@@ -48,6 +52,7 @@ def test_manifest_samples_side_swaps_after_freeze() -> None:
         deck_ids=pools["deck_ids"],
         strategy_ids=pools["strategy_ids"],
         manifest_seed=11,
+        registry_path=registry,
     )
     assert len(manifest.cells) == 10
     pairs: dict[str, list[int]] = {}
@@ -55,19 +60,31 @@ def test_manifest_samples_side_swaps_after_freeze() -> None:
         pairs.setdefault(cell.pair_id, []).append(cell.side)
     assert pairs and all(sorted(sides) == [0, 1] for sides in pairs.values())
 
+    with pytest.raises(ValueError, match="already issued"):
+        sample_sealed_manifest(
+            challenger_hash="challenger-2",
+            contract_hash="contract-1",
+            strata_counts={"scripted": 3, "meta": 2},
+            deck_ids=pools["deck_ids"],
+            strategy_ids=pools["strategy_ids"],
+            manifest_seed=11,
+            registry_path=registry,
+        )
     resealed = sample_sealed_manifest(
         challenger_hash="challenger-2",
         contract_hash="contract-1",
         strata_counts={"scripted": 3, "meta": 2},
         deck_ids=pools["deck_ids"],
         strategy_ids=pools["strategy_ids"],
-        manifest_seed=11,
+        manifest_seed=12,
+        registry_path=registry,
     )
     assert resealed.manifest_hash != manifest.manifest_hash
 
 
-def test_retired_manifest_cannot_promote_again() -> None:
+def test_retired_manifest_cannot_promote_again(tmp_path) -> None:
     pools = _pools()
+    registry = tmp_path / "manifest_registry.json"
     manifest = sample_sealed_manifest(
         challenger_hash="challenger-9",
         contract_hash="contract-1",
@@ -75,26 +92,53 @@ def test_retired_manifest_cannot_promote_again() -> None:
         deck_ids=pools["deck_ids"],
         strategy_ids=pools["strategy_ids"],
         manifest_seed=99,
+        registry_path=registry,
     )
-    retire_manifest(manifest.manifest_hash)
+    retire_manifest(manifest.manifest_hash, registry_path=registry)
     with pytest.raises(ValueError, match="retired manifest"):
         sample_sealed_manifest(
-            challenger_hash="challenger-9",
+            challenger_hash="challenger-10",
             contract_hash="contract-1",
             strata_counts={"scripted": 1},
             deck_ids=pools["deck_ids"],
             strategy_ids=pools["strategy_ids"],
             manifest_seed=99,
+            registry_path=registry,
         )
+    # The retirement must also survive a new Python process, where no
+    # module-level state from this test can be reused.
+    script = (
+        "from simulator.evaluation.benchmark_manifest import sample_sealed_manifest; "
+        "sample_sealed_manifest(challenger_hash='challenger-11', "
+        "contract_hash='contract-1', strata_counts={'scripted': 1}, "
+        "deck_ids={'scripted': ['d1', 'd2']}, "
+        "strategy_ids={'scripted': ['s1']}, manifest_seed=99, "
+        f"registry_path={str(registry)!r})"
+    )
+    child = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    assert child.returncode != 0
+    assert "retired manifest" in child.stderr
 
 
 def test_paired_bootstrap_lcb_is_deterministic() -> None:
     blocks = [[0.1, 0.0], [0.2], [-0.05, 0.05], [0.3]]
-    first = stratified_paired_bootstrap_lcb(blocks, n_bootstrap=2000, seed=3)
-    second = stratified_paired_bootstrap_lcb(blocks, n_bootstrap=2000, seed=3)
+    strata = ["a", "a", "b", "b"]
+    first = stratified_paired_bootstrap_lcb(blocks, strata=strata, n_bootstrap=2000, seed=3)
+    second = stratified_paired_bootstrap_lcb(blocks, strata=strata, n_bootstrap=2000, seed=3)
     assert first == second
     assert first["lcb"] <= first["mean"]
     assert first["confidence"] == 0.95
+
+
+def test_stratified_bootstrap_matches_macro_average() -> None:
+    blocks = [[1.0, 1.0]] * 9 + [[-1.0, -1.0]]
+    result = stratified_paired_bootstrap_lcb(
+        blocks, strata=["common"] * 9 + ["rare"], n_bootstrap=1000,
+    )
+    assert result["mean"] == pytest.approx(0.0)
+    assert result["lcb"] == pytest.approx(0.0)
+    with pytest.raises(ValueError, match="strata must match"):
+        stratified_paired_bootstrap_lcb(blocks, strata=["common"])
 
 
 def test_paired_helpers_reject_bad_inputs() -> None:

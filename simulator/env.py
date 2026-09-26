@@ -485,7 +485,11 @@ class SimulatorEnv:
             fingerprint = _state_sync_fingerprint(state)
             if cached[0] == fingerprint and cached[1] == "v1":
                 observations = cached[2]
-                if isinstance(observations, tuple) and len(observations) == 2:
+                if (
+                    isinstance(observations, tuple)
+                    and len(observations) == 2
+                    and all(observation is not None for observation in observations)
+                ):
                     return observations  # type: ignore[return-value]
         return tuple(
             build_policy_observation(
@@ -517,7 +521,11 @@ class SimulatorEnv:
             fingerprint = _state_sync_fingerprint(state)
             if cached[0] == fingerprint and cached[1] == "v2":
                 observations = cached[2]
-                if isinstance(observations, tuple) and len(observations) == 2:
+                if (
+                    isinstance(observations, tuple)
+                    and len(observations) == 2
+                    and all(observation is not None for observation in observations)
+                ):
                     return observations  # type: ignore[return-value]
         observations = tuple(
             build_policy_observation_v2(

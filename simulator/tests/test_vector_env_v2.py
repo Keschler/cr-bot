@@ -204,3 +204,36 @@ def test_vector_single_view_step_skips_unused_public_projection() -> None:
     finally:
         full.close()
         actor_only.close()
+
+
+def test_persistent_single_view_cache_can_later_return_both_views(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import multiprocessing
+
+    from simulator.env import SimulatorEnv, VectorSimulatorEnv
+    from simulator.observation_v2 import PolicyObservationV2
+
+    real_get_context = multiprocessing.get_context
+
+    def fork_context(method: str | None = None):
+        return real_get_context("fork" if method in {"forkserver", "spawn"} else method)
+
+    monkeypatch.setattr(multiprocessing, "get_context", fork_context)
+
+    vector = VectorSimulatorEnv(
+        (SimulatorEnv(decision_interval_us=1_000_000),),
+        backend="persistent-process",
+        workers=1,
+    )
+    try:
+        vector.reset_v2((73,))
+        step = vector.step_v2_for_viewer(((None, None),), viewer=0)[0]
+        assert step.observations[1] is None
+
+        both = vector.environments[0].observe_v2()
+        assert all(isinstance(view, PolicyObservationV2) for view in both)
+        np.testing.assert_array_equal(both[0].board, step.observations[0].board)
+        assert vector.environments[0].observe_v2_for_viewer(1) is not None
+    finally:
+        vector.close()

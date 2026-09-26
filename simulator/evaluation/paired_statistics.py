@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import math
 from statistics import NormalDist
+from collections.abc import Sequence
 import numpy as np
 
 
@@ -34,6 +35,7 @@ def paired_differences(
 def stratified_paired_bootstrap_lcb(
     blocks: list[list[float]] | list[np.ndarray],
     *,
+    strata: Sequence[str],
     confidence: float = 0.95,
     n_bootstrap: int = 10000,
     seed: int = 0,
@@ -41,9 +43,8 @@ def stratified_paired_bootstrap_lcb(
     """Block bootstrap LCB for the mean paired improvement.
 
     Each block holds the linked ``di`` values of one base draw (e.g. both
-    side swaps).  Blocks are resampled with replacement; the block mean
-    preserves the benchmark strata and paired structure.  Returns the
-    observed mean and the one-sided lower confidence bound.
+    side swaps). Blocks are resampled within their strata, then stratum means
+    are averaged equally. ``strata`` gives one label per block.
     """
 
     if not 0.0 < confidence < 1.0:
@@ -56,12 +57,21 @@ def stratified_paired_bootstrap_lcb(
     for block in block_arrays:
         if block.size == 0 or not np.isfinite(block).all():
             raise ValueError("every block must contain finite values")
-    observed = float(np.mean([float(np.mean(block)) for block in block_arrays]))
+    if len(strata) != len(block_arrays):
+        raise ValueError("strata must match the number of blocks")
+    if any(not isinstance(label, str) or not label for label in strata):
+        raise ValueError("strata must contain non-empty labels")
+    groups: dict[str, list[float]] = {}
+    for label, block in zip(strata, block_arrays):
+        groups.setdefault(label, []).append(float(np.mean(block)))
+    observed = float(np.mean([np.mean(values) for values in groups.values()]))
     rng = np.random.default_rng(seed)
-    index = rng.integers(0, len(block_arrays), size=(n_bootstrap, len(block_arrays)))
-    replicate_means = np.array(
-        [float(np.mean([float(np.mean(block_arrays[i])) for i in row])) for row in index]
-    )
+    stratum_replicates = []
+    for values in groups.values():
+        sample = np.asarray(values, dtype=np.float64)
+        index = rng.integers(0, len(sample), size=(n_bootstrap, len(sample)))
+        stratum_replicates.append(sample[index].mean(axis=1))
+    replicate_means = np.mean(stratum_replicates, axis=0)
     quantile = (1.0 - confidence) * 100.0
     lcb = float(np.quantile(replicate_means, quantile / 100.0))
     return {"mean": observed, "lcb": lcb, "confidence": float(confidence)}
