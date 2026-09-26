@@ -248,7 +248,7 @@ def plan_branches(
     inputs, legal, hand, elixir = _observe_inputs(env, device)
     tensors = _step_inputs(inputs, device)
     legal_t = torch.as_tensor(legal, device=device).unsqueeze(0).unsqueeze(0)
-    masks = masks_from_legal_play(legal_t)
+    masks = masks_from_legal_play(legal_t, bool(inputs["legal_wait"]))
     with torch.no_grad():
         # replay_to_state returns memory AFTER the current observation. Reuse
         # it directly; starting a fresh GRU or advancing it twice is incorrect.
@@ -270,6 +270,8 @@ def plan_branches(
     def add(source: str, mode: int, slot: int = 0, row: int = 0, col: int = 0) -> None:
         if len(branches) >= max_branches:
             return
+        if mode == 0 and not bool(inputs["legal_wait"]):
+            return
         if mode == 1 and not bool(legal[slot, row, col]):
             return
         key = (source, mode, slot, row, col)
@@ -285,7 +287,7 @@ def plan_branches(
             entity_tokens=np.asarray(inputs["entities"], dtype=np.float32),
             entity_mask=np.asarray(inputs["entity_mask"], dtype=bool),
             legal_play=legal,
-            legal_wait=True,
+            legal_wait=bool(inputs["legal_wait"]),
             own_elixir=float(elixir),
         )
         add("rule", int(rule.mode), int(rule.card_slot), int(rule.row), int(rule.col))
@@ -400,11 +402,12 @@ def run_branch(
                 hand = list(st.players[0].hand[:4])
                 elixir = float(st.players[0].elixir_milli) / 1000.0
                 estimator.sync_from_env(child, viewer=0)
-                tensors = _step_inputs(_v4_step_inputs(obs, hand, elixir, estimator.snapshot()), device)
+                packed = _v4_step_inputs(obs, hand, elixir, estimator.snapshot())
+                tensors = _step_inputs(packed, device)
                 legal = torch.as_tensor(
                     np.array(obs.legal_play, dtype=bool, copy=True), device=device
                 ).unsqueeze(0).unsqueeze(0)
-                masks = masks_from_legal_play(legal)
+                masks = masks_from_legal_play(legal, bool(packed["legal_wait"]))
                 reset = torch.zeros((1, 1), dtype=torch.bool, device=device)
                 _, acts, _, _, _, nxt = policy.rollout_sample(
                     tensors["raster"], tensors["global_features"], tensors["entities"],

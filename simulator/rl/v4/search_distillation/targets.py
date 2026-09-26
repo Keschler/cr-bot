@@ -147,7 +147,10 @@ def paired_advantage(verdict: Mapping[str, Any], *, require_independent: bool = 
     if best_values and len(best_values) == len(sim_values):
         diffs = np.asarray(best_values, dtype=np.float64) - np.asarray(sim_values, dtype=np.float64)
         mean = float(diffs.mean())
-        se = float(diffs.std(ddof=1) / math.sqrt(len(diffs))) if len(diffs) > 1 else 0.0
+        # A single paired replica estimates the mean but provides no sample
+        # variance. Treat its lower confidence bound as unresolved rather
+        # than certifying a correction from one favorable outcome.
+        se = float(diffs.std(ddof=1) / math.sqrt(len(diffs))) if len(diffs) > 1 else float("inf")
     else:
         mean = _branch_mean(best) - _branch_mean(sim)
         se = float(best.get("se", 0.0)) + float(sim.get("se", 0.0))
@@ -364,4 +367,3 @@ def _record_soft_target(record: CachedPrefix, old: tuple[torch.Tensor, torch.Ten
         legal_play=record.legal_play[-1], branches=record.branches,
         baseline=baseline, temperature=temperature,
     )
-

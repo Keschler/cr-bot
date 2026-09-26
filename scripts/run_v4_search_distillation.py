@@ -36,7 +36,6 @@ if str(REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from simulator.rl.v4.frontier import frontier_model_config
-from simulator.rl.v4 import search_distillation
 from simulator.rl.v4.search_distillation.artifacts import atomic_torch_save
 from simulator.rl.v4.search_distillation import (
     DEFAULT_CONTEXT,
@@ -48,6 +47,7 @@ from simulator.rl.v4.search_distillation import (
     prepare_records,
     train_one,
 )
+from simulator.rl.v4.search_distillation.preparation import parse_entry_id, match_json_path
 from simulator.rl.v4.v4_ppo import load_frozen_anchor
 
 
@@ -180,8 +180,55 @@ def _dataset_identity(root: Path) -> dict[str, Any]:
 
 
 def _implementation_identity() -> dict[str, str]:
-    package_root = Path(search_distillation.__file__).resolve().parent
-    return {path.name: file_sha256(path) for path in sorted(package_root.glob("*.py"))}
+    """Fingerprint simulation, observation, training and evaluation dependencies.
+
+    Use a conservative source closure: replay depends on engine and ruleset
+    behavior as well as distillation itself. Paths are repository-relative so
+    identically checked out code has the same identity on another machine.
+    """
+    paths = set((REPO_ROOT / "simulator").rglob("*.py"))
+    paths.update((REPO_ROOT / "simulator" / "rulesets").rglob("*.json"))
+    paths.update((REPO_ROOT / "src" / "cr_bot").rglob("*.py"))
+    return {
+        str(path.relative_to(REPO_ROOT)): file_sha256(path)
+        for path in sorted(paths)
+        if "__pycache__" not in path.parts and "tests" not in path.parts
+    }
+
+
+def _source_match_seeds(root: Path, entries: list[Any], retention_count: int) -> set[int]:
+    """Account for every match eligible for correction or retention replay."""
+    keys = [parse_entry_id(str(entry["entry_id"]))[:2] for entry in entries]
+    paths = {match_json_path(root, split, match_id) for split, match_id in keys}
+    splits = {split for split, _ in keys}
+    if retention_count > 0:
+        paths.update(
+            path for path in root.glob("*_match.json")
+            if not splits or path.name.split("_", 1)[0] in splits
+        )
+    seeds = set()
+    for path in sorted(paths):
+        try:
+            match = json.loads(path.read_text(encoding="utf-8"))
+            config = match["config"]
+            seed = config["match_seed"]
+            if seed is None or isinstance(seed, bool) or not isinstance(seed, int):
+                raise ValueError("match_seed must be an integer")
+            if config.get("archetype") is None or config.get("match_index") is None:
+                raise ValueError("missing archetype or match_index")
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise ValueError(f"source match requires valid config provenance: {path}") from exc
+        seeds.add(seed)
+    return seeds
+
+
+def _check_disjoint_sources(args: argparse.Namespace, train_entries: list[Any], validation_entries: list[Any]) -> None:
+    _check_disjoint_entries(train_entries, validation_entries)
+    train = _source_match_seeds(args.dataset_root, train_entries, args.max_retention)
+    validation = _source_match_seeds(args.validation_root, validation_entries, args.validation_retention)
+    overlap = train & validation
+    if overlap:
+        raise ValueError(f"train and validation source matches share match_seed: {len(overlap)} overlapping values")
 
 
 def _cache_identity(args: argparse.Namespace) -> dict[str, Any]:
@@ -272,7 +319,7 @@ def _load_or_prepare_records(
             )
         train_entries = load_frontier_entries(train_path)
         validation_entries = load_frontier_entries(validation_path)
-        _check_disjoint_entries(train_entries, validation_entries)
+        _check_disjoint_sources(args, train_entries, validation_entries)
         print(f"[search-distill] replaying prefixes: train entries={len(train_entries)} validation entries={len(validation_entries)} context={args.context}", flush=True)
         if effective_deadline is not None and time.time() >= effective_deadline:
             _atomic_json(out / "run_state.json", {

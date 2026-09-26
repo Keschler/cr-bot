@@ -14,10 +14,11 @@ def _stack_records(records: Sequence[CachedPrefix], *, context: int, device: tor
     if not records:
         raise ValueError("cannot stack an empty record list")
     expected = context + 1
-    def selected(record: CachedPrefix) -> tuple[list[dict[str, np.ndarray]], list[np.ndarray]]:
-        if len(record.observations) < expected:
+    def selected(record: CachedPrefix) -> tuple[list[dict[str, np.ndarray]], list[np.ndarray], list[bool]]:
+        if min(len(record.observations), len(record.legal_play), len(record.legal_wait)) < expected:
             raise ValueError("record does not contain the requested context")
-        return record.observations[-expected:], record.legal_play[-expected:]
+        return (record.observations[-expected:], record.legal_play[-expected:],
+                record.legal_wait[-expected:])
     names = (
         "raster", "global_features", "entities", "entity_mask", "hand_tokens",
         "opp_hand_probs", "opp_out_of_cycle", "opp_elixir_interval", "event_history",
@@ -31,8 +32,9 @@ def _stack_records(records: Sequence[CachedPrefix], *, context: int, device: tor
     legal = torch.stack(
         [torch.stack([torch.as_tensor(value, dtype=torch.bool) for value in selected(r)[1]]) for r in records]
     ).to(device)
+    legal_wait = torch.tensor([selected(r)[2] for r in records], dtype=torch.bool, device=device)
     output["legal_play"] = legal
-    output["masks"] = masks_from_legal_play(legal)
+    output["masks"] = masks_from_legal_play(legal, legal_wait)
     output["reset_mask"] = torch.zeros(len(records), expected, dtype=torch.bool, device=device)
     output["reset_mask"][:, 0] = True
     return output
@@ -46,4 +48,3 @@ def _forward(policy: RecurrentV4Policy, batch: Mapping[str, Any]) -> tuple[V4Log
         batch["event_history"], batch["reset_mask"],
     )
     return logits, batch["masks"]
-

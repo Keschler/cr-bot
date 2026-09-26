@@ -114,8 +114,7 @@ def to_torch_sequence_batch(
 
     import torch
 
-    from ...foundation.trajectory import ActionMasks
-    from ..model_v4 import V4ActionBatch
+    from ..model_v4 import V4ActionBatch, masks_from_legal_play
 
     if not sequences or any(not sequence for sequence in sequences):
         raise ValueError("sequences must contain at least one non-empty trajectory")
@@ -158,15 +157,11 @@ def to_torch_sequence_batch(
         [[sample.target.mode for sample in sequence] for sequence in sequences],
         dtype=torch.long,
     )
-    card_mask = legal_play.reshape(batch, time, 4, -1).any(dim=-1)
-    mode_mask = torch.stack(
-        (
-            torch.ones(batch, time, dtype=torch.bool),
-            card_mask.any(dim=-1),
-        ),
-        dim=-1,
+    legal_wait = torch.tensor(
+        [[sample.legal_wait for sample in sequence] for sequence in sequences],
+        dtype=torch.bool,
     )
-    masks = ActionMasks(mode=mode_mask, card=card_mask, placement=legal_play)
+    masks = masks_from_legal_play(legal_play, legal_wait)
     actions = V4ActionBatch(
         mode=mode,
         card_slot=torch.tensor(
@@ -214,4 +209,3 @@ def to_torch_sequence_batch(
             str(sequence[0].provenance.get("seq_id", "")) for sequence in sequences
         ],
     }
-

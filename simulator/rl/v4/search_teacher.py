@@ -685,6 +685,7 @@ def score_branch(
         before_towers = _tower_totals(child.state)
     if before_threats is None:
         before_threats = _threat_health(child.state, owner=1 - player)
+    event_start = len(child.state.events) if mode != "wait" else 0
     deployed, cost = _apply_branch(child, action, player, elixir_costs)
     # Snapshot this before the rollout can remove dead entities from the
     # state's entity map.  The survival denominator must include every unit
@@ -704,6 +705,15 @@ def score_branch(
             opponent_strategy=str(opponent_strategy),
             learner_controller=learner_controller,
             opponent_factory=opponent_factory,
+        )
+        # Active continuations can play more cards after the forced action.
+        # Price every accepted learner play, including the branch play, using
+        # the engine's effective cost (which may differ from the card's base
+        # cost). Rejected actions emit no card_played event and cost nothing.
+        cost = sum(
+            int(event.get("cost_milli") or 0)
+            for event in child.state.events[event_start:]
+            if event.kind == "card_played" and event.get("player") == player
         )
     after_towers = _tower_totals(child.state)
     score, terms = score_outcome(

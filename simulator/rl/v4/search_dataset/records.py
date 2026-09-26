@@ -10,6 +10,7 @@ from simulator.observation_v3 import (
     EVENT_HISTORY_LEN,
     HAND_TOKEN_FEATURES,
 )
+from simulator.public_state_estimator import PublicStateEstimator
 from simulator.roster import PLAYER_DECK as ROSTER_PLAYER_DECK
 from simulator.rl.v4.distillation import DistillationConfig, family_for_index
 from simulator.rl.foundation.opponent_pool import OpponentPool
@@ -92,6 +93,52 @@ def _new_sim_env(context_ruleset: Any, pool: OpponentPool, seed: int, index: int
     return env, family, source
 
 
+def _public_memory_features(env: Any, public_memory: Any = None) -> dict[str, np.ndarray]:
+    """Read the public estimator state for one simulator observation.
+
+    Search records used to carry freshly initialized placeholders for the
+    recurrent public-memory inputs.  A supplied value may be either an
+    estimator (which is synchronized at the current state) or an immutable
+    estimator snapshot (used by active collection, which already synchronized
+    the environment before recording it).
+    """
+
+    if public_memory is None:
+        public_memory = PublicStateEstimator()
+    sync = getattr(public_memory, "sync_from_env", None)
+    if callable(sync):
+        snapshot = sync(env, viewer=0)
+    else:
+        snapshot_fn = getattr(public_memory, "snapshot", None)
+        snapshot = snapshot_fn() if callable(snapshot_fn) else public_memory
+    if snapshot is None:
+        raise TeacherError("public memory synchronization returned no snapshot")
+    try:
+        event_history = np.array(snapshot.event_history, dtype=np.float32, copy=True)
+        opp_hand_probs = np.array(snapshot.opp_hand_probs, dtype=np.float32, copy=True)
+        opp_out_of_cycle = np.array(snapshot.opp_out_of_cycle, dtype=bool, copy=True)
+        interval = getattr(snapshot, "opp_elixir_interval", None)
+        if interval is None:
+            interval = (snapshot.opp_elixir_lo, snapshot.opp_elixir_hi)
+        opp_elixir_interval = np.array(interval, dtype=np.float32, copy=True)
+    except (AttributeError, TypeError, ValueError) as error:
+        raise TeacherError("invalid public memory snapshot") from error
+    if event_history.shape != (EVENT_HISTORY_LEN, EVENT_DIM):
+        raise TeacherError("invalid public event history shape")
+    if opp_hand_probs.shape != (BELIEF_CARD_COUNT,):
+        raise TeacherError("invalid public hand belief shape")
+    if opp_out_of_cycle.shape != (BELIEF_CARD_COUNT,):
+        raise TeacherError("invalid public cycle mask shape")
+    if opp_elixir_interval.shape != (2,):
+        raise TeacherError("invalid public elixir interval shape")
+    return {
+        "event_history": event_history,
+        "opp_hand_probs": opp_hand_probs,
+        "opp_out_of_cycle": opp_out_of_cycle,
+        "opp_elixir_interval": opp_elixir_interval,
+    }
+
+
 def _record_from_env(
     env: Any,
     family: str,
@@ -109,6 +156,10 @@ def _record_from_env(
     try:
         observation = env.observe_v2_for_viewer(0)
     except (ValueError, TypeError):
+        return None
+    try:
+        public_features = _public_memory_features(env, public_memory)
+    except (TeacherError, ValueError, TypeError):
         return None
     player_state = state.players[0]
     hand = list(player_state.hand)
@@ -167,10 +218,10 @@ def _record_from_env(
         "offset": 0,
         "legal_cards": legal_cards,
         "play_legal": bool(legal_cards > 0),
-        "event_history": np.zeros((EVENT_HISTORY_LEN, EVENT_DIM), dtype=np.float32),
-        "opp_hand_probs": np.full((BELIEF_CARD_COUNT,), 1.0 / BELIEF_CARD_COUNT, dtype=np.float32),
-        "opp_out_of_cycle": np.zeros((BELIEF_CARD_COUNT,), dtype=bool),
-        "opp_elixir_interval": np.asarray([0.0, 10.0], dtype=np.float32),
+        "event_history": public_features["event_history"],
+        "opp_hand_probs": public_features["opp_hand_probs"],
+        "opp_out_of_cycle": public_features["opp_out_of_cycle"],
+        "opp_elixir_interval": public_features["opp_elixir_interval"],
         "provenance": {
             "generator": SEARCH_GENERATOR_VERSION,
             "timing_family": family,
@@ -198,4 +249,3 @@ def _spell_opp(record: dict[str, Any]) -> bool:
 
 def _ambiguous(record: dict[str, Any]) -> bool:
     return record["target"].mode == 0 and bool(record["play_legal"])
-

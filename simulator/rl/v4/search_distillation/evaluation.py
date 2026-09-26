@@ -15,7 +15,7 @@ from .artifacts import DistillationDeadline, _check_deadline
 from .batching import _forward, _stack_records
 from .losses import _factorized_kl
 from .records import ActionTarget, CachedPrefix
-from .targets import _branch_mean, _old_action_from_distributions, factorized_distributions
+from .targets import _action_from_branch, _branch_mean, _old_action_from_distributions, factorized_distributions
 
 
 def _paired_outcome_evaluation(
@@ -65,6 +65,15 @@ def _paired_outcome_evaluation(
             source="recorded", mode=recorded.mode, slot=recorded.slot,
             row=recorded.row, col=recorded.col,
         )
+        best_action = (
+            _action_from_branch(max(record.branches, key=_branch_mean))
+            if record.is_correction and record.branches else None
+        )
+        best_branch = (BranchSpec(
+            source="search_best", mode=best_action.mode, slot=best_action.slot,
+            row=best_action.row, col=best_action.col,
+        ) if best_action is not None else None)
+        regret_values: list[float] = []
         values: list[float] = []
         selected_values: list[float] = []
         recorded_values: list[float] = []
@@ -90,13 +99,31 @@ def _paired_outcome_evaluation(
             selected_values.append(selected_value)
             recorded_values.append(recorded_value)
             values.append(selected_value - recorded_value)
+            if best_action is not None:
+                if best_action.key() == selected_action.key():
+                    best_value = selected_value
+                elif best_action.key() == recorded.key():
+                    best_value = recorded_value
+                else:
+                    _check_deadline(deadline_epoch)
+                    best_value = float(run_branch(
+                        env=env, hidden=hidden, branch=best_branch,
+                        opponent_spec=opponent_spec, replica_seed=replica_seed,
+                        horizon=horizon, policy=policy, device=device,
+                    )["value"])
+                regret_values.append(best_value - selected_value)
         array = np.asarray(values, dtype=np.float64)
         return {
             "evaluated": True, "coverage": 1.0, "reason": "paired_research",
             "n": int(len(values)), "mean": float(array.mean()),
-            "se": float(array.std(ddof=1) / math.sqrt(len(array))) if len(array) > 1 else 0.0,
+            # A singleton paired sample has a defined mean but no estimate of
+            # sample variance.  Keep its uncertainty explicitly unresolved;
+            # reporting zero would make one replica look certain.
+            "se": float(array.std(ddof=1) / math.sqrt(len(array))) if len(array) > 1 else float("inf"),
             "values": values, "selected_values": selected_values,
             "recorded_values": recorded_values,
+            "search_regret": float(np.mean(regret_values)) if regret_values else None,
+            "search_regret_values": regret_values,
         }
     except DistillationDeadline:
         raise
@@ -160,18 +187,10 @@ def evaluate_records(
             row["paired_outcome_delta"] = outcome["mean"]
             row["paired_outcome_se"] = outcome["se"]
             if record.is_correction:
-                # The source best action was selected on discovery replicas.
-                # If the student's selected action was absent from that branch
-                # set, infer its regret from its independently re-searched
-                # paired delta against the recorded action.  This keeps every
-                # selected action in the metric denominator.
-                best = max(record.branches, key=lambda b: _branch_mean(b)) if record.branches else None
-                sim = next((b for b in record.branches if b.get("source") == "sim"), None)
-                if outcome["evaluated"] and best is not None and sim is not None:
-                    selected_mean = _branch_mean(sim) + float(outcome["mean"])
-                    row["search_regret"] = float(_branch_mean(best) - selected_mean)
-                else:
-                    row["search_regret"] = None
+                # Select the reference action from discovery, but compare it
+                # with the student's action under identical fresh replicas,
+                # horizon and continuation policy.
+                row["search_regret"] = outcome.get("search_regret")
                 row["correction_target_match"] = bool(record.correction_action and new_action.key() == record.correction_action.key())
             rows.append(row)
     policy.train()
@@ -206,4 +225,3 @@ def evaluate_records(
         "kl_mean": float(np.mean([float(r["kl_batch"]) for r in rows])) if rows else 0.0,
         "rows": rows,
     }
-

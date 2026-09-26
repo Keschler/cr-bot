@@ -175,3 +175,24 @@ def test_search_result_carries_full_provenance() -> None:
         }
         assert all(np.isfinite(v) for v in branch.terms.values())
         assert np.isfinite(branch.score)
+
+
+def test_active_wait_branch_prices_later_accepted_play(monkeypatch) -> None:
+    from simulator.actions import PlayCardAction, WaitAction
+
+    env = _env("ground-defense", "beatdown", 26)
+    _search_inputs(env, ["cannon", "skeletons", "hog-rider", "musketeer"], 6000)
+
+    def play_cannon(observation, player):
+        row, col = np.argwhere(observation.legal_play[0])[0]
+        return PlayCardAction(player, 0, (int(col), int(row)))
+
+    monkeypatch.setattr(
+        st, "_active_opponent",
+        lambda **_kwargs: type("Opponent", (), {"choose_action": lambda self, *_args: WaitAction(1)})(),
+    )
+    branch = st.score_branch(
+        env, st.BranchAction("wait"), horizon=2,
+        continuation_mode="active-policy", learner_controller=play_cannon,
+    )
+    assert branch.terms["elixir_spent"] == pytest.approx(0.3)

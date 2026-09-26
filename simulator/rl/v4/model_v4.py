@@ -842,12 +842,14 @@ def count_parameters(policy: RecurrentV4Policy) -> int:
     return sum(int(p.numel()) for p in policy.parameters() if p.requires_grad)
 
 
-def masks_from_legal_play(legal_play: torch.Tensor) -> ActionMasks:
+def masks_from_legal_play(
+    legal_play: torch.Tensor, legal_wait: torch.Tensor | bool = True
+) -> ActionMasks:
     """Build factorized masks from a legal-play boolean tensor.
 
-    Mirrors ``distillation.to_torch_batch`` exactly: WAIT is always legal,
-    a card slot is legal iff it holds a legal cell, and PLAY is legal iff
-    any slot is legal.  Accepts ``[..., slots, rows, cols]``.
+    A card slot is legal iff it holds a legal cell, and PLAY is legal iff
+    any slot is legal. ``legal_wait`` must match the leading dimensions of
+    ``legal_play`` (or be a scalar). Accepts ``[..., slots, rows, cols]``.
     """
 
     from ..foundation.trajectory import ActionMasks
@@ -859,13 +861,20 @@ def masks_from_legal_play(legal_play: torch.Tensor) -> ActionMasks:
     if legal_play.ndim < 3:
         raise ValueError("legal_play must have shape [..., slots, rows, cols]")
     card_mask = legal_play.flatten(-2).any(dim=-1)
+    wait_mask = torch.as_tensor(legal_wait, dtype=torch.bool, device=legal_play.device)
+    if wait_mask.ndim == 0:
+        wait_mask = wait_mask.expand(card_mask.shape[:-1])
+    if wait_mask.shape != card_mask.shape[:-1]:
+        raise ValueError("legal_wait must match legal_play's leading dimensions")
     mode_mask = torch.stack(
         (
-            torch.ones_like(card_mask[..., :1]),
-            card_mask.any(dim=-1, keepdim=True),
+            wait_mask,
+            card_mask.any(dim=-1),
         ),
         dim=-1,
-    ).squeeze(-2)
+    )
+    if not bool(mode_mask.any(dim=-1).all()):
+        raise ValueError("observation has no legal WAIT or PLAY action")
     return ActionMasks(mode=mode_mask, card=card_mask, placement=legal_play)
 
 

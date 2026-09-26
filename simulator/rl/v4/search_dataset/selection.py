@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections import Counter
+from functools import lru_cache
+from math import ceil
 from typing import Any
 import numpy as np
 from simulator.rl.v4.simulator_teacher import TeacherError
@@ -93,32 +95,82 @@ def _select_candidates(candidates: list[dict[str, Any]], config: SearchDatasetCo
         if len(selected) >= n_total:
             break
         selected.append(entry)
-    quotas = [
-        (config.min_spell_share, lambda c: c["spell"]),
-        (config.min_transition_share, lambda c: c["transition"]),
-        (config.min_sim_share, lambda c: c["sim"]),
-    ]
-    pool_left = [c for c in rest if id(c) not in {id(s) for s in selected}]
+    return _satisfy_quotas(selected, rest, config, n_total)
 
-    def share(pred) -> float:
-        return sum(1 for c in selected if pred(c)) / max(1, len(selected))
 
-    for minimum, pred in quotas:
-        while share(pred) < minimum and pool_left:
-            found = next((c for c in pool_left if pred(c)), None)
-            if found is None:
-                break
-            pool_left.remove(found)
-            if len(selected) < n_total:
-                selected.append(found)
+def _satisfy_quotas(
+    selected: list[dict[str, Any]], rest: list[dict[str, Any]],
+    config: SearchDatasetConfig, n_total: int,
+) -> list[dict[str, Any]]:
+    """Solve the four lower bounds jointly, grouping by their 16 Boolean masks.
+
+    Records contain NumPy arrays, so membership and removal must never use
+    dictionary equality. Work with group counts instead. Preserve the preferred
+    selection unchanged if it satisfies all quotas, and prefer its counts when
+    repair is necessary. Exhaustive bounded count search makes failure mean
+    infeasibility rather than failure of a greedy sequence of replacements.
+    """
+    fields = ("adopted", "spell", "transition", "sim")
+    required = tuple(
+        ceil(n_total * getattr(config, f"min_{field}_share") - 1e-9)
+        for field in fields
+    )
+    if all(sum(bool(c[field]) for c in selected) >= need
+           for field, need in zip(fields, required)):
+        return selected
+    taken = {id(c) for c in selected}
+    ordered = selected + [c for c in rest if id(c) not in taken]
+    groups: dict[tuple[bool, ...], list[dict[str, Any]]] = {}
+    preferred: Counter = Counter()
+    for c in ordered:
+        mask = tuple(bool(c[field]) for field in fields)
+        groups.setdefault(mask, []).append(c)
+        if id(c) in taken:
+            preferred[mask] += 1
+    # Multi-quota records first; stable Boolean order breaks ties.
+    masks = sorted(groups, key=lambda mask: (-sum(mask), mask))
+    capacities = [len(groups[mask]) for mask in masks]
+    suffix_total = [0] * (len(masks) + 1)
+    suffix_quota = [[0] * len(fields) for _ in suffix_total]
+    for i in range(len(masks) - 1, -1, -1):
+        suffix_total[i] = suffix_total[i + 1] + capacities[i]
+        suffix_quota[i] = [
+            suffix_quota[i + 1][j] + capacities[i] * masks[i][j]
+            for j in range(len(fields))
+        ]
+
+    @lru_cache(maxsize=100_000)
+    def solve(i: int, slots: int, needs: tuple[int, ...]) -> tuple[int, ...] | None:
+        if slots < 0 or suffix_total[i] < slots:
+            return None
+        if any(need > min(slots, suffix_quota[i][j]) for j, need in enumerate(needs)):
+            return None
+        if i == len(masks):
+            return () if slots == 0 else None
+        mask = masks[i]
+        lower = max(0, slots - suffix_total[i + 1])
+        upper = min(slots, capacities[i])
+        for j, need in enumerate(needs):
+            if mask[j]:
+                lower = max(lower, need - suffix_quota[i + 1][j])
             else:
-                victim = next((s for s in selected if not pred(s)), None)
-                if victim is None:
-                    break
-                selected.remove(victim)
-                pool_left.append(victim)
-                selected.append(found)
-    return selected
+                upper = min(upper, slots - need)
+        # Try the existing count first, then nearby counts deterministically.
+        for count in sorted(range(lower, upper + 1),
+                            key=lambda value: (abs(value - preferred[mask]), -value)):
+            tail = solve(i + 1, slots - count,
+                         tuple(max(0, need - count * mask[j])
+                               for j, need in enumerate(needs)))
+            if tail is not None:
+                return (count,) + tail
+        return None
+
+    counts = solve(0, n_total, required)
+    if counts is None:
+        raise TeacherError("search balance unsatisfiable: no joint quota selection exists")
+    chosen = {id(c) for mask, count in zip(masks, counts) for c in groups[mask][:count]}
+    return [c for c in ordered if id(c) in chosen]
+
 
 
 def _search_stats(selected: list[dict[str, Any]]) -> dict[str, Any]:

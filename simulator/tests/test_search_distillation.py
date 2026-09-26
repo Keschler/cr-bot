@@ -21,6 +21,33 @@ from simulator.rl.v4.search_distillation.losses import _factorized_kl
 from simulator.rl.v4.model_v4 import V4Logits, masks_from_legal_play
 
 
+def test_cached_prefix_batch_respects_wait_legality() -> None:
+    from simulator.rl.v4.distillation import DistillationConfig, generate_sample
+    from simulator.rl.v4.search_distillation import CachedPrefix
+    from simulator.rl.v4.search_distillation.batching import _stack_records
+
+    sample = generate_sample(DistillationConfig(n_states=1, seed=7), 0)
+    inputs = {
+        "raster": sample.raster,
+        "global_features": sample.global_features,
+        "entities": sample.entity_tokens,
+        "entity_mask": sample.entity_mask,
+        "hand_tokens": sample.hand_tokens,
+        "opp_hand_probs": sample.opp_hand_probs,
+        "opp_out_of_cycle": sample.opp_out_of_cycle,
+        "opp_elixir_interval": sample.opp_elixir_interval,
+        "event_history": sample.event_history,
+    }
+    legal = np.zeros_like(sample.legal_play, dtype=bool)
+    legal[0, 0, 0] = True
+    record = CachedPrefix(
+        key="test", match_id="test", offset=0, observations=[inputs],
+        legal_play=[legal], legal_wait=[False], recorded_action=ActionTarget(1, 0, 0, 0),
+    )
+    batch = _stack_records([record], context=0, device=torch.device("cpu"))
+    assert batch["masks"].mode[0, 0].tolist() == [False, True]
+
+
 def test_parse_entry_id_and_paired_advantage_use_common_replicas() -> None:
     assert parse_entry_id("train:beatdown#4:t247") == ("train", "beatdown#4", 247)
     verdict = {
@@ -147,6 +174,24 @@ def test_paired_confidence_uses_only_independent_confirmations() -> None:
     assert not accepted
     assert stats["mean"] == -1.0
     assert stats["confidence_source"] == "validation"
+
+
+def test_single_confirmation_cannot_certify_correction() -> None:
+    from simulator.rl.v4.search_distillation import validated_correction
+
+    verdict = {"discovery_replica_indices": [0],
+               "confirmation_replica_indices": [1], "branches": [
+        {"source": "sim", "mode": 0, "values": [0.0],
+         "confirmation_values": [0.0]},
+        {"source": "rule", "mode": 1, "slot": 0, "row": 0, "col": 0,
+         "values": [1.0], "confirmation_values": [1.0]},
+    ]}
+    accepted, action, stats = validated_correction(verdict)
+    assert not accepted
+    assert action is None
+    assert stats["mean"] == 1.0
+    assert stats["se"] == float("inf")
+    assert stats["lcb95"] == -float("inf")
 
 
 def test_deadline_inside_first_epoch_resumes_from_initial_boundary(tmp_path: Path) -> None:

@@ -52,6 +52,8 @@ from typing import Any, Callable, Sequence
 import numpy as np
 
 try:
+    from ...observation_v3 import BELIEF_CARD_COUNT, EVENT_DIM, EVENT_HISTORY_LEN
+    from ...public_state_estimator import PublicStateEstimator
     from ...ruleset import load_fixed_ruleset
     from ...roster import PLAYER_DECK as ROSTER_PLAYER_DECK
     from ..foundation.basic_scenarios import BasicMechanicsScenarioEnv, BasicScenarioConfig
@@ -61,6 +63,8 @@ try:
     from .simulator_teacher import TeacherError, soft_placement_target
     from .timing_teacher import TIMING_TEACHER_VERSION, timing_teacher_label
 except ImportError:  # pragma: no cover - top-level ``rl`` imports
+    from simulator.observation_v3 import BELIEF_CARD_COUNT, EVENT_DIM, EVENT_HISTORY_LEN
+    from simulator.public_state_estimator import PublicStateEstimator
     from simulator.ruleset import load_fixed_ruleset
     from simulator.roster import PLAYER_DECK as ROSTER_PLAYER_DECK
     from simulator.rl.foundation.basic_scenarios import BasicMechanicsScenarioEnv, BasicScenarioConfig
@@ -403,6 +407,51 @@ def _step_wait(env: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _public_memory_features(env: Any, public_memory: Any = None) -> dict[str, np.ndarray]:
+    """Read public history and opponent estimates for one timing state.
+
+    Timing records are consumed by the recurrent V4 policy, so their memory
+    channels must describe the simulator's public event prefix.  Accept both a
+    live estimator and an already synchronized snapshot for callers that own
+    the sequence memory.
+    """
+
+    if public_memory is None:
+        public_memory = PublicStateEstimator()
+    sync = getattr(public_memory, "sync_from_env", None)
+    if callable(sync):
+        snapshot = sync(env, viewer=0)
+    else:
+        snapshot_fn = getattr(public_memory, "snapshot", None)
+        snapshot = snapshot_fn() if callable(snapshot_fn) else public_memory
+    if snapshot is None:
+        raise TeacherError("public memory synchronization returned no snapshot")
+    try:
+        event_history = np.array(snapshot.event_history, dtype=np.float32, copy=True)
+        opp_hand_probs = np.array(snapshot.opp_hand_probs, dtype=np.float32, copy=True)
+        opp_out_of_cycle = np.array(snapshot.opp_out_of_cycle, dtype=bool, copy=True)
+        interval = getattr(snapshot, "opp_elixir_interval", None)
+        if interval is None:
+            interval = (snapshot.opp_elixir_lo, snapshot.opp_elixir_hi)
+        opp_elixir_interval = np.array(interval, dtype=np.float32, copy=True)
+    except (AttributeError, TypeError, ValueError) as error:
+        raise TeacherError("invalid public memory snapshot") from error
+    if event_history.shape != (EVENT_HISTORY_LEN, EVENT_DIM):
+        raise TeacherError("invalid public event history shape")
+    if opp_hand_probs.shape != (BELIEF_CARD_COUNT,):
+        raise TeacherError("invalid public hand belief shape")
+    if opp_out_of_cycle.shape != (BELIEF_CARD_COUNT,):
+        raise TeacherError("invalid public cycle mask shape")
+    if opp_elixir_interval.shape != (2,):
+        raise TeacherError("invalid public elixir interval shape")
+    return {
+        "event_history": event_history,
+        "opp_hand_probs": opp_hand_probs,
+        "opp_out_of_cycle": opp_out_of_cycle,
+        "opp_elixir_interval": opp_elixir_interval,
+    }
+
+
 def _capture(
     context: _TimingContext,
     env: Any,
@@ -412,6 +461,7 @@ def _capture(
     offset: int,
     env_seed: int,
     source: str,
+    public_memory: Any = None,
 ) -> dict[str, Any] | None:
     """Observe, label, and package one decision point (None if unusable)."""
 
@@ -421,6 +471,10 @@ def _capture(
     try:
         observation = env.observe_v2_for_viewer(0)
     except (ValueError, TypeError):
+        return None
+    try:
+        public_features = _public_memory_features(env, public_memory)
+    except (TeacherError, ValueError, TypeError):
         return None
     player_state = state.players[0]
     hand = list(player_state.hand)
@@ -500,6 +554,10 @@ def _capture(
             "tick_seconds": round(tick_seconds, 3),
             "foe_cards": list(foe_cards),
         },
+        "event_history": public_features["event_history"],
+        "opp_hand_probs": public_features["opp_hand_probs"],
+        "opp_out_of_cycle": public_features["opp_out_of_cycle"],
+        "opp_elixir_interval": public_features["opp_elixir_interval"],
     }
 
 
@@ -1123,6 +1181,18 @@ def _assert_balance(stats: dict[str, Any], config: TimingConfig, n_total: int) -
 def _to_sample(record: dict[str, Any], index: int) -> DistillationSample:
     provenance = dict(record["provenance"])
     provenance["index"] = index
+    event_history = np.array(record["event_history"], dtype=np.float32, copy=True)
+    opp_hand_probs = np.array(record["opp_hand_probs"], dtype=np.float32, copy=True)
+    opp_out_of_cycle = np.array(record["opp_out_of_cycle"], dtype=bool, copy=True)
+    opp_elixir_interval = np.array(record["opp_elixir_interval"], dtype=np.float32, copy=True)
+    if event_history.shape != (EVENT_HISTORY_LEN, EVENT_DIM):
+        raise TeacherError("invalid public event history shape")
+    if opp_hand_probs.shape != (BELIEF_CARD_COUNT,):
+        raise TeacherError("invalid public hand belief shape")
+    if opp_out_of_cycle.shape != (BELIEF_CARD_COUNT,):
+        raise TeacherError("invalid public cycle mask shape")
+    if opp_elixir_interval.shape != (2,):
+        raise TeacherError("invalid public elixir interval shape")
     return DistillationSample(
         family=record["family"],
         raster=record["raster"],
@@ -1130,10 +1200,10 @@ def _to_sample(record: dict[str, Any], index: int) -> DistillationSample:
         entity_tokens=record["entity_tokens"],
         entity_mask=record["entity_mask"],
         hand_tokens=record["hand_tokens"],
-        opp_hand_probs=_uniform_belief(),
-        opp_out_of_cycle=_empty_out_of_cycle(),
-        opp_elixir_interval=np.asarray([0.0, 10.0], dtype=np.float32),
-        event_history=np.zeros((16, 8), dtype=np.float32),
+        opp_hand_probs=opp_hand_probs,
+        opp_out_of_cycle=opp_out_of_cycle,
+        opp_elixir_interval=opp_elixir_interval,
+        event_history=event_history,
         legal_play=record["legal_play"],
         legal_wait=record["legal_wait"],
         own_elixir=record["own_elixir"],
@@ -1141,22 +1211,6 @@ def _to_sample(record: dict[str, Any], index: int) -> DistillationSample:
         soft_placement=record["soft_placement"],
         provenance=provenance,
     )
-
-
-_BELIEF_CACHE: dict[str, np.ndarray] = {}
-
-
-def _uniform_belief() -> np.ndarray:
-    cached = _BELIEF_CACHE.get("probs")
-    if cached is None:
-        cached = np.full((128,), 1.0 / 128, dtype=np.float32)
-        _BELIEF_CACHE["probs"] = cached
-    return np.array(cached, dtype=np.float32)
-
-
-def _empty_out_of_cycle() -> np.ndarray:
-    return np.zeros((128,), dtype=bool)
-
 
 def generate_timing_dataset(config: TimingConfig) -> tuple[list[DistillationSample], dict[str, Any]]:
     """Generate a quota-balanced timing dataset and its balance report."""

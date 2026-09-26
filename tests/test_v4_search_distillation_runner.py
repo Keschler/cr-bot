@@ -21,7 +21,9 @@ def run_setup(tmp_path, monkeypatch):
         torch.save([{"entry_id": f"train:hog#{index}:t2",
                      "provenance": {"state_hash": str(index), "match_seed": index}}],
                    root / "frontier_train.pt")
-        (root / f"train_hog_{index}_match.json").write_text("{}")
+        (root / f"train_hog_{index}_match.json").write_text(json.dumps({
+            "config": {"archetype": "hog", "match_index": index, "match_seed": index},
+        }))
         (root / f"train_hog_{index}_t2_verdict.json").write_text("{}")
     checkpoint = tmp_path / "anchor.pt"
     checkpoint.write_bytes(b"fixture")
@@ -65,7 +67,9 @@ def test_changed_inputs_reject_cache_and_completed_run(run_setup, change):
         args += ["--max-retention", "1"]
     else:
         path = next(roots[0].glob(f"*_{change}.json"))
-        path.write_text(json.dumps({"changed": True}))
+        payload = json.loads(path.read_text())
+        payload["changed"] = True
+        path.write_text(json.dumps(payload))
     with pytest.raises(ValueError, match="prefix cache settings"):
         runner.main(args + ["--reuse-cache"])
     # Automatic cache rebuild must still refuse to skip/resume an old run.
@@ -116,8 +120,33 @@ def test_changed_implementation_rejects_completed_run(run_setup, monkeypatch):
     args, _, calls = run_setup
     assert runner.main(args) == 0
     identity = runner._implementation_identity()
-    assert "preparation.py" in identity and "training.py" in identity
+    assert "simulator/rl/v4/search_distillation/preparation.py" in identity
+    assert "simulator/rl/v4/search_distillation/training.py" in identity
+    assert "simulator/engine/combat.py" in identity
+    assert "simulator/public_state_estimator.py" in identity
+    assert "simulator/rl/v4/model_v4.py" in identity
+    assert "simulator/rl/v4/frontier_eval.py" in identity
+    assert any(name.startswith("simulator/rulesets/") for name in identity)
     monkeypatch.setattr(runner, "_implementation_identity", lambda: {**identity, "training.py": "changed"})
     with pytest.raises(ValueError, match="different data, code, or optimizer settings"):
         runner.main(args)
     assert calls["train"] == 1
+
+
+def test_retention_only_source_overlap_is_rejected(run_setup):
+    args, roots, calls = run_setup
+    for index, root in enumerate(roots):
+        (root / f"train_extra_{index}_match.json").write_text(json.dumps({
+            "config": {"archetype": "extra", "match_index": index, "match_seed": 999},
+        }))
+    with pytest.raises(ValueError, match="source matches share match_seed"):
+        runner.main(args)
+    assert calls == {"prepare": 0, "train": 0}
+
+
+def test_retention_source_missing_provenance_is_rejected(run_setup):
+    args, roots, calls = run_setup
+    (roots[0] / "train_extra_0_match.json").write_text("{}")
+    with pytest.raises(ValueError, match="source match requires valid config provenance"):
+        runner.main(args)
+    assert calls == {"prepare": 0, "train": 0}

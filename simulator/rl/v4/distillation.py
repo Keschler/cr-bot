@@ -365,8 +365,7 @@ def to_torch_batch(samples: list[DistillationSample]) -> dict[str, object]:
 
     import torch
 
-    from ..foundation.trajectory import ActionMasks
-    from .model_v4 import V4ActionBatch
+    from .model_v4 import V4ActionBatch, masks_from_legal_play
 
     def stack(name: str, dtype: torch.dtype) -> torch.Tensor:
         return torch.stack(
@@ -388,15 +387,8 @@ def to_torch_batch(samples: list[DistillationSample]) -> dict[str, object]:
         [torch.as_tensor(sample.legal_play, dtype=torch.bool) for sample in samples]
     ).unsqueeze(1)
     mode = torch.tensor([s.target.mode for s in samples], dtype=torch.long).reshape(batch, 1)
-    card_mask = legal_play.reshape(batch, 1, 4, -1).any(dim=-1)
-    mode_mask = torch.stack(
-        (
-            torch.ones(batch, 1, dtype=torch.bool),
-            card_mask.any(dim=-1),
-        ),
-        dim=-1,
-    )
-    masks = ActionMasks(mode=mode_mask, card=card_mask, placement=legal_play)
+    legal_wait = torch.tensor([s.legal_wait for s in samples], dtype=torch.bool).reshape(batch, 1)
+    masks = masks_from_legal_play(legal_play, legal_wait)
     actions = V4ActionBatch(
         mode=mode,
         card_slot=torch.tensor(

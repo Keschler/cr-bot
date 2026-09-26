@@ -13,7 +13,7 @@ from simulator.rl.v4.distillation import (
     to_torch_batch,
 )
 from simulator.rl.v4.losses_v4 import V4SupervisedWeights, v4_supervised_loss
-from simulator.rl.v4.model_v4 import WAIT_DURATIONS, ModelConfigV4, RecurrentV4Policy
+from simulator.rl.v4.model_v4 import WAIT_DURATIONS, ModelConfigV4, RecurrentV4Policy, masks_from_legal_play
 from simulator.rl.v4.simulator_teacher import TeacherError, soft_placement_target, teacher_label
 
 
@@ -98,6 +98,21 @@ def test_batch_actions_agree_with_masks() -> None:
             col = int(actions.placement[index, 0, 1])
             assert bool(masks.card[index, 0, slot])
             assert bool(masks.placement[index, 0, slot, row, col])
+
+
+def test_wait_legality_is_preserved_in_distillation_masks() -> None:
+    from simulator.rl.v4.search_dataset.batching import to_torch_sequence_batch
+
+    sample = next(sample for sample in generate_dataset(_config(n=64)) if sample.target.mode == 1)
+    sample.legal_wait = False
+    masks = to_torch_batch([sample])["masks"]
+    assert masks.mode[0, 0].tolist() == [False, True]
+    sequence_masks = to_torch_sequence_batch([[sample]])["masks"]
+    assert sequence_masks.mode[0, 0].tolist() == [False, True]
+
+    legal = torch.zeros((1, 1, 4, 2, 2), dtype=torch.bool)
+    with pytest.raises(ValueError, match="no legal WAIT or PLAY"):
+        masks_from_legal_play(legal, False)
 
 
 def test_supervised_loss_is_finite_and_learns() -> None:

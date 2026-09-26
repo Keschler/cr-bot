@@ -309,7 +309,7 @@ def collect_pool_match(
             oel = torch.as_tensor(np.asarray(inputs["opp_elixir_interval"], dtype=np.float32), device=device).unsqueeze(0).unsqueeze(0)
             ehist = torch.as_tensor(np.asarray(inputs["event_history"], dtype=np.float32), device=device).unsqueeze(0).unsqueeze(0)
             legal = torch.as_tensor(np.asarray(inputs["legal_play"], dtype=bool), device=device).unsqueeze(0).unsqueeze(0)
-            masks = masks_from_legal_play(legal)
+            masks = masks_from_legal_play(legal, bool(inputs["legal_wait"]))
             reset_mask = torch.ones((1, 1), dtype=torch.bool, device=device) if needs_reset else torch.zeros((1, 1), dtype=torch.bool, device=device)
             logits, actions, joint_lp, entropy, ht, next_hidden = policy.rollout_sample(
                 raster, glob, entities, entity_mask, hand_t, ohp, ooc, oel, ehist,

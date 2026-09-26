@@ -130,6 +130,7 @@ def _search_live(
                             _stable_seed(seed, "continuation", result.state_hash)
                         ),
                         opponent_strategy=opponent_strategy,
+                        learner_controller=learner_controller,
                         horizon=horizon,
                     )
                     actor_score = float(extra.score)
