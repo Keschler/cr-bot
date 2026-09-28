@@ -15,12 +15,23 @@ from simulator.physical_lab.workflow.automation import (
 )
 from simulator.physical_lab.capture.devices import Frame
 from simulator.physical_lab.capture.devices import ActionReceipt, FakePhoneController
+from simulator.physical_lab.workflow.prototype_controller import _default_template_root
+
+
+# Resolve the card templates through the production helper so this suite
+# exercises the same lookup a real phone run uses.  A hardcoded relative
+# root silently skipped every card-identity test whenever the templates
+# lived under the other supported location.
+_TEMPLATE_ROOT = _default_template_root(Path(__file__).resolve().parents[2])
 
 
 def _card_frame(*, card_id: str, x: int, y: int, width: int = 250, height: int = 300) -> Frame:
     cv2 = pytest.importorskip("cv2")
     np = pytest.importorskip("numpy")
-    root = Path("assets/templates/cr-api-assets/cards-gold")
+    # Resolve the templates exactly the way the controller does.  Hardcoding
+    # one candidate root silently skipped every card-identity test in a
+    # checkout that carries the templates under the other supported location.
+    root = _default_template_root(Path(__file__).resolve().parents[2])
     asset_name = "the-log" if card_id == "log" else card_id
     asset = cv2.imread(str(root / f"{asset_name}.png"), cv2.IMREAD_COLOR)
     if asset is None:
@@ -54,12 +65,12 @@ def test_card_vision_accepts_a_high_confidence_deck_card() -> None:
     center_x, center_y = profile.deck_card_centers()[0]
     frame = _card_frame(card_id="hog-rider", x=center_x - 125, y=center_y - 150)
 
-    match = CardVision("assets/templates/cr-api-assets/cards-gold").match_slot(frame, profile, 0)
+    match = CardVision(_TEMPLATE_ROOT).match_slot(frame, profile, 0)
 
     assert match is not None
     assert match.card_id == "hog-rider"
     assert match.score >= 0.62
-    selected = CardVision("assets/templates/cr-api-assets/cards-gold").find_card_near(
+    selected = CardVision(_TEMPLATE_ROOT).find_card_near(
         frame, "hog-rider", match.center
     )
     assert selected is not None
@@ -71,7 +82,7 @@ def test_deck_slot_identity_does_not_bless_a_furnace_as_hog() -> None:
     center_x, center_y = profile.deck_card_centers()[0]
     frame = _card_frame(card_id="furnace", x=center_x - 125, y=center_y - 150)
 
-    match = CardVision("assets/templates/cr-api-assets/cards-gold").match_slot(frame, profile, 0)
+    match = CardVision(_TEMPLATE_ROOT).match_slot(frame, profile, 0)
 
     assert match is not None
     assert match.card_id == "furnace"
@@ -81,7 +92,7 @@ def test_card_vision_finds_a_collection_card_without_grayscale_false_positive() 
     profile = UiProfile("A", 1080, 2400, (0.275, 0.425), 0.59, 0.42)
     frame = _card_frame(card_id="cannon", x=100, y=1500)
 
-    match = CardVision("assets/templates/cr-api-assets/cards-gold").find_collection_card(
+    match = CardVision(_TEMPLATE_ROOT).find_collection_card(
         frame, profile, "cannon"
     )
 
@@ -94,7 +105,7 @@ def test_card_vision_searches_the_full_collection_after_scrolling() -> None:
     profile = UiProfile("A", 1080, 2400, (0.275, 0.425), 0.59, 0.42)
     frame = _card_frame(card_id="hog-rider", x=100, y=300)
 
-    match = CardVision("assets/templates/cr-api-assets/cards-gold").find_collection_card(
+    match = CardVision(_TEMPLATE_ROOT).find_collection_card(
         frame, profile, "hog-rider", scrolled=True
     )
 
@@ -108,7 +119,7 @@ def test_card_vision_keeps_distinct_candidates_on_the_same_collection_page() -> 
     np = pytest.importorskip("numpy")
     profile = UiProfile("A", 1080, 2400, (0.275, 0.425), 0.59, 0.42)
     asset = cv2.imread(
-        "assets/templates/cr-api-assets/cards-gold/hog-rider.png",
+        str(_TEMPLATE_ROOT / "hog-rider.png"),
         cv2.IMREAD_COLOR,
     )
     if asset is None:
@@ -122,7 +133,7 @@ def test_card_vision_keeps_distinct_candidates_on_the_same_collection_page() -> 
     frame = Frame("A", 0, 0, encoded.tobytes())
 
     matches = CardVision(
-        "assets/templates/cr-api-assets/cards-gold"
+        _TEMPLATE_ROOT
     ).find_collection_card_candidates(frame, profile, "hog-rider", scrolled=True)
 
     assert len(matches) == 2
@@ -134,7 +145,7 @@ def test_scrolled_collection_search_excludes_visible_active_deck() -> None:
     np = pytest.importorskip("numpy")
     profile = UiProfile("A", 1080, 2400, (0.275, 0.49), 0.59, 0.42)
     asset = cv2.imread(
-        "assets/templates/cr-api-assets/cards-gold/hog-rider.png",
+        str(_TEMPLATE_ROOT / "hog-rider.png"),
         cv2.IMREAD_COLOR,
     )
     if asset is None:
@@ -150,7 +161,7 @@ def test_scrolled_collection_search_excludes_visible_active_deck() -> None:
     frame = Frame("A", 0, 0, encoded.tobytes())
 
     matches = CardVision(
-        "assets/templates/cr-api-assets/cards-gold"
+        _TEMPLATE_ROOT
     ).find_collection_card_candidates(frame, profile, "hog-rider", scrolled=True)
 
     assert matches == ()
@@ -184,7 +195,7 @@ def test_card_identity_ranking_names_a_false_hog_candidate() -> None:
     profile = UiProfile("A", 1080, 2400, (0.275, 0.425), 0.59, 0.42)
     frame = _card_frame(card_id="furnace", x=300, y=1200)
     identities = CardVision(
-        "assets/templates/cr-api-assets/cards-gold"
+        _TEMPLATE_ROOT
     ).rank_card_identities_near(frame, (425, 1350), limit=2)
 
     assert identities[0].card_id == "furnace"
@@ -265,10 +276,10 @@ def test_slot_occupancy_gate_does_not_treat_an_unreadable_card_as_empty() -> Non
     cv2 = pytest.importorskip("cv2")
     np = pytest.importorskip("numpy")
     profile = UiProfile("A", 1080, 2400, (0.275, 0.425), 0.59, 0.42)
-    vision = CardVision("assets/templates/cr-api-assets/cards-gold")
+    vision = CardVision(_TEMPLATE_ROOT)
     phone = AutonomousPhone(object(), profile, vision)
     empty = np.full((2400, 1080, 3), (130, 65, 20), dtype=np.uint8)
-    card = cv2.imread("assets/templates/cr-api-assets/cards-gold/hog-rider.png", cv2.IMREAD_COLOR)
+    card = cv2.imread(str(_TEMPLATE_ROOT / "hog-rider.png"), cv2.IMREAD_COLOR)
     if card is None:
         pytest.skip("hog-rider card template fixture is unavailable")
     card = cv2.resize(card, (250, 300), interpolation=cv2.INTER_AREA)
@@ -290,7 +301,7 @@ def test_samsung_b_rejects_regular_musketeer_in_the_first_three_slots() -> None:
     phone = AutonomousPhone(
         object(),
         profile,
-        CardVision("assets/templates/cr-api-assets/cards-gold"),
+        CardVision(_TEMPLATE_ROOT),
     )
 
     with pytest.raises(AutomationError, match="human deck slots 4-8"):
@@ -308,7 +319,7 @@ def test_asus_a_rejects_regular_special_cards_in_the_first_three_slots() -> None
     phone = AutonomousPhone(
         object(),
         profile,
-        CardVision("assets/templates/cr-api-assets/cards-gold"),
+        CardVision(_TEMPLATE_ROOT),
     )
 
     with pytest.raises(AutomationError, match="regular Archers and Musketeer"):
@@ -359,7 +370,7 @@ def test_scroll_settle_gate_requires_stable_screenshot_samples(monkeypatch: pyte
     cv2 = pytest.importorskip("cv2")
     np = pytest.importorskip("numpy")
     profile = UiProfile("A", 1080, 2400, (0.275, 0.425), 0.59, 0.42)
-    phone = AutonomousPhone(object(), profile, CardVision("assets/templates/cr-api-assets/cards-gold"))
+    phone = AutonomousPhone(object(), profile, CardVision(_TEMPLATE_ROOT))
     canvas = np.full((2400, 1080, 3), (80, 60, 30), dtype=np.uint8)
     success, encoded = cv2.imencode(".png", canvas)
     assert success
@@ -379,7 +390,7 @@ def test_scroll_settle_gate_requires_stable_screenshot_samples(monkeypatch: pyte
 
 def test_deck_editor_gate_rejects_the_collection_page() -> None:
     profile = UiProfile("A", 1080, 2400, (0.275, 0.425), 0.59, 0.42)
-    phone = AutonomousPhone(object(), profile, CardVision("assets/templates/cr-api-assets/cards-gold"))
+    phone = AutonomousPhone(object(), profile, CardVision(_TEMPLATE_ROOT))
 
     assert phone._looks_like_deck_editor(_editor_header_frame(decks_selected=True))
     assert not phone._looks_like_deck_editor(_editor_header_frame(decks_selected=False))
@@ -390,7 +401,7 @@ def test_deck_editor_gate_rejects_seasonal_modal_false_positive() -> None:
     cv2 = pytest.importorskip("cv2")
     np = pytest.importorskip("numpy")
     profile = UiProfile("A", 1080, 2400, (0.275, 0.425), 0.59, 0.42)
-    phone = AutonomousPhone(object(), profile, CardVision("assets/templates/cr-api-assets/cards-gold"))
+    phone = AutonomousPhone(object(), profile, CardVision(_TEMPLATE_ROOT))
     canvas = np.full((2400, 1080, 3), (35, 20, 65), dtype=np.uint8)
     # Reproduce the misleading left/right luminance difference without the
     # editor's wide saturated-blue deck switcher.
@@ -423,7 +434,7 @@ def test_lobby_gate_recognizes_the_large_battle_button_only() -> None:
     success, encoded = cv2.imencode(".png", canvas)
     assert success
     lobby = Frame("A", 0, 0, encoded.tobytes())
-    phone = AutonomousPhone(object(), profile, CardVision("assets/templates/cr-api-assets/cards-gold"))
+    phone = AutonomousPhone(object(), profile, CardVision(_TEMPLATE_ROOT))
 
     assert phone._looks_like_lobby(lobby)
     assert not phone._looks_like_lobby(_editor_header_frame(decks_selected=True))
@@ -454,7 +465,7 @@ def test_preparation_sends_no_game_input_from_an_unverified_start(
 
     controller = Controller()
     profile = UiProfile("A", 1080, 2400, (0.275, 0.425), 0.59, 0.42)
-    phone = AutonomousPhone(controller, profile, CardVision("assets/templates/cr-api-assets/cards-gold"))
+    phone = AutonomousPhone(controller, profile, CardVision(_TEMPLATE_ROOT))
     monkeypatch.setattr(automation_module.time, "sleep", lambda _seconds: None)
 
     with pytest.raises(automation_module.AutomationError, match="verified top Decks screen"):
@@ -592,7 +603,7 @@ def test_solo_battle_long_press_is_a_real_hold_and_records_opening_hand(
     phone = AutonomousPhone(
         controller,
         profile,
-        CardVision("assets/templates/cr-api-assets/cards-gold"),
+        CardVision(_TEMPLATE_ROOT),
     )
 
     result = phone.open_testspiel_solo(
@@ -615,7 +626,7 @@ def test_fixed_deck_testspiel_start_requires_a_reviewed_start_point(
     phone = AutonomousPhone(
         controller,
         UiProfile("A", 1080, 2400, (0.275, 0.425), 0.59, 0.42),
-        CardVision("assets/templates/cr-api-assets/cards-gold"),
+        CardVision(_TEMPLATE_ROOT),
     )
 
     with pytest.raises(automation_module.AutomationError, match="toggle point"):
