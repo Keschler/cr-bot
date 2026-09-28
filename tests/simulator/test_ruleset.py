@@ -296,3 +296,40 @@ def test_canonical_hash_excludes_only_hash_field() -> None:
     assert calculate_content_hash(raw) == declared
     raw["level"] = 12
     assert calculate_content_hash(raw) != declared
+
+
+def test_v1_and_the_roster_artifact_share_one_card_table() -> None:
+    """The two IDs must not drift into two different games.
+
+    ``2026-08-04-roster`` is the generated intermediate and ``v1`` is the
+    fixed artifact derived from it. They legitimately differ in ``ruleset_id``,
+    ``content_hash``, and the metadata that describes their purpose, but the
+    executable payload must stay identical; otherwise two IDs would describe
+    the same 124 cards with different balance.
+    """
+
+    payload_keys = {
+        "arena",
+        "cards",
+        "interaction_set",
+        "level",
+        "match",
+        "schema_version",
+        "sources",
+        "tick_us",
+        "towers",
+        "uncertainties",
+        "units",
+    }
+    fixed = json.loads(ruleset_path("v1").read_text(encoding="utf-8"))
+    roster = json.loads(
+        ruleset_path("2026-08-04-roster").read_text(encoding="utf-8")
+    )
+    differing = {key for key in payload_keys if fixed[key] != roster[key]}
+    assert differing == set()
+    assert fixed["ruleset_id"] == "v1"
+    assert roster["ruleset_id"] == "2026-08-04-roster"
+    # A different identity must produce a different digest.
+    assert fixed["content_hash"] != roster["content_hash"]
+    assert fixed["metadata"]["status"] == "v1-fixed"
+    assert roster["metadata"]["status"] == "roster-complete-provisional"
