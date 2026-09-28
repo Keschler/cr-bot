@@ -555,45 +555,31 @@ def test_reevaluate_move_only_update_repositions():
 
 def test_reevaluate_forward_stores_correction_and_restores_hidden():
     import torch
-
-    from simulator.rl.foundation.model import AutoregressiveLogits, RecurrentPolicyOutput
+    from cr_bot.domain.game_state import Action
     from src.frontend.session import clear_reevaluation, reevaluate_frame
 
-    placement = torch.zeros(1, 1, 4, 32, 18)
-
-    class FakePolicy:
+    class FakeActor:
         def __init__(self):
+            self._hidden = None
             self.forward_calls = 0
 
-        def initial_hidden(self, batch_size, *, device=None, dtype=None):
-            return torch.zeros(1, batch_size, 8)
+        def snapshot_state(self):
+            return self._hidden
 
-        def forward(self, raster, global_features, entities, entity_mask, **kwargs):
+        def restore_state(self, state):
+            self._hidden = state
+
+        def decide_with_scores(self, observation):
             self.forward_calls += 1
-            return RecurrentPolicyOutput(
-                logits=AutoregressiveLogits(
-                    mode=torch.zeros(1, 1, 2),
-                    card=torch.zeros(1, 1, 4),
-                    placement=placement,
-                ),
-                encoded_features=torch.zeros(1, 1, 8),
-                recurrent_features=torch.zeros(1, 1, 8),
-                final_hidden=torch.ones(1, 1, 8),
-                belief_logits=None,
+            self._hidden = torch.ones(1, 1, 8)
+            return (
+                Action(kind="Wait"),
+                [{"kind": "wait", "probability": 1.0, "log_prob": 0.0}],
+                {"entropy": 0.0},
             )
 
-    class FakeActor:
-        def __init__(self, policy):
-            self.policy = policy
-            self._hidden = None
-            self._torch = torch
-
-        @property
-        def device(self):
-            return torch.device("cpu")
-
     session = _labeled_session()
-    actor = FakeActor(FakePolicy())
+    actor = FakeActor()
     session.actor = actor
     sentinel = torch.zeros(1, 1, 8)
     actor._hidden = sentinel
@@ -612,7 +598,7 @@ def test_reevaluate_forward_stores_correction_and_restores_hidden():
             ],
         },
     )
-    assert actor.policy.forward_calls == 1
+    assert actor.forward_calls == 1
     assert actor._hidden is sentinel
     assert correction["revised"] is True
     assert correction["applied"]["counts"] == {"updated": 1, "deleted": 1, "added": 1}

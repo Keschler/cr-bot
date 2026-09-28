@@ -86,6 +86,11 @@ def api_video_start(request: VideoStartRequest) -> dict[str, Any]:
     if request.roi_set is not None and not isinstance(request.roi_set, dict):
         raise HTTPException(status_code=400, detail="roi_set must be an object or null")
     checkpoint = _resolve_against_repo(request.checkpoint) or _default_checkpoint()
+    if not checkpoint:
+        raise HTTPException(
+            status_code=400,
+            detail="checkpoint is required; configure a V4 checkpoint or set CR_BOT_V4_CHECKPOINT",
+        )
     if not Path(checkpoint).is_file():
         raise HTTPException(
             status_code=404, detail=f"checkpoint file does not exist: {checkpoint}"

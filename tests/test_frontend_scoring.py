@@ -259,127 +259,20 @@ def test_heatmap_invalid_slot_and_empty_grid_raise():
         placement_heatmap(logits, mask, 3)  # no legal cells in slot 3
 
 
-# ---------------------------------------------------------------------------
-# decide_with_scores (fake actor + real PolicyObservationV2, no checkpoint)
-# ---------------------------------------------------------------------------
+def test_decide_with_scores_delegates_to_v4_actor_and_fails_closed():
+    observation = object()
+    expected = (object(), [], {"entropy": 0.0})
 
+    class Actor:
+        def decide_with_scores(self, received):
+            assert received is observation
+            return expected
 
-def _make_v2_observation(*, legal_wait=True, legal_cells=()):
-    from simulator.observation import BOARD_SHAPE, GLOBAL_VECTOR_SHAPE
-    from simulator.observation_v2 import ENTITY_TOKEN_SHAPE, ENTITY_TOKEN_MAX, PolicyObservationV2
-
-    legal_play = np.zeros((4, 32, 18), dtype=bool)
-    for slot, row, col in legal_cells:
-        legal_play[slot, row, col] = True
-    return PolicyObservationV2(
-        board=np.zeros(BOARD_SHAPE, dtype=np.float32),
-        global_vector=np.zeros(GLOBAL_VECTOR_SHAPE, dtype=np.float32),
-        entity_tokens=np.zeros(ENTITY_TOKEN_SHAPE, dtype=np.float32),
-        entity_mask=np.zeros((ENTITY_TOKEN_MAX,), dtype=bool),
-        legal_play=legal_play,
-        legal_wait=bool(legal_wait),
-    )
-
-
-class _FakePolicy:
-    def __init__(self, mode_logits, card_logits, placement_logits, hidden_dim=8):
-        self._mode = torch.tensor(mode_logits, dtype=torch.float32)
-        self._card = torch.tensor(card_logits, dtype=torch.float32)
-        self._placement = torch.tensor(placement_logits, dtype=torch.float32)
-        self.hidden_dim = hidden_dim
-        self.forward_calls = 0
-        self.seen_reset_masks = []
-        self.initial_hidden_calls = 0
-
-    def initial_hidden(self, batch_size, *, device=None, dtype=None):
-        self.initial_hidden_calls += 1
-        return torch.zeros(1, batch_size, self.hidden_dim)
-
-    def forward(self, raster, global_features, entities, entity_mask, **kwargs):
-        from simulator.rl.foundation.model import AutoregressiveLogits, RecurrentPolicyOutput
-
-        self.forward_calls += 1
-        reset = kwargs.get("reset_mask")
-        assert reset is not None
-        self.seen_reset_masks.append(bool(reset[0, 0].item()))
-        hidden = kwargs.get("hidden")
-        assert hidden is not None
-        assert kwargs.get("include_beliefs") is False
-        assert kwargs.get("inference") is True
-        masks = kwargs.get("action_masks")
-        assert masks is not None
-        return RecurrentPolicyOutput(
-            logits=AutoregressiveLogits(
-                mode=self._mode.reshape(1, 1, 2),
-                card=self._card.reshape(1, 1, 4),
-                placement=self._placement.reshape(1, 1, 4, 32, 18),
-            ),
-            encoded_features=torch.zeros(1, 1, self.hidden_dim),
-            recurrent_features=torch.zeros(1, 1, self.hidden_dim),
-            final_hidden=torch.ones(1, 1, self.hidden_dim),
-            belief_logits=None,
-        )
-
-
-class _FakeActor:
-    def __init__(self, policy):
-        self.policy = policy
-        self._hidden = None
-        self._torch = torch
-
-    @property
-    def device(self):
-        return torch.device("cpu")
-
-    def act_deterministic(self, *args, **kwargs):  # must never be called
-        raise AssertionError("decide_with_scores must not call act_deterministic")
-
-
-def test_decide_with_scores_play_rank1_and_hidden_semantics():
-    placement = np.zeros((4, 32, 18), dtype=np.float32)
-    placement[0, 2, 3] = 6.0
-    policy = _FakePolicy([-4.0, 4.0], [3.0, -3.0, -3.0, -3.0], placement)
-    actor = _FakeActor(policy)
-    obs = _make_v2_observation(legal_wait=True, legal_cells=[(0, 2, 3)])
-
-    action, suggestions, diagnostics = decide_with_scores(actor, obs)
-
-    assert policy.forward_calls == 1
-    assert policy.initial_hidden_calls == 1
-    assert policy.seen_reset_masks == [True]  # first step resets.
-    assert actor._hidden is not None
-    assert tuple(actor._hidden.shape) == (1, 1, policy.hidden_dim)
-    assert not actor._hidden.requires_grad
-
-    assert action.kind == "Play"
-    assert action.card_idx == suggestions[0].card_slot == 0
-    assert action.cell == suggestions[0].cell == (3, 2)
-    assert suggestions[0].kind == "play"
-    assert set(diagnostics) == {"mode_prob_wait", "mode_prob_play", "entropy", "top_log_prob"}
-    assert diagnostics["mode_prob_wait"] + diagnostics["mode_prob_play"] == pytest.approx(1.0, rel=1e-4)
-    assert diagnostics["mode_prob_play"] > 0.99
-    assert math.isfinite(diagnostics["entropy"]) and diagnostics["entropy"] >= 0.0
-    assert diagnostics["top_log_prob"] == pytest.approx(suggestions[0].log_prob)
-
-    # Second step reuses the carried hidden state with a zero reset mask.
-    action2, suggestions2, diagnostics2 = decide_with_scores(actor, obs)
-    assert policy.forward_calls == 2
-    assert policy.initial_hidden_calls == 1  # no re-initialization.
-    assert policy.seen_reset_masks == [True, False]
-    assert action2.kind == "Play" and action2.cell == (3, 2)
-    assert diagnostics2["top_log_prob"] == pytest.approx(suggestions2[0].log_prob)
-
-
-def test_decide_with_scores_wait_when_wait_rank1():
-    placement = np.zeros((4, 32, 18), dtype=np.float32)
-    policy = _FakePolicy([6.0, -6.0], [0.0, 0.0, 0.0, 0.0], placement)
-    actor = _FakeActor(policy)
-    obs = _make_v2_observation(legal_wait=True, legal_cells=[(1, 0, 0)])
-
-    action, suggestions, diagnostics = decide_with_scores(actor, obs)
-    assert action.kind == "Wait"
-    assert suggestions[0].kind == "wait"
-    assert diagnostics["mode_prob_wait"] > 0.99
+    assert decide_with_scores(Actor(), observation) is expected
+    with pytest.raises(ValueError, match="required"):
+        decide_with_scores(None, observation)
+    with pytest.raises(ValueError, match="implement"):
+        decide_with_scores(object(), observation)
 
 
 def test_scoring_module_has_no_eager_heavy_imports():

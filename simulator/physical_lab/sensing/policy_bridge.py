@@ -21,11 +21,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 import logging
+import math
 from typing import Any, Protocol
 
 import numpy as np
 
 from cr_bot.domain.card_metadata import CARD_METADATA
+from cr_bot.domain.constants import TOTAL_MATCH_SECONDS
 from cr_bot.domain.game_state import Action as PolicyAction
 from cr_bot.features.action_masks import get_action_mask
 from cr_bot.features.board_rasterizer import build_board
@@ -157,6 +159,93 @@ def _canonicalize_visual_game_state(game_state: Any) -> Any:
 
 class PolicyBridgeError(PhysicalLabError):
     """Raised when a visual state or policy action cannot be used safely."""
+
+
+@dataclass(frozen=True, slots=True)
+class VisualPolicyObservation:
+    """V2 tensors plus the public values needed by the deployed V4 actor.
+
+    ``PolicyObservationV2`` deliberately contains only model tensors.  Live
+    inference also needs the currently visible hand and own elixir to build
+    V4 hand tokens, and needs a monotonic public match clock for the estimator
+    history.  Keeping those values in this small boundary record avoids
+    reaching back into the mutable extractor state from the policy module.
+
+    Attribute access for the tensor contract is delegated to ``base`` so
+    existing consumers can continue to use ``observation.board`` and
+    ``observation.structured_action_masks()`` unchanged.
+    """
+
+    base: PolicyObservationV2
+    hand_cards: tuple[str | None, ...]
+    own_elixir: float | None
+    match_time_s: float
+    game_state: Any
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.base, PolicyObservationV2):
+            raise TypeError("base must be a PolicyObservationV2")
+        if len(self.hand_cards) != 4:
+            raise ValueError("hand_cards must contain exactly four slots")
+        if not math.isfinite(float(self.match_time_s)) or self.match_time_s < 0.0:
+            raise ValueError("match_time_s must be a finite non-negative number")
+        if self.own_elixir is not None and not math.isfinite(float(self.own_elixir)):
+            raise ValueError("own_elixir must be finite when present")
+
+    def __getattr__(self, name: str) -> Any:
+        """Expose the immutable V2 tensor fields through the wrapper."""
+
+        return getattr(self.base, name)
+
+    def structured_action_masks(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        return self.base.structured_action_masks()
+
+    def as_dict(self, *, copy: bool = False) -> dict[str, Any]:
+        return self.base.as_dict(copy=copy)
+
+
+def _visual_policy_context(
+    base: PolicyObservationV2,
+    game_state: Any,
+) -> VisualPolicyObservation:
+    """Attach only public hand, elixir, and clock values to V2 tensors."""
+
+    hud = getattr(game_state, "hud", None)
+    raw_hand = getattr(hud, "hand_cards", None)
+    if not isinstance(raw_hand, (list, tuple)) or len(raw_hand) < 4:
+        raise PolicyBridgeError("visual state does not contain four hand cards")
+    hand = tuple(
+        None if card is None else str(card).strip() or None
+        for card in tuple(raw_hand)[:4]
+    )
+    raw_elixir = getattr(hud, "elixir_self", None)
+    try:
+        own_elixir = float(raw_elixir)
+    except (TypeError, ValueError):
+        own_elixir = None
+    if own_elixir is not None and not math.isfinite(own_elixir):
+        own_elixir = None
+    raw_remaining = getattr(game_state, "total_remaining_s", None)
+    if raw_remaining is None:
+        raw_remaining = getattr(hud, "time_left_s", None)
+    try:
+        remaining = float(raw_remaining)
+    except (TypeError, ValueError):
+        remaining = 600.0
+    if not math.isfinite(remaining):
+        remaining = 600.0
+    # The estimator consumes elapsed match time.  ``total_remaining_s`` is
+    # preferred because it remains monotonic through overtime; the clamp also
+    # keeps malformed OCR from moving policy memory backwards.
+    match_duration = float(TOTAL_MATCH_SECONDS)
+    match_time_s = min(match_duration, max(0.0, match_duration - remaining))
+    return VisualPolicyObservation(
+        base=base,
+        hand_cards=hand,
+        own_elixir=own_elixir,
+        match_time_s=match_time_s,
+        game_state=game_state,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -306,7 +395,7 @@ def observation_v2_from_game_state(
     *,
     arena_px: tuple[float, float, float, float],
     legal_wait: bool | None = None,
-) -> PolicyObservationV2:
+) -> VisualPolicyObservation:
     """Project one visual ``GameState`` into the public recurrent V2 contract.
 
     The V1 tensors are built by the existing visual feature stack.  Entity
@@ -325,10 +414,11 @@ def observation_v2_from_game_state(
             _canonicalize_visual_game_state(game_state),
             viewer=0,
         )
-        return PolicyObservationV2.from_v1(
+        base = PolicyObservationV2.from_v1(
             observation_v1,
             public_entity_rows=public_entity_rows,
         )
+        return _visual_policy_context(base, game_state)
     except (TypeError, ValueError, KeyError, AttributeError) as error:
         raise PolicyBridgeError(
             f"visual state cannot be converted to public V2 observation: {error}"
@@ -364,7 +454,7 @@ def observation_from_match_step(step: Any) -> PolicyObservationV1 | None:
     )
 
 
-def observation_v2_from_match_step(step: Any) -> PolicyObservationV2 | None:
+def observation_v2_from_match_step(step: Any) -> VisualPolicyObservation | None:
     """Convert an emitted visual match step into a public V2 observation.
 
     Lobby/countdown/end frames return ``None``.  The caller owns recurrent
@@ -393,7 +483,7 @@ def placement_command_from_policy_action(
     action: PolicyAction,
     game_state: Any,
     *,
-    observation: PolicyObservationV1 | PolicyObservationV2 | None = None,
+    observation: PolicyObservationV1 | PolicyObservationV2 | VisualPolicyObservation | None = None,
 ) -> PlacementCommand | None:
     """Resolve a policy action to a verified hand card and local grid cell.
 
@@ -442,7 +532,7 @@ def dispatch_policy_action(
     game_state: Any,
     *,
     calibration: Any,
-    observation: PolicyObservationV1 | PolicyObservationV2 | None = None,
+    observation: PolicyObservationV1 | PolicyObservationV2 | VisualPolicyObservation | None = None,
     capture: Any = None,
 ) -> tuple[int, Any, Any] | None:
     """Send one validated placement through ``AutonomousPhone``.
@@ -470,6 +560,7 @@ def dispatch_policy_action(
 __all__ = [
     "PlacementCommand",
     "PolicyBridgeError",
+    "VisualPolicyObservation",
     "dispatch_policy_action",
     "observation_from_game_state",
     "observation_from_match_step",

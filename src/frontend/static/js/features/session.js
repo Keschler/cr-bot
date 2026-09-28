@@ -556,7 +556,7 @@ export function fillCheckpointSelect(selectEl, data) {
   if (!items.length) {
     const opt = document.createElement('option');
     opt.value = '';
-    opt.textContent = 'prototype.pt (default)';
+    opt.textContent = 'No V4 checkpoint configured';
     selectEl.appendChild(opt);
     return;
   }

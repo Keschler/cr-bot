@@ -1,9 +1,9 @@
-# Prototype live binary
+# V4 live binary
 
 The downloadable artifact is
 `dist/prototype-live-linux-x86_64`. It is a single Linux x86-64 executable
 containing the Python runtime, the `cr_bot` visual extractor, KataCR inference
-code, CPU PyTorch, the default prototype checkpoint, card assets, and the
+code, CPU PyTorch, the explicitly selected V4 checkpoint, card assets, and the
 `adb`/`ffmpeg` helpers used by the live stream.
 
 Recipients do not need Python, pip, a virtual environment, the repository, or
@@ -19,18 +19,17 @@ chmod +x prototype-live-linux-x86_64
 ./prototype-live-linux-x86_64 --help
 ```
 
-The binary has the repository's `prototype-fast-current` checkpoint embedded as
-its default. To use another compatible recurrent prototype, pass its path with
-`--checkpoint`:
+The binary embeds the V4 checkpoint selected at build time. To use another
+compatible V4 state dict, pass its path with `--checkpoint`:
 
 ```bash
 ./prototype-live-linux-x86_64 \
-  --checkpoint /absolute/path/to/prototype.pt \
+  --checkpoint /absolute/path/to/v4_actor.pt \
   --video /absolute/path/to/gameplay.mp4 \
   --max-frames 20
 ```
 
-The checkpoint must be compatible with the recurrent prototype loader. The
+The checkpoint must be compatible with the V4 actor loader. The
 external checkpoint is the only model file needed; the extractor assets are
 already inside the binary.
 
@@ -43,7 +42,7 @@ screen stream and processes only the newest decoded frame.
 
 ```bash
 ./prototype-live-linux-x86_64 \
-  --checkpoint /absolute/path/to/prototype.pt \
+  --checkpoint /absolute/path/to/v4_actor.pt \
   --serial R7AIB700D744BX7 \
   --max-frames 100 \
   --jsonl-out /tmp/prototype-live-dry-run.jsonl
@@ -69,7 +68,7 @@ phone-specific calibration artifact and both confirmation flags:
 
 ```bash
 ./prototype-live-linux-x86_64 \
-  --checkpoint /absolute/path/to/prototype.pt \
+  --checkpoint /absolute/path/to/v4_actor.pt \
   --serial R7AIB700D744BX7 \
   --calibration /absolute/path/to/phone-a-candidate.json \
   --execute \
@@ -87,8 +86,8 @@ recordings/storage.
 
 ## Useful options
 
-- `--checkpoint PATH` selects the recurrent neural network. If omitted, the
-  embedded `prototype-fast-current` checkpoint is used.
+- `--checkpoint PATH` selects the V4 recurrent neural network. If omitted, the
+  checkpoint embedded at build time is used.
 - `--yolo-image-size 896` is the default extractor resolution. `640` is a
   faster experimental setting that can reduce small-object detection quality.
 - `--interval-s 0.25` controls the minimum live polling interval.
@@ -105,7 +104,7 @@ recordings/storage.
 - `selected ADB device is not connected`: check USB debugging, authorization,
   the cable, and the exact serial. The binary's embedded ADB still needs host
   permission to access the USB device.
-- `prototype checkpoint does not exist`: pass an absolute path with
+- `V4 checkpoint does not exist`: pass an absolute path with
   `--checkpoint`, or omit it to use the embedded model.
 - Calibration or card-template errors mean a live safety gate failed. Fix the
   artifact or path instead of bypassing the gate.
@@ -120,15 +119,13 @@ the CPU-only PyTorch wheels and the project's PyInstaller installation, then
 run from the simulator directory:
 
 ```bash
-PROTOTYPE_LIVE_CHECKPOINT=/absolute/path/to/prototype.pt \
+CR_BOT_V4_CHECKPOINT=/absolute/path/to/v4_actor.pt \
   ../outputs/venv/bin/python -m PyInstaller --clean --noconfirm \
   prototype_live.spec
 ```
 
-Omit `PROTOTYPE_LIVE_CHECKPOINT` when the repository's generated
-`prototype-fast-current` checkpoint is available at its default path. Otherwise,
-set it to any compatible recurrent prototype checkpoint to embed that model as
-the binary's default.
+Set `CR_BOT_V4_CHECKPOINT` to a compatible plain V4 state-dict checkpoint to
+embed that model in the binary. There is no historical checkpoint default.
 
 The result is written to `dist/prototype-live-linux-x86_64`. The spec locates
 the checkpoint, extractor assets, and the `adb`/`ffmpeg` binaries from the

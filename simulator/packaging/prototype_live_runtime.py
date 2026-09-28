@@ -1,4 +1,4 @@
-"""Runtime setup for the frozen prototype-live executable."""
+"""Runtime setup for the frozen V4 live executable."""
 
 from pathlib import Path
 import os
@@ -6,6 +6,14 @@ import sys
 
 
 _BUNDLE_ROOT = Path(getattr(sys, "_MEIPASS", Path.cwd()))
+
+# The build spec puts exactly the selected V4 state dict under this directory.
+# Make that explicit build input available to the controller without baking a
+# historical experiment path into source code.
+if not os.environ.get("CR_BOT_V4_CHECKPOINT", "").strip():
+    _bundled_checkpoints = sorted((_BUNDLE_ROOT / "outputs" / "v4").glob("*.pt"))
+    if len(_bundled_checkpoints) == 1:
+        os.environ["CR_BOT_V4_CHECKPOINT"] = str(_bundled_checkpoints[0])
 
 # KataCR imports optional training components unless this flag is present.
 # The live executable only needs the inference path.

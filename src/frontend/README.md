@@ -72,7 +72,8 @@ in the persistent error bar.
 1. Click the **Video** tab (or **Open Replay** in the top bar).
 2. Choose a video file with the native file picker (it is uploaded to
    `POST /api/upload` first; the label then shows frame count/duration
-   from `GET /api/video/info`), pick a checkpoint (defaults to `prototype.pt`),
+   from `GET /api/video/info`), pick a V4 checkpoint from the configured
+   checkpoint list,
    plus start frame (`0` = from the beginning), `frame_stride` and `max_frames`.
    The session panel collapses automatically once analysis runs with frames.
 3. If the probed video size differs from the native `1080x2400` ROI space,
@@ -113,7 +114,8 @@ auto-resumed — re-check Adapt ROIs and Start manually.
 
 1. Click the **Live** tab (or **Dashboard** in the top bar).
 2. Enter the ADB `serial`, `transport` (`stream` / `screenshot`), pick a
-   checkpoint (prefers `prototype.pt`) and optional `calibration` profile.
+   V4 checkpoint and optional `calibration` profile. Set
+   `CR_BOT_V4_CHECKPOINT` to expose one explicit default.
    Leaving calibration blank uses
    `simulator/physical_lab/calibrations/phone-a-candidate.json` for the ASUS
    AI2302 (1080×2400). Enter a device-specific JSON path for another layout;
@@ -133,7 +135,7 @@ and a dedicated device; never enable execute on an unattended phone.
 | Method | Endpoint            | Purpose                                              |
 |--------|---------------------|------------------------------------------------------|
 | GET    | `/api/health`       | Liveness probe → `{ok: true}`                        |
-| GET    | `/api/checkpoints`  | List `*.pt` candidates + default (`prototype.pt`)    |
+| GET    | `/api/checkpoints`  | List V4 `*.pt` candidates + configured default       |
 | POST   | `/api/upload`       | Upload a video file (`multipart/form-data`)          |
 | GET    | `/api/video/info?path=` | Probe frames/fps/duration/size of a video          |
 | GET    | `/api/roi-preview?path=&frame=&overlay=` | Preview adapted ROIs → `{probe_frame, native_size, adapted, rois, warnings, image}` (404/422/501 on failures; `overlay=0` returns the raw probe frame so clients can draw/edit boxes themselves) |

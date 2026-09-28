@@ -1,11 +1,11 @@
-"""Run the public prototype actor against live ADB screenshots or a video.
+"""Run the public V4 actor against live ADB screenshots or a video.
 
 The module is deliberately a thin deployment boundary:
 
 ``ADB/video frame -> cr_bot visual extractor -> public V2 observation ->
-prototype actor -> Wait/Play -> calibrated ADB taps``
+V4 actor -> Wait/Play -> calibrated ADB taps``
 
-The actor is loaded from the auditable recurrent-prototype checkpoint and only
+The actor is loaded from an explicit V4 state-dict checkpoint and only
 receives the same public V2 tensors used by simulator training.  Live control
 is opt-in.  A normal invocation is a dry-run that performs extraction and
 prints or records the decisions without sending input to Android.
@@ -23,6 +23,7 @@ from dataclasses import dataclass, replace
 import argparse
 import json
 import math
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -44,7 +45,14 @@ for _path in (_REPOSITORY_ROOT, _REPOSITORY_ROOT / "src"):
         sys.path.insert(0, str(_path))
 
 
-DEFAULT_CHECKPOINT = _MODULE_ROOT / "outputs/simulator/training/prototype-fast-current/prototype.pt"
+# The deployed actor consumes the same plain V4 state-dict format as the
+# simulator evaluator.  There is deliberately no experiment checkpoint baked
+# into the application; deployment must select one explicitly.
+V4_CHECKPOINT_ENV = "CR_BOT_V4_CHECKPOINT"
+_configured_checkpoint = os.environ.get(V4_CHECKPOINT_ENV, "").strip()
+DEFAULT_CHECKPOINT = (
+    Path(_configured_checkpoint).expanduser() if _configured_checkpoint else None
+)
 LIVE_IGNORED_DETECTOR_LABELS: frozenset[str] = frozenset({"bomb"})
 LIVE_OWN_DECK_CARD_NAMES: frozenset[str] = frozenset(
     {
@@ -807,144 +815,10 @@ class VideoFrameSource:
             pass
 
 
-def _array_tensor(torch: Any, value: Any, *, dtype: Any, device: Any) -> Any:
-    """Copy one immutable public NumPy snapshot into ``[B=1,T=1,...]``."""
-
-    import numpy as np
-
-    array = np.array(value, dtype=dtype, order="C", copy=True)
-    return torch.from_numpy(array).unsqueeze(0).unsqueeze(1).to(device=device)
-
-
-def observation_to_model_inputs(observation: Any, *, device: Any) -> tuple[Any, ...]:
-    """Convert one ``PolicyObservationV2`` into recurrent actor inputs."""
-
-    if not callable(getattr(observation, "structured_action_masks", None)):
-        raise PrototypeControllerError(
-            "prototype inference requires a public PolicyObservationV2"
-        )
-    try:
-        import torch
-    except ImportError as error:  # pragma: no cover - environment-specific
-        raise PrototypeControllerError(
-            "prototype inference requires PyTorch"
-        ) from error
-    try:
-        try:
-            from ...rl.foundation.trajectory import ActionMasks
-        except ImportError:
-            from rl.foundation.trajectory import ActionMasks
-    except ImportError as error:  # pragma: no cover - environment-specific
-        raise PrototypeControllerError(
-            "could not import the recurrent action-mask contract"
-        ) from error
-
-    mode_mask, card_mask, placement_mask = observation.structured_action_masks()
-    masks = ActionMasks(
-        mode=_array_tensor(torch, mode_mask, dtype=bool, device=device),
-        card=_array_tensor(torch, card_mask, dtype=bool, device=device),
-        placement=_array_tensor(torch, placement_mask, dtype=bool, device=device),
-    )
-    return (
-        _array_tensor(torch, observation.board, dtype="float32", device=device),
-        _array_tensor(torch, observation.global_vector, dtype="float32", device=device),
-        _array_tensor(torch, observation.entity_tokens, dtype="float32", device=device),
-        _array_tensor(torch, observation.entity_mask, dtype=bool, device=device),
-        masks,
-    )
-
-
-def policy_action_from_batch(actions: Any) -> Any:
-    """Decode a one-row ``ActionBatch`` as the visual policy ``Action``."""
-
-    mode_tensor = getattr(actions, "mode", None)
-    card_tensor = getattr(actions, "card_slot", None)
-    placement_tensor = getattr(actions, "placement", None)
-    if mode_tensor is None or card_tensor is None or placement_tensor is None:
-        raise PrototypeControllerError("actor did not return an ActionBatch")
-    if int(mode_tensor.numel()) != 1 or int(card_tensor.numel()) != 1:
-        raise PrototypeControllerError("actor action batch must contain one row")
-    try:
-        from cr_bot.domain.game_state import Action
-    except ImportError as error:  # pragma: no cover - environment-specific
-        raise PrototypeControllerError("cr_bot is required to decode actor actions") from error
-
-    mode = int(mode_tensor.reshape(-1)[0].item())
-    if mode == 0:
-        return Action(kind="Wait")
-    if mode != 1:
-        raise PrototypeControllerError(f"actor returned unsupported mode: {mode}")
-    card_slot = int(card_tensor.reshape(-1)[0].item())
-    placement = placement_tensor.reshape(-1, 2)
-    if placement.shape[0] != 1:
-        raise PrototypeControllerError("actor placement batch must contain one row")
-    row = int(placement[0, 0].item())
-    column = int(placement[0, 1].item())
-    if not 0 <= card_slot < 4 or not 0 <= column < 18 or not 0 <= row < 32:
-        raise PrototypeControllerError(
-            f"actor returned an out-of-range play: slot={card_slot}, cell={(column, row)}"
-        )
-    return Action(kind="Play", card_idx=card_slot, cell=(column, row))
-
-
-class PrototypeActor:
-    """Frozen recurrent actor loaded from a prototype checkpoint."""
-
-    def __init__(self, checkpoint: str | Path, *, device: str = "cpu") -> None:
-        try:
-            import torch
-        except ImportError as error:  # pragma: no cover - environment-specific
-            raise PrototypeControllerError("prototype inference requires PyTorch") from error
-        try:
-            try:
-                from ...rl.foundation.inference_checkpoint import load_shadow_prototype_checkpoint
-            except ImportError:
-                from rl.foundation.inference_checkpoint import load_shadow_prototype_checkpoint
-            learner, config, metadata = load_shadow_prototype_checkpoint(
-                checkpoint,
-                device=device,
-            )
-        except Exception as error:
-            raise PrototypeControllerError(
-                f"could not load prototype checkpoint {Path(checkpoint)}: {error}"
-            ) from error
-        self.learner = learner
-        self.config = config
-        self.metadata = metadata
-        self.policy = learner.policy
-        self.policy.eval()
-        self._torch = torch
-        self._hidden: Any | None = None
-
-    @property
-    def device(self) -> Any:
-        return self.learner.device
-
-    def reset(self) -> None:
-        """Reset the GRU before the next detected match."""
-
-        self._hidden = None
-
-    def decide(self, observation: Any) -> Any:
-        inputs = observation_to_model_inputs(observation, device=self.device)
-        if self._hidden is None:
-            hidden = self.policy.initial_hidden(1, device=self.device)
-            reset_mask = self._torch.ones(
-                (1, 1), dtype=self._torch.bool, device=self.device
-            )
-        else:
-            hidden = self._hidden
-            reset_mask = self._torch.zeros(
-                (1, 1), dtype=self._torch.bool, device=self.device
-            )
-        with self._torch.inference_mode():
-            actions, next_hidden = self.policy.act_deterministic(
-                *inputs,
-                reset_mask=reset_mask,
-                hidden=hidden,
-            )
-        self._hidden = next_hidden.detach()
-        return policy_action_from_batch(actions)
+try:
+    from .v4_actor import V4Actor, V4ActorError
+except ImportError:  # pragma: no cover - direct-script execution fallback
+    from physical_lab.workflow.v4_actor import V4Actor, V4ActorError  # type: ignore
 
 
 def _action_kind(action: Any) -> str:
@@ -2202,7 +2076,7 @@ def _validate_live_setup(
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Run the public Clash Royale prototype actor on ADB screenshots or video"
+        description="Run the public Clash Royale V4 actor on ADB screenshots or video"
     )
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--serial", help="one explicitly selected ADB device serial")
@@ -2211,7 +2085,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--checkpoint",
         type=Path,
         default=DEFAULT_CHECKPOINT,
-        help="recurrent prototype checkpoint",
+        help="V4 recurrent actor checkpoint",
     )
     parser.add_argument(
         "--device",
@@ -2374,9 +2248,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.stream_bit_rate <= 0:
         parser.error("--stream-bit-rate must be positive")
 
-    checkpoint = _resolve(_MODULE_ROOT, args.checkpoint)
+    if args.checkpoint is None:
+        parser.error(
+            f"a V4 checkpoint is required; pass --checkpoint or set {V4_CHECKPOINT_ENV}"
+        )
+    checkpoint = _resolve(_REPOSITORY_ROOT, args.checkpoint)
     if not checkpoint.is_file():
-        parser.error(f"prototype checkpoint does not exist: {checkpoint}")
+        parser.error(f"V4 checkpoint does not exist: {checkpoint}")
     try:
         _bootstrap_extractor_runtime()
     except PrototypeControllerError as error:
@@ -2440,7 +2318,7 @@ def main(argv: list[str] | None = None) -> int:
         from cr_bot.vision.yolo_runtime import build_detector
         detector = build_detector()
         configure_detector_inference_size(detector, args.yolo_image_size)
-        actor = PrototypeActor(checkpoint, device=args.device)
+        actor = V4Actor(checkpoint, device=args.device)
         runner = LivePrototypeRunner(
             source,
             detector,
@@ -2490,6 +2368,7 @@ __all__ = [
     "AdbScreenshotSource",
     "CachedAdbPhoneController",
     "DEFAULT_CHECKPOINT",
+    "V4_CHECKPOINT_ENV",
     "DecisionRecord",
     "LiveDetectionFilter",
     "LivePrototypeRunner",
@@ -2499,7 +2378,8 @@ __all__ = [
     "LIVE_OWN_DECK_CARD_NAMES",
     "LIVE_OWN_DETECTOR_ALIASES",
     "LIVE_OWN_TROOP_CARD_NAMES",
-    "PrototypeActor",
+    "V4Actor",
+    "V4ActorError",
     "PrototypeControllerError",
     "RunSummary",
     "SourceFrame",
@@ -2510,6 +2390,4 @@ __all__ = [
     "configure_detector_inference_size",
     "format_decision_record",
     "main",
-    "observation_to_model_inputs",
-    "policy_action_from_batch",
 ]

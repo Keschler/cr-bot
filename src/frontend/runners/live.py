@@ -69,7 +69,7 @@ def run_live_session(
                 LiveDetectionFilter,
                 LiveHandStateFilter,
                 LivePrototypeRunner,
-                PrototypeActor,
+                V4Actor,
                 _bootstrap_extractor_runtime,
                 _filter_live_analysis,
                 action_to_dict,
@@ -83,7 +83,7 @@ def run_live_session(
                 LiveDetectionFilter,
                 LiveHandStateFilter,
                 LivePrototypeRunner,
-                PrototypeActor,
+                V4Actor,
                 _bootstrap_extractor_runtime,
                 _filter_live_analysis,
                 action_to_dict,
@@ -163,7 +163,7 @@ def run_live_session(
         yolo_device_name, actor_device = resolve_inference_devices(device)
         detector = build_detector(device=yolo_device_name)
         configure_detector_inference_size(detector, yolo_image_size)
-        actor = PrototypeActor(checkpoint, device=actor_device)
+        actor = V4Actor(checkpoint, device=actor_device)
         # Lend the live actor to what-if re-evaluations (borrowed under
         # session.actor_lock with hidden-state save/restore).
         session.actor = actor

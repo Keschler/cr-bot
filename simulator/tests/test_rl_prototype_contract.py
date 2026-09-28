@@ -1,10 +1,4 @@
-"""Focused public-observation contract checks for the recurrent RL prototype.
-
-These tests deliberately construct two authoritative states that differ only
-in information the viewer is not allowed to observe.  The policy boundary and
-the model are then compared end-to-end.  Checkpoint metadata is covered by the
-separate train/resume/evaluate integration test.
-"""
+"""Public-observation and V4 actor invariance under hidden-state changes."""
 
 from __future__ import annotations
 
@@ -188,96 +182,31 @@ def test_public_memory_replays_when_a_processed_event_is_rewritten() -> None:
     assert memory.opponent_elixir_milli_est != first_estimate
 
 
-def _model_config():
-    from rl.foundation.model import ModelConfig
-
-    return ModelConfig(
-        raster_channels=21,
-        raster_height=32,
-        raster_width=18,
-        global_dim=768,
-        entity_dim=32,
-        max_entities=128,
-        model_dim=8,
-        encoder_dim=8,
-        transformer_heads=2,
-        transformer_layers=1,
-        transformer_ff_dim=16,
-        gru_hidden_dim=8,
-        card_slots=4,
-        belief_card_count=128,
-        placement_rows=32,
-        placement_cols=18,
-    )
-
-
-def _model_inputs(observation: PolicyObservationV2):
-    assert torch is not None
-    return (
-        torch.tensor(observation.board).unsqueeze(0).unsqueeze(0),
-        torch.tensor(observation.global_vector).unsqueeze(0).unsqueeze(0),
-        torch.tensor(observation.entity_tokens).unsqueeze(0).unsqueeze(0),
-        torch.tensor(observation.entity_mask).unsqueeze(0).unsqueeze(0),
-    )
-
-
-def _action_masks(observation: PolicyObservationV2):
-    from rl.foundation.trajectory import ActionMasks
-
-    assert torch is not None
-    mode, card, placement = observation.structured_action_masks()
-    return ActionMasks(
-        mode=torch.tensor(mode).unsqueeze(0).unsqueeze(0),
-        card=torch.tensor(card).unsqueeze(0).unsqueeze(0),
-        placement=torch.tensor(placement).unsqueeze(0).unsqueeze(0),
-    )
-
-
 @requires_torch
-def test_model_actor_path_is_invariant_to_hidden_opponent_state() -> None:
-    from rl.foundation.model import RecurrentHybridPolicy
+def test_v4_actor_path_is_invariant_to_hidden_opponent_state() -> None:
+    from simulator.public_state_estimator import PublicStateEstimator
+    from simulator.rl.v4.frontier import frontier_model_config
+    from simulator.rl.v4.model_v4 import RecurrentV4Policy
+    from simulator.rl.v4.v4_ppo.runtime import _v4_step_inputs, batch_v4_inputs
 
     public_state, private_state = _states_with_private_difference()
     public = _public_observation(public_state)
     changed = _public_observation(private_state)
-    config = _model_config()
+    hand = tuple(public_state.players[0].hand[:4])
+    elixir = float(public_state.players[0].elixir_milli) / 1000.0
+    snapshot = PublicStateEstimator().snapshot()
+    first = batch_v4_inputs(_v4_step_inputs(public, hand, elixir, snapshot), "cpu")
+    second = batch_v4_inputs(_v4_step_inputs(changed, hand, elixir, snapshot), "cpu")
+
     torch.manual_seed(23)
-    policy = RecurrentHybridPolicy(config).eval()
-
-    public_inputs = _model_inputs(public)
-    changed_inputs = _model_inputs(changed)
-    reset_mask = torch.ones((1, 1), dtype=torch.bool)
-    hidden = policy.initial_hidden(1)
-
+    policy = RecurrentV4Policy(frontier_model_config()).eval()
+    reset = torch.ones((1, 1), dtype=torch.bool)
     with torch.inference_mode():
-        public_output = policy(
-            *public_inputs,
-            reset_mask=reset_mask,
-            hidden=hidden,
-        )
-        changed_output = policy(
-            *changed_inputs,
-            reset_mask=reset_mask,
-            hidden=hidden,
-        )
+        public_logits, public_recurrent, _ = policy.forward_step(first, reset_mask=reset)
+        changed_logits, changed_recurrent, _ = policy.forward_step(second, reset_mask=reset)
 
-        for public_logits, changed_logits in (
-            (public_output.logits.mode, changed_output.logits.mode),
-            (public_output.logits.card, changed_output.logits.card),
-            (public_output.logits.placement, changed_output.logits.placement),
-            (public_output.encoded_features, changed_output.encoded_features),
-            (public_output.recurrent_features, changed_output.recurrent_features),
-        ):
-            torch.testing.assert_close(public_logits, changed_logits)
-
-        public_masked = policy.action_head.masked_log_probs(
-            public_output.logits,
-            _action_masks(public),
+    for name in ("mode", "card", "placement", "wait_duration"):
+        torch.testing.assert_close(
+            getattr(public_logits, name), getattr(changed_logits, name)
         )
-        changed_masked = policy.action_head.masked_log_probs(
-            changed_output.logits,
-            _action_masks(changed),
-        )
-        torch.testing.assert_close(public_masked.mode, changed_masked.mode)
-        torch.testing.assert_close(public_masked.card, changed_masked.card)
-        torch.testing.assert_close(public_masked.placement, changed_masked.placement)
+    torch.testing.assert_close(public_recurrent, changed_recurrent)

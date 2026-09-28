@@ -35,6 +35,11 @@ def api_live_start(request: LiveStartRequest) -> dict[str, Any]:
             detail="live execution requires confirm_live=True",
         )
     checkpoint = _resolve_against_repo(request.checkpoint) or _default_checkpoint()
+    if not checkpoint:
+        raise HTTPException(
+            status_code=400,
+            detail="checkpoint is required; configure a V4 checkpoint or set CR_BOT_V4_CHECKPOINT",
+        )
     if not Path(checkpoint).is_file():
         raise HTTPException(
             status_code=404, detail=f"checkpoint file does not exist: {checkpoint}"

@@ -3,13 +3,10 @@ from __future__ import annotations
 from io import BytesIO
 from types import SimpleNamespace
 
-import numpy as np
 import pytest
 
 from cr_bot.domain.frame_analysis import FrameAnalysisResult
 from cr_bot.domain.game_state import Action, Detection, Match
-from simulator.observation import PolicyObservationV1
-from simulator.observation_v2 import PolicyObservationV2
 from simulator.physical_lab.workflow.automation import AutonomousPhone, CardMatch, UiProfile
 from simulator.physical_lab.capture.calibration import CalibrationArtifact
 from simulator.physical_lab.capture.devices import FakePhoneController, Frame
@@ -30,23 +27,8 @@ from simulator.physical_lab.workflow.prototype_controller import (
     build_arg_parser,
     configure_detector_inference_size,
     format_decision_record,
-    observation_to_model_inputs,
-    policy_action_from_batch,
     _filter_live_analysis,
 )
-
-
-def _observation() -> PolicyObservationV2:
-    legal_play = np.zeros((4, 32, 18), dtype=bool)
-    legal_play[0, 20, 9] = True
-    v1 = PolicyObservationV1(
-        board=np.zeros((21, 32, 18), dtype=np.float32),
-        global_vector=np.zeros((768,), dtype=np.float32),
-        spatial_masks=np.zeros((4, 32, 18), dtype=bool),
-        legal_play=legal_play,
-        legal_wait=True,
-    )
-    return PolicyObservationV2.from_v1(v1)
 
 
 def test_adb_source_retries_an_empty_screenshot_payload() -> None:
@@ -116,6 +98,7 @@ def test_cached_adb_controller_reuses_recent_screenshot_connectivity() -> None:
 
 
 def test_h264_stream_is_serial_scoped_and_provides_recent_action_frames() -> None:
+    pytest.importorskip("cv2")
     width, height = 2, 1
     raw_frame = bytes((10, 20, 30, 40, 50, 60))
     commands: list[list[str]] = []
@@ -261,51 +244,6 @@ def test_detector_resolution_defaults_to_original_extractor_size() -> None:
     assert fast_args.yolo_image_size == 640
     assert default_args.adb_transport == "stream"
     assert screenshot_args.adb_transport == "screenshot"
-
-
-def test_observation_boundary_builds_one_step_recurrent_inputs() -> None:
-    torch = pytest.importorskip("torch")
-
-    board, global_features, entities, entity_mask, masks = observation_to_model_inputs(
-        _observation(), device="cpu"
-    )
-
-    assert tuple(board.shape) == (1, 1, 21, 32, 18)
-    assert tuple(global_features.shape) == (1, 1, 768)
-    assert tuple(entities.shape) == (1, 1, 128, 32)
-    assert tuple(entity_mask.shape) == (1, 1, 128)
-    assert tuple(masks.mode.shape) == (1, 1, 2)
-    assert tuple(masks.card.shape) == (1, 1, 4)
-    assert tuple(masks.placement.shape) == (1, 1, 4, 32, 18)
-    assert bool(masks.mode[0, 0, 0])
-    assert bool(masks.mode[0, 0, 1])
-    assert bool(masks.card[0, 0, 0])
-    assert not bool(masks.card[0, 0, 1])
-    assert torch.equal(
-        masks.placement[0, 0, 0],
-        torch.from_numpy(_observation().legal_play[0].copy()),
-    )
-
-
-def test_policy_batch_decoding_preserves_column_row_convention() -> None:
-    torch = pytest.importorskip("torch")
-
-    wait = SimpleNamespace(
-        mode=torch.tensor([[0]], dtype=torch.long),
-        card_slot=torch.tensor([[0]], dtype=torch.long),
-        placement=torch.tensor([[[0, 0]]], dtype=torch.long),
-    )
-    play = SimpleNamespace(
-        mode=torch.tensor([[1]], dtype=torch.long),
-        card_slot=torch.tensor([[2]], dtype=torch.long),
-        # ActionBatch stores (row, column); visual actions use (column, row).
-        placement=torch.tensor([[[20, 9]]], dtype=torch.long),
-    )
-
-    assert action_to_dict(policy_action_from_batch(wait)) == {"kind": "wait"}
-    assert policy_action_from_batch(play) == Action(
-        kind="Play", card_idx=2, cell=(9, 20)
-    )
 
 
 def test_live_runner_omits_ignored_bomb_objects_before_session() -> None:

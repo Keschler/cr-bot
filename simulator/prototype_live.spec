@@ -1,4 +1,4 @@
-"""PyInstaller one-file build for the Linux prototype live controller.
+"""PyInstaller one-file build for the Linux V4 live controller.
 
 Build with the repository's inference environment, for example:
 
@@ -30,19 +30,12 @@ SOURCE_ROOT = CHECKOUT_ROOT / "src"
 ASSETS_ROOT = CHECKOUT_ROOT / "assets"
 VENDOR_ROOT = CHECKOUT_ROOT / "vendor"
 KATACR_SOURCE_ROOT = VENDOR_ROOT / "external" / "KataCR"
-DEFAULT_CHECKPOINT = (
-    SIMULATOR_ROOT
-    / "outputs"
-    / "simulator"
-    / "training"
-    / "prototype-fast-current"
-    / "prototype.pt"
-)
-# Training outputs are intentionally ignored by Git.  A build can select a
-# compatible checkpoint from another location without staging it in the repo.
-CHECKPOINT = Path(
-    os.environ.get("PROTOTYPE_LIVE_CHECKPOINT", str(DEFAULT_CHECKPOINT))
-).expanduser()
+# Checkpoints are intentionally selected at build time.  No historical
+# experiment artifact is silently bundled into the executable.
+_checkpoint_value = os.environ.get("CR_BOT_V4_CHECKPOINT", "").strip()
+if not _checkpoint_value:
+    raise SystemExit("set CR_BOT_V4_CHECKPOINT to a compatible V4 state-dict checkpoint")
+CHECKPOINT = Path(_checkpoint_value).expanduser()
 
 for _import_root in (CHECKOUT_ROOT, SOURCE_ROOT, KATACR_SOURCE_ROOT):
     if str(_import_root) not in sys.path:
@@ -92,7 +85,7 @@ datas = [
         "vendor/external/Clash-Royale-Detection-Dataset/version_info",
     ),
     (str(_require(SIMULATOR_ROOT / "rulesets")), "simulator/rulesets"),
-    (str(_require(CHECKPOINT)), "simulator/outputs/simulator/training/prototype-fast-current"),
+    (str(_require(CHECKPOINT)), "outputs/v4"),
 ]
 
 # AppDetector resolves this tracker file through KATACR_ROOT.  Keep the
@@ -112,9 +105,13 @@ binaries = [_helper_binary("adb"), _helper_binary("ffmpeg")]
 hiddenimports = [
     "scripts.run_seed_inference",
     "simulator.physical_lab.workflow.prototype_controller",
-    "simulator.rl.foundation.inference_checkpoint",
+    "simulator.physical_lab.workflow.v4_actor",
     "simulator.rl.foundation._compat",
-    "simulator.rl.foundation.provenance",
+    "simulator.rl.v4.frontier",
+    "simulator.rl.v4.hand_features",
+    "simulator.rl.v4.model_v4",
+    "simulator.rl.v4.v4_ppo",
+    "simulator.rl.v4.v4_ppo.runtime",
     "katacr.constants.label_list",
     "katacr.build_dataset.utils.split_part",
     "katacr.build_dataset.utils.datapath_manager",

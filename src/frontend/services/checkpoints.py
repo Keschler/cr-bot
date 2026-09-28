@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -7,26 +8,27 @@ from .paths import REPO_ROOT
 
 
 CHECKPOINT_GLOBS = (
-    "prototype.pt",
-    "*.pt",
-    "simulator/outputs/**/*.pt",
-    "outputs/**/*.pt",
+    "outputs/v4/**/*.pt",
 )
 
 
-def _default_checkpoint() -> str:
-    preferred = REPO_ROOT / "prototype.pt"
-    if preferred.is_file():
-        return str(preferred)
-    try:
-        from simulator.physical_lab.workflow.prototype_controller import DEFAULT_CHECKPOINT
-    except ImportError:
-        from physical_lab.workflow.prototype_controller import DEFAULT_CHECKPOINT  # type: ignore
-    return str(DEFAULT_CHECKPOINT)
+V4_CHECKPOINT_ENV = "CR_BOT_V4_CHECKPOINT"
+
+
+def _default_checkpoint() -> str | None:
+    """Return the explicitly configured V4 checkpoint, if one exists."""
+
+    configured = os.environ.get(V4_CHECKPOINT_ENV, "").strip()
+    if not configured:
+        return None
+    path = Path(configured).expanduser()
+    if not path.is_absolute():
+        path = REPO_ROOT / path
+    return str(path)
 
 
 def _list_checkpoints(limit: int = 20) -> tuple[list[dict[str, Any]], str | None]:
-    """List candidate checkpoint files; default prefers repo-root prototype.pt."""
+    """List V4 actor checkpoints and identify the configured default."""
     seen: dict[str, None] = {}
     candidates: list[Path] = []
     for pattern in CHECKPOINT_GLOBS:
@@ -69,7 +71,4 @@ def _list_checkpoints(limit: int = 20) -> tuple[list[dict[str, Any]], str | None
                 "missing": not path.is_file(),
             },
         )
-    if not any(item.get("default") for item in items) and items:
-        items[0]["default"] = True
-        default = items[0]["path"]
     return items, default

@@ -42,6 +42,9 @@ def reevaluate_frame(
     _, decide_fn, action_to_dict_fn = _live_policy_imports()
     with session.actor_lock:
         hidden = getattr(actor, "_hidden", None)
+        snapshot_fn = getattr(actor, "snapshot_state", None)
+        restore_fn = getattr(actor, "restore_state", None)
+        actor_state = snapshot_fn() if callable(snapshot_fn) else None
         try:
             try:
                 scored = decide_fn(actor, observation)
@@ -51,10 +54,13 @@ def reevaluate_frame(
                 raise CorrectionUnprocessableError("decision entry point misbehaved")
             action_obj, suggestions, diagnostics = scored
         finally:
-            try:
-                actor._hidden = hidden
-            except (AttributeError, TypeError):
-                pass
+            if actor_state is not None and callable(restore_fn):
+                restore_fn(actor_state)
+            else:
+                try:
+                    actor._hidden = hidden
+                except (AttributeError, TypeError):
+                    pass
     suggestion_dicts = [
         _suggestion_to_dict(s)
         for s in (suggestions if isinstance(suggestions, (list, tuple)) else [])

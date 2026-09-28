@@ -173,6 +173,24 @@ class PublicStateEstimator:
             self._elixir_hi = min(MAX_ELIXIR, self._elixir_hi + gain)
             self._tick = float(tick_seconds)
 
+    def advance_to(self, tick_seconds: float) -> None:
+        """Advance public time bookkeeping when no event was observed.
+
+        Visual inference often receives several frames between card plays.
+        Keeping this operation public lets those callers update the elixir
+        interval without reaching into the estimator's private state.
+        """
+
+        try:
+            tick = float(tick_seconds)
+        except (TypeError, ValueError, OverflowError) as error:
+            raise ValueError("tick_seconds must be a finite non-negative number") from error
+        if not np.isfinite(tick) or tick < 0.0:
+            raise ValueError("tick_seconds must be a finite non-negative number")
+        if tick < self._tick:
+            raise ValueError("time must not move backwards")
+        self._advance_to(tick)
+
     def out_of_cycle(self) -> np.ndarray:
         """Known unavailable cards under the standard four-other-play rotation.
 

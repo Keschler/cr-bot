@@ -16,7 +16,7 @@ Design notes:
 * Placement grids use ``[slot, row, column]`` layout with ``row`` in
   ``[0, 32)`` and ``column`` in ``[0, 18)``.  Public ``cell`` coordinates are
   ``(col, row)`` tuples, matching
-  ``simulator.physical_lab.workflow.prototype_controller.policy_action_from_batch``.
+  the deployed V4 actor action adapter.
 """
 
 from __future__ import annotations
@@ -35,6 +35,7 @@ __all__ = [
     "masked_log_softmax_1d",
     "top_k_suggestions",
     "placement_heatmap",
+    "score_action_heads",
     "decide_with_scores",
 ]
 
@@ -363,6 +364,107 @@ def top_k_suggestions(
     return candidates[:top_k]
 
 
+def score_action_heads(
+    logits: Any,
+    masks: Any,
+    *,
+    hand_cards: Sequence | None = None,
+    top_k: int = 3,
+) -> tuple[Any, list[ScoredAction], dict[str, float]]:
+    """Rank one V4 policy output without advancing recurrent state.
+
+    V4 and the former actor share the same mode/card/placement factorization,
+    while their recurrent forward APIs differ.  Keeping this pure head
+    scoring helper separate lets deployment adapters own model state and lets
+    the frontend use one probability calculation for both paths.
+    """
+
+    import torch
+
+    try:
+        mode = logits.mode[0, 0]
+        card = logits.card[0, 0]
+        placement = logits.placement[0, 0]
+        mode_mask = masks.mode[0, 0]
+        card_mask = masks.card[0, 0]
+        placement_mask = masks.placement[0, 0]
+    except (AttributeError, IndexError, TypeError) as error:
+        raise ValueError("policy heads must expose singleton V4 logits and masks") from error
+    suggestions = top_k_suggestions(
+        mode,
+        card,
+        placement,
+        (mode_mask, card_mask, placement_mask),
+        hand_cards=hand_cards,
+        top_k=top_k,
+    )
+    best = suggestions[0]
+    try:
+        from cr_bot.domain.game_state import Action
+    except ImportError as error:  # pragma: no cover - deployment environment
+        raise ValueError("cr_bot is required to decode scored actions") from error
+    if best.kind == "wait":
+        action = Action(kind="Wait")
+    else:
+        if best.card_slot is None or best.cell is None:
+            raise ValueError("rank-1 play is missing slot/cell")
+        action = Action(
+            kind="Play",
+            card_idx=int(best.card_slot),
+            cell=(int(best.cell[0]), int(best.cell[1])),
+        )
+
+    mode_log_probs = masked_log_softmax_1d(mode, mode_mask)
+    wait_legal = bool(mode_mask[_WAIT_INDEX].item())
+    play_legal = bool(mode_mask[_PLAY_INDEX].item())
+    mode_prob_wait = math.exp(float(mode_log_probs[_WAIT_INDEX].item())) if wait_legal else 0.0
+    mode_prob_play = math.exp(float(mode_log_probs[_PLAY_INDEX].item())) if play_legal else 0.0
+
+    entropy = 0.0
+    for index, probability in (
+        (_WAIT_INDEX, mode_prob_wait),
+        (_PLAY_INDEX, mode_prob_play),
+    ):
+        if bool(mode_mask[index].item()):
+            entropy -= probability * float(mode_log_probs[index].item())
+    if play_legal and mode_prob_play > 0.0 and bool(card_mask.any().item()):
+        card_log_probs = masked_log_softmax_1d(card, card_mask)
+        card_entropy = 0.0
+        slot_prob: dict[int, float] = {}
+        for slot in range(int(card.shape[0])):
+            if not bool(card_mask[slot].item()):
+                continue
+            log_prob = float(card_log_probs[slot].item())
+            probability = math.exp(log_prob)
+            slot_prob[slot] = probability
+            card_entropy -= probability * log_prob
+        entropy += mode_prob_play * card_entropy
+        for slot, probability in slot_prob.items():
+            cell_mask = placement_mask[slot]
+            if not bool(cell_mask.any().item()):
+                continue
+            place_log_probs = masked_log_softmax_1d(
+                placement[slot].reshape(-1), cell_mask.reshape(-1)
+            )
+            place_entropy = 0.0
+            for flat_index in torch.nonzero(
+                cell_mask.reshape(-1), as_tuple=False
+            ).flatten().tolist():
+                log_prob = float(place_log_probs[int(flat_index)].item())
+                place_entropy -= math.exp(log_prob) * log_prob
+            entropy += mode_prob_play * probability * place_entropy
+    entropy = _finite_float("entropy", entropy)
+    if entropy < -1e-6:
+        raise ValueError(f"entropy must be non-negative, got {entropy!r}")
+    diagnostics = {
+        "mode_prob_wait": _finite_float("mode_prob_wait", mode_prob_wait),
+        "mode_prob_play": _finite_float("mode_prob_play", mode_prob_play),
+        "entropy": entropy,
+        "top_log_prob": _finite_float("top_log_prob", best.log_prob),
+    }
+    return action, suggestions, diagnostics
+
+
 def placement_heatmap(
     placement_logits: torch.Tensor,
     placement_masks: torch.Tensor,
@@ -414,217 +516,12 @@ def placement_heatmap(
     return nested
 
 
-def _extract_hand_cards(observation: Any) -> list[str] | None:
-    """Best-effort public hand-name lookup; ``None`` when unavailable."""
-
-    for attribute in ("hand_cards", "hand"):
-        value = getattr(observation, attribute, None)
-        if isinstance(value, (list, tuple)) and value:
-            return [str(item) if not isinstance(item, str) else item for item in value]
-    for wrapper in ("game_state", "state"):
-        inner = getattr(observation, wrapper, None)
-        if inner is not None:
-            for attribute in ("hand_cards", "hand"):
-                value = getattr(inner, attribute, None)
-                if isinstance(value, (list, tuple)) and value:
-                    return [str(item) if not isinstance(item, str) else item for item in value]
-            hud = getattr(inner, "hud", None)
-            value = getattr(hud, "hand_cards", None)
-            if isinstance(value, (list, tuple)) and value:
-                return [str(item) if not isinstance(item, str) else item for item in value]
-    hud = getattr(observation, "hud", None)
-    value = getattr(hud, "hand_cards", None)
-    if isinstance(value, (list, tuple)) and value:
-        return [str(item) if not isinstance(item, str) else item for item in value]
-    return None
-
-
 def decide_with_scores(actor: Any, observation: Any) -> tuple[Any, list[ScoredAction], dict[str, float]]:
-    """Single-forward-pass replacement for ``PrototypeActor.decide``.
+    """Score one V4 actor decision through its deployment adapter."""
 
-    Builds model inputs via ``observation_to_model_inputs``, manages
-    ``actor._hidden`` plus the reset mask exactly like
-    ``PrototypeActor.decide`` (fresh initial hidden plus all-ones reset on the
-    first step, carried hidden plus all-zeros reset afterwards), runs one
-    ``actor.policy.forward(..., include_beliefs=False, inference=True)`` pass
-    under inference mode, ranks suggestions with :func:`top_k_suggestions`,
-    derives the deterministic action as the rank-1 suggestion, stores
-    ``actor._hidden = final_hidden.detach()``, and returns
-    ``(Action, suggestions, diagnostics)`` where diagnostics carries
-    ``mode_prob_wait``, ``mode_prob_play``, ``entropy``, and ``top_log_prob``.
-
-    Never calls ``act_deterministic`` (which would advance the hidden state a
-    second time).  ``torch`` and the simulator/cr_bot boundaries are imported
-    lazily so this module stays importable without ``torch``.
-    """
-
-    import math
-
-    import torch
-    from simulator.physical_lab.workflow.prototype_controller import observation_to_model_inputs
-
-    from cr_bot.domain.game_state import Action
-
-    if actor is None:
-        raise ValueError("decide_with_scores: actor must not be None (fail-closed)")
-    if observation is None:
-        raise ValueError("decide_with_scores: observation must not be None (fail-closed)")
-    policy = getattr(actor, "policy", None)
-    if policy is None:
-        raise ValueError("decide_with_scores: actor has no .policy recurrent policy (fail-closed)")
-    device = getattr(actor, "device", None)
-    if device is None:
-        raise ValueError("decide_with_scores: actor has no .device (fail-closed)")
-    if not callable(getattr(policy, "forward", None)):
-        raise ValueError("decide_with_scores: actor.policy has no forward method (fail-closed)")
-    if not callable(getattr(policy, "initial_hidden", None)):
-        raise ValueError("decide_with_scores: actor.policy has no initial_hidden method (fail-closed)")
-
-    model_inputs = observation_to_model_inputs(observation, device=device)
-    try:
-        board, global_vector, entity_tokens, entity_mask, masks = model_inputs
-    except (TypeError, ValueError) as error:
-        raise ValueError(
-            "decide_with_scores: observation_to_model_inputs must return "
-            "(board, global_vector, entity_tokens, entity_mask, masks) (fail-closed)"
-        ) from error
-
-    torch_mod = getattr(actor, "_torch", None) or torch
-    use_initial_hidden = getattr(actor, "_hidden", None) is None
-    if use_initial_hidden:
-        hidden = policy.initial_hidden(1, device=device)
-        reset_mask = torch_mod.ones((1, 1), dtype=torch_mod.bool, device=device)
-    else:
-        hidden = actor._hidden
-        reset_mask = torch_mod.zeros((1, 1), dtype=torch_mod.bool, device=device)
-    if (
-        not isinstance(reset_mask, torch.Tensor)
-        or tuple(reset_mask.shape) != (1, 1)
-        or reset_mask.dtype != torch.bool
-    ):
-        raise ValueError("decide_with_scores: reset_mask must be a bool tensor with shape [1, 1] (fail-closed)")
-
-    inference_mode = getattr(torch_mod, "inference_mode", None) or torch.inference_mode
-    with inference_mode():
-        output = policy.forward(
-            board,
-            global_vector,
-            entity_tokens,
-            entity_mask,
-            action_masks=masks,
-            reset_mask=reset_mask,
-            hidden=hidden,
-            include_beliefs=False,
-            inference=True,
-        )
-
-    logits = getattr(output, "logits", None)
-    if logits is None:
-        raise ValueError("decide_with_scores: policy.forward returned no action logits (fail-closed)")
-    final_hidden = getattr(output, "final_hidden", None)
-    if final_hidden is None:
-        raise ValueError("decide_with_scores: policy.forward returned no final_hidden (fail-closed)")
-    try:
-        mode_logits = logits.mode[0, 0]
-        card_logits = logits.card[0, 0]
-        placement_logits = logits.placement[0, 0]
-        mode_mask = masks.mode[0, 0]
-        card_mask = masks.card[0, 0]
-        placement_mask = masks.placement[0, 0]
-    except (AttributeError, IndexError, TypeError) as error:
-        raise ValueError(
-            "decide_with_scores: policy logits/masks must expose [B=1, T=1, ...] "
-            "mode/card/placement tensors (fail-closed)"
-        ) from error
-
-    suggestions = top_k_suggestions(
-        mode_logits,
-        card_logits,
-        placement_logits,
-        (mode_mask, card_mask, placement_mask),
-        hand_cards=_extract_hand_cards(observation),
-        top_k=3,
-    )
-    if not suggestions:
-        raise ValueError("decide_with_scores: no scorable actions (fail-closed)")
-    best = suggestions[0]
-    if best.kind == "wait":
-        action = Action(kind="Wait")
-    else:
-        if best.card_slot is None or best.cell is None:
-            raise ValueError("decide_with_scores: rank-1 play is missing slot/cell (fail-closed)")
-        action = Action(kind="Play", card_idx=int(best.card_slot), cell=(int(best.cell[0]), int(best.cell[1])))
-
-    try:
-        actor._hidden = final_hidden.detach()
-    except (AttributeError, RuntimeError) as error:
-        raise ValueError(f"decide_with_scores: could not detach final hidden state: {error}") from error
-
-    mode_log_probs = masked_log_softmax_1d(mode_logits, mode_mask)
-    wait_legal = bool(mode_mask[_WAIT_INDEX].item())
-    play_legal = bool(mode_mask[_PLAY_INDEX].item())
-    mode_prob_wait = (
-        _finite_float("mode_prob_wait", math.exp(float(mode_log_probs[_WAIT_INDEX].item())))
-        if wait_legal
-        else 0.0
-    )
-    mode_prob_play = (
-        _finite_float("mode_prob_play", math.exp(float(mode_log_probs[_PLAY_INDEX].item())))
-        if play_legal
-        else 0.0
-    )
-    for name, value in (("mode_prob_wait", mode_prob_wait), ("mode_prob_play", mode_prob_play)):
-        if not 0.0 - 1e-6 <= value <= 1.0 + 1e-6:
-            raise ValueError(f"decide_with_scores: {name} out of range: {value!r}")
-
-    # Exact autoregressive joint entropy: H(mode) + P(PLAY) * H(card | PLAY)
-    # + P(PLAY) * sum_s P(card=s | PLAY) * H(placement | s).  Card slots that
-    # are legal but have no legal placement cell contribute nothing (they are
-    # already excluded from the ranked suggestions).
-    entropy = 0.0
-    for index in range(2):
-        if bool(mode_mask[index].item()):
-            log_prob = _finite_float(
-                f"mode entropy log-prob({index})", float(mode_log_probs[index].item())
-            )
-            entropy -= mode_prob_wait * log_prob if index == _WAIT_INDEX else mode_prob_play * log_prob
-    if play_legal and mode_prob_play > 0.0 and bool(card_mask.any().item()):
-        card_log_probs = masked_log_softmax_1d(card_logits, card_mask)
-        card_entropy = 0.0
-        slot_prob: dict[int, float] = {}
-        for slot in range(int(card_logits.shape[0])):
-            if not bool(card_mask[slot].item()):
-                continue
-            card_lp = _finite_float(
-                f"card entropy log-prob({slot})", float(card_log_probs[slot].item())
-            )
-            prob = math.exp(card_lp)
-            slot_prob[slot] = prob
-            card_entropy -= prob * card_lp
-        entropy += mode_prob_play * card_entropy
-        for slot, prob in slot_prob.items():
-            cell_mask = placement_mask[slot]
-            if not bool(cell_mask.any().item()):
-                continue
-            place_log_probs = masked_log_softmax_1d(
-                placement_logits[slot].reshape(-1), cell_mask.reshape(-1)
-            )
-            place_entropy = 0.0
-            for flat_index in torch.nonzero(cell_mask.reshape(-1), as_tuple=False).flatten().tolist():
-                place_lp = _finite_float(
-                    f"placement entropy log-prob({int(flat_index)})",
-                    float(place_log_probs[int(flat_index)].item()),
-                )
-                place_entropy -= math.exp(place_lp) * place_lp
-            entropy += mode_prob_play * prob * place_entropy
-    entropy = _finite_float("entropy", entropy)
-    if entropy < -1e-6:
-        raise ValueError(f"decide_with_scores: entropy must be non-negative, got {entropy!r}")
-
-    diagnostics = {
-        "mode_prob_wait": mode_prob_wait,
-        "mode_prob_play": mode_prob_play,
-        "entropy": entropy,
-        "top_log_prob": _finite_float("top_log_prob", best.log_prob),
-    }
-    return action, suggestions, diagnostics
+    if actor is None or observation is None:
+        raise ValueError("actor and public observation are required")
+    decide = getattr(actor, "decide_with_scores", None)
+    if not callable(decide):
+        raise ValueError("actor must implement decide_with_scores")
+    return decide(observation)

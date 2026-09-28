@@ -44,7 +44,7 @@ def run_video_session(
                 LiveDetectionFilter,
                 LiveHandStateFilter,
                 LivePrototypeRunner,
-                PrototypeActor,
+                V4Actor,
                 VideoFrameSource,
                 _bootstrap_extractor_runtime,
                 _filter_live_analysis,
@@ -56,7 +56,7 @@ def run_video_session(
                 LiveDetectionFilter,
                 LiveHandStateFilter,
                 LivePrototypeRunner,
-                PrototypeActor,
+                V4Actor,
                 VideoFrameSource,
                 _bootstrap_extractor_runtime,
                 _filter_live_analysis,
@@ -132,7 +132,7 @@ def run_video_session(
         startup_ms["build_detector"] = (time.monotonic() - t_startup) * 1000.0
         t_startup = time.monotonic()
         configure_detector_inference_size(detector, yolo_image_size)
-        actor = PrototypeActor(checkpoint, device=actor_device)
+        actor = V4Actor(checkpoint, device=actor_device)
         startup_ms["load_actor"] = (time.monotonic() - t_startup) * 1000.0
         # Lend the live actor to what-if re-evaluations (borrowed under
         # session.actor_lock with hidden-state save/restore).
