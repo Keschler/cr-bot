@@ -3,7 +3,6 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from simulator.rl.v4 import search_teacher
 from simulator.rl.v4.frontier_eval import (
     fixed_action_horizon_gate,
     horizon_stability,
@@ -109,35 +108,3 @@ def test_source_best_action_selects_highest_mean_duplicate_source():
         ],
     }
     assert _source_best_action(source)["col"] == 2
-
-
-def test_default_wait_rollout_has_no_undefined_controller():
-    class Engine:
-        def step(self, state, actions):
-            state.steps += 1
-
-    env = SimpleNamespace(
-        state=SimpleNamespace(terminal=False, steps=0),
-        engine=Engine(),
-        decision_interval_ticks=1,
-    )
-    assert search_teacher._rollout(env, 3) == 3
-    assert env.state.steps == 3
-
-
-def test_survival_denominator_includes_dead_deployments():
-    after = SimpleNamespace(
-        entities={
-            1: SimpleNamespace(uid=1, alive=True, hp=10, max_hp=10),
-        }
-    )
-    score, terms = search_teacher.score_outcome(
-        before_towers={0: (100, 100), 1: (100, 100)},
-        after_towers={0: (100, 100), 1: (90, 100)},
-        before_threats={},
-        after_state=after,
-        deployed_uids=[1, 2],
-        deployed_max_hp=20,
-        elixir_spent_milli=0,
-    )
-    assert terms["deployed_survived"] == pytest.approx(0.5)

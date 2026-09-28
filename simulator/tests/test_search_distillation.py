@@ -21,24 +21,32 @@ from simulator.rl.v4.search_distillation.losses import _factorized_kl
 from simulator.rl.v4.model_v4 import V4Logits, masks_from_legal_play
 
 
+def _synthetic_observation() -> dict[str, np.ndarray]:
+    """Build a small public-input fixture without the retired data generator."""
+
+    from simulator.rl.v4.hand_features import build_hand_tokens
+
+    return {
+        "raster": np.zeros((21, 32, 18), dtype=np.float32),
+        "global_features": np.zeros((768,), dtype=np.float32),
+        "entities": np.zeros((128, 32), dtype=np.float32),
+        "entity_mask": np.zeros((128,), dtype=bool),
+        "hand_tokens": build_hand_tokens(
+            ["hog-rider", "cannon", "musketeer", "skeletons"], 7.0
+        ),
+        "opp_hand_probs": np.full((128,), 1.0 / 128, dtype=np.float32),
+        "opp_out_of_cycle": np.zeros((128,), dtype=bool),
+        "opp_elixir_interval": np.asarray([0.0, 10.0], dtype=np.float32),
+        "event_history": np.zeros((16, 8), dtype=np.float32),
+    }
+
+
 def test_cached_prefix_batch_respects_wait_legality() -> None:
-    from simulator.rl.v4.distillation import DistillationConfig, generate_sample
     from simulator.rl.v4.search_distillation import CachedPrefix
     from simulator.rl.v4.search_distillation.batching import _stack_records
 
-    sample = generate_sample(DistillationConfig(n_states=1, seed=7), 0)
-    inputs = {
-        "raster": sample.raster,
-        "global_features": sample.global_features,
-        "entities": sample.entity_tokens,
-        "entity_mask": sample.entity_mask,
-        "hand_tokens": sample.hand_tokens,
-        "opp_hand_probs": sample.opp_hand_probs,
-        "opp_out_of_cycle": sample.opp_out_of_cycle,
-        "opp_elixir_interval": sample.opp_elixir_interval,
-        "event_history": sample.event_history,
-    }
-    legal = np.zeros_like(sample.legal_play, dtype=bool)
+    inputs = _synthetic_observation()
+    legal = np.zeros((4, 32, 18), dtype=bool)
     legal[0, 0, 0] = True
     record = CachedPrefix(
         key="test", match_id="test", offset=0, observations=[inputs],
@@ -296,7 +304,6 @@ def test_prefix_cache_loads_original_public_class_paths(tmp_path: Path, monkeypa
 
 @pytest.mark.parametrize("method", ["hard-none", "hard-replay", "soft-replay", "soft-kl"])
 def test_real_training_resumes_identically_at_epoch_boundary(tmp_path: Path, method: str) -> None:
-    from simulator.rl.v4.distillation import DistillationConfig, generate_sample
     from simulator.rl.v4.model_v4 import ModelConfigV4, RecurrentV4Policy
     from simulator.rl.v4.search_distillation import CachedPrefix, DistillationDeadline
 
@@ -311,18 +318,13 @@ def test_real_training_resumes_identically_at_epoch_boundary(tmp_path: Path, met
         ))
         records = []
         for index in range(2):
-            sample = generate_sample(DistillationConfig(n_states=2, seed=5), index)
-            observation = {name: getattr(sample, name) for name in (
-                "raster", "global_features", "entity_mask", "hand_tokens", "opp_hand_probs",
-                "opp_out_of_cycle", "opp_elixir_interval", "event_history",
-            )}
-            observation["entities"] = sample.entity_tokens
-            target = ActionTarget(sample.target.mode, sample.target.card_slot,
-                                  sample.target.row, sample.target.col)
+            observation = _synthetic_observation()
+            target = ActionTarget(1, 0, index, index)
+            legal_play = np.ones((4, 32, 18), dtype=bool)
             records.append(CachedPrefix(
                 key=f"train:synthetic#0:t{index}", match_id="synthetic#0", offset=index,
                 observations=[observation, observation],
-                legal_play=[sample.legal_play, sample.legal_play], legal_wait=[True, True],
+                legal_play=[legal_play, legal_play], legal_wait=[True, True],
                 recorded_action=ActionTarget(0), correction_action=target,
                 branches=[{"source": "sim", "mode": 0, "mean": 0.0},
                           {"source": "search", "mode": target.mode, "slot": target.slot,

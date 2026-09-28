@@ -1,13 +1,13 @@
-"""Simulator-grounded supervised teacher for V4 distillation (paper Stage 1).
+"""Small public-state rules teacher used by V4 bootstrap and frontier audit.
 
 The teacher maps a public observation to a supervised target
 ``(mode, card, placement, WAIT duration)`` using validated tactical rules
 plus simulator legality.  It is deliberately *not* a strategy oracle: each
 rule keys off immediate public facts (threat position, cluster density,
 elixir, affordability) and every proposal is clamped to the legal mask.
-Over time, counterfactual search (Stage 2) replaces this teacher as the
-authority; the teacher's job now is to bootstrap basic tactics from
-causally clean simulator states instead of unverified expert video.
+It is deliberately a baseline labeler rather than a policy or an oracle.  The
+from-scratch bootstrap uses it to produce an initial compatible checkpoint;
+frontier audit uses it as one candidate branch for comparison.
 
 Entity feature order follows ``observation_v2.ENTITY_TOKEN_FEATURES``;
 hand-token order follows ``observation_v3.HAND_TOKEN_FEATURES``.

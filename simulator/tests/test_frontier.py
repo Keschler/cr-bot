@@ -176,10 +176,13 @@ def test_build_distribution_stratifies_and_caps():
     assert report["by_class"] == {"frontier": 30, "solved": 10}
 
 
-TRAIN_PT = "outputs/v4/frontier/frontier_train.pt"
+TRAIN_PT = "outputs/v4/frontier_seed0/frontier_train.pt"
 
 
-@pytest.mark.skipif(not os.path.exists(TRAIN_PT), reason="frontier train set missing")
+@pytest.mark.skipif(
+    not os.path.exists(TRAIN_PT),
+    reason="fresh bootstrap frontier artifact missing; run the V4 pipeline first",
+)
 def test_frontier_entry_round_trip():
     """A materialized entry resets a live env; policy + opponent can step it."""
 
@@ -236,10 +239,13 @@ def test_frontier_entry_round_trip():
     assert result.terminated is False or True  # stepping works either way
 
 
-CKPT = "outputs/v4/stage2_12k_v2_e12_s12.pt"
+CKPT = "outputs/v4/bootstrap_seed0/actor.pt"
 
 
-@pytest.mark.skipif(not os.path.exists(CKPT), reason="champion checkpoint missing")
+@pytest.mark.skipif(
+    not os.path.exists(CKPT),
+    reason="fresh bootstrap actor missing; run run_v4_bootstrap.py first",
+)
 def test_live_replay_branch_harness_micro():
     """End-to-end micro run: collect -> replay -> branches -> one branch."""
 

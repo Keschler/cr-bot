@@ -21,7 +21,8 @@ def positive(value):
 
 def parser():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--checkpoint", type=Path, default=REPO / "outputs/v4/stage2_12k_v2_e12_s12.pt")
+    p.add_argument("--checkpoint", type=Path, required=True,
+                   help="V4 actor checkpoint produced by the bootstrap or a previous training run")
     p.add_argument("--out", type=Path, required=True)
     p.add_argument(
         "--reuse-matches-from", type=Path, default=None,

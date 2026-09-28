@@ -2,7 +2,7 @@
 
 These dataclasses deliberately contain storage and validation only.  They do
 not implement batching, replay, or PPO optimization.  The reset mask follows
-the convention used by :class:`rl.foundation.model.GRURecurrentCore`: ``True`` at time
+the V4 recurrent policy convention: ``True`` at time
 ``t`` clears the hidden state immediately before observation ``t`` is
 processed.
 """

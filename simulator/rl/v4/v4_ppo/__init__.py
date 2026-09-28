@@ -41,11 +41,9 @@ from .runtime import (
     _forward_sequence,
 )
 
-from .rollout import (
+from .rollout_utils import (
     post_step_value,
     rollout_next_values,
-    collect_v4_rollout,
-    _stack_rollout,
 )
 
 from .update import (
@@ -74,7 +72,6 @@ __all__ = [
     "V4PPOConfig",
     "V4RolloutBatch",
     "V4UpdateReport",
-    "collect_v4_rollout",
     "decode_v4_sim_actions",
     "fit_value_head",
     "load_frozen_anchor",
@@ -84,4 +81,3 @@ __all__ = [
     "return_distribution",
     "update_v4_ppo",
 ]
-

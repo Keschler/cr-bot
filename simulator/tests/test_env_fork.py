@@ -1,4 +1,4 @@
-"""Parity and isolation tests for SimulatorEnv.fork() (Stage 2, Step 1).
+"""Parity and isolation tests for SimulatorEnv.fork().
 
 A fork must start from the exact same logical state as its parent
 (observations, hashes, legal masks identical) and become fully independent
@@ -14,16 +14,12 @@ import pytest
 from simulator.actions import PlayCardAction, WaitAction
 from simulator.engine import BattleEngine
 from simulator.env import SimulatorEnv
-from simulator.rl.foundation.basic_scenarios import (
-    BasicMechanicsScenarioEnv,
-    BasicScenarioConfig,
-)
 from simulator.rl.foundation.opponent_pool import OpponentPool
 from simulator.roster import PLAYER_DECK
 from simulator.ruleset import load_fixed_ruleset
 
 
-def _scenario_env(seed: int = 123) -> BasicMechanicsScenarioEnv:
+def _scenario_env(seed: int = 123) -> SimulatorEnv:
     ruleset = load_fixed_ruleset()
     opponent = OpponentPool(ruleset, seed=71).sample(
         0, archetype="beatdown", strategy="deterministic-cycle"
@@ -32,16 +28,12 @@ def _scenario_env(seed: int = 123) -> BasicMechanicsScenarioEnv:
         engine=BattleEngine(ruleset, validate_every_tick=False),
         decision_interval_us=250_000,
     )
-    wrapped = BasicMechanicsScenarioEnv(
-        base,
-        BasicScenarioConfig(source="ground-defense", target_player=0, decision_limit=64),
-    )
-    wrapped.reset_v2(
+    base.reset_v2(
         seed=seed,
         decks=(tuple(PLAYER_DECK), opponent.deck.cards),
         shuffle_decks=True,
     )
-    return wrapped
+    return base
 
 
 def _v2_snapshot(env) -> dict[str, np.ndarray | bool]:

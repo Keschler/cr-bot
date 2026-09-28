@@ -386,39 +386,6 @@ def test_trajectory_v4_fields_validate() -> None:
         RecurrentSequence(**dict(full, hand_tokens=torch.zeros(batch, time, 4, 15)))
 
 
-def _lane(source: str, archetype: str, seed: int) -> dict:
-    from simulator.engine import BattleEngine
-    from simulator.engine.match import DeterministicCycleController
-    from simulator.env import SimulatorEnv
-    from simulator.public_state_estimator import PublicStateEstimator
-    from simulator.rl.foundation.basic_scenarios import BasicMechanicsScenarioEnv, BasicScenarioConfig
-    from simulator.rl.foundation.opponent_pool import OpponentPool
-    from simulator.roster import PLAYER_DECK
-    from simulator.ruleset import load_fixed_ruleset
-
-    ruleset = load_fixed_ruleset()
-    opponent = OpponentPool(ruleset, seed=seed + 100).sample(
-        0, archetype=archetype, strategy="deterministic-cycle"
-    )
-    base = SimulatorEnv(
-        engine=BattleEngine(ruleset, validate_every_tick=False),
-        decision_interval_us=250_000,
-    )
-    env = BasicMechanicsScenarioEnv(
-        base, BasicScenarioConfig(source=source, target_player=0, decision_limit=16)
-    )
-    decks = (tuple(PLAYER_DECK), tuple(opponent.deck.cards))
-    env.reset_v2(seed=seed, decks=decks, shuffle_decks=True)
-    return {
-        "env": env,
-        "opponent": DeterministicCycleController(lane="alternate"),
-        "estimator": PublicStateEstimator(),
-        "decks": decks,
-        "next_seed": seed + 1000,
-        "needs_reset": True,
-    }
-
-
 def test_decode_v4_sim_actions_types() -> None:
     from simulator.actions import PlayCardAction, WaitAction
     from simulator.rl.v4.model_v4 import V4ActionBatch
@@ -451,110 +418,6 @@ def test_load_frozen_anchor_freezes_and_verifies(tmp_path) -> None:
         str(path), _tiny_config(), expected_sha256=anchor.anchor_sha256
     )
     assert not reloaded.training
-
-
-def test_v4_ppo_dry_run_collect_and_update() -> None:
-    """End-to-end wiring proof on live sims: collect, update, stay finite."""
-
-    from simulator.rl.v4.v4_ppo import (
-        collect_v4_rollout,
-        load_frozen_anchor,
-        update_v4_ppo,
-    )
-
-    torch.manual_seed(21)
-    policy = RecurrentV4Policy(_tiny_config())
-    critic = V4ValueHead(64)
-    anchor_path = "/tmp/v4_ppo_dryrun_anchor.pt"
-    torch.save(policy.state_dict(), anchor_path)
-    anchor = load_frozen_anchor(anchor_path, _tiny_config())
-    anchor_before = [p.detach().clone() for p in anchor.parameters()]
-    lanes = [
-        _lane("ground-defense", "beatdown", 5),
-        _lane("isolated-offense", "aggressive-pressure", 6),
-    ]
-    actor_opt = torch.optim.Adam(policy.parameters(), lr=1e-5)
-    critic_opt = torch.optim.Adam(critic.parameters(), lr=1e-4)
-    try:
-        batch, info = collect_v4_rollout(
-            policy, critic, anchor, lanes, n_decisions=4, device=torch.device("cpu")
-        )
-    finally:
-        import os
-
-        os.remove(anchor_path)
-    assert info["illegal_attempts"] == 0
-    assert 0.0 <= info["wait_fraction"] <= 1.0
-    assert batch.trajectory.sequence.hand_tokens is not None
-    assert batch.trajectory.sequence.event_history is not None
-    assert batch.anchor_actions is not None
-    report = update_v4_ppo(
-        policy, critic, actor_opt, critic_opt, batch, ppo_epochs=1, bc_coef=0.05
-    )
-    assert bool(torch.isfinite(torch.tensor(report.policy_loss)))
-    assert bool(torch.isfinite(torch.tensor(report.value_loss)))
-    assert bool(torch.isfinite(torch.tensor(report.behavior_cloning_loss)))
-    assert isinstance(report.quarantined, bool) and isinstance(
-        report.quarantine_reasons, list
-    )
-    for param, before in zip(anchor.parameters(), anchor_before):
-        assert bool(torch.equal(param.detach(), before))
-    assert set(report.per_head_entropy) >= {"joint", "mode", "duration", "card", "placement"}
-    assert set(report.grad_norms) >= {"mode", "card", "placement"}
-    assert bool(torch.isfinite(torch.tensor(report.policy_grad_norm)))
-    assert bool(torch.isfinite(torch.tensor(report.bc_grad_norm)))
-    assert report.policy_grad_norm >= 0.0 and report.bc_grad_norm >= 0.0
-    assert 0.0 <= (report.anchor_mode_agree or 0.0) <= 1.0
-    assert bool(torch.isfinite(torch.tensor(report.returns_mean)))
-    assert bool(torch.isfinite(torch.tensor(report.advantages_std)))
-
-
-def test_v4_rollout_continues_recurrent_state_across_batches(monkeypatch) -> None:
-    from simulator.rl.v4.v4_ppo import collect_v4_rollout, _forward_sequence
-
-    torch.manual_seed(23)
-    policy = RecurrentV4Policy(_tiny_config())
-    anchor = RecurrentV4Policy(_tiny_config())
-    critic = V4ValueHead(64)
-    # A WAIT advances the same episode, so the second batch must start from
-    # the first batch's final actor and anchor states.
-    with torch.no_grad():
-        policy.heads.mode_head.weight.zero_()
-        policy.heads.mode_head.bias[:] = torch.tensor([80.0, -80.0])
-    lane = _lane("ground-defense", "beatdown", 5)
-    first, _ = collect_v4_rollout(
-        policy, critic, anchor, [lane], n_decisions=1,
-        deterministic_policy=True,
-    )
-    actor_hidden = lane["v4_policy_hidden"].clone()
-    anchor_hidden = lane["v4_anchor_hidden"].clone()
-    assert not lane["needs_reset"]
-    assert torch.count_nonzero(actor_hidden) > 0
-    assert torch.count_nonzero(anchor_hidden) > 0
-
-    seen_anchor_hidden = []
-    original_forward = anchor.forward_step
-
-    def record_anchor_forward(inputs, *, hidden=None, reset_mask=None):
-        seen_anchor_hidden.append(hidden.detach().clone())
-        return original_forward(inputs, hidden=hidden, reset_mask=reset_mask)
-
-    monkeypatch.setattr(anchor, "forward_step", record_anchor_forward)
-    second, _ = collect_v4_rollout(
-        policy, critic, anchor, [lane], n_decisions=1,
-        deterministic_policy=True,
-    )
-    sequence = second.trajectory.sequence
-    assert not bool(sequence.reset_mask[0, 0])
-    torch.testing.assert_close(sequence.initial_hidden, actor_hidden)
-    torch.testing.assert_close(seen_anchor_hidden[0], anchor_hidden)
-    with torch.no_grad():
-        logits, recurrent, _ = _forward_sequence(policy, sequence, "cpu")
-        log_probs = policy.log_prob(logits, second.trajectory.action_masks,
-                                    second.trajectory.actions)
-    torch.testing.assert_close(recurrent, second.recurrent)
-    torch.testing.assert_close(log_probs, second.trajectory.old_log_probs)
-    torch.testing.assert_close(first.next_values[0, 0], second.trajectory.values[0, 0])
 
 
 def test_log_prob_finite_on_broke_wait_rows() -> None:
@@ -730,31 +593,6 @@ def test_potential_anneal_schedule() -> None:
         potential_anneal_weight(0.1, -1, 5)
     with pytest.raises(ValueError, match="finite non-negative"):
         potential_anneal_weight(float("nan"), 0, 5)
-
-
-def test_deterministic_collect_is_reproducible() -> None:
-    from simulator.rl.v4.v4_ppo import collect_v4_rollout
-
-    def run_once() -> list:
-        torch.manual_seed(31)
-        policy = RecurrentV4Policy(_tiny_config())
-        critic = V4ValueHead(64)
-        lanes = [
-            _lane("ground-defense", "beatdown", 5),
-            _lane("isolated-offense", "aggressive-pressure", 6),
-        ]
-        batch, _ = collect_v4_rollout(
-            policy, critic, None, lanes, n_decisions=4,
-            device=torch.device("cpu"), deterministic_policy=True,
-        )
-        return [
-            batch.trajectory.actions.mode.tolist(),
-            batch.trajectory.actions.card_slot.tolist(),
-            batch.trajectory.old_log_probs.tolist(),
-        ]
-
-    first, second = run_once(), run_once()
-    assert first == second
 
 
 def test_monte_carlo_returns_and_distribution() -> None:

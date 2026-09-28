@@ -7,6 +7,7 @@ from typing import Any, Sequence
 import numpy as np
 import torch
 from ..model_v4 import ModelConfigV4, RecurrentV4Policy, V4ActionBatch
+from ..hand_features import build_hand_tokens
 from ...foundation.trajectory import RecurrentSequence
 
 
@@ -117,10 +118,6 @@ def _hand_tokens_partial(hand: Sequence[str], elixir: float) -> np.ndarray:
     the sampler can never select them).
     """
 
-    try:
-        from ..simulator_distillation import build_hand_tokens
-    except ImportError:  # pragma: no cover
-        from simulator.rl.v4.simulator_distillation import build_hand_tokens
     tokens = np.zeros((4, 16), dtype=np.float32)
     for slot, card in enumerate(list(hand)[:4]):
         row = np.array(build_hand_tokens([card] * 4, float(elixir))[0], copy=True)

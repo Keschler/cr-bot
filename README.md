@@ -25,7 +25,8 @@ Open **http://127.0.0.1:8000/**. The UI is served by the Python backend and uses
 native JavaScript modules; no Node.js installation or frontend build is needed.
 The server loads vision and policy dependencies when analysis starts. Analysis
 also needs the local detector/classifier assets and a policy checkpoint; the
-checkpoint selector prefers `prototype.pt` in the repository root when present.
+checkpoint selection is explicit; set `CR_BOT_V4_CHECKPOINT` for a configured
+default or choose a V4 checkpoint in the UI.
 
 ### Analyze a video
 
@@ -63,7 +64,8 @@ ROI editing, session behavior, and API endpoints.
 For a standalone command-line workflow, the Linux executable documented in
 [`simulator/RUN_PROTOTYPE_LIVE.md`](simulator/RUN_PROTOTYPE_LIVE.md) bundles the
 Python runtime, CPU PyTorch, visual extractor, KataCR inference, default
-checkpoint, card assets, ADB, and FFmpeg. It does not require a Python setup.
+V4 checkpoint selected at build time, card assets, ADB, and FFmpeg. It does not
+require a Python setup.
 
 Download `prototype-live-linux-x86_64` from the
 [latest GitHub release](https://github.com/keschler/cr-bot/releases/latest).
@@ -89,18 +91,17 @@ chmod +x prototype-live-linux-x86_64
 
 ### 2. Test on a video
 
-For the older live-phone prototype, use its released checkpoint,
-[`prototype.pt`](https://github.com/Keschler/cr-bot/releases/download/v0.5/prototype.pt):
+Use a compatible plain V4 state-dict checkpoint:
 
 ```bash
 ./prototype-live-linux-x86_64 \
-  --checkpoint /absolute/path/to/prototype.pt \
+  --checkpoint /absolute/path/to/v4_actor.pt \
   --video /absolute/path/to/gameplay.mp4 \
   --max-frames 20
 ```
 
-`--checkpoint` is optional when the bundled `prototype-fast-current` policy is
-sufficient.
+`--checkpoint` is required unless the binary was built with an explicit
+`CR_BOT_V4_CHECKPOINT` value.
 
 The repository also includes a [1080×2400 sample gameplay video](assets/pictures/gameplay.mp4)
 that can be used to reproduce the extractor locally. It starts with roughly
@@ -109,7 +110,7 @@ source frame reaches the in-game section without preprocessing the video:
 
 ```bash
 ./prototype-live-linux-x86_64 \
-  --checkpoint /absolute/path/to/prototype.pt \
+  --checkpoint /absolute/path/to/v4_actor.pt \
   --video assets/pictures/gameplay.mp4 \
   --frame-stride 10 \
   --max-frames 30 \
@@ -129,7 +130,7 @@ serial:
 
 ```bash
 ./prototype-live-linux-x86_64 \
-  --checkpoint /absolute/path/to/prototype.pt \
+  --checkpoint /absolute/path/to/v4_actor.pt \
   --serial YOUR_PHONE_SERIAL \
   --max-frames 100 \
   --jsonl-out /tmp/prototype-live.jsonl
@@ -152,7 +153,7 @@ and both confirmation flags:
 
 ```bash
 ./prototype-live-linux-x86_64 \
-  --checkpoint /absolute/path/to/prototype.pt \
+  --checkpoint /absolute/path/to/v4_actor.pt \
   --serial YOUR_PHONE_SERIAL \
   --calibration /absolute/path/to/phone-calibration.json \
   --execute \

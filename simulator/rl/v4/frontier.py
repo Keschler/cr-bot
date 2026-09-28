@@ -28,8 +28,6 @@ except ImportError:  # pragma: no cover - top-level ``rl`` imports
 
 FRONTIER_VERSION: str = "frontier-v4-2"
 
-CHAMPION_CHECKPOINT: str = "outputs/v4/stage2_12k_v2_e12_s12.pt"
-
 # Discovery opponent pool: pinned archetype decks (``allow_variants=False``).
 # Sealed evaluation uses held-out variants + different seeds (see frontier_eval).
 DISCOVERY_ARCHETYPES: tuple[str, ...] = (
@@ -570,9 +568,7 @@ def load_json(path: str) -> Any:
 
 
 __all__ = [
-    "CHAMPION_CHECKPOINT",
     "DISCOVERY_ARCHETYPES",
-    "FRONTIER_VERSION",
     "FRONTIER_VERSION",
     "FULL_MATCH_DECISIONS",
     "FilterConfig",

@@ -1,6 +1,6 @@
-"""V4 hierarchical recurrent policy: current-state-first actor.
+"""V4 hierarchical recurrent policy with current-state-aware action heads.
 
-Differences from the V3 actor (``rl.foundation.model``) that this module implements:
+The actor uses these public-state and action-decoding contracts:
 
 1. The spatial CNN keeps a board-aligned feature map at full ``32 x 18``
    resolution all the way to placement scoring; a pooled summary feeds
@@ -12,8 +12,9 @@ Differences from the V3 actor (``rl.foundation.model``) that this module impleme
    context, not a four-logit readout from one undifferentiated vector.
 4. Placement is a card-conditioned dot-product decoder over the spatial map
    (one selected-card map only, masked softmax over legal cells).
-5. WAIT is a semi-Markov action with a learned duration head over
-   ``WAIT_DURATIONS = (1, 2, 4, 8)`` base decision ticks.
+5. The supervised bootstrap retains a duration head over
+   ``WAIT_DURATIONS = (1, 2, 4, 8)``. The active simulator runtime fixes
+   WAIT to one decision interval.
 
 Inputs are ``[batch, time, ...]`` sequences of ``PolicyObservationV3``
 tensors plus legality masks from :mod:`rl.foundation.trajectory`.  No hidden

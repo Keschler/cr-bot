@@ -1,19 +1,15 @@
-"""V4 actor training, search, and simulator distillation implementations."""
+"""V4 actor training, bootstrap, search, and evaluation implementations."""
 
 __all__ = [
-    "distillation",
+    "bootstrap",
     "frontier",
     "frontier_eval",
     "frontier_ppo",
+    "hand_features",
     "learning_curve",
-    "losses_v4",
     "model_v4",
-    "search_dataset",
     "search_distillation",
-    "search_teacher",
-    "simulator_distillation",
+    "supervised",
     "simulator_teacher",
-    "timing_curriculum",
-    "timing_teacher",
     "v4_ppo",
 ]

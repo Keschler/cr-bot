@@ -1,20 +1,12 @@
-"""Shared RL model, scenario, and tensor foundations.
+"""Shared V4 tensor, opponent-pool, and provenance utilities.
 
-Modules are intentionally not imported eagerly.  Importing :mod:`rl` remains
-safe without PyTorch, and the V4 entry points can load without the historical
-training runtime.
+Submodules remain lazy so importing :mod:`simulator.rl` does not load PyTorch.
 """
 
 __all__ = [
     "_compat",
-    "basic_scenarios",
-    "opponent_pool",
-    "inference_checkpoint",
-    "seeding",
-    "domain_randomization",
-    "learner",
-    "model",
     "objectives",
+    "opponent_pool",
     "provenance",
     "trajectory",
 ]

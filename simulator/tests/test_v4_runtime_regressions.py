@@ -13,11 +13,11 @@ from simulator.rl.v4.frontier_ppo import (
 from simulator.rl.v4.model_v4 import RecurrentV4Policy, V4ActionBatch, V4ValueHead
 from simulator.rl.foundation.objectives import compute_gae
 from simulator.rl.v4.v4_ppo import (
-    collect_v4_rollout, configure_v4_runtime, decode_v4_sim_actions,
-    return_distribution, rollout_next_values, update_v4_ppo,
+    configure_v4_runtime, decode_v4_sim_actions, return_distribution,
 )
+from simulator.rl.v4.v4_ppo.rollout_utils import post_step_value, rollout_next_values
 from simulator.roster import PLAYER_DECK
-from simulator.tests.test_v4_ppo_adapter import _inputs, _lane, _masks
+from simulator.tests.test_v4_ppo_adapter import _inputs, _masks
 
 
 def policy():
@@ -73,19 +73,6 @@ def test_internal_cut_uses_successor_not_unrelated_reset_value():
         rollout_next_values(values, terminated, truncated, torch.full_like(saved, float('nan')))
 
 
-def test_anchor_targets_come_from_anchor_weights():
-    learner, anchor = policy(), policy()
-    force_mode(learner, 1)
-    force_mode(anchor, 0)
-    critic = V4ValueHead(64)
-    lane = _lane("ground-defense", "beatdown", 5)
-    batch, _ = collect_v4_rollout(learner, critic, anchor, [lane], n_decisions=3, deterministic_policy=True)
-    assert batch.trajectory.actions.mode[0, 0].item() == 1
-    assert torch.count_nonzero(batch.anchor_actions.mode) == 0
-    assert batch.next_values is not None
-    assert torch.isfinite(batch.next_values).all()
-
-
 def entries(count=3):
     spec = pinned_opponent_decks()[0]
     result = []
@@ -100,7 +87,7 @@ def entries(count=3):
 
 def test_frontier_rotates_entries_and_values_before_reset(monkeypatch):
     import simulator.rl.v4.frontier_ppo.collection as frontier
-    import simulator.rl.v4.v4_ppo as runtime
+    import simulator.rl.v4.v4_ppo.rollout_utils as runtime
     data = entries()
     seen, ticks = [], []
     original = frontier.load_frontier_state
@@ -148,7 +135,6 @@ def test_placement_bias_is_registered_before_first_forward():
 
 def test_successor_value_uses_next_observation_without_consuming_rng():
     from simulator.public_state_estimator import PublicStateEstimator
-    from simulator.rl.v4.v4_ppo import post_step_value
     from simulator.rl.v4.frontier_eval import _observe_inputs, _step_inputs
     from simulator.actions import WaitAction
     net = policy()
@@ -170,49 +156,6 @@ def test_successor_value_uses_next_observation_without_consuming_rng():
     assert torch.equal(before_rng, torch.get_rng_state())
     assert actual == pytest.approx(expected)
     assert not torch.equal(current, expected_features)
-
-
-def test_entropy_quarantine_uses_post_update_logits(monkeypatch):
-    """A collapsing post-update policy must trip the entropy quarantine."""
-
-    net = policy()
-    critic = V4ValueHead(64)
-    batch, _ = collect_v4_rollout(
-        net, critic, None, [_lane("ground-defense", "beatdown", 5)],
-        n_decisions=2, deterministic_policy=True,
-    )
-    # Make the comparison baseline deterministic and non-zero.  The wrapper
-    # below returns zero entropy only for a fresh post-step logits object; the
-    # stale pre-step object returns one, reproducing the old false negative.
-    batch.per_head_entropy = {
-        key: torch.ones_like(value)
-        for key, value in batch.per_head_entropy.items()
-    }
-    original = net.action_entropy
-    first_logits = None
-    seen = []
-
-    def collapse_post(logits, masks):
-        nonlocal first_logits
-        seen.append(logits)
-        if first_logits is None:
-            first_logits = logits
-            return original(logits, masks)
-        base = original(logits, masks)
-        if logits is first_logits:
-            return {key: torch.ones_like(value) for key, value in base.items()}
-        return {key: torch.zeros_like(value) for key, value in base.items()}
-
-    monkeypatch.setattr(net, "action_entropy", collapse_post)
-    report = update_v4_ppo(
-        net, critic, torch.optim.Adam(net.parameters(), lr=1e-5),
-        torch.optim.Adam(critic.parameters(), lr=1e-4), batch,
-    )
-    assert len(seen) == 2
-    assert seen[1] is not seen[0]
-    assert report.per_head_entropy["joint_collapse"] == pytest.approx(1.0)
-    assert report.quarantined
-    assert any("joint entropy collapse" in reason for reason in report.quarantine_reasons)
 
 
 def test_wait_only_margin_report_has_explicit_empty_placement_summary():
@@ -252,38 +195,6 @@ def test_return_distribution_quantile_levels_follow_input_device(monkeypatch):
 def test_return_distribution_runs_on_cuda():
     result = return_distribution(torch.arange(8, dtype=torch.float32, device="cuda"))
     assert result["n"] == 8
-
-
-@pytest.mark.parametrize("epochs", [1, 2])
-def test_movement_quarantine_measures_updated_candidate(epochs):
-    from simulator.rl.v4.v4_ppo import _forward_sequence
-    from simulator.rl.foundation.objectives import PPOObjectiveConfig
-
-    net = policy()
-    critic = V4ValueHead(64)
-    batch, _ = collect_v4_rollout(
-        net, critic, None, [_lane("ground-defense", "beatdown", 5)],
-        n_decisions=4, deterministic_policy=True,
-    )
-    config = PPOObjectiveConfig(clip_epsilon=0.1, bc_coef=0.0)
-    report = update_v4_ppo(
-        net, critic, torch.optim.Adam(net.parameters(), lr=0.01),
-        torch.optim.Adam(critic.parameters(), lr=1e-4), batch,
-        ppo_config=config, ppo_epochs=epochs,
-    )
-    trajectory = batch.trajectory
-    with torch.no_grad():
-        logits, _, _ = _forward_sequence(net, trajectory.sequence, "cpu")
-        log_probs = net.log_prob(logits, trajectory.action_masks, trajectory.actions)
-        difference = log_probs - trajectory.old_log_probs
-    assert report.approx_kl == pytest.approx((-difference).mean().item())
-    assert report.mean_abs_log_ratio == pytest.approx(difference.abs().mean().item())
-    assert report.clip_fraction == pytest.approx(
-        ((difference.exp() - 1).abs() > config.clip_epsilon).float().mean().item()
-    )
-    assert report.mean_abs_log_ratio > 0.05
-    assert report.quarantined
-    assert any("mean-abs-log-ratio" in reason for reason in report.quarantine_reasons)
 
 
 def test_monte_carlo_terminal_reward_reaches_prior_actions_without_crossing_resets():

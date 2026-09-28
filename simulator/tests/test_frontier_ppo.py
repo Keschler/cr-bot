@@ -15,9 +15,13 @@ from simulator.rl.v4.frontier_ppo import (
     summarize_choice_regret,
 )
 
-CKPT = "outputs/v4/stage2_12k_v2_e12_s12.pt"
-TRAIN_PT = "outputs/v4/frontier/frontier_train.pt"
-SEALED_PT = "outputs/v4/frontier/frontier_sealed.pt"
+CKPT = "outputs/v4/bootstrap_seed0/actor.pt"
+TRAIN_PT = "outputs/v4/frontier_seed0/frontier_train.pt"
+SEALED_PT = "outputs/v4/frontier_seed0/frontier_sealed.pt"
+
+_FRESH_ARTIFACT_REASON = (
+    "fresh bootstrap/frontier artifacts missing; run the V4 pipeline first"
+)
 
 
 def test_pinned_opponent_decks_stable():
@@ -31,7 +35,7 @@ def test_pinned_opponent_decks_stable():
     }
 
 
-@pytest.mark.skipif(not os.path.exists(CKPT), reason="champion checkpoint missing")
+@pytest.mark.skipif(not os.path.exists(CKPT), reason=_FRESH_ARTIFACT_REASON)
 def test_full_match_record_deterministic_micro():
     import torch
 
@@ -50,7 +54,7 @@ def test_full_match_record_deterministic_micro():
 
 @pytest.mark.skipif(
     not (os.path.exists(CKPT) and os.path.exists(TRAIN_PT)),
-    reason="champion checkpoint or train set missing",
+    reason=_FRESH_ARTIFACT_REASON,
 )
 def test_collect_frontier_rollout_shapes_and_rotation():
     import torch
@@ -83,7 +87,7 @@ def test_collect_frontier_rollout_shapes_and_rotation():
 
 @pytest.mark.skipif(
     not (os.path.exists(CKPT) and os.path.exists(TRAIN_PT)),
-    reason="champion checkpoint or train set missing",
+    reason=_FRESH_ARTIFACT_REASON,
 )
 def test_truncation_reward_bonus_and_flag_off_parity():
     import torch
@@ -114,7 +118,7 @@ def test_truncation_reward_bonus_and_flag_off_parity():
     assert torch.equal(batch_on.trajectory.truncated, batch_off.trajectory.truncated)
 @pytest.mark.skipif(
     not (os.path.exists(CKPT) and os.path.exists(TRAIN_PT)),
-    reason="champion checkpoint or train set missing",
+    reason=_FRESH_ARTIFACT_REASON,
 )
 def test_step_tower_reward_telescopes_to_lump():
     """Per-step tower deltas sum to the truncation lump (same totals, new timing)."""
@@ -158,7 +162,7 @@ def test_step_tower_reward_telescopes_to_lump():
 
 @pytest.mark.skipif(
     not (os.path.exists(CKPT) and os.path.exists(SEALED_PT)),
-    reason="champion checkpoint or sealed set missing",
+    reason=_FRESH_ARTIFACT_REASON,
 )
 def test_sealed_choice_regret_self_consistent_micro():
     import torch
@@ -179,7 +183,7 @@ def test_sealed_choice_regret_self_consistent_micro():
 
 @pytest.mark.skipif(
     not (os.path.exists(CKPT) and os.path.exists(SEALED_PT)),
-    reason="champion checkpoint or sealed set missing",
+    reason=_FRESH_ARTIFACT_REASON,
 )
 def test_sealed_choice_reports_per_replica_values():
     import torch
@@ -327,7 +331,7 @@ def test_frontier_ppo_script_eval_wiring_flags():
 
 @pytest.mark.skipif(
     not (os.path.exists(CKPT) and os.path.exists(SEALED_PT)),
-    reason="champion checkpoint or sealed set missing",
+    reason=_FRESH_ARTIFACT_REASON,
 )
 def test_sealed_choice_reports_paired_stats():
     import torch

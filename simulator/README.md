@@ -15,26 +15,11 @@ while the actor, training loop, evaluation, and simulator throughput improve.
 This permits provisional experiments only; it does not satisfy the fidelity
 gates or authorize a `training_ready` claim.
 
-The older live-phone prototype actor is
-`outputs/simulator/training/prototype-public-primary-current/prototype.pt`.
-It uses the public hand/current-state card head as the primary card policy,
-fixing the verified stale recurrent cheap-cycle failure. It scores 4/6 on the
-exact matrix and 16/24 (66.7%) on a paired shuffled-hand matrix, versus 2/24
-(8.3%) for the former baseline. Evaluation is actor-controlled and public-only;
-all candidate quality and simulation-exploit gates pass. The checkpoint's
-`evaluation-exact6.json` and `evaluation-summary.json` contain the sealed
-evidence. This is simulator prototype evidence, not live-game strength or a
-V4 model-quality result. See the [V4 training guide](../docs/v4_training.md)
-for the current V4 checkpoint and dataset status.
-
-The retired prototype PPO experiment used 8 GPU lanes, a 512-decision rollout,
-recurrent minibatches of 8, and a `2e-6` resume learning rate. It completed 69,632 clean
-Phase-1 decisions without changing the retained held-out trajectory, at 336
-end-to-end decisions/s with bulky decision traces disabled. Full diagnostics
-measure about 128–145 decisions/s. Set
-`PYTORCH_ALLOC_CONF=expandable_segments:True` for multi-segment runs on the
-4 GB GPU; this fixes the observed allocator-fragmentation OOM. Exact evaluation
-remains memory-safe at batch 6.
+The active V4 policy is trained from scratch with the simulator bootstrap,
+then evaluated through frontier generation, search distillation, and controlled
+PPO experiments. A fresh checkout has no promoted model checkpoint or measured
+policy strength. See the [V4 training guide](../docs/v4_training.md) for the
+reproducible commands and evaluation boundary.
 
 ## Setup and tests
 
@@ -112,107 +97,33 @@ Offline runs remain `candidate_only`. Device preparation, calibration,
 capture, ingest, and the connected two-phone workflow are documented in
 [PHYSICAL_FIDELITY_LAB.md](PHYSICAL_FIDELITY_LAB.md).
 
-### Prototype actor on a phone
+### V4 actor on video or a phone
 
-`dist/prototype-live-linux-x86_64` is a standalone Linux x86-64 CPU
-executable. It contains the live controller, visual extractor, neural-network
-runtime and assets, default policy, ADB, and FFmpeg.
-
-```text
-phone → live stream → visual extractor → public state
-      → policy → card + placement → ADB → phone action
-```
-
-> [!NOTE]
-> The binary is approximately **800 MB** because it bundles the runtime and
-> all required dependencies. It uses **CPU inference only**, which is
-> substantially slower than GPU inference. An RTX 2050 / Intel i9-13900H
-> machine reached up to **4 FPS** during a live-action run. A GPU build is not
-> distributed because its additional dependencies would make the download
-> significantly larger.
-
-#### 1. Make it executable
+The visual frontend and the simulator use the same V4 actor checkpoint format.
+First produce a checkpoint with the [bootstrap](../docs/v4_training.md), then
+validate observation and action decoding on a recorded video:
 
 ```bash
-chmod +x dist/prototype-live-linux-x86_64
-```
-
-#### 2. Test on a video
-
-For this older live-phone prototype, use its released checkpoint,
-[`prototype.pt`](https://github.com/Keschler/cr-bot/releases/download/v0.5/prototype.pt):
-
-```bash
-./dist/prototype-live-linux-x86_64 \
-  --checkpoint /absolute/path/to/prototype.pt \
+outputs/venv/bin/python simulator/run_prototype_live.py \
+  --checkpoint outputs/v4/bootstrap_seed0/actor.pt \
   --video /absolute/path/to/gameplay.mp4 \
-  --max-frames 20
+  --max-frames 30
 ```
 
-`--checkpoint` is optional when the bundled `prototype-fast-current` policy is
-sufficient.
-
-The repository includes a [1080×2400 sample gameplay video](../assets/pictures/gameplay.mp4).
-It starts with roughly five seconds of loading and the versus animation, so
-this smoke test samples every tenth source frame to reach the in-game section
-without preprocessing the video:
+A phone dry run requires an exact ADB serial and records decisions without
+tapping the device:
 
 ```bash
-./dist/prototype-live-linux-x86_64 \
-  --checkpoint /absolute/path/to/prototype.pt \
-  --video ../assets/pictures/gameplay.mp4 \
-  --frame-stride 10 \
-  --max-frames 30 \
-  --jsonl-out /tmp/prototype-gameplay.jsonl
-```
-
-`--max-frames` counts processed frames; with `--frame-stride 10`, these 30
-frames cover approximately the first 10 seconds. Use `--frame-stride 1` to
-process every frame, allowing enough frames to pass the opening animation.
-
-#### 3. Dry run on a phone
-
-Enable USB debugging, connect and authorize the phone, then use its exact ADB
-serial:
-
-```bash
-./dist/prototype-live-linux-x86_64 \
-  --checkpoint /absolute/path/to/prototype.pt \
+outputs/venv/bin/python simulator/run_prototype_live.py \
+  --checkpoint outputs/v4/bootstrap_seed0/actor.pt \
   --serial YOUR_PHONE_SERIAL \
-  --max-frames 100 \
-  --jsonl-out /tmp/prototype-live.jsonl
+  --max-frames 100
 ```
 
-> [!NOTE]
-> This is a dry run by default: it observes the game and records decisions,
-> but never taps the phone. The default transport is a low-latency H.264
-> stream; use `--adb-transport screenshot` for diagnosis.
-
-#### 4. Enable live actions
-
-> [!WARNING]
-> Live actions are calibrated only for a **1080×2400 phone**. Do not enable
-> taps on another resolution or layout without a separately reviewed
-> calibration.
-
-Validate dry runs first. Real taps require a phone-specific calibration file
-and both confirmation flags:
-
-```bash
-./dist/prototype-live-linux-x86_64 \
-  --checkpoint /absolute/path/to/prototype.pt \
-  --serial YOUR_PHONE_SERIAL \
-  --calibration /absolute/path/to/phone-calibration.json \
-  --execute \
-  --confirm-live
-```
-
-Before every `PLAY`, the controller verifies the selected card and applies the
-calibrated card and arena taps. `WAIT` never taps the phone. Press `Ctrl-C` to
-stop the controller.
-
-See [RUN_PROTOTYPE_LIVE.md](RUN_PROTOTYPE_LIVE.md) for the complete option
-reference, troubleshooting, safety gates, and native-build instructions.
+Live taps require a reviewed phone calibration and the explicit execution
+flags. See [RUN_PROTOTYPE_LIVE.md](RUN_PROTOTYPE_LIVE.md) for the device and
+safety workflow. The earlier released prototype binary and checkpoint use a
+different model format and do not represent the V4 actor.
 
 ### Fidelity readiness
 
@@ -346,24 +257,18 @@ entity tokens.
 ## Neural policy and training
 
 Current search, distillation, PPO, and evaluation code lives in [rl/v4/](rl/v4/).
-Shared models, tensor utilities, opponent pools, and scenario environments live
+Shared tensor utilities and opponent pools live
 in [rl/foundation/](rl/foundation/). See the [V4 training guide](../docs/v4_training.md)
-for the roadmap runners, dataset splits, recurrent context, and evaluation gates.
+for the bootstrap, dataset splits, recurrent context, and evaluation gates.
 
-The earlier prototype/generalized training, league, rotation, shadow, diagnosis,
-and benchmark runners have been retired. The `recurrent-prototype` CLI command
-and `rl.legacy` package are removed. Use the V4 scripts under `scripts/` for
-training and evaluation.
+The earlier prototype and NumPy PPO learners, historical Stage-2 proof,
+synthetic/timing curricula, and experiment-specific runners have been retired.
+Use the V4 scripts under `scripts/` for training and evaluation; the simulator
+CLI contains simulation, fidelity, and audit commands.
 
-The retired foundation rollout collector, public counter teachers, and policy
-diagnostics have also been removed. V4 owns rollout, teacher, and diagnostic
-implementations under `rl/v4/`.
-
-The phone/video frontend still supports deployed public-actor checkpoints through
-[the inference reader](rl/foundation/inference_checkpoint.py). This reader keeps
-checkpoint architecture, engine, ruleset, and public-observation validation; it
-does not expose a training command. This compatibility path does not make old
-checkpoints V4 checkpoints or change the live observation contract.
+The phone/video frontend consumes V4 actor state dictionaries through a public
+observation adapter. Supply a compatible checkpoint explicitly; the old
+prototype checkpoint format is retired.
 
 Legality masks remove impossible actions only. A privileged critic may use full
 simulator state during training; the actor receives public observations. Teacher

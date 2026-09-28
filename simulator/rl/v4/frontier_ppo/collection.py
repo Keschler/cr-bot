@@ -124,10 +124,8 @@ def collect_frontier_rollout(
     import torch
 
     from ..model_v4 import V4ActionBatch
-    from ..v4_ppo import (
-        _stack_rollout,
-        decode_v4_sim_actions, configure_v4_runtime, post_step_value,
-    )
+    from ..v4_ppo import decode_v4_sim_actions, configure_v4_runtime
+    from ..v4_ppo.rollout_utils import _stack_rollout, post_step_value
     from simulator.public_state_estimator import PublicStateEstimator
 
     if episode_cap < 1 or type(episode_cap) is not int:
@@ -313,7 +311,7 @@ def collect_frontier_rollout(
                 }
             )
     first_hidden = policy.initial_hidden(n_lanes, device=torch.device("cpu"))
-    batch = _stack_rollout(steps, first_hidden, n_lanes, n_decisions, device)
+    batch = _stack_rollout(steps, first_hidden, device)
     total = n_lanes * n_decisions
     info = {
         "wait_fraction": wait_count / max(1, total),

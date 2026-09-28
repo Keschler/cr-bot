@@ -32,7 +32,7 @@ def require_torch() -> Any:
     if not TORCH_AVAILABLE:
         raise TorchUnavailableError(
             "The simulator RL model requires PyTorch. Install the optional "
-            "torch dependency before importing rl.foundation.model or "
+            "torch dependency before importing rl.v4.model_v4 or "
             "rl.foundation.trajectory."
         )
     return _torch

@@ -13,7 +13,7 @@ Sources are specified as ``ROOT[:SPLIT]``.  A source without a suffix means
     python scripts/run_v4_teacher_audit.py \
         --source outputs/v4/runpod_frontier_dataset_20260921:train \
         --source outputs/v4/runpod_frontier_dataset_20260921:sealed \
-        --checkpoint outputs/v4/stage2_12k_v2_e12_s12.pt \
+        --checkpoint outputs/v4/bootstrap_seed0/actor.pt \
         --out outputs/v4/teacher_audit_20260921 --workers 26
 
 The output is safe to resume.  Each state/horizon is written to its own file

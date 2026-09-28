@@ -10,7 +10,7 @@ Example smoke run::
     PYTHONPATH=.:src outputs/venv/bin/python -u scripts/run_v4_search_distillation.py \
       --dataset-root outputs/v4/runpod_frontier_dataset_20260921 \
       --validation-root /path/to/disjoint-confirmed-validation \
-      --checkpoint outputs/v4/stage2_12k_v2_e12_s12.pt \
+      --checkpoint outputs/v4/bootstrap_seed0/actor.pt \
       --out outputs/v4/search_distillation_smoke \
       --context 32 --methods hard-none,soft-kl --seeds 0 --epochs 1 \
       --batch-size 4 --max-retention 16
