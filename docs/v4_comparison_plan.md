@@ -301,3 +301,55 @@ the original path in regression checks. Continuation rollouts remain the
 dominant cost, so do not apply 7.29× to the whole search estimate. The prior
 5–10-day planning range remains conservative until full-match throughput is
 measured after this change.
+
+### Search-stage profile after replay reuse
+
+Fresh CPU measurements on 2026-09-28 used one Torch thread, the same 512-step
+aggressive-pressure source match, 16 selected candidates, four actual branches,
+eight discovery plus eight confirmation replicas, and a 128-decision horizon.
+These measurements precede the navigation optimization below.
+One source match took 5.70 seconds to collect; caching all 16 candidate states
+took 2.90 seconds. Two representative candidate evaluations took:
+
+| Candidate | Discovery | Confirmation | Total | Simulator stepping | Actor sampling | Observation construction |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Early (`t=90`) | 26.71 s | 26.23 s | 52.94 s | 31.48 s (59%) | 15.12 s (29%) | 3.96 s (7%) |
+| Late (`t=487`) | 61.17 s | 61.13 s | 122.30 s | 94.86 s (78%) | 16.52 s (14%) | 5.74 s (5%) |
+
+Both evaluations executed 64 branch rollouts and 8,192 continuation decisions.
+The later board cost more mainly because simulator stepping became slower. A
+single late branch profiled with `cProfile` spent 3.17 of 4.08 seconds inside
+the core simulator step; movement and route planning dominated it, including
+404 uncached route plans and roughly 170,000 walkability checks. Profiler
+overhead affects absolute times, so use the unprofiled component timings above
+for wall-clock estimates. These are small representative samples, not a
+measured distribution across all decks and matches. The new full candidate
+timings overlap earlier pre-cache measurements, so a total-search speedup has
+not yet been established; the reliably measured saving is prefix replay.
+
+### Simulator stepping optimization
+
+The route planner now computes fixed waypoint edges and goal visibility only
+when search reaches the corresponding waypoint. It avoids point-by-point river
+checks when all integer samples fit inside one bridge, and moving ground units
+reuse valid routes before rebuilding obstacle lists. Collision separation skips
+square roots for nonoverlapping troop pairs. Target acquisition calculates
+in-flight projectile reservations once per physics phase instead of repeating
+the same scan for every attacker.
+
+Against the original implementation, a cold-cache probe of four distinct
+128-decision branches at each candidate state measured:
+
+| Candidate | Original simulator stepping | Optimized stepping | Reduction |
+| --- | ---: | ---: | ---: |
+| Early (`t=90`) | 2.14 s | 1.37 s | 36% |
+| Late (`t=487`) | 6.09 s | 2.86 s | 53% |
+| Air-beatdown (`t=314`) | 2.64 s | 1.81 s | 31% |
+
+All 1,536 post-step simulator state hashes and branch results matched the
+original code. The route planner also matched 1,000 randomized route queries
+against the prior eager-graph implementation and 12,000 randomized visibility
+queries against the original segment checker. These probes do not establish a
+full-search speedup across every deck and board state. Repeating one late
+branch with warm caches reduced its stepping time from 0.705 to 0.541 seconds;
+warm-cache gains depend on how often the search revisits the same layout.
