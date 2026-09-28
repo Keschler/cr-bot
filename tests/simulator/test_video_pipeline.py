@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from simulator.video_pipeline import (
     PRE_EVOLUTION_CUTOFF,
     SOURCE_CHANNEL_URL,
@@ -341,7 +343,10 @@ def test_source_discovery_reuses_cutoff_aware_repository_resolver(monkeypatch) -
         calls.update(kwargs)
         return [_source()]
 
-    import cr_bot.mining.video_manifest as video_manifest
+    # ``discover_source_manifest`` resolves through
+    # ``cr_bot.mining.video_manifest``; that module is not part of this
+    # repository, so the seam cannot be exercised here.
+    video_manifest = pytest.importorskip("cr_bot.mining.video_manifest")
 
     monkeypatch.setattr(video_manifest, "resolve_video_manifest", fake_resolve)
     result = discover_source_manifest(max_videos=7, cookies_from_browser="firefox")

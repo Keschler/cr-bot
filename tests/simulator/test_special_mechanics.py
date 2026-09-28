@@ -442,17 +442,27 @@ def test_sparky_has_a_four_second_charge_and_recharges_without_an_extra_cooldown
     target = _entity(state, card_id="giant", owner=1, x=10_000, y=15_000, hp=3_617)
     sparky.target_uid = target.uid
 
+    # Sparky is the documented no-preload exception: the first charge runs on
+    # the first-attack clock for the full 4 s hit time, while later charges
+    # reuse the hit time as a per-shot wind-up.
     engine._advance_attacks(state)
-    assert sparky.windup_remaining_us == 4_000_000
-    assert sparky.attack_cooldown_us == 4_000_000
+    assert sparky.attack_load_remaining_us == 3_950_000
     assert sparky.attack_count == 0
 
-    for _ in range(80):
+    for _ in range(78):
         engine._advance_attacks(state)
+    assert sparky.attack_count == 0
+
+    engine._advance_attacks(state)
     assert sparky.attack_count == 1
-    assert sparky.windup_remaining_us == 0
-    assert sparky.attack_cooldown_us == 0
     assert len(state.projectiles) == 1
+
+    # The next tick arms the following charge for the full hit time with no
+    # extra cooldown layered on top of it.
+    engine._advance_attacks(state)
+    assert sparky.attack_cooldown_us == 4_000_000
+    assert sparky.windup_remaining_us == 4_000_000
+    assert sparky.attack_count == 1
 
     # A hard crowd-control effect interrupts the next charge rather than
     # allowing the pending shot to fire after the status expires.
@@ -487,6 +497,11 @@ def test_goblin_machine_runs_melee_and_blind_range_rocket_as_independent_weapons
     ]
     assert len(secondary) == 1
     assert secondary[0].get("target_uid") == rocket_target.uid
+    # The July 2024 change gives the primary channel a 0.5 s first hit, so the
+    # melee damage lands on the first-attack clock rather than immediately.
+    assert melee_target.hp == 3_968
+    for _ in range(ROSTER.card("goblin-machine").first_hit_delay_us // ROSTER.tick_us):
+        engine._advance_attacks(state)
     assert melee_target.hp == 3_736
     assert len(state.projectiles) == 1
     projectile = next(iter(state.projectiles.values()))
@@ -494,13 +509,14 @@ def test_goblin_machine_runs_melee_and_blind_range_rocket_as_independent_weapons
     assert projectile.speed_mtile_per_s == 350_000
 
     engine._advance_projectiles(state)
-    assert rocket_target.hp == 761
+    # Rocket body damage was reduced to 304 by the official October 2025 patch.
+    assert rocket_target.hp == 848
     engine._resolve_deaths(state)
     assert any(
         event.kind == "damage_applied"
         and event.get("source_card_id") == "goblin-machine"
         and event.get("target_uid") == rocket_target.uid
-        and event.get("damage") == 391
+        and event.get("damage") == 304
         for event in state.events
     )
     restored = battle_state_from_primitive(state.to_primitive())

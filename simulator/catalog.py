@@ -1814,6 +1814,8 @@ def _generated_card(card_id: str, metadata: Mapping[str, Any]) -> dict[str, Any]
         mechanics["revive"] = dict(REVIVE_DEFINITIONS[card_id])
     if card_id == "firecracker":
         mechanics.update({
+            # Pre-August-2025 default; the official scalar below reduces the
+            # recoil to one tile.
             "recoil_mtile": 1_500,
             # Firecracker's primary projectile bursts into five independent
             # swept shrapnels behind its acquired target.  ``pellets`` is

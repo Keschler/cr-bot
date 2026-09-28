@@ -92,10 +92,11 @@ def test_royal_ghost_reveals_on_attack_and_recloaks_after_delay() -> None:
 
     engine._resolve_attack(state, ghost)
     assert ghost.stealth_active is False
-    assert ghost.stealth_remaining_us == 1_500_000
+    # Official March 2026 invisibility delay after attacking.
+    assert ghost.stealth_remaining_us == 2_000_000
     assert any(event.kind == "stealth_broken" for event in state.events)
 
-    for _ in range(30):
+    for _ in range(2_000_000 // RULESET.tick_us + 1):
         engine._advance_statuses_and_lifetimes(state)
     assert ghost.stealth_active is True
     assert any(event.kind == "stealth_started" for event in state.events)
@@ -130,14 +131,16 @@ def test_miner_can_tunnel_to_any_ground_cell_but_is_hidden_until_emergence() -> 
 def test_mixed_swarm_cards_spawn_their_real_child_compositions() -> None:
     engine, state = _state()
     gang = _spawn_card(engine, state, "goblin-gang", 1, (9, 10))
-    assert [entity.card_id for entity in gang].count("goblin") == 3
+    # The knife Goblins use a dedicated child form so their April 2025 0.6 s
+    # first hit stays distinct from the generic 0.4 s Goblin.
+    assert [entity.card_id for entity in gang].count("goblin-gang-goblin") == 3
     assert [entity.card_id for entity in gang].count("spear-goblin") == 3
     assert all(entity.max_hp in {133, 202} for entity in gang)
 
     rascals = _spawn_card(engine, state, "rascals", 1, (9, 11))
     assert [entity.card_id for entity in rascals].count("rascal-boy") == 1
     assert [entity.card_id for entity in rascals].count("rascal-girl") == 2
-    assert next(entity for entity in rascals if entity.card_id == "rascal-boy").max_hp == 1_940
+    assert next(entity for entity in rascals if entity.card_id == "rascal-boy").max_hp == 1_832
     assert all(
         entity.max_hp == 202
         for entity in rascals
@@ -237,9 +240,11 @@ def test_mega_knight_jumps_and_lands_with_area_damage() -> None:
 
 
 def test_electro_and_ice_wizard_deployment_control_pulse() -> None:
+    # The Ice Wizard's authored deployment pulse is a 1.0 s spawn-damage slow
+    # using the current -30% values, not the historical 1.5 s hard freeze.
     for card_id, status_kind, duration in (
         ("electro-wizard", "stun", 500_000),
-        ("ice-wizard", "freeze", 1_500_000),
+        ("ice-wizard", "slow", 1_000_000),
     ):
         engine, state = _state()
         wizard = _spawn_card(engine, state, card_id, 0)[0]

@@ -289,6 +289,11 @@ def test_elixir_regeneration_is_exact_and_card_returns_after_four_more_plays() -
     for expected_card, cell in zip(expected_cards, placements, strict=True):
         player.elixir_milli = engine.ruleset.match.max_elixir_milli
         cost = engine.ruleset.card(expected_card).elixir_milli
+        # Slot 0 carries a 2 s next-card cooldown, so the same slot can only
+        # be replayed after that window.  Elixir is pinned immediately before
+        # the play so the regeneration loop above stays the only elixir source.
+        for _ in range(2_000_000 // engine.ruleset.tick_us):
+            engine.step(state)
         result = engine.apply_actions(state, (PlayCardAction(0, 0, cell),))[0]
         assert result.accepted and result.card_id == expected_card
         assert player.elixir_milli == engine.ruleset.match.max_elixir_milli - cost
@@ -1175,16 +1180,21 @@ def test_freeze_pauses_an_attack_already_in_windup() -> None:
         ),
     )
     musketeer = _unit(state, "musketeer", owner=0)
-    _advance_until(engine, state, lambda: musketeer.windup_remaining_us > 0, limit=40)
-    initial_windup = musketeer.windup_remaining_us
+    # The first attack is loaded while the troop walks, so the pending
+    # first-attack clock is ``attack_load_remaining_us``; ``windup_remaining_us``
+    # is reserved for recharge weapons such as Sparky.
+    _advance_until(engine, state, lambda: musketeer.attack_load_remaining_us > 0, limit=40)
+    initial_load = musketeer.attack_load_remaining_us
     musketeer.statuses.append(StatusState("freeze", 1_200_000, 0))
 
     for _ in range(10):
         engine.step(state)
 
     assert musketeer.attack_count == 0
-    assert musketeer.windup_remaining_us == initial_windup
-    _advance_until(engine, state, lambda: musketeer.attack_count == 1, limit=40)
+    # Hard crowd control holds the pending first-attack clock instead of
+    # consuming it.
+    assert musketeer.attack_load_remaining_us == initial_load
+    _advance_until(engine, state, lambda: musketeer.attack_count == 1, limit=60)
     assert musketeer.attack_count == 1
 
 

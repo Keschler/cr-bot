@@ -68,6 +68,21 @@ def test_roster_spawner_and_spell_spawn_components_emit_deterministic_events() -
         )
         state.players[1].elixir_milli = ruleset.match.max_elixir_milli
         cell = engine.legal_cells(state, 1, card_id)[0]
+        # Mirror and Elixir Collector are excluded from the *opening* hand, so
+        # slot 0 is not necessarily the card under test.  Swap the card into
+        # slot 0 (drawing it from the pile when necessary) so the play targets
+        # the intended card while hand + draw pile still equals the deck.
+        hand = list(state.players[1].hand)
+        draw = list(state.players[1].draw_pile)
+        if card_id in hand:
+            slot = hand.index(card_id)
+            hand[0], hand[slot] = hand[slot], hand[0]
+        else:
+            draw.remove(card_id)
+            draw.append(hand.pop(0))
+            hand.insert(0, card_id)
+        state.players[1].hand = hand
+        state.players[1].draw_pile = draw
         engine.step(state, (PlayCardAction(1, 0, cell),))
         # Collector generation is pinned to the current 13-second cycle.
         for _ in range(300):
@@ -113,8 +128,11 @@ def test_goblin_drill_is_a_passive_spawner_not_a_repeating_turret() -> None:
     assert drill.range_mtile is None
     assert drill.projectile is None
     assert drill.mechanics["tower_spawn_damage"] == 0
+    # The authored spawner materializes one Goblin body per wave.  Whether a
+    # wave is one body or a three-body group is still open; see the
+    # ``spawner.wave-cadence`` row in UNKNOWN_BEHAVIORS.md.
     assert drill.mechanics["spawn"] == {
-        "card_id": "goblins",
+        "card_id": "goblin",
         "interval_us": 3_000_000,
         "start_delay_us": 1_000_000,
         "max_alive": 6,
@@ -127,7 +145,9 @@ def test_furnace_is_a_moving_troop_that_spawns_fire_spirits() -> None:
     furnace = ruleset.card("furnace")
     assert furnace.kind == "troop"
     assert furnace.hitpoints == 727
-    assert furnace.damage == 135
+    # Level-11 damage 179 from the pinned structured snapshot; see the
+    # ``furnace.rework-mechanics`` row in UNKNOWN_BEHAVIORS.md.
+    assert furnace.damage == 179
     assert furnace.attack_interval_us == 1_700_000
     assert furnace.range_mtile == 5_500
     assert furnace.move_speed_mtile_per_s == 1_200

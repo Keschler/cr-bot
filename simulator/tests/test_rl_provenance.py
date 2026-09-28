@@ -2,7 +2,7 @@ from __future__ import annotations
 
 
 def test_code_revision_is_explicit_when_git_is_available() -> None:
-    from rl.foundation.provenance import code_revision, revision_changed
+    from simulator.rl.foundation.provenance import code_revision, revision_changed
 
     revision = code_revision()
 
