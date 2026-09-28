@@ -2390,7 +2390,7 @@
     "rage": {
       "attack_interval_s": null,
       "charge_damage": null,
-      "damage": 179,
+      "damage": null,
       "duration_s": 4.5,
       "elixir_cost": 2,
       "fatal_damage": null,

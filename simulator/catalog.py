@@ -954,11 +954,14 @@ PERSISTENT_EFFECT_DEFINITIONS: Mapping[str, Mapping[str, Any]] = {
         "pull_to_center_mtile": 1_000,
     },
     "rage": {
-        # Rage deals its one-shot area damage on impact and leaves a 4.5 s
-        # aura.  The one-element schedules intentionally make later pulses
-        # damage-free while still refreshing a friendly buff for units which
-        # enter the field after impact.  Units retain the buff for one second
-        # after leaving, matching the current post-2025 behavior.
+        # Rage is a pure buff.  It deals no body damage and no Crown Tower
+        # damage, and it leaves a 4.5 s aura that accelerates friendly units.
+        # The previous one-shot 179-damage pulse was spurious: its
+        # ``damage`` came from a Level-11 snapshot value that Giant Snowball
+        # and the Furnace also carried, and its 45-damage Crown Tower pulse
+        # was a duplicate of Giant Snowball's value.  The field still ticks so
+        # units which enter after the impact still receive the aura, and
+        # units retain the buff for one second after leaving.
         "duration_us": 4_500_000,
         "duration_anchor": "creation",
         "tick_interval_us": 100_000,
@@ -966,8 +969,6 @@ PERSISTENT_EFFECT_DEFINITIONS: Mapping[str, Mapping[str, Any]] = {
         "targets": ["air", "ground", "building", "crown_tower"],
         "damage_per_tick": 0,
         "crown_damage_per_tick": 0,
-        "damage_schedule": [179],
-        "crown_damage_schedule": [45],
         "friendly_status": {
             "kind": "rage",
             "duration_us": 1_000_000,
@@ -1024,9 +1025,17 @@ def _speed(value: object) -> int | None:
     # spellings.  Treat them as the same qualitative value; falling through
     # to ``medium`` would silently make every very-fast card (Bats, Goblins,
     # Spirits, ...) path at the wrong speed.
+    #
+    # The four in-game speed codes are 45 (Slow), 60 (Medium), 90 (Fast) and
+    # 120 (Very Fast); a code means "tiles travelled per minute", so the
+    # runtime stores code * 20 milli-tiles per second.  ``Slow`` was 700,
+    # which is code 35 and a speed no Clash Royale card has, and it
+    # contradicted both the other three rows and the one hand-curated Slow
+    # card (ice-golem at 900).  Every slow tank therefore walked 22% short of
+    # the real arena.
     normalized = str(value).strip().casefold().replace("-", " ")
     return {
-        "slow": 700,
+        "slow": 900,
         "medium": 1_200,
         "fast": 1_800,
         "very fast": 2_400,
@@ -1257,6 +1266,14 @@ def _apply_high_severity_card_fixes(
         _append_card_provenance(
             fixed, "first_hit_delay_us", HIGH_SEVERITY_CARD_FIX_SOURCE_ID
         )
+
+    if card_id == "rage":
+        # Rage is a pure buff.  The card metadata carries a 286-damage value
+        # that belongs to Giant Snowball, and the Level-11 snapshot carried 179
+        # for Rage, Giant Snowball, and the Furnace alike, so the generated
+        # scalar is not a Rage damage figure.  Rage deals no damage at all.
+        fixed["damage"] = None
+        _append_card_provenance(fixed, "damage", HIGH_SEVERITY_CARD_FIX_SOURCE_ID)
 
     if card_id == "goblin-barrel":
         fixed["damage"] = 0
@@ -2903,6 +2920,7 @@ def build_roster_ruleset_raw(base_raw: Mapping[str, Any] | None = None) -> dict[
             "goblin-barrel",
             "phoenix",
             "night-witch",
+            "rage",
             "royal-delivery",
             "tesla",
             "log",

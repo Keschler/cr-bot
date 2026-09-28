@@ -1446,7 +1446,7 @@
         "suicide_on_attack": false,
         "targetable_during_deploy": false
       },
-      "move_speed_mtile_per_s": 700,
+      "move_speed_mtile_per_s": 900,
       "name": "Bowler",
       "projectile": {
         "homing": false,
@@ -2547,7 +2547,7 @@
         "suicide_on_attack": false,
         "targetable_during_deploy": false
       },
-      "move_speed_mtile_per_s": 700,
+      "move_speed_mtile_per_s": 900,
       "name": "Electro Giant",
       "projectile": null,
       "provenance": {
@@ -2952,7 +2952,7 @@
         "suicide_on_attack": false,
         "targetable_during_deploy": true
       },
-      "move_speed_mtile_per_s": 700,
+      "move_speed_mtile_per_s": 900,
       "name": "Elixir Blob",
       "projectile": null,
       "provenance": {
@@ -3129,7 +3129,7 @@
         "suicide_on_attack": false,
         "targetable_during_deploy": false
       },
-      "move_speed_mtile_per_s": 700,
+      "move_speed_mtile_per_s": 900,
       "name": "Elixir Golem",
       "projectile": null,
       "provenance": {
@@ -3224,7 +3224,7 @@
         "suicide_on_attack": false,
         "targetable_during_deploy": true
       },
-      "move_speed_mtile_per_s": 700,
+      "move_speed_mtile_per_s": 900,
       "name": "Elixir Golemite",
       "projectile": null,
       "provenance": {
@@ -4093,7 +4093,7 @@
         "suicide_on_attack": false,
         "targetable_during_deploy": false
       },
-      "move_speed_mtile_per_s": 700,
+      "move_speed_mtile_per_s": 900,
       "name": "Giant",
       "projectile": null,
       "provenance": {
@@ -5712,7 +5712,7 @@
         "suicide_on_attack": false,
         "targetable_during_deploy": false
       },
-      "move_speed_mtile_per_s": 700,
+      "move_speed_mtile_per_s": 900,
       "name": "Golem",
       "projectile": null,
       "provenance": {
@@ -5803,7 +5803,7 @@
         "suicide_on_attack": false,
         "targetable_during_deploy": true
       },
-      "move_speed_mtile_per_s": 700,
+      "move_speed_mtile_per_s": 900,
       "name": "Golemite",
       "projectile": null,
       "provenance": {
@@ -7085,7 +7085,7 @@
         "suicide_on_attack": false,
         "targetable_during_deploy": false
       },
-      "move_speed_mtile_per_s": 700,
+      "move_speed_mtile_per_s": 900,
       "name": "Lava Hound",
       "projectile": {
         "homing": true,
@@ -8779,7 +8779,7 @@
         "suicide_on_attack": false,
         "targetable_during_deploy": false
       },
-      "move_speed_mtile_per_s": 700,
+      "move_speed_mtile_per_s": 900,
       "name": "Pekka",
       "projectile": null,
       "provenance": {
@@ -9304,8 +9304,8 @@
       "area_radius_mtile": 3000,
       "attack_interval_us": null,
       "collision_radius_mtile": null,
-      "crown_tower_damage": 45,
-      "damage": 179,
+      "crown_tower_damage": 0,
+      "damage": null,
       "deploy_time_us": 0,
       "elixir_milli": 2000,
       "first_hit_delay_us": null,
@@ -9324,13 +9324,7 @@
         "movement_layer": null,
         "persistent_effect": {
           "crown_damage_per_tick": 0,
-          "crown_damage_schedule": [
-            45
-          ],
           "damage_per_tick": 0,
-          "damage_schedule": [
-            179
-          ],
           "duration_anchor": "creation",
           "duration_us": 4500000,
           "friendly_status": {
@@ -9378,6 +9372,9 @@
         ],
         "crown_tower_damage": [
           "official-june-2026-spell-crown-damage"
+        ],
+        "damage": [
+          "local-high-severity-card-fixes-2026-08-29"
         ],
         "generated_mechanics": [
           "local-card-metadata-2026-08-14"
@@ -10179,7 +10176,7 @@
         "suicide_on_attack": false,
         "targetable_during_deploy": false
       },
-      "move_speed_mtile_per_s": 700,
+      "move_speed_mtile_per_s": 900,
       "name": "Royal Giant",
       "projectile": {
         "homing": true,
@@ -10918,7 +10915,7 @@
         "suicide_on_attack": false,
         "targetable_during_deploy": false
       },
-      "move_speed_mtile_per_s": 700,
+      "move_speed_mtile_per_s": 900,
       "name": "Sparky",
       "projectile": {
         "homing": true,
@@ -12483,7 +12480,7 @@
       ]
     }
   },
-  "content_hash": "sha256:61c2b1932e6cd5e314f5d342ee57ae01788a3f8c300561b350588039418f001d",
+  "content_hash": "sha256:d73ad2832d81721568b5d665993361d4fdac9d3b5b051e587ddac7843b59a54a",
   "interaction_set": [
     "archers",
     "arrows",
@@ -13004,7 +13001,7 @@
       "note": "Comparison source only; official patch overrides and video evidence outrank it.",
       "published_at": null,
       "retrieved_at": "2026-04-12",
-      "sha256": "aba447d29a990ca9a2968e1615373a87f979110df2c17b36a014a5554ff55f1e",
+      "sha256": "36b1380903be1531362edf077cae250e972c592df80762e004a79cca05cdf094",
       "url": "https://github.com/RoyaleAPI/cr-api-data"
     },
     "local-level11-hog-movement-2026-08-12": {
@@ -13271,7 +13268,7 @@
       "confidence_tier": "A",
       "kind": "official-patch-note",
       "lineage": "Supercell",
-      "note": "Explicit Level-11 blanket spell nerf: Fireball Crown Tower damage 207 to 172 and The Log 41 to 35.",
+      "note": "Explicit Level-11 blanket spell nerf: Fireball Crown Tower damage 207 to 172 and The Log 41 to 35. The retrieved note enumerates only those two rows; the remaining spell_crown_tower_damage rows carried by this table come from the same Level-11 snapshot and are not attributable to the June 2026 note. Rage is recorded as zero because Rage deals no damage at all: its earlier value of 45 duplicated Giant Snowball's.",
       "published_at": "2026-06-01",
       "retrieved_at": "2026-08-13",
       "sha256": "0f354d7d9796fc7f18dfb11dfdbb163fa1e9a5bc3a9376d085b00449527a86ac",
@@ -13533,7 +13530,7 @@
       "collision_radius_mtile": 1000,
       "crown_value": 1,
       "damage": 109,
-      "first_hit_delay_us": 0,
+      "first_hit_delay_us": 800000,
       "hitpoints": 3052,
       "name": "Princess Tower",
       "projectile": {
@@ -13544,6 +13541,10 @@
         "start_radius_mtile": 300
       },
       "provenance": {
+        "first_hit_delay_us": [
+          "royaleapi-tower-princess-2024",
+          "simulator-baseline-assumptions"
+        ],
         "level_11_stats": [
           "local-level11-hog-video-2026-08-12",
           "royaleapi-tower-princess-2024"
@@ -13570,7 +13571,7 @@
         {
           "field": "first_hit_delay_us",
           "impact": "critical",
-          "reason": "Zero load_time does not establish the full acquisition-to-impact timeline.",
+          "reason": "The Princess Tower has no load time, so its first attack speed equals its 0.8 s hit speed; the acquisition-to-impact timeline is still measured from a high frame rate rather than derived.",
           "resolution": "Measure isolated first and repeat attacks at high frame rate."
         }
       ]

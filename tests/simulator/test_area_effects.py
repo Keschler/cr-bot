@@ -109,7 +109,7 @@ def test_persistent_spawn_effect_is_temporal_and_capped() -> None:
     engine.validate_state(state)
 
 
-def test_rage_deals_one_impact_pulse_and_refreshes_a_friendly_aura() -> None:
+def test_rage_deals_no_damage_and_refreshes_a_friendly_aura() -> None:
     engine = BattleEngine(ROSTER)
     state = engine.new_battle((PLAYER_DECK, PLAYER_DECK), seed=12, shuffle_decks=False)
     _unit(state, state.next_uid, "hog-rider", 0, 9_000, 15_000, hp=500)
@@ -139,22 +139,23 @@ def test_rage_deals_one_impact_pulse_and_refreshes_a_friendly_aura() -> None:
         x_mtile=9_000,
         y_mtile=15_000,
         default_radius=3_000,
-        default_damage=179,
-        default_crown_damage=45,
+        default_damage=0,
+        default_crown_damage=0,
         default_status=None,
         default_knockback=0,
         raw_effect=ROSTER.card("rage").mechanics["persistent_effect"],
     )
     hog = state.entities[7]
     giant = state.entities[9]
-    assert giant.hp == 821
+    # Rage is a pure buff: an enemy inside the field takes no damage at all.
+    assert giant.hp == 1_000
     assert any(status.kind == "rage" for status in hog.statuses)
     assert engine._speed_multiplier(hog) == 1_300
 
-    # Later pulses refresh the friendly aura but do not re-apply Rage damage.
+    # Later pulses refresh the friendly aura and still deal no damage.
     for _ in range(10):
         engine._advance_area_effects(state)
-    assert giant.hp == 821
+    assert giant.hp == 1_000
     hog.x_mtile = 15_000
     for _ in range(20):
         engine._advance_area_effects(state)

@@ -615,6 +615,48 @@ def test_bridge_walkability_accounts_for_unit_radius() -> None:
     assert not point_is_walkable(RULESET.arena, end - radius + 1, y, radius)
 
 
+def test_diagonal_river_segment_checks_horizontal_span_too() -> None:
+    # At the first river sample the route has already left the left bridge.
+    # Sampling by |dy| alone skips that point because this segment is wider
+    # than it is tall.
+    start = (4_857, 15_214)
+    end = (14_025, 7_506)
+    radius = 105
+
+    assert not point_is_walkable(RULESET.arena, 5_104, 15_005, radius)
+    assert not segment_is_walkable(
+        RULESET.arena, start, end, agent_radius_mtile=radius
+    )
+
+
+def test_optimized_river_check_matches_pointwise_sampling() -> None:
+    from random import Random
+
+    from simulator.fixed import ceil_div
+    from simulator.navigation import NAVIGATION_SAMPLE_MTILE
+
+    rng = Random(20260928)
+    arena = RULESET.arena
+    for _ in range(2_000):
+        start = (rng.randrange(arena.width_mtile), rng.randrange(arena.height_mtile))
+        end = (rng.randrange(arena.width_mtile), rng.randrange(arena.height_mtile))
+        radius = rng.choice((0, 105, 250, 500))
+        dx, dy = end[0] - start[0], end[1] - start[1]
+        samples = max(1, ceil_div(max(abs(dx), abs(dy)), NAVIGATION_SAMPLE_MTILE))
+        pointwise = all(
+            point_is_walkable(
+                arena,
+                start[0] + dx * index // samples,
+                start[1] + dy * index // samples,
+                radius,
+            )
+            for index in range(samples + 1)
+        )
+        assert segment_is_walkable(
+            arena, start, end, agent_radius_mtile=radius
+        ) == pointwise
+
+
 def test_large_ground_units_can_route_through_the_three_tile_bridge() -> None:
     for card_id in ("ice-golem", "giant-skeleton"):
         radius = int(RULESET.card(card_id).collision_radius_mtile or 0)
@@ -749,18 +791,25 @@ def test_bandit_dash_misses_when_target_leaves_landing_range() -> None:
     assert target.max_hp - target.hp == int(RULESET.card("bandit").damage or 0)
 
 
-def test_lumberjack_death_rage_uses_rage_damage_on_its_first_pulse() -> None:
+def test_lumberjack_death_rage_is_a_friendly_aura_with_no_damage() -> None:
     engine, state = _state()
     lumberjack = _entity(state, "lumberjack", 0, 9_000, 15_000)
     target = _entity(state, "giant", 1, 10_000, 15_000)
+    ally = _entity(state, "musketeer", 0, 9_500, 15_000)
     lumberjack.hp = 0
 
     engine._resolve_deaths(state)
 
-    assert target.max_hp - target.hp == int(RULESET.card("rage").damage or 0)
+    # The death Rage follows the Rage card, which deals no damage at all.
+    assert RULESET.card("rage").damage is None
+    assert target.max_hp - target.hp == 0
     effect = next(
         effect
         for effect in state.effects.values()
         if effect.source_uid == lumberjack.uid
     )
-    assert effect.damage_schedule == (int(RULESET.card("rage").damage or 0),)
+    assert effect.damage_schedule == (0,)
+    assert effect.crown_damage_schedule == (0,)
+    # The aura still reaches the caster's own units, including Crown Towers.
+    assert any(status.kind == "rage" for status in ally.statuses)
+    assert "crown_tower" in tuple(effect.friendly_allowed_targets)
