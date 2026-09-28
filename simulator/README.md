@@ -42,10 +42,9 @@ The two audio/mining tests are excluded unless the change concerns those
 systems. Generated outputs under `outputs/` are local artifacts and should not
 be committed.
 
-An independent bug-fix agent may commit simulator changes at any time. Treat
-each new `HEAD` as a new experiment revision: pin and record the commit before
-training or evaluation, require the run to finish on that revision, and rerun
-preflight, parity, and exploit checks after any intervening commit. Never
+Treat each new `HEAD` as a new experiment revision: pin and record the commit
+before training or evaluation, require the run to finish on that revision, and
+rerun preflight, parity, and exploit checks after any intervening commit. Never
 promote an artifact produced across mixed revisions.
 
 ## Quick start
@@ -93,9 +92,9 @@ PYTHONPATH=.:..:../src ../outputs/venv/bin/python -m simulator lab run \
   --json-out outputs/simulator/fidelity_media/physical_lab/offline-summary.json
 ```
 
-Offline runs remain `candidate_only`. Device preparation, calibration,
-capture, ingest, and the connected two-phone workflow are documented in
-[PHYSICAL_FIDELITY_LAB.md](PHYSICAL_FIDELITY_LAB.md).
+Offline runs remain `candidate_only`. The current two-phone campaign and
+connected workflow are documented in
+[the physical-lab goal](physical_lab/PHYSICAL_FIDELITY_GOAL.md).
 
 ### V4 actor on video or a phone
 
@@ -104,8 +103,8 @@ First produce a checkpoint with the [bootstrap](../docs/v4_training.md), then
 validate observation and action decoding on a recorded video:
 
 ```bash
-outputs/venv/bin/python simulator/run_prototype_live.py \
-  --checkpoint outputs/v4/bootstrap_seed0/actor.pt \
+../outputs/venv/bin/python run_prototype_live.py \
+  --checkpoint ../outputs/v4/bootstrap_seed0/actor.pt \
   --video /absolute/path/to/gameplay.mp4 \
   --max-frames 30
 ```
@@ -114,8 +113,8 @@ A phone dry run requires an exact ADB serial and records decisions without
 tapping the device:
 
 ```bash
-outputs/venv/bin/python simulator/run_prototype_live.py \
-  --checkpoint outputs/v4/bootstrap_seed0/actor.pt \
+../outputs/venv/bin/python run_prototype_live.py \
+  --checkpoint ../outputs/v4/bootstrap_seed0/actor.pt \
   --serial YOUR_PHONE_SERIAL \
   --max-frames 100
 ```
@@ -346,9 +345,6 @@ Benchmark the simulator on the current host from the repository root:
 PYTHONPATH=.:src outputs/venv/bin/python -m simulator \
   --ruleset v1 benchmark-vector --envs 16 --steps 100 --backend reference
 ```
-
-Use the V4 roadmap reports for current policy throughput. Historical prototype
-throughput is not a prediction for the current search and training workload.
 
 ## Automation and current limits
 

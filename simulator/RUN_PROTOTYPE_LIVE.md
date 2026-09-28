@@ -1,9 +1,10 @@
-# V4 live binary
+# Build and run the V4 live binary
 
-The downloadable artifact is
-`dist/prototype-live-linux-x86_64`. It is a single Linux x86-64 executable
+Build a new `dist/prototype-live-linux-x86_64` after producing a V4 checkpoint.
+Earlier prototype release binaries use a different checkpoint format and do
+not contain the V4 actor. The new build is a single Linux x86-64 executable
 containing the Python runtime, the `cr_bot` visual extractor, KataCR inference
-code, CPU PyTorch, the explicitly selected V4 checkpoint, card assets, and the
+code, CPU PyTorch, the selected V4 checkpoint, card assets, and the
 `adb`/`ffmpeg` helpers used by the live stream.
 
 Recipients do not need Python, pip, a virtual environment, the repository, or
@@ -12,7 +13,8 @@ different operating system or CPU architecture needs its own native build.
 
 ## Quick start
 
-Download the one file, make it executable, and check it:
+After building, copy the executable to the target machine, make it executable,
+and check it:
 
 ```bash
 chmod +x prototype-live-linux-x86_64
@@ -53,6 +55,7 @@ transport remains available for diagnosis:
 
 ```bash
 ./prototype-live-linux-x86_64 \
+  --checkpoint /absolute/path/to/v4_actor.pt \
   --serial R7AIB700D744BX7 \
   --adb-transport screenshot
 ```
@@ -134,6 +137,6 @@ checkout at build time. Build separately on each target OS/architecture.
 ## Source launcher
 
 For development, the repository launcher `run_prototype_live.py` remains
-available and has the same arguments. It requires the checkout's Python
-dependencies and is not the distribution artifact; use the compiled binary
-above when the recipient must not install Python packages.
+available and has the same arguments. Pass `--checkpoint` or set
+`CR_BOT_V4_CHECKPOINT`; the source launcher has no bundled model. It requires
+the checkout's Python dependencies and is not the distribution artifact.

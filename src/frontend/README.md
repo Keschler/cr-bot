@@ -1,4 +1,4 @@
-# cr-bot frontend (static UI v1)
+# cr-bot frontend
 
 Vanilla HTML/CSS/JS dashboard for the Arena Replay Analyst. All data comes
 from the real backend API — there are no mocks or bundled fixtures.
@@ -21,7 +21,7 @@ and `src.frontend.*`):
   `live`. `session.py` is a shim re-exporting these for old imports.
 - `corrections/` — what-if label-correction engine (`_common`, `vocab`,
   `edits`, `observation`, `reevaluate`).
-- `scoring.py` — pure policy-scoring helpers, unchanged.
+- `scoring.py` — pure helpers for ranking V4 actor suggestions.
 - `imaging.py` — JPEG encode + frame-dimension helpers.
 
 No heavy imports (`torch`/`cv2`/`cr_bot`) at module top: they stay lazy
@@ -165,8 +165,9 @@ The resolved devices are reported in the session `summary.devices` and
 shown in the reasoning card, alongside the per-frame pipeline time
 (`diagnostics.timing_ms`, full breakdown on hover). The arena grid also
 shades the river band and bridge columns served by `GET /api/grid`.
-CPU-only installs cannot use `cuda` (see `outputs/venv-gpu` for a CUDA
-build); video throughput is ~3x higher on GPU.
+CPU-only installs cannot use `cuda`. Use the project environment at
+`outputs/venv/` with a CUDA-enabled PyTorch installation when GPU inference is
+needed; measure throughput on the target machine.
 
 Label correction is a stateless what-if: the DETECTED OBJECTS panel lets
 you relabel a detection's class/team, delete false positives, or draw a

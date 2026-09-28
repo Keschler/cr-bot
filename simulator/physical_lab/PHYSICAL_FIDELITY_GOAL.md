@@ -202,7 +202,7 @@ explicitly with `physical-lab extract-run --run ... --json-out ...`; stored
 cases can then be re-scored with:
 
 ```bash
-PYTHONPATH=.:src outputs/venv-cpu/bin/python -c \
+PYTHONPATH=.:src outputs/venv/bin/python -c \
   'from simulator.physical_lab.workflow.cli import main; raise SystemExit(main(["evaluate-stored", "--json-out", "outputs/simulator/fidelity_media/physical_lab/stored-evaluation.json"]))'
 ```
 

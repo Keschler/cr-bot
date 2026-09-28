@@ -61,7 +61,7 @@ The executable commands and package responsibilities are in
   held-out complete-match outcomes and action consequences against the frozen
   starting actor, with uncertainty and per-opponent results.
 - Simulator fidelity and a live deployment claim require separate physical
-  evidence through [the physical lab](PHYSICAL_FIDELITY_LAB.md). Provisional
+  evidence through [the physical lab](physical_lab/PHYSICAL_FIDELITY_GOAL.md). Provisional
   simulator experiments do not satisfy the `training_ready` gate.
 
 Generated datasets, videos, checkpoints, and reports under `outputs/` are local

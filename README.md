@@ -59,29 +59,24 @@ calibration JSON; relative paths resolve from the repository root.
 See the [frontend guide](src/frontend/README.md) for keyboard shortcuts,
 ROI editing, session behavior, and API endpoints.
 
-## Run the packaged binary
+## Build and run the V4 binary
 
-For a standalone command-line workflow, the Linux executable documented in
-[`simulator/RUN_PROTOTYPE_LIVE.md`](simulator/RUN_PROTOTYPE_LIVE.md) bundles the
-Python runtime, CPU PyTorch, visual extractor, KataCR inference, default
-V4 checkpoint selected at build time, card assets, ADB, and FFmpeg. It does not
-require a Python setup.
-
-Download `prototype-live-linux-x86_64` from the
-[latest GitHub release](https://github.com/keschler/cr-bot/releases/latest).
+For a standalone command-line workflow, first create a V4 checkpoint and
+[build a new native binary](simulator/RUN_PROTOTYPE_LIVE.md). The build bundles
+the selected checkpoint, Python runtime, CPU PyTorch, visual extractor, KataCR
+inference, card assets, ADB, and FFmpeg. The resulting executable does not
+require Python on the recipient's machine. Earlier prototype release binaries
+use a different checkpoint format and are not V4 builds.
 
 ```text
 phone → live stream → visual extractor → public state
       → policy → card + placement → ADB → phone action
 ```
 
-> [!NOTE]
-> The Linux x86-64 binary is approximately **800 MB** because it bundles the
-> Python runtime, visual-extractor assets, policy, ADB, FFmpeg, and their
-> dependencies. It uses **CPU inference only**, which is substantially slower
-> than GPU inference. An RTX 2050 / Intel i9-13900H machine reached up to
-> **4 FPS** during a live-action run. A GPU build is not distributed because
-> its additional dependencies would make the download significantly larger.
+The native build targets Linux x86-64 and uses CPU inference. Measure its size
+and live throughput after building from the current source and checkpoint.
+The commands below assume the built executable has been copied into the
+repository root.
 
 ### 1. Make it executable
 
@@ -120,9 +115,6 @@ source frame reaches the in-game section without preprocessing the video:
 `--max-frames` counts processed frames; with `--frame-stride 10`, these 30
 frames cover approximately the first 10 seconds. Use `--frame-stride 1` to
 process every frame, allowing enough frames to pass the opening animation.
-If you downloaded only the release binary, the same video is available as a
-[direct download](https://github.com/Keschler/cr-bot/raw/main/assets/pictures/gameplay.mp4).
-
 ### 3. Dry run on a phone
 
 Enable USB debugging, connect and authorize the phone, then use its exact ADB
@@ -187,6 +179,7 @@ The source launcher accepts the same options as the packaged executable:
 
 ```bash
 python simulator/run_prototype_live.py \
+  --checkpoint /absolute/path/to/v4_actor.pt \
   --video /absolute/path/to/gameplay.mp4 \
   --max-frames 20
 ```
@@ -205,9 +198,9 @@ PyInstaller build instructions.
 
 The policy is trained against a deterministic, versioned Level-11 simulator.
 The actor receives public observations only; privileged simulator state is
-restricted to the training critic. The RL stack includes recurrent factorized
-PPO, deterministic curriculum states, held-out evaluation, checkpoint
-regression diagnosis, and simulation-exploit auditing.
+restricted to the training critic. The V4 workflow includes a simulator
+bootstrap, frontier search, search distillation, recurrent PPO, and held-out
+evaluation.
 
 The V1 research ruleset contains 124 definitions and the complete 109-card
 eligible opponent roster, but remains explicitly `training_ready: false` until
@@ -238,7 +231,7 @@ cr-bot/
 │   │   └── support/                shared schemas and artifacts
 │   ├── rl/                         policy and training packages
 │   │   ├── v4/                     current search and V4 training
-│   │   └── foundation/             shared models, environments, and checkpoint reader
+│   │   └── foundation/             opponent pool and shared PPO objectives
 │   ├── engine/                     deterministic battle engine
 │   ├── rulesets/                   versioned card and mechanic definitions
 │   ├── rosters/                    supported opponent roster data
@@ -302,7 +295,7 @@ flowchart TD
     Vision["cr_bot vision · KataCR, classifiers, OCR"]
     Tracking["Frame pipeline + MatchSession · temporal trackers"]
     Bridge["Policy bridge · PolicyObservationV2"]
-    Actor["PrototypeActor · recurrent policy checkpoint"]
+    Actor["V4Actor · recurrent policy checkpoint"]
     Frames["FrontendSession · bounded frame history and suggestions"]
     Edits["Label corrections · rebuild observation and re-score"]
     Control["Execute + confirmation + calibration · verified ADB taps"]

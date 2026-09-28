@@ -59,17 +59,34 @@ final evaluation. Check `summary.json` before training: if either split has
 too few accepted frontiers, collect more matches rather than treating an
 empty or narrow pool as a performance result.
 
-Audit accepted frontier labels before using them for search distillation:
+Search distillation also requires a separate development-validation frontier
+run. Use different pool seeds so its match states are disjoint from the
+training run; its `frontier_train.pt` supplies validation records. Its sealed
+split is not a substitute for development validation:
+
+```bash
+PYTHONPATH=.:src outputs/venv/bin/python scripts/run_v4_frontier_generation.py \
+  --checkpoint outputs/v4/bootstrap_seed0/actor.pt \
+  --train-pool-seed 20261003 --sealed-pool-seed 20261004 \
+  --out outputs/v4/frontier_validation
+```
+
+Inspect the frontier verdicts with the teacher audit before using them for
+search distillation. This audit is diagnostic; the distillation runner reads
+the generator's verdict files, not the audit report. The audit's
+`--first-count` must not exceed the number of accepted training entries
+(the default is 300):
 
 ```bash
 PYTHONPATH=.:src outputs/venv/bin/python scripts/run_v4_teacher_audit.py \
   --source outputs/v4/frontier_seed0:train \
   --checkpoint outputs/v4/bootstrap_seed0/actor.pt \
+  --first-count 100 \
   --out outputs/v4/teacher_audit_seed0
 ```
 
-The active search-distillation runner consumes frontier match records and
-their audited verdicts:
+The active search-distillation runner consumes disjoint frontier match records
+and their generator verdicts:
 
 ```bash
 PYTHONPATH=.:src outputs/venv/bin/python scripts/run_v4_search_distillation.py \

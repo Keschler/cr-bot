@@ -44,12 +44,14 @@ PYTHONPATH=src python3 -m cr_bot.eval.action_eval \
 
 ## Built-In Eval Scenarios
 
-Use `run_action_eval_scenarios.py` when you want to rerun the two checked-in
-hog-cycle evaluation scenarios and get one combined summary.
+Use `run_action_eval_scenarios.py` to evaluate one or all five configured
+action-detection scenarios and get a combined summary.
 
-By default it only evaluates the existing capture outputs, prints each
-scenario's `action_eval` report, and then prints aggregate precision/recall/F1
-across all selected runs:
+By default it evaluates all five scenarios from existing capture outputs,
+prints each `action_eval` report, and then prints aggregate
+precision/recall/F1. The prediction files under `outputs/video/capture/` are
+local generated artifacts and must already exist; use `--run-detection` to
+regenerate them when the source videos and model assets are available:
 
 ```bash
 PYTHONPATH=src python3 -m cr_bot.eval.run_action_eval_scenarios
@@ -69,10 +71,13 @@ Built-in scenarios:
 
 - `2hog-cycle`: `dataset_generation/data/video_clips/10_fps_2.6HogCycle.mp4`
 - `3400ladder`: `dataset_generation/data/video_clips/downloaded_videos/HOG 2.6 LADDER 🏆+3400 [tvA-OvUUHmw].mp4`
+- `spell`: `dataset_generation/data/video_clips/spell/spell.mp4`
+- `spell2`: `dataset_generation/data/video_clips/spell/spell2.mp4`
+- `spell3`: `dataset_generation/data/video_clips/spell/spell3.mp4`
 
 Behavior:
 
-- `--scenario all|2hog-cycle|3400ladder` selects one run or both.
+- `--scenario all|2hog-cycle|3400ladder|spell|spell2|spell3` selects one run or all five.
 - `--mode full|summary` chooses detailed per-run output or only the final summary.
 - `--run-detection` regenerates the capture txt before evaluation. Without it,
   the script only evaluates the existing prediction files.
