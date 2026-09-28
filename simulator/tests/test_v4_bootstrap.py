@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from types import SimpleNamespace
 import numpy as np
 import pytest
 
@@ -35,7 +36,7 @@ def test_hand_encoder_is_fixed_and_rejects_unknown_cards() -> None:
 
 
 def test_bootstrap_collection_is_deterministic_and_public() -> None:
-    config = BootstrapConfig(n_states=2, seed=19, max_decisions=16)
+    config = BootstrapConfig(n_states=2, seed=19, max_decisions=128)
     first = generate_bootstrap_dataset(config)
     second = generate_bootstrap_dataset(config)
     assert [sample.provenance["state_hash"] for sample in first] == [
@@ -50,7 +51,7 @@ def test_bootstrap_collection_is_deterministic_and_public() -> None:
 
 
 def test_bootstrap_collection_balances_opponent_archetypes() -> None:
-    config = BootstrapConfig(n_states=12, seed=7, max_decisions=32)
+    config = BootstrapConfig(n_states=12, seed=7, max_decisions=128)
     samples = generate_bootstrap_dataset(config)
     assert Counter(sample.family for sample in samples) == {
         archetype: 2 for archetype in config.archetypes
@@ -58,7 +59,7 @@ def test_bootstrap_collection_balances_opponent_archetypes() -> None:
 
 
 def test_bootstrap_batch_preserves_masks_and_action_targets() -> None:
-    samples = generate_bootstrap_dataset(BootstrapConfig(n_states=3, seed=2, max_decisions=12))
+    samples = generate_bootstrap_dataset(BootstrapConfig(n_states=3, seed=2, max_decisions=128))
     batch = to_torch_batch(samples)
     assert tuple(batch["raster"].shape) == (3, 1, 21, 32, 18)
     assert tuple(batch["actions"].mode.shape) == (3, 1)
@@ -71,6 +72,92 @@ def test_bootstrap_batch_preserves_masks_and_action_targets() -> None:
             slot = int(batch["actions"].card_slot[index, 0])
             row, col = (int(value) for value in batch["actions"].placement[index, 0])
             assert bool(batch["masks"].placement[index, 0, slot, row, col])
+
+
+@pytest.fixture
+def fake_bootstrap_matches(monkeypatch):
+    """Fast full episodes with a long WAIT opening and late PLAY labels."""
+    import simulator.rl.v4.bootstrap as bootstrap
+
+    environments = []
+    modes = {"play_after": 90}
+
+    class FakeEnv:
+        def __init__(self, engine, **kwargs):
+            self.engine = engine
+            self.steps = 0
+            self.state = SimpleNamespace(terminal=False, phase="regulation", elapsed_us=0)
+            environments.append(self)
+
+        def reset_v2(self, **kwargs):
+            pass
+
+        def step_v2(self, actions):
+            self.steps += 1
+            self.state.elapsed_us = self.steps * 250_000
+            self.state.terminal = self.steps == 100
+
+    controller = SimpleNamespace(choose_action=lambda *args: None)
+    scenario = SimpleNamespace(
+        deck=SimpleNamespace(cards=("test-card",) * 8),
+        build_controller=lambda: controller,
+    )
+    monkeypatch.setattr(bootstrap, "load_fixed_ruleset", lambda: object())
+    monkeypatch.setattr(bootstrap, "BattleEngine", lambda *args, **kwargs: object())
+    monkeypatch.setattr(bootstrap, "SimulatorEnv", FakeEnv)
+    monkeypatch.setattr(bootstrap, "PublicStateEstimator", lambda: object())
+    monkeypatch.setattr(
+        bootstrap, "OpponentPool",
+        lambda *args, **kwargs: SimpleNamespace(sample=lambda *args, **kwargs: scenario),
+    )
+
+    def capture(env, estimator, *, archetype, episode, decision, seed):
+        sample = SimpleNamespace(
+            family=archetype,
+            target=SimpleNamespace(mode=int(decision >= modes["play_after"])),
+            provenance={
+                "episode": episode, "decision": decision, "seed": seed,
+                "elapsed_us": env.state.elapsed_us, "phase": env.state.phase,
+                "state_hash": f"{episode}:{decision}",
+            },
+        )
+        return sample, None
+
+    monkeypatch.setattr(bootstrap, "_capture_sample", capture)
+    return environments, modes
+
+
+def test_bootstrap_samples_late_plays_and_multiple_complete_matches(fake_bootstrap_matches):
+    environments, _ = fake_bootstrap_matches
+    config = BootstrapConfig(
+        n_states=20, seed=7, max_decisions=200,
+        archetypes=("first", "second"), samples_per_episode=4,
+    )
+    first = generate_bootstrap_dataset(config)
+    second = generate_bootstrap_dataset(config)
+    assert [sample.provenance for sample in first] == [sample.provenance for sample in second]
+    assert Counter((sample.family, sample.target.mode) for sample in first) == {
+        ("first", 0): 5, ("first", 1): 5,
+        ("second", 0): 5, ("second", 1): 5,
+    }
+    episodes = Counter(sample.provenance["episode"] for sample in first)
+    assert len(episodes) >= 6
+    assert max(episodes.values()) <= 4
+    assert all(env.steps == 100 for env in environments)
+    assert all(sample.provenance["decision"] >= 90 for sample in first if sample.target.mode)
+    assert any(sample.provenance["decision"] >= 50 for sample in first if not sample.target.mode)
+
+
+def test_bootstrap_impossible_play_quota_fails_with_bounded_work(fake_bootstrap_matches):
+    environments, modes = fake_bootstrap_matches
+    modes["play_after"] = 101
+    with pytest.raises(RuntimeError, match="(?i)(play|quota|target|label|collect)"):
+        generate_bootstrap_dataset(BootstrapConfig(
+            n_states=4, seed=0, max_decisions=200,
+            archetypes=("first",), samples_per_episode=4,
+        ))
+    assert 1 <= len(environments) <= 8
+    assert all(env.steps == 100 for env in environments)
 
 
 def test_rules_teacher_returns_a_legal_public_target() -> None:

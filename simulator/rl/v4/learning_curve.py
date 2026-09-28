@@ -28,7 +28,7 @@ import numpy as np
 
 
 LEARNING_CURVE_SCHEMA_VERSION = "v4-learning-curve-v1"
-LEARNING_CURVE_VERSION = "v4-controlled-learning-curve-2"
+LEARNING_CURVE_VERSION = "v4-controlled-learning-curve-5"
 # ``learning_curve.py`` now lives at ``simulator/rl/v4``.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _RUNNER_PATH = Path(__file__).resolve()
@@ -39,8 +39,15 @@ _RUNTIME_SOURCE_PATHS = (
     _REPO_ROOT / "simulator" / "rl" / "v4" / "v4_ppo",
     _REPO_ROOT / "simulator" / "rl" / "v4" / "frontier_ppo",
     _REPO_ROOT / "simulator" / "rl" / "v4" / "frontier.py",
+    _REPO_ROOT / "simulator" / "rl" / "v4" / "raw_ppo.py",
+    _REPO_ROOT / "simulator" / "rl" / "v4" / "policy_opponent.py",
+    _REPO_ROOT / "simulator" / "rl" / "v4" / "real_decks.py",
+    _REPO_ROOT / "simulator" / "rl" / "v4" / "real_decks.json",
     _REPO_ROOT / "simulator" / "rl" / "v4" / "frontier_eval.py",
+    _REPO_ROOT / "scripts" / "run_v4_raw_ppo_starts.py",
+    _REPO_ROOT / "scripts" / "run_v4_random_actor.py",
     _REPO_ROOT / "simulator" / "rl" / "v4" / "model_v4.py",
+    _REPO_ROOT / "simulator" / "rl" / "foundation" / "opponent_pool.py",
     _REPO_ROOT / "simulator" / "public_state_estimator.py",
     _REPO_ROOT / "simulator" / "observation_v3.py",
 )
@@ -316,6 +323,7 @@ class LearningCurveConfig:
 
     checkpoint: Path | None = None
     train_entries: Path | None = None
+    training_source: str = "frontier"
     sealed_entries: Path | None = None
     output_dir: Path = Path("outputs/v4/learning_curve")
     update_schedule: tuple[int, ...] = DEFAULT_UPDATE_SCHEDULE
@@ -391,6 +399,10 @@ class LearningCurveConfig:
             raise ValueError("device cannot be empty")
         if self.reward_mode not in ("terminal", "tower-delta", "truncation"):
             raise ValueError("reward_mode must be terminal, tower-delta, or truncation")
+        if self.training_source not in ("frontier", "match-start"):
+            raise ValueError("training_source must be frontier or match-start")
+        if self.training_source == "match-start" and self.bc_coef != 0.0:
+            raise ValueError("match-start reward-only PPO requires bc_coef=0")
         if self.model_config is not None and not isinstance(self.model_config, Mapping):
             raise ValueError("model_config must be a JSON object or None")
 
@@ -1015,6 +1027,7 @@ def _record_key(record: Mapping[str, Any], index: int) -> tuple[Any, ...]:
     if "archetype" in record or "seed" in record or "match_seed" in record:
         return (
             record.get("archetype"),
+            record.get("deck_id"),
             record.get("seed", record.get("match_seed")),
             record.get("opponent"),
         )
@@ -1128,9 +1141,9 @@ def _choice_summary(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
 
 
 def _default_opponents() -> tuple[dict[str, Any], ...]:
-    from .frontier_ppo import pinned_opponent_decks
+    from .frontier_ppo.environment import real_eval_opponent_decks
 
-    return tuple(dict(value) for value in pinned_opponent_decks())
+    return tuple(dict(value) for value in real_eval_opponent_decks())
 
 
 def _validate_input_paths(config: LearningCurveConfig) -> None:
@@ -1220,6 +1233,43 @@ def _load_runtime_entries(config: LearningCurveConfig) -> tuple[list[Any], list[
     train, train_meta = _load_entries(
         config.train_entries, label="train", required=not config.evaluation_only and not config.smoke
     )
+    if config.training_source == "match-start" and not config.evaluation_only and not config.smoke:
+        from .raw_ppo import RAW_PPO_STARTS_VERSION
+        from .real_decks import catalog_sha256, real_decks_for
+
+        if not train:
+            raise ValueError("match-start PPO requires at least one opening entry")
+        for index, entry in enumerate(train):
+            provenance = entry.get("provenance") if isinstance(entry, Mapping) else None
+            initial_state = entry.get("initial_state") if isinstance(entry, Mapping) else None
+            if (
+                not isinstance(provenance, Mapping)
+                or provenance.get("generator") != RAW_PPO_STARTS_VERSION
+                or not isinstance(initial_state, Mapping)
+                or initial_state.get("tick") != 0
+                or "verdict" in entry
+            ):
+                raise ValueError(
+                    f"train entry {index} is not a search-free raw PPO match opening"
+                )
+            if (
+                provenance.get("profile") == "real"
+                and entry.get("opponent", {}).get("kind") != "v4-checkpoint"
+            ):
+                deck_id = provenance.get("real_deck_id")
+                archetype = entry.get("opponent", {}).get("archetype")
+                valid = (
+                    provenance.get("real_deck_catalog_sha256") == catalog_sha256()
+                    and any(
+                        deck.deck_id == deck_id
+                        and tuple(entry.get("opponent_deck", ())) == deck.cards
+                        for deck in real_decks_for("train", archetype)
+                    )
+                )
+                if not valid:
+                    raise ValueError(
+                        f"train entry {index} does not match the pinned real-deck train catalog"
+                    )
     sealed, sealed_meta = _load_entries(
         config.sealed_entries, label="sealed", required=not config.smoke
     )
@@ -1445,7 +1495,8 @@ def run_learning_curve(
     # architecture must be supplied with a matching --model-config and is
     # usually clearer as its own output directory.
     comparisons: list[dict[str, Any]] = []
-    for index, path in enumerate(config.comparison_checkpoints):
+    comparison_eval_index = points[-1]["update"] if points else 0
+    for path in config.comparison_checkpoints:
         comparison_policy = _load_policy_for_config(
             hooks,
             config,
@@ -1454,13 +1505,25 @@ def run_learning_curve(
         )
         comparison_eval = evaluate(
             comparison_policy,
-            evaluation_index=1_000_000 + index,
+            evaluation_index=comparison_eval_index,
         )
+        versus_final = None
+        if points:
+            final_matches = points[-1]["evaluation"]["full_match"]["candidate"]["records"]
+            comparison_matches = comparison_eval["full_match"]["candidate"]["records"]
+            versus_final = {
+                "curve_update": comparison_eval_index,
+                "full_match": paired_match_statistics(
+                    final_matches, comparison_matches,
+                    max_decisions=config.eval_max_decisions,
+                ),
+            }
         comparisons.append({
             "artifact": artifact_fingerprint(path),
             "role": "independently trained comparison checkpoint",
             "evaluated_in_this_curve": True,
             "evaluation": _serialise(comparison_eval),
+            "versus_final_curve_point": _serialise(versus_final),
         })
 
     checkpoint_meta = None
@@ -1506,6 +1569,7 @@ def run_learning_curve(
         "config": config_record,
         "provenance": provenance,
         "protocol": {
+            "training_source": config.training_source,
             "opponent_specs": _serialise(opponents),
             "eval_seeds": list(eval_seeds),
             "baseline_choice_summary": _choice_summary(baseline_choice_rows),

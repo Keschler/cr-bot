@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import random
 from typing import Any, Sequence
 
 import numpy as np
@@ -46,7 +47,7 @@ except ImportError:  # pragma: no cover - top-level ``rl`` imports
     )
 
 
-BOOTSTRAP_VERSION = "v4-bootstrap-sim-v1"
+BOOTSTRAP_VERSION = "v4-bootstrap-sim-v2"
 BOOTSTRAP_ARCHETYPES: tuple[str, ...] = (
     "deterministic-cycle",
     "aggressive-pressure",
@@ -68,7 +69,8 @@ class BootstrapConfig:
 
     n_states: int
     seed: int = 0
-    max_decisions: int = 256
+    max_decisions: int = 1440
+    samples_per_episode: int = 64
     archetypes: tuple[str, ...] = BOOTSTRAP_ARCHETYPES
 
     def __post_init__(self) -> None:
@@ -78,6 +80,8 @@ class BootstrapConfig:
             raise ValueError("seed must be a non-negative integer")
         if type(self.max_decisions) is not int or self.max_decisions <= 0:
             raise ValueError("max_decisions must be a positive integer")
+        if type(self.samples_per_episode) is not int or self.samples_per_episode < 2:
+            raise ValueError("samples_per_episode must be an integer of at least two")
         if not self.archetypes or any(
             not isinstance(value, str) or not value for value in self.archetypes
         ):
@@ -200,6 +204,8 @@ def _capture_sample(
             "seed": seed,
             "episode": episode,
             "decision": decision,
+            "elapsed_us": state.elapsed_us,
+            "phase": state.phase,
             "archetype": archetype,
             "state_hash": state.state_hash(),
         },
@@ -208,7 +214,11 @@ def _capture_sample(
 
 
 def generate_bootstrap_dataset(config: BootstrapConfig) -> list[BootstrapSample]:
-    """Collect ``config.n_states`` deterministic public simulator states."""
+    """Sample whole trajectories with balanced modes and bounded match influence.
+
+    Independent per-mode reservoirs sample uniformly over each trajectory.
+    Quotas control retained records, never how early a trajectory stops.
+    """
 
     ruleset = load_fixed_ruleset()
     pool = OpponentPool(ruleset, seed=config.seed)
@@ -218,13 +228,37 @@ def generate_bootstrap_dataset(config: BootstrapConfig) -> list[BootstrapSample]
         + (index < config.n_states % len(config.archetypes))
         for index, archetype in enumerate(config.archetypes)
     }
-    family_counts = dict.fromkeys(config.archetypes, 0)
+    mode_cap = config.samples_per_episode // 2
+    remaining = {
+        archetype: {
+            1: (quota + (index % 2 == 0)) // 2,
+            0: quota - (quota + (index % 2 == 0)) // 2,
+        }
+        for index, (archetype, quota) in enumerate(quotas.items())
+    }
+    episode_limits = {
+        archetype: max(8, 8 * ((max(targets.values()) + mode_cap - 1) // mode_cap))
+        for archetype, targets in remaining.items()
+    }
+    family_episodes = dict.fromkeys(config.archetypes, 0)
     episode = 0
     while len(samples) < config.n_states:
         archetype = config.archetypes[episode % len(config.archetypes)]
-        if family_counts[archetype] >= quotas[archetype]:
+        if not any(remaining[archetype].values()):
             episode += 1
             continue
+        if family_episodes[archetype] >= episode_limits[archetype]:
+            raise RuntimeError(
+                f"bootstrap could not fill PLAY/WAIT quotas for {archetype} "
+                f"after {family_episodes[archetype]} episodes: "
+                f"missing {remaining[archetype]}; increase max_decisions or "
+                "inspect teacher action coverage"
+            )
+        family_episodes[archetype] += 1
+        capacities = {mode: min(mode_cap, count) for mode, count in remaining[archetype].items()}
+        reservoirs: dict[int, list[BootstrapSample]] = {0: [], 1: []}
+        seen = {0: 0, 1: 0}
+        rng = random.Random(_stable_seed(config.seed, "bootstrap-reservoir", episode))
         episode_seed = _stable_seed(config.seed, "bootstrap-episode", episode)
         scenario = pool.sample(
             episode,
@@ -261,17 +295,23 @@ def generate_bootstrap_dataset(config: BootstrapConfig) -> list[BootstrapSample]
                 )
             else:
                 sample, learner_action = captured
-                samples.append(sample)
-                family_counts[archetype] += 1
-                if family_counts[archetype] >= quotas[archetype]:
-                    break
+                mode = sample.target.mode
+                seen[mode] += 1
+                bucket = reservoirs[mode]
+                if len(bucket) < capacities[mode]:
+                    bucket.append(sample)
+                elif capacities[mode]:
+                    replacement = rng.randrange(seen[mode])
+                    if replacement < capacities[mode]:
+                        bucket[replacement] = sample
             opponent_action = opponent.choose_action(env.engine, env.state, 1)
             env.step_v2((learner_action, opponent_action))
+        retained = reservoirs[0] + reservoirs[1]
+        retained.sort(key=lambda sample: int(sample.provenance["decision"]))
+        samples.extend(retained)
+        for mode in (0, 1):
+            remaining[archetype][mode] -= len(reservoirs[mode])
         episode += 1
-        if episode > config.n_states * 32:
-            raise RuntimeError(
-                "bootstrap collection could not find enough labelable public states"
-            )
     return samples
 
 

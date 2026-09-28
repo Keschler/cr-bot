@@ -63,6 +63,21 @@ def test_curve_artifacts_and_overwrite_protection(tmp_path):
         run_learning_curve(config, hooks=smoke_hooks())
 
 
+def test_comparison_checkpoint_is_paired_directly_with_final_curve_point(tmp_path):
+    comparison = tmp_path / 'comparison.pt'
+    comparison.write_bytes(b'smoke comparison fixture')
+    config = LearningCurveConfig(
+        output_dir=tmp_path / 'paired', smoke=True,
+        update_schedule=(0, 1), eval_seeds=(1, 2, 3),
+        comparison_checkpoints=(comparison,),
+    )
+    report = run_learning_curve(config, hooks=smoke_hooks())
+    direct = report['comparison_checkpoints'][0]['versus_final_curve_point']
+    assert direct['curve_update'] == 1
+    assert direct['full_match']['n_paired'] == 3
+    assert direct['full_match']['n_censored'] == 0
+
+
 def test_quarantined_update_does_not_create_candidate_checkpoint(tmp_path):
     hooks = smoke_hooks()
     hooks.update = lambda **kwargs: {'quarantined': True, 'quarantine_reasons': ['test']}

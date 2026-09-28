@@ -29,6 +29,7 @@ def parser():
         help="copy matching source match JSONs and rescore them; source verdicts are never reused",
     )
     p.add_argument("--train-matches-per-archetype", type=positive, default=20)
+    p.add_argument("--train-profile", choices=("pinned", "mixed", "real"), default="pinned")
     p.add_argument("--sealed-matches-per-archetype", type=positive, default=8)
     p.add_argument("--train-pool-seed", type=int, default=20261001)
     p.add_argument("--sealed-pool-seed", type=int, default=20261002)
@@ -69,9 +70,13 @@ def _load_compatible_verdict(path):
 def run_match(task):
     import torch
     from simulator.rl.v4.frontier import PoolMatchConfig, FilterConfig, collect_pool_match, select_candidates, frontier_model_config
-    from simulator.rl.v4.frontier_eval import EvalConfig, evaluate_candidate, materialize_entries
+    from simulator.rl.v4.frontier_eval import (
+        EvalConfig, evaluate_candidate, materialize_entries, replay_candidate_states,
+    )
     from simulator.rl.v4.v4_ppo import load_frozen_anchor
     config, split,seed,arch,index=task
+    real_profile = config["train_profile"] == "real"
+    allow_variants = not real_profile and (split == "sealed" or config["train_profile"] == "mixed")
     ROOT = Path(config["out"])
     policy=load_frozen_anchor(config["checkpoint"],config=frontier_model_config(),device='cpu')
     key=f'{arch}#{index}'
@@ -91,7 +96,9 @@ def run_match(task):
                 "archetype": arch,
                 "match_index": index,
                 "pool_seed": seed,
-                "allow_variants": split == 'sealed',
+                "allow_variants": allow_variants,
+                "deck_profile": "real" if real_profile else "scripted",
+                "real_deck_split": ("eval" if split == "sealed" else "train") if real_profile else None,
             }
             mismatches = {
                 key: (source_config.get(key), value)
@@ -107,9 +114,17 @@ def run_match(task):
                     f"cannot reuse {source_path}: max_decisions differs from requested generation"
                 )
         else:
-            match=collect_pool_match(policy=policy,cfg=PoolMatchConfig(archetype=arch,match_index=index,pool_seed=seed,max_decisions=config["max_decisions"],allow_variants=split=='sealed'),device='cpu')
+            match=collect_pool_match(policy=policy,cfg=PoolMatchConfig(
+                archetype=arch,match_index=index,pool_seed=seed,
+                max_decisions=config["max_decisions"],allow_variants=allow_variants,
+                deck_profile="real" if real_profile else "scripted",
+                real_deck_split="eval" if split == "sealed" else "train",
+            ),device='cpu')
         save(path,match)
     candidates=select_candidates(match,FilterConfig(max_per_match=config["candidates_per_match"]))
+    prepared_states = replay_candidate_states(
+        match, [int(candidate["t"]) for candidate in candidates], policy, device='cpu'
+    )
     verdicts=[]
     for candidate in candidates:
         path=ROOT/f'{split}_{arch}_{index}_t{candidate["t"]}_verdict.json'
@@ -130,6 +145,7 @@ def run_match(task):
                     replica_indices=tuple(range(discovery_replicas)),
                 ),
                 device='cpu',
+                prepared_state=prepared_states[int(candidate["t"])],
             )
             # Freeze the discovery winner, then evaluate that same complete
             # action identity on replicas whose seeds were never used for
@@ -148,6 +164,7 @@ def run_match(task):
                     frozen_action=verdict.get("best_action"),
                 ),
                 device='cpu',
+                prepared_state=prepared_states[int(candidate["t"])],
             )
             from simulator.rl.v4.frontier_eval import merge_independent_confirmation
             verdict=merge_independent_confirmation(
@@ -157,13 +174,18 @@ def run_match(task):
             )
             save(path,verdict)
         verdicts.append(verdict)
-    entries=materialize_entries({key:match},[v for v in verdicts if v['class']=='frontier'],policy,split=split,device='cpu')
+    entries=materialize_entries(
+        {key:match},[v for v in verdicts if v['class']=='frontier'],policy,
+        split=split,device='cpu',prepared_states=prepared_states,
+    )
     torch.save(entries,ROOT/f'{split}_{arch}_{index}_entries.pt')
     return split,key,verdicts,len(entries)
 
 def main():
     import torch
     from simulator.rl.v4.frontier import DISCOVERY_ARCHETYPES
+    from simulator.rl.v4.raw_ppo import MIXED_ARCHETYPES
+    from simulator.rl.v4.real_decks import REAL_DECK_ARCHETYPES, catalog_sha256
     from simulator.rl.v4.frontier_eval import build_distribution
     from simulator.rl.v4.learning_curve import validate_entry_split
     from simulator.rl.v4.frontier import FilterConfig
@@ -190,6 +212,12 @@ def main():
         source_hash = json.loads(source_manifest.read_text()).get("checkpoint_sha256")
         if source_hash != checkpoint_sha256:
             raise ValueError("reused matches were generated by a different checkpoint")
+        if args.train_profile == "real":
+            source_catalog_hash = json.loads(source_manifest.read_text()).get(
+                "config", {}
+            ).get("real_deck_catalog_sha256")
+            if source_catalog_hash != catalog_sha256():
+                raise ValueError("reused matches use a different real-deck catalog")
     ROOT = args.out.expanduser().resolve()
     config = {
         key: str(value) if isinstance(value, Path) else value
@@ -202,6 +230,9 @@ def main():
         str(args.reuse_matches_from) if args.reuse_matches_from is not None else None
     )
     config.update(checkpoint=str(args.checkpoint), out=str(ROOT))
+    config["real_deck_catalog_sha256"] = (
+        catalog_sha256() if args.train_profile == "real" else None
+    )
     sources = [Path(__file__).resolve()]
     sources += [p for p in (REPO / "simulator").rglob("*")
                 if p.is_file() and p.suffix in (".py", ".json", ".yaml", ".yml")
@@ -221,10 +252,20 @@ def main():
             raise ValueError("output is non-empty without a matching manifest; choose a new --out")
         ROOT.mkdir(parents=True, exist_ok=True)
         save(manifest_path, manifest)
+    train_archetypes = (
+        REAL_DECK_ARCHETYPES if args.train_profile == "real"
+        else DISCOVERY_ARCHETYPES if args.train_profile == "pinned"
+        else MIXED_ARCHETYPES
+    )
+    sealed_archetypes = (
+        REAL_DECK_ARCHETYPES if args.train_profile == "real" else DISCOVERY_ARCHETYPES
+    )
     tasks=[(config, split,seed,arch,index)
-           for split,seed,count in [("train",args.train_pool_seed,args.train_matches_per_archetype),
-                                    ("sealed",args.sealed_pool_seed,args.sealed_matches_per_archetype)]
-           for arch in DISCOVERY_ARCHETYPES for index in range(count)]
+           for split,seed,count,archetypes in [
+               ("train",args.train_pool_seed,args.train_matches_per_archetype,train_archetypes),
+               ("sealed",args.sealed_pool_seed,args.sealed_matches_per_archetype,sealed_archetypes),
+           ]
+           for arch in archetypes for index in range(count)]
     by_split={'train':[],'sealed':[]}
     with ProcessPoolExecutor(max_workers=args.workers,mp_context=multiprocessing.get_context('spawn')) as pool:
         futures=[pool.submit(run_match,t) for t in tasks]

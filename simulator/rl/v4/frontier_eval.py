@@ -206,6 +206,54 @@ def replay_to_state(
     return env, hidden
 
 
+def replay_candidate_states(
+    match: dict[str, Any], decisions_to_keep: Sequence[int], policy: Any,
+    device: Any = None,
+) -> dict[int, tuple[Any, Any]]:
+    """Replay one source match once and retain exact candidate states.
+
+    Observation and recurrent memory are advanced in the same order as
+    ``replay_to_state``. Forking the selected state lets later branch rollouts
+    and confirmation share the prefix without sharing mutable state.
+    """
+
+    import torch
+
+    decisions = match["decisions"]
+    requested = set(decisions_to_keep)
+    if not requested:
+        return {}
+    if min(requested) < 0 or max(requested) >= len(decisions):
+        raise ValueError("candidate decision outside recorded prefix")
+    env = _fresh_env(match)
+    from simulator.public_state_estimator import PublicStateEstimator
+    from .v4_ppo import configure_v4_runtime
+    configure_v4_runtime(policy)
+    policy.eval()
+    estimator = PublicStateEstimator()
+    hidden = policy.initial_hidden(1, device=device)
+    retained: dict[int, tuple[Any, Any]] = {}
+    with torch.no_grad():
+        for i in range(max(requested) + 1):
+            rec = decisions[i]
+            inputs, _, _, _ = _observe_inputs(env, device, estimator)
+            _, _, hidden = policy.forward_step(_step_inputs(inputs, device), hidden=hidden)
+            if i in requested:
+                actual = env.state.state_hash()
+                if actual != rec["state_hash"]:
+                    raise ValueError(
+                        f"prefix replay diverged at t={i}: "
+                        f"{actual[:12]} != {rec['state_hash'][:12]}"
+                    )
+                retained[i] = (env.fork(), hidden.detach().clone())
+            if i < max(requested):
+                env.step_v2((
+                    _recorded_action(rec["learner"], 0),
+                    _recorded_action(rec["opponent"], 1),
+                ))
+    return retained
+
+
 def plan_branches(
     env: Any,
     policy: Any,
@@ -311,7 +359,12 @@ def plan_branches(
     return branches
 
 
-def make_opponent(spec: dict[str, Any], seed: int) -> Any:
+def make_opponent(spec: dict[str, Any], seed: int, *, env: Any = None) -> Any:
+    if spec.get("kind") == "v4-checkpoint":
+        if env is None:
+            raise ValueError("V4 checkpoint opponent requires a bound environment")
+        from .policy_opponent import V4PolicyOpponent
+        return V4PolicyOpponent(env, str(spec["checkpoint"]), str(spec["sha256"]))
     try:
         from ..foundation.opponent_pool import make_opponent_controller
     except ImportError:  # pragma: no cover
@@ -360,7 +413,7 @@ def run_branch(
     except Exception:
         pass
     before = tower_fracs(child.state)
-    opponent = make_opponent(opponent_spec, replica_seed)
+    opponent = make_opponent(opponent_spec, replica_seed, env=child)
     from .v4_ppo import configure_v4_runtime
     configure_v4_runtime(policy)
     policy.eval()
@@ -707,11 +760,15 @@ def evaluate_candidate(
     eval_cfg: EvalConfig,
     classify_cfg: ClassifyConfig | None = None,
     device: Any = None,
+    prepared_state: tuple[Any, Any] | None = None,
 ) -> dict[str, Any]:
     """Full replica evaluation of one candidate state (JSON-serializable)."""
 
     classify_cfg = classify_cfg or ClassifyConfig()
-    env, hidden = replay_to_state(match, int(candidate["t"]), policy, device)
+    env, hidden = (
+        replay_to_state(match, int(candidate["t"]), policy, device)
+        if prepared_state is None else prepared_state
+    )
     if eval_cfg.opponent_specs:
         opp_specs = eval_cfg.opponent_specs
     else:
@@ -1211,13 +1268,17 @@ def materialize_entries(
     *,
     split: str,
     device: Any = None,
+    prepared_states: dict[int, tuple[Any, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Replay frontier verdicts once more; capture resettable PPO entries."""
 
     entries: list[dict[str, Any]] = []
     for v in verdicts:
         match = matches[v["match_id"]]
-        env, hidden = replay_to_state(match, int(v["t"]), policy, device)
+        env, hidden = (
+            replay_to_state(match, int(v["t"]), policy, device)
+            if prepared_states is None else prepared_states[int(v["t"])]
+        )
         import torch
 
         entries.append(
@@ -1291,7 +1352,7 @@ def reset_to_frontier_entry(env: Any, entry: dict[str, Any]) -> dict[str, Any]:
     load_frontier_state(env, entry["initial_state"])
     hidden = torch.as_tensor(entry["hidden0"]).contiguous()
     opp = entry["opponent"]
-    opponent = make_opponent(opp, int(opp.get("controller_seed", 0)))
+    opponent = make_opponent(opp, int(opp.get("controller_seed", 0)), env=env)
     return {"hidden": hidden, "opponent": opponent, "entry_id": entry["entry_id"]}
 
 

@@ -1,0 +1,646 @@
+{
+  "version": 1,
+  "captured_on": "2026-09-28",
+  "decks": [
+    {
+      "id": "hog-26-zap",
+      "split": "train",
+      "archetype": "aggressive-pressure",
+      "cards": [
+        "cannon",
+        "fireball",
+        "hog-rider",
+        "ice-golem",
+        "ice-spirit",
+        "musketeer",
+        "skeletons",
+        "zap"
+      ],
+      "source_url": "https://royaleapi.com/decks/stats/cannon%2Cfireball%2Chog-rider%2Cice-golem%2Cice-spirit%2Cmusketeer%2Cskeletons%2Czap?lang=en"
+    },
+    {
+      "id": "pekka-bridge-fireball",
+      "split": "train",
+      "archetype": "aggressive-pressure",
+      "cards": [
+        "bandit",
+        "battle-ram",
+        "electro-wizard",
+        "fireball",
+        "magic-archer",
+        "pekka",
+        "royal-ghost",
+        "zap"
+      ],
+      "source_url": "https://royaleapi.com/decks/stats/bandit%2Cbattle-ram%2Celectro-wizard%2Cfireball%2Cmagic-archer%2Cpekka%2Croyal-ghost%2Czap?lang=en"
+    },
+    {
+      "id": "xbow-30",
+      "split": "train",
+      "archetype": "defensive-cycle",
+      "cards": [
+        "tesla",
+        "knight",
+        "archers",
+        "electro-spirit",
+        "x-bow",
+        "fireball",
+        "skeletons",
+        "log"
+      ],
+      "source_url": "https://royaleapi.com/decks/stats/tesla%2Cknight%2Carchers%2Celectro-spirit%2Cx-bow%2Cfireball%2Cskeletons%2Cthe-log"
+    },
+    {
+      "id": "golem-megam-lightning",
+      "split": "train",
+      "archetype": "beatdown",
+      "cards": [
+        "baby-dragon",
+        "golem",
+        "lightning",
+        "lumberjack",
+        "mega-minion",
+        "night-witch",
+        "tornado",
+        "zap"
+      ],
+      "source_url": "https://royaleapi.com/decks/stats/baby-dragon%2Cgolem%2Clightning%2Clumberjack%2Cmega-minion%2Cnight-witch%2Ctornado%2Czap?lang=en"
+    },
+    {
+      "id": "giant-witch-arena3",
+      "split": "train",
+      "archetype": "beatdown",
+      "cards": [
+        "giant",
+        "knight",
+        "musketeer",
+        "witch",
+        "minions",
+        "cannon",
+        "fireball",
+        "arrows"
+      ],
+      "source_url": "https://www.deckshop.pro/deck/detail/giant%2Cknight%2Cmusketeer%2Cwitch%2Cminions%2Ccannon%2Cfireball%2Carrows"
+    },
+    {
+      "id": "lavaloon-lightning",
+      "split": "train",
+      "archetype": "air-beatdown",
+      "cards": [
+        "arrows",
+        "balloon",
+        "guards",
+        "lava-hound",
+        "lightning",
+        "mega-minion",
+        "minions",
+        "tombstone"
+      ],
+      "source_url": "https://royaleapi.com/decks/stats/arrows%2Cballoon%2Cguards%2Clava-hound%2Clightning%2Cmega-minion%2Cminions%2Ctombstone?lang=en"
+    },
+    {
+      "id": "lavaloon-skdragons",
+      "split": "train",
+      "archetype": "air-beatdown",
+      "cards": [
+        "lava-hound",
+        "balloon",
+        "skeleton-dragons",
+        "mega-minion",
+        "guards",
+        "tombstone",
+        "lightning",
+        "zap"
+      ],
+      "source_url": "https://www.deckshop.pro/deck/detail/lava-hound%2Cballoon%2Cskeleton-dragons%2Cmega-minion%2Cguards%2Ctombstone%2Clightning%2Czap"
+    },
+    {
+      "id": "valk-log-bait",
+      "split": "train",
+      "archetype": "siege-bait",
+      "cards": [
+        "goblin-barrel",
+        "goblin-gang",
+        "ice-spirit",
+        "inferno-tower",
+        "princess",
+        "rocket",
+        "log",
+        "valkyrie"
+      ],
+      "source_url": "https://royaleapi.com/decks/stats/goblin-barrel%2Cgoblin-gang%2Cice-spirit%2Cinferno-tower%2Cprincess%2Crocket%2Cthe-log%2Cvalkyrie?lang=en"
+    },
+    {
+      "id": "hog-icegolem-snowball",
+      "split": "eval",
+      "archetype": "aggressive-pressure",
+      "cards": [
+        "hog-rider",
+        "ice-golem",
+        "musketeer",
+        "goblins",
+        "fire-spirit",
+        "cannon",
+        "fireball",
+        "giant-snowball"
+      ],
+      "source_url": "https://www.deckshop.pro/deck/detail/hog-rider%2Cice-golem%2Cmusketeer%2Cgoblins%2Cfire-spirit%2Ccannon%2Cfireball%2Cgiant-snowball"
+    },
+    {
+      "id": "xbow-megam",
+      "split": "eval",
+      "archetype": "defensive-cycle",
+      "cards": [
+        "ice-spirit",
+        "archers",
+        "knight",
+        "tesla",
+        "mega-minion",
+        "fireball",
+        "x-bow",
+        "log"
+      ],
+      "source_url": "https://www.deckshop.pro/deck/detail/ice-spirit%2Carchers%2Cknight%2Ctesla%2Cmega-minion%2Cfireball%2Cx-bow%2Cthe-log"
+    },
+    {
+      "id": "golem-nw-pump",
+      "split": "eval",
+      "archetype": "beatdown",
+      "cards": [
+        "golem",
+        "night-witch",
+        "baby-dragon",
+        "mega-minion",
+        "goblins",
+        "elixir-collector",
+        "lightning",
+        "arrows"
+      ],
+      "source_url": "https://www.deckshop.pro/deck/detail/golem%2Cnight-witch%2Cbaby-dragon%2Cmega-minion%2Cgoblins%2Celixir-collector%2Clightning%2Carrows"
+    },
+    {
+      "id": "lavaloon-fm-poison",
+      "split": "eval",
+      "archetype": "air-beatdown",
+      "cards": [
+        "balloon",
+        "lava-hound",
+        "mega-minion",
+        "flying-machine",
+        "guards",
+        "tombstone",
+        "poison",
+        "arrows"
+      ],
+      "source_url": "https://www.deckshop.pro/deck/detail/balloon%2Clava-hound%2Cmega-minion%2Cflying-machine%2Cguards%2Ctombstone%2Cpoison%2Carrows"
+    },
+    {
+      "id": "rascals-princess-bait",
+      "split": "eval",
+      "archetype": "siege-bait",
+      "cards": [
+        "goblin-barrel",
+        "rascals",
+        "princess",
+        "dart-goblin",
+        "goblin-gang",
+        "cannon",
+        "log",
+        "giant-snowball"
+      ],
+      "source_url": "https://www.deckshop.pro/deck/detail/goblin-barrel%2Crascals%2Cprincess%2Cdart-goblin%2Cgoblin-gang%2Ccannon%2Cthe-log%2Cgiant-snowball"
+    },
+    {
+      "id": "hog-knight-log",
+      "split": "train",
+      "archetype": "aggressive-pressure",
+      "cards": [
+        "hog-rider",
+        "knight",
+        "musketeer",
+        "skeletons",
+        "ice-spirit",
+        "cannon",
+        "fireball",
+        "log"
+      ],
+      "source_url": "https://www.deckshop.pro/deck/detail/hog-rider%2Cknight%2Cmusketeer%2Cskeletons%2Cice-spirit%2Ccannon%2Cfireball%2Cthe-log"
+    },
+    {
+      "id": "hog-mini-pekka",
+      "split": "train",
+      "archetype": "aggressive-pressure",
+      "cards": [
+        "hog-rider",
+        "mini-pekka",
+        "musketeer",
+        "skeletons",
+        "electro-spirit",
+        "cannon",
+        "fireball",
+        "zap"
+      ],
+      "source_url": "https://www.deckshop.pro/deck/detail/hog-rider%2Cmini-pekka%2Cmusketeer%2Cskeletons%2Celectro-spirit%2Ccannon%2Cfireball%2Czap"
+    },
+    {
+      "id": "pekka-poison-snowball",
+      "split": "train",
+      "archetype": "aggressive-pressure",
+      "cards": [
+        "battle-ram",
+        "pekka",
+        "bandit",
+        "electro-wizard",
+        "baby-dragon",
+        "poison",
+        "barbarian-barrel",
+        "giant-snowball"
+      ],
+      "source_url": "https://www.deckshop.pro/deck/detail/battle-ram%2Cpekka%2Cbandit%2Celectro-wizard%2Cbaby-dragon%2Cpoison%2Cbarbarian-barrel%2Cgiant-snowball"
+    },
+    {
+      "id": "pekka-ghost-minions",
+      "split": "train",
+      "archetype": "aggressive-pressure",
+      "cards": [
+        "battle-ram",
+        "pekka",
+        "royal-ghost",
+        "bandit",
+        "electro-wizard",
+        "minions",
+        "poison",
+        "zap"
+      ],
+      "source_url": "https://www.deckshop.pro/deck/detail/battle-ram%2Cpekka%2Croyal-ghost%2Cbandit%2Celectro-wizard%2Cminions%2Cpoison%2Czap"
+    },
+    {
+      "id": "hog-knight-zap",
+      "split": "eval",
+      "archetype": "aggressive-pressure",
+      "cards": [
+        "hog-rider",
+        "knight",
+        "musketeer",
+        "skeletons",
+        "ice-spirit",
+        "cannon",
+        "fireball",
+        "zap"
+      ],
+      "source_url": "https://www.deckshop.pro/deck/detail/hog-rider%2Cknight%2Cmusketeer%2Cskeletons%2Cice-spirit%2Ccannon%2Cfireball%2Czap"
+    },
+    {
+      "id": "xbow-pump-snowball",
+      "split": "train",
+      "archetype": "defensive-cycle",
+      "cards": [
+        "x-bow",
+        "knight",
+        "musketeer",
+        "skeletons",
+        "tesla",
+        "elixir-collector",
+        "log",
+        "giant-snowball"
+      ],
+      "source_url": "https://www.deckshop.pro/deck/detail/x-bow%2Cknight%2Cmusketeer%2Cskeletons%2Ctesla%2Celixir-collector%2Cthe-log%2Cgiant-snowball"
+    },
+    {
+      "id": "xbow-icewiz-rocket",
+      "split": "train",
+      "archetype": "defensive-cycle",
+      "cards": [
+        "x-bow",
+        "knight",
+        "ice-wizard",
+        "mega-minion",
+        "skeletons",
+        "rocket",
+        "tornado",
+        "log"
+      ],
+      "source_url": "https://www.deckshop.pro/deck/detail/x-bow%2Cknight%2Cice-wizard%2Cmega-minion%2Cskeletons%2Crocket%2Ctornado%2Cthe-log"
+    },
+    {
+      "id": "xbow-valk-cycle",
+      "split": "train",
+      "archetype": "defensive-cycle",
+      "cards": [
+        "x-bow",
+        "valkyrie",
+        "archers",
+        "skeletons",
+        "ice-spirit",
+        "tesla",
+        "fireball",
+        "log"
+      ],
+      "source_url": "https://www.deckshop.pro/deck/detail/x-bow%2Cvalkyrie%2Carchers%2Cskeletons%2Cice-spirit%2Ctesla%2Cfireball%2Cthe-log"
+    },
+    {
+      "id": "xbow-rascals-cycle",
+      "split": "train",
+      "archetype": "defensive-cycle",
+      "cards": [
+        "x-bow",
+        "rascals",
+        "mega-minion",
+        "skeletons",
+        "ice-spirit",
+        "tesla",
+        "fireball",
+        "log"
+      ],
+      "source_url": "https://www.deckshop.pro/deck/detail/x-bow%2Crascals%2Cmega-minion%2Cskeletons%2Cice-spirit%2Ctesla%2Cfireball%2Cthe-log"
+    },
+    {
+      "id": "xbow-icegolem-rocket",
+      "split": "train",
+      "archetype": "defensive-cycle",
+      "cards": [
+        "x-bow",
+        "ice-golem",
+        "ice-wizard",
+        "mega-minion",
+        "skeletons",
+        "rocket",
+        "tornado",
+        "log"
+      ],
+      "source_url": "https://www.deckshop.pro/deck/detail/x-bow%2Cice-golem%2Cice-wizard%2Cmega-minion%2Cskeletons%2Crocket%2Ctornado%2Cthe-log"
+    },
+    {
+      "id": "xbow-hunter",
+      "split": "eval",
+      "archetype": "defensive-cycle",
+      "cards": [
+        "x-bow",
+        "ice-golem",
+        "hunter",
+        "mega-minion",
+        "guards",
+        "ice-spirit",
+        "fireball",
+        "log"
+      ],
+      "source_url": "https://www.deckshop.pro/deck/detail/x-bow%2Cice-golem%2Chunter%2Cmega-minion%2Cguards%2Cice-spirit%2Cfireball%2Cthe-log"
+    },
+    {
+      "id": "golem-clone",
+      "split": "train",
+      "archetype": "beatdown",
+      "cards": [
+        "golem",
+        "lumberjack",
+        "night-witch",
+        "baby-dragon",
+        "bats",
+        "skeleton-army",
+        "clone",
+        "arrows"
+      ],
+      "source_url": "https://www.deckshop.pro/deck/detail/golem%2Clumberjack%2Cnight-witch%2Cbaby-dragon%2Cbats%2Cskeleton-army%2Cclone%2Carrows"
+    },
+    {
+      "id": "golem-dark-prince",
+      "split": "train",
+      "archetype": "beatdown",
+      "cards": [
+        "golem",
+        "dark-prince",
+        "mother-witch",
+        "night-witch",
+        "baby-dragon",
+        "lightning",
+        "tornado",
+        "barbarian-barrel"
+      ],
+      "source_url": "https://www.deckshop.pro/deck/detail/golem%2Cdark-prince%2Cmother-witch%2Cnight-witch%2Cbaby-dragon%2Clightning%2Ctornado%2Cbarbarian-barrel"
+    },
+    {
+      "id": "golem-standard-barbbarrel",
+      "split": "train",
+      "archetype": "beatdown",
+      "cards": [
+        "golem",
+        "lumberjack",
+        "night-witch",
+        "baby-dragon",
+        "mega-minion",
+        "lightning",
+        "tornado",
+        "barbarian-barrel"
+      ],
+      "source_url": "https://www.deckshop.pro/deck/detail/golem%2Clumberjack%2Cnight-witch%2Cbaby-dragon%2Cmega-minion%2Clightning%2Ctornado%2Cbarbarian-barrel"
+    },
+    {
+      "id": "golem-cannon-cart",
+      "split": "train",
+      "archetype": "beatdown",
+      "cards": [
+        "golem",
+        "cannon-cart",
+        "night-witch",
+        "baby-dragon",
+        "mega-minion",
+        "poison",
+        "tornado",
+        "log"
+      ],
+      "source_url": "https://www.deckshop.pro/deck/detail/golem%2Ccannon-cart%2Cnight-witch%2Cbaby-dragon%2Cmega-minion%2Cpoison%2Ctornado%2Cthe-log"
+    },
+    {
+      "id": "golem-guards-fireball",
+      "split": "eval",
+      "archetype": "beatdown",
+      "cards": [
+        "golem",
+        "night-witch",
+        "inferno-dragon",
+        "baby-dragon",
+        "guards",
+        "fireball",
+        "tornado",
+        "zap"
+      ],
+      "source_url": "https://www.deckshop.pro/deck/detail/golem%2Cnight-witch%2Cinferno-dragon%2Cbaby-dragon%2Cguards%2Cfireball%2Ctornado%2Czap"
+    },
+    {
+      "id": "lavaloon-skdragons-fireball",
+      "split": "train",
+      "archetype": "air-beatdown",
+      "cards": [
+        "balloon",
+        "lava-hound",
+        "skeleton-dragons",
+        "mega-minion",
+        "guards",
+        "tombstone",
+        "fireball",
+        "zap"
+      ],
+      "source_url": "https://www.deckshop.pro/deck/detail/balloon%2Clava-hound%2Cskeleton-dragons%2Cmega-minion%2Cguards%2Ctombstone%2Cfireball%2Czap"
+    },
+    {
+      "id": "lavaloon-barbarians",
+      "split": "train",
+      "archetype": "air-beatdown",
+      "cards": [
+        "balloon",
+        "lava-hound",
+        "barbarians",
+        "mega-minion",
+        "minions",
+        "tombstone",
+        "fireball",
+        "zap"
+      ],
+      "source_url": "https://www.deckshop.pro/deck/detail/balloon%2Clava-hound%2Cbarbarians%2Cmega-minion%2Cminions%2Ctombstone%2Cfireball%2Czap"
+    },
+    {
+      "id": "lavaloon-inferno-dragon",
+      "split": "train",
+      "archetype": "air-beatdown",
+      "cards": [
+        "balloon",
+        "lava-hound",
+        "inferno-dragon",
+        "minions",
+        "guards",
+        "tombstone",
+        "fireball",
+        "zap"
+      ],
+      "source_url": "https://www.deckshop.pro/deck/detail/balloon%2Clava-hound%2Cinferno-dragon%2Cminions%2Cguards%2Ctombstone%2Cfireball%2Czap"
+    },
+    {
+      "id": "lavaloon-valk-flying-machine",
+      "split": "train",
+      "archetype": "air-beatdown",
+      "cards": [
+        "balloon",
+        "lava-hound",
+        "valkyrie",
+        "mega-minion",
+        "flying-machine",
+        "tombstone",
+        "fireball",
+        "zap"
+      ],
+      "source_url": "https://www.deckshop.pro/deck/detail/balloon%2Clava-hound%2Cvalkyrie%2Cmega-minion%2Cflying-machine%2Ctombstone%2Cfireball%2Czap"
+    },
+    {
+      "id": "lavaloon-miner-horde",
+      "split": "eval",
+      "archetype": "air-beatdown",
+      "cards": [
+        "balloon",
+        "miner",
+        "lava-hound",
+        "minion-horde",
+        "minions",
+        "skeleton-army",
+        "goblin-gang",
+        "arrows"
+      ],
+      "source_url": "https://www.deckshop.pro/deck/detail/balloon%2Cminer%2Clava-hound%2Cminion-horde%2Cminions%2Cskeleton-army%2Cgoblin-gang%2Carrows"
+    },
+    {
+      "id": "bait-knight-dart",
+      "split": "train",
+      "archetype": "siege-bait",
+      "cards": [
+        "goblin-barrel",
+        "knight",
+        "princess",
+        "dart-goblin",
+        "goblin-gang",
+        "ice-spirit",
+        "inferno-tower",
+        "log"
+      ],
+      "source_url": "https://www.deckshop.pro/deck/detail/goblin-barrel%2Cknight%2Cprincess%2Cdart-goblin%2Cgoblin-gang%2Cice-spirit%2Cinferno-tower%2Cthe-log"
+    },
+    {
+      "id": "bait-prince-rascals",
+      "split": "train",
+      "archetype": "siege-bait",
+      "cards": [
+        "goblin-barrel",
+        "prince",
+        "rascals",
+        "knight",
+        "princess",
+        "dart-goblin",
+        "goblin-gang",
+        "log"
+      ],
+      "source_url": "https://www.deckshop.pro/deck/detail/goblin-barrel%2Cprince%2Crascals%2Cknight%2Cprincess%2Cdart-goblin%2Cgoblin-gang%2Cthe-log"
+    },
+    {
+      "id": "bait-valk-guards",
+      "split": "train",
+      "archetype": "siege-bait",
+      "cards": [
+        "goblin-barrel",
+        "valkyrie",
+        "princess",
+        "guards",
+        "electro-spirit",
+        "inferno-tower",
+        "rocket",
+        "log"
+      ],
+      "source_url": "https://www.deckshop.pro/deck/detail/goblin-barrel%2Cvalkyrie%2Cprincess%2Cguards%2Celectro-spirit%2Cinferno-tower%2Crocket%2Cthe-log"
+    },
+    {
+      "id": "bait-skeleton-barrel",
+      "split": "train",
+      "archetype": "siege-bait",
+      "cards": [
+        "goblin-barrel",
+        "skeleton-barrel",
+        "valkyrie",
+        "princess",
+        "dart-goblin",
+        "skeleton-army",
+        "inferno-tower",
+        "log"
+      ],
+      "source_url": "https://www.deckshop.pro/deck/detail/goblin-barrel%2Cskeleton-barrel%2Cvalkyrie%2Cprincess%2Cdart-goblin%2Cskeleton-army%2Cinferno-tower%2Cthe-log"
+    },
+    {
+      "id": "bait-knight-tesla",
+      "split": "train",
+      "archetype": "siege-bait",
+      "cards": [
+        "goblin-barrel",
+        "knight",
+        "princess",
+        "dart-goblin",
+        "skeletons",
+        "ice-spirit",
+        "tesla",
+        "arrows"
+      ],
+      "source_url": "https://www.deckshop.pro/deck/detail/goblin-barrel%2Cknight%2Cprincess%2Cdart-goblin%2Cskeletons%2Cice-spirit%2Ctesla%2Carrows"
+    },
+    {
+      "id": "bait-prince-guards",
+      "split": "eval",
+      "archetype": "siege-bait",
+      "cards": [
+        "goblin-barrel",
+        "prince",
+        "rascals",
+        "princess",
+        "dart-goblin",
+        "guards",
+        "rocket",
+        "log"
+      ],
+      "source_url": "https://www.deckshop.pro/deck/detail/goblin-barrel%2Cprince%2Crascals%2Cprincess%2Cdart-goblin%2Cguards%2Crocket%2Cthe-log"
+    }
+  ]
+}

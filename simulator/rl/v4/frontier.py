@@ -1,6 +1,6 @@
-"""Data-driven frontier discovery for V4 (Stage 3): pool collection + cheap filter.
+"""Data-driven frontier discovery for V4: pool collection + cheap filter.
 
-Pass 1 runs the frozen simx12 champion through long/full trajectories against
+Pass 1 runs a supplied V4 actor through long/full trajectories against
 the diverse heuristic opponent pool and records compact per-decision records.
 Pass 2 cheap-filters naturally visited states that may be frontier mistakes
 using policy/rule disagreement, uncertainty, close action probabilities,
@@ -15,7 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Sequence
 
 import numpy as np
@@ -28,8 +28,8 @@ except ImportError:  # pragma: no cover - top-level ``rl`` imports
 
 FRONTIER_VERSION: str = "frontier-v4-2"
 
-# Discovery opponent pool: pinned archetype decks (``allow_variants=False``).
-# Sealed evaluation uses held-out variants + different seeds (see frontier_eval).
+# Baseline discovery pool. The runner may also use mixed deck variants and
+# random-legal; sealed collection uses a distinct seed and deck variants.
 DISCOVERY_ARCHETYPES: tuple[str, ...] = (
     "deterministic-cycle",
     "aggressive-pressure",
@@ -77,9 +77,53 @@ class PoolMatchConfig:
     pool_seed: int = 0
     max_decisions: int = FULL_MATCH_DECISIONS
     learner_deck: str = "roster"  # "roster" -> simulator PLAYER_DECK
+    deck_profile: str = "scripted"
+    real_deck_split: str = "train"
 
     def resolved_strategy(self) -> str:
         return self.strategy or self.archetype
+
+
+def make_pool_match_start(cfg: PoolMatchConfig) -> tuple[Any, Any, int, tuple[str, ...]]:
+    """Build the exact match opening shared by frontier search and raw PPO."""
+
+    from simulator.engine.core import BattleEngine
+    from simulator.env import SimulatorEnv
+    from simulator.roster import PLAYER_DECK
+    from simulator.ruleset import load_fixed_ruleset
+    from ..foundation.opponent_pool import OpponentDeckSpec, OpponentPool
+
+    ruleset = load_fixed_ruleset()
+    pool = OpponentPool(ruleset, seed=_stable_seed(cfg.pool_seed, "pool", cfg.archetype))
+    scenario = pool.sample(
+        cfg.match_index,
+        archetype=cfg.archetype,
+        strategy=cfg.resolved_strategy() or None,
+        allow_variants=cfg.allow_variants,
+    )
+    if cfg.deck_profile == "real":
+        from .real_decks import select_real_deck
+
+        chosen = select_real_deck(cfg.real_deck_split, cfg.archetype, cfg.match_index)
+        scenario = replace(
+            scenario,
+            deck=OpponentDeckSpec(
+                deck_id=chosen.deck_id, archetype=cfg.archetype,
+                cards=chosen.cards, tags=("real-deck", cfg.real_deck_split),
+                source=chosen.source_url,
+            ),
+        )
+    elif cfg.deck_profile != "scripted":
+        raise ValueError("deck_profile must be scripted or real")
+    learner_deck = tuple(PLAYER_DECK) if cfg.learner_deck == "roster" else tuple(cfg.learner_deck)
+    match_seed = _stable_seed(cfg.pool_seed, "match", cfg.archetype, cfg.match_index)
+    env = SimulatorEnv(BattleEngine(ruleset, validate_every_tick=False))
+    env.reset_v2(
+        seed=match_seed,
+        decks=(learner_deck, tuple(scenario.deck.cards)),
+        shuffle_decks=True,
+    )
+    return env, scenario, match_seed, learner_deck
 
 
 @dataclass(slots=True)
@@ -242,39 +286,19 @@ def collect_pool_match(
     import torch
 
     from simulator.actions import PlayCardAction, WaitAction
-    from simulator.engine.core import BattleEngine
-    from simulator.env import SimulatorEnv
-    from simulator.roster import PLAYER_DECK
-    from simulator.ruleset import load_fixed_ruleset
     from simulator.public_state_estimator import PublicStateEstimator
     from .v4_ppo.runtime import batch_v4_inputs, observe_v4_inputs
 
     try:
-        from ..foundation.opponent_pool import OpponentPool
         from .simulator_teacher import teacher_label
         from .model_v4 import masks_from_legal_play
     except ImportError:  # pragma: no cover
-        from simulator.rl.foundation.opponent_pool import OpponentPool
         from simulator.rl.v4.simulator_teacher import teacher_label
         from simulator.rl.v4.model_v4 import masks_from_legal_play
 
-    ruleset = load_fixed_ruleset()
-    pool = OpponentPool(ruleset, seed=_stable_seed(cfg.pool_seed, "pool", cfg.archetype))
-    scenario = pool.sample(
-        cfg.match_index,
-        archetype=cfg.archetype,
-        strategy=cfg.resolved_strategy() or None,
-        allow_variants=cfg.allow_variants,
-    )
-    learner_deck = tuple(PLAYER_DECK) if cfg.learner_deck == "roster" else tuple(cfg.learner_deck)
-    decks = (learner_deck, tuple(scenario.deck.cards))
-    match_seed = _stable_seed(cfg.pool_seed, "match", cfg.archetype, cfg.match_index)
-
+    env, scenario, match_seed, learner_deck = make_pool_match_start(cfg)
     torch.manual_seed(match_seed & 0xFFFFFFFF)
     opponent = scenario.build_controller()
-    base = SimulatorEnv(BattleEngine(ruleset, validate_every_tick=False))
-    env = base
-    env.reset_v2(seed=match_seed, decks=decks, shuffle_decks=True)
     from .v4_ppo import configure_v4_runtime
     configure_v4_runtime(policy)
     estimator = PublicStateEstimator()
@@ -382,6 +406,8 @@ def collect_pool_match(
             "archetype": cfg.archetype,
             "strategy": scenario.strategy,
             "allow_variants": cfg.allow_variants,
+            "deck_profile": cfg.deck_profile,
+            "real_deck_split": cfg.real_deck_split if cfg.deck_profile == "real" else None,
             "match_index": cfg.match_index,
             "pool_seed": cfg.pool_seed,
             "max_decisions": cfg.max_decisions,

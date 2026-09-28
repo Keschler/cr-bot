@@ -289,6 +289,26 @@ def _run_is_complete(run_manifest: Mapping[str, Any], report_path: Path, checkpo
     )
 
 
+def _export_actor_checkpoint(checkpoint_path: Path, actor_path: Path) -> str:
+    """Export the plain V4 actor weights used by shared held-out evaluation."""
+
+    saved = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    state = saved.get("state_dict") if isinstance(saved, Mapping) else None
+    if not isinstance(state, Mapping) or not state or not all(
+        isinstance(value, torch.Tensor) for value in state.values()
+    ):
+        raise ValueError(f"distillation checkpoint has no actor state dict: {checkpoint_path}")
+    if actor_path.exists():
+        existing = torch.load(actor_path, map_location="cpu", weights_only=True)
+        if not isinstance(existing, Mapping) or existing.keys() != state.keys() or any(
+            not torch.equal(existing[key], value) for key, value in state.items()
+        ):
+            raise ValueError(f"actor export differs from training checkpoint: {actor_path}")
+    else:
+        atomic_torch_save(state, actor_path)
+    return file_sha256(actor_path)
+
+
 def _load_or_prepare_records(
     args: argparse.Namespace, data_identity: Mapping[str, Any],
     effective_deadline: float | None,
@@ -360,6 +380,7 @@ def _run_experiment(
     method, seed, context = (run_spec[name] for name in ("method", "seed", "context"))
     report_path = out / f"{label}.json"
     checkpoint_path = out / "checkpoints" / f"{label}.pt"
+    actor_path = out / "actors" / f"{label}.pt"
     run_manifest_path = out / "runs" / f"{label}.json"
     existing = {}
     if run_manifest_path.is_file():
@@ -374,6 +395,9 @@ def _run_experiment(
         )
     if existing.get("spec") == run_spec and _run_is_complete(existing, report_path, checkpoint_path, label):
         report = json.loads(report_path.read_text(encoding="utf-8"))
+        report["actor_checkpoint"] = str(actor_path)
+        report["actor_sha256"] = _export_actor_checkpoint(checkpoint_path, actor_path)
+        _atomic_json(report_path, report)
         print(f"[search-distill] skip completed {label}", flush=True)
         return report
     print(f"[search-distill] start {label} device={device}", flush=True)
@@ -392,6 +416,11 @@ def _run_experiment(
             checkpoint_path=checkpoint_path,
             deadline_epoch=effective_deadline,
         )
+        report["label"] = label
+        report_status = str(report.get("status", "complete"))
+        if report_status == "complete":
+            report["actor_checkpoint"] = str(actor_path)
+            report["actor_sha256"] = _export_actor_checkpoint(checkpoint_path, actor_path)
     except Exception as exc:
         _atomic_json(run_manifest_path, {
             "status": "failed", "spec": run_spec,
@@ -401,9 +430,7 @@ def _run_experiment(
         })
         print(f"[search-distill] failed {label}: {type(exc).__name__}: {exc}", flush=True)
         return None
-    report["label"] = label
     _atomic_json(report_path, report)
-    report_status = str(report.get("status", "complete"))
     _atomic_json(run_manifest_path, {
         "status": report_status, "spec": run_spec,
         "finished_at": time.time(), "report": str(report_path),

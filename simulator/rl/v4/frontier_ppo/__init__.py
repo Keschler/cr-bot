@@ -13,7 +13,7 @@ Evaluation (identical protocol pre/post, paired seeds throughout):
   with matched replica seeds;
 * sealed rollout return: stochastic rollouts from sealed entries with common
   random numbers across the two policies;
-* full-match W/L/D: fresh deterministic matches vs the pinned 6-archetype
+* full-match W/L/D: fresh deterministic matches vs a configured opponent
   pool, paired by (archetype, seed)."""
 
 from .constants import (
@@ -34,6 +34,8 @@ from .statistics import (
 from .environment import (
     make_frontier_env,
     pinned_opponent_decks,
+    heldout_opponent_decks,
+    real_eval_opponent_decks,
 )
 from .collection import (
     collect_frontier_rollout,
@@ -64,6 +66,8 @@ __all__ = [
     'make_frontier_env',
     'paired_delta_stats',
     'pinned_opponent_decks',
+    'heldout_opponent_decks',
+    'real_eval_opponent_decks',
     'sealed_choice_regret',
     'sealed_rollout_returns',
     'summarize_choice_regret',

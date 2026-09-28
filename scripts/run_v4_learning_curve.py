@@ -101,7 +101,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--train-entries",
         type=Path,
-        help="frontier train entries used only for PPO rollouts",
+        help="frontier entries or raw match openings used only for PPO rollouts",
+    )
+    parser.add_argument(
+        "--training-source", choices=("frontier", "match-start"), default="frontier",
+        help="identify and validate the PPO training source (match-start requires --bc-coef 0)",
     )
     parser.add_argument(
         "--sealed-entries",
@@ -210,6 +214,7 @@ def main(argv: list[str] | None = None) -> int:
         config = LearningCurveConfig(
             checkpoint=checkpoint,
             train_entries=args.train_entries,
+            training_source=args.training_source,
             sealed_entries=args.sealed_entries,
             output_dir=args.output_dir,
             update_schedule=schedule,

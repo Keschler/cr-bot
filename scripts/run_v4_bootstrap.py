@@ -39,7 +39,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--epochs", type=int, default=8)
     parser.add_argument("--batch-size", type=int, default=64)
-    parser.add_argument("--max-decisions", type=int, default=256)
+    parser.add_argument("--max-decisions", type=int, default=1440)
+    parser.add_argument("--samples-per-episode", type=int, default=64)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--out", type=Path, default=Path("outputs/v4/bootstrap"))
@@ -99,6 +100,7 @@ def _train(args: argparse.Namespace) -> dict[str, Any]:
     import torch
 
     from simulator.rl.v4.bootstrap import (
+        BOOTSTRAP_VERSION,
         BootstrapConfig,
         generate_bootstrap_dataset,
         move_batch_to_device,
@@ -112,7 +114,7 @@ def _train(args: argparse.Namespace) -> dict[str, Any]:
     states = 32 if args.smoke else args.states
     epochs = 1 if args.smoke else args.epochs
     batch_size = 8 if args.smoke else args.batch_size
-    max_decisions = 32 if args.smoke else args.max_decisions
+    max_decisions = 256 if args.smoke else args.max_decisions
     if type(states) is not int or states <= 0:
         raise ValueError("--states must be a positive integer")
     if type(epochs) is not int or epochs <= 0:
@@ -124,9 +126,11 @@ def _train(args: argparse.Namespace) -> dict[str, Any]:
 
     torch.manual_seed(args.seed)
     device = torch.device(args.device)
-    samples = generate_bootstrap_dataset(
-        BootstrapConfig(n_states=states, seed=args.seed, max_decisions=max_decisions)
+    collection_config = BootstrapConfig(
+        n_states=states, seed=args.seed, max_decisions=max_decisions,
+        samples_per_episode=args.samples_per_episode,
     )
+    samples = generate_bootstrap_dataset(collection_config)
     config = frontier_model_config()
     policy = RecurrentV4Policy(config).to(device)
     optimizer = torch.optim.Adam(policy.parameters(), lr=float(args.lr))
@@ -168,9 +172,23 @@ def _train(args: argparse.Namespace) -> dict[str, Any]:
     args.out.mkdir(parents=True, exist_ok=True)
     actor_path = args.out / "actor.pt"
     torch.save(policy.state_dict(), actor_path)
+    coverage = {}
+    for family in sorted({sample.family for sample in samples}):
+        family_samples = [sample for sample in samples if sample.family == family]
+        elapsed = [sample.provenance["elapsed_us"] for sample in family_samples]
+        coverage[family] = {
+            "episodes": len({sample.provenance["episode"] for sample in family_samples}),
+            "play": sum(sample.target.mode == 1 for sample in family_samples),
+            "wait": sum(sample.target.mode == 0 for sample in family_samples),
+            "elapsed_us_min": min(elapsed),
+            "elapsed_us_max": max(elapsed),
+            "phases": dict(Counter(sample.provenance["phase"] for sample in family_samples)),
+        }
     manifest = {
-        "schema_version": "v4-bootstrap-manifest-v2",
-        "generator": "v4-bootstrap-sim-v1",
+        "schema_version": "v4-bootstrap-manifest-v3",
+        "generator": BOOTSTRAP_VERSION,
+        "collection_config": asdict(collection_config),
+        "coverage": coverage,
         "seed": args.seed,
         "n_states": len(samples),
         "epochs": epochs,

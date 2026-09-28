@@ -36,6 +36,7 @@ def _start_entry(lane: _FrontierLane, entry: dict[str, Any], seed: int, tower_re
     lane.opponent = make_opponent(
         opp,
         _stable_seed("frontier-ppo", seed, entry["entry_id"], lane.visits) & 0xFFFFFFFF,
+        env=lane.env,
     )
     lane.estimator = PublicStateEstimator()
     lane.steps = 0

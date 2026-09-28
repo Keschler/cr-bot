@@ -155,7 +155,7 @@ def sealed_rollout_returns(
             env = make_frontier_env()
             load_frontier_state(env, entry["initial_state"])
             hidden = policy.initial_hidden(1, device=device)
-            opponent = make_opponent(entry["opponent"], replica_seed)
+            opponent = make_opponent(entry["opponent"], replica_seed, env=env)
             estimator = PublicStateEstimator()
             total = 0.0
             winner: Any = None
@@ -216,7 +216,7 @@ def full_match_record(
     deterministic: bool = True,
     max_decisions: int = 1200,
 ) -> list[dict[str, Any]]:
-    """Metric C: paired deterministic full matches vs the pinned pool."""
+    """Metric C: paired deterministic full matches vs a fixed opponent pool."""
 
     import torch
 
@@ -233,6 +233,8 @@ def full_match_record(
 
     out = []
     for spec in opponent_specs:
+        if spec.get("kind") == "v4-checkpoint" and tuple(spec["deck"]) != tuple(PLAYER_DECK):
+            raise ValueError("V4 checkpoint opponent currently requires the learner deck")
         for match_seed in seeds:
             torch.manual_seed(_stable_seed("full-match", spec["archetype"], match_seed) & 0xFFFFFFFF)
             env = make_frontier_env()
@@ -241,10 +243,7 @@ def full_match_record(
                 decks=(tuple(PLAYER_DECK), tuple(spec["deck"])),
                 shuffle_decks=True,
             )
-            opponent = make_opponent(
-                {"strategy": spec["strategy"], "controller_seed": spec["controller_seed"]},
-                int(match_seed),
-            )
+            opponent = make_opponent(spec, int(match_seed), env=env)
             hidden = policy.initial_hidden(1, device=device)
             estimator = PublicStateEstimator()
             winner: Any = None
@@ -288,6 +287,7 @@ def full_match_record(
             out.append(
                 {
                     "archetype": spec["archetype"],
+                    "deck_id": spec.get("deck_id"),
                     "seed": int(match_seed),
                     "winner": winner,
                     "decisions": ran,

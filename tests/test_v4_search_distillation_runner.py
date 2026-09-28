@@ -37,7 +37,7 @@ def run_setup(tmp_path, monkeypatch):
         calls["train"] += 1
         report = {"status": "complete", "method": method, "seed": seed}
         checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-        torch.save({"report": report}, checkpoint_path)
+        torch.save({"report": report, "state_dict": {"weight": torch.tensor([1.0])}}, checkpoint_path)
         return report
 
     monkeypatch.setattr(runner, "prepare_records", prepare)
@@ -55,6 +55,21 @@ def test_unchanged_run_reuses_cache_and_completed_training(run_setup):
     assert runner.main(args) == 0
     assert runner.main(args + ["--reuse-cache"]) == 0
     assert calls == {"prepare": 2, "train": 1}
+    actor = Path(args[args.index("--out") + 1]) / "actors/context0_hard-none_seed0.pt"
+    assert torch.equal(torch.load(actor, weights_only=True)["weight"], torch.tensor([1.0]))
+
+
+def test_exported_actor_loads_in_shared_v4_evaluator(tmp_path):
+    from simulator.rl.v4.frontier import frontier_model_config
+    from simulator.rl.v4.model_v4 import RecurrentV4Policy
+    from simulator.rl.v4.v4_ppo import load_frozen_anchor
+
+    wrapped = tmp_path / "training.pt"
+    exported = tmp_path / "actor.pt"
+    torch.save({"state_dict": RecurrentV4Policy(frontier_model_config()).state_dict()}, wrapped)
+    digest = runner._export_actor_checkpoint(wrapped, exported)
+    assert digest == runner.file_sha256(exported)
+    assert load_frozen_anchor(str(exported), frontier_model_config(), device="cpu")
 
 
 @pytest.mark.parametrize("change", ["correction_limit", "retention_limit", "match", "verdict"])

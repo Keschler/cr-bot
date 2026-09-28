@@ -322,6 +322,77 @@ def test_spacing_is_absolute_against_all_previously_selected_states(monkeypatch)
     assert [c['t'] for c in selected] == [40, 20]
 
 
+def test_batched_replay_preserves_search_and_entry_results():
+    import torch
+
+    from simulator.rl.v4.frontier import PoolMatchConfig, collect_pool_match, frontier_model_config
+    from simulator.rl.v4.frontier_eval import (
+        EvalConfig, evaluate_candidate, materialize_entries,
+        merge_independent_confirmation, replay_candidate_states, replay_to_state,
+    )
+    from simulator.rl.v4.model_v4 import RecurrentV4Policy
+
+    policy = RecurrentV4Policy(frontier_model_config()).eval()
+    match = collect_pool_match(
+        policy=policy,
+        cfg=PoolMatchConfig(
+            archetype="aggressive-pressure", match_index=0,
+            pool_seed=17, max_decisions=32,
+        ),
+        device="cpu",
+    )
+    times = (2, 15, 29)
+    prepared = replay_candidate_states(match, times, policy, device="cpu")
+    for decision in times:
+        original_env, original_hidden = replay_to_state(match, decision, policy, "cpu")
+        cached_env, cached_hidden = prepared[decision]
+        assert original_env.state.state_hash() == cached_env.state.state_hash()
+        torch.testing.assert_close(original_hidden, cached_hidden, rtol=0, atol=0)
+
+    decision = times[0]
+    recorded = match["decisions"][decision]
+    candidate = {
+        "match_id": "aggressive-pressure#0", "archetype": "aggressive-pressure",
+        "t": decision, "tick": recorded["tick"],
+        "state_hash": recorded["state_hash"], "tags": recorded["tags"],
+        "filter": {"score": 1.0}, "learner": recorded["learner"],
+    }
+    discovery = EvalConfig(horizon=4, n_replicas=2, max_branches=4,
+                           replica_seed_base=17, replica_indices=(0, 1))
+    original = evaluate_candidate(match=match, candidate=candidate, policy=policy,
+                                  eval_cfg=discovery, device="cpu")
+    cached = evaluate_candidate(match=match, candidate=candidate, policy=policy,
+                                eval_cfg=discovery, device="cpu",
+                                prepared_state=prepared[decision])
+    assert cached == original
+    confirmation = EvalConfig(
+        horizon=4, n_replicas=2, max_branches=4, replica_seed_base=17,
+        replica_indices=(2, 3), frozen_action=original["best_action"],
+    )
+    original_confirm = evaluate_candidate(match=match, candidate=candidate,
+                                          policy=policy, eval_cfg=confirmation, device="cpu")
+    cached_confirm = evaluate_candidate(match=match, candidate=candidate,
+                                        policy=policy, eval_cfg=confirmation, device="cpu",
+                                        prepared_state=prepared[decision])
+    assert cached_confirm == original_confirm
+    original_merged = merge_independent_confirmation(
+        original, original_confirm, frozen_action=original["best_action"]
+    )
+    cached_merged = merge_independent_confirmation(
+        cached, cached_confirm, frozen_action=cached["best_action"]
+    )
+    assert cached_merged == original_merged
+    source = {candidate["match_id"]: match}
+    original_entry = materialize_entries(source, [original_merged], policy,
+                                         split="train", device="cpu")[0]
+    cached_entry = materialize_entries(source, [cached_merged], policy,
+                                       split="train", device="cpu",
+                                       prepared_states=prepared)[0]
+    assert original_entry["initial_state"] == cached_entry["initial_state"]
+    torch.testing.assert_close(original_entry["hidden0"], cached_entry["hidden0"],
+                               rtol=0, atol=0)
+
+
 def test_lost_position_is_not_solved_even_when_actions_tie():
     assert classify_verdict({'regret': 0, 'stability': 1, 'best_mean': -2})[0] == 'hopeless'
 
