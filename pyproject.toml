@@ -20,3 +20,26 @@ where = ["src"]
 
 [tool.setuptools.dynamic]
 dependencies = {file = ["requirements.txt"]}
+
+[tool.pytest.ini_options]
+# Collection is bounded to the two real test roots.  Without this, a bare
+# ``pytest`` from the repository root walks local virtualenvs, build output,
+# and PyInstaller bundles that are not part of the project.
+testpaths = ["tests", "simulator/tests"]
+pythonpath = [".", "src"]
+norecursedirs = [
+    ".git",
+    ".pytest_cache",
+    "*.egg-info",
+    "__pycache__",
+    "build",
+    "capture/build",
+    "capture/dist",
+    "dist",
+    "outputs",
+    "simulator/dist",
+    "simulator/outputs",
+    "vendor",
+    "*.venv",
+    "venv",
+]
