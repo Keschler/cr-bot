@@ -74,10 +74,13 @@ class CollisionMixin:
                             continue
                         dx = x_mtile[right_index] - x_mtile[left_index]
                         dy = y_mtile[right_index] - y_mtile[left_index]
-                        distance = distance_mtile(0, 0, dx, dy)
                         minimum = radii[left_index] + radii[right_index]
-                        if distance >= minimum:
+                        # Most pairs are far apart. The integer square root is
+                        # needed only to calculate an actual overlap; this
+                        # squared comparison has the same boundary semantics.
+                        if dx * dx + dy * dy >= minimum * minimum:
                             continue
+                        distance = distance_mtile(0, 0, dx, dy)
                         overlap = minimum - distance
                         left_mass = masses[left_index]
                         right_mass = masses[right_index]

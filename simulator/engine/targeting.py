@@ -12,12 +12,25 @@ class TargetingMixin:
         # canonical UID-ordered alive snapshot across all selectors instead
         # of sorting and filtering the entity mapping once per candidate.
         alive_entities = self._alive_entities(state)
+        projectile_targets = {
+            projectile.target_uid
+            for projectile in state.projectiles.values()
+            if projectile.alive
+        }
+        reserved_uids = {
+            entity.uid
+            for entity in alive_entities
+            if entity.uid in projectile_targets
+            and self._projectile_lethally_reserved(state, entity)
+        }
         for entity in alive_entities:
             if entity.deploy_remaining_us > 0:
                 continue
             if entity.target_uid is not None:
                 current = state.entities.get(entity.target_uid)
-                invalid = not self._valid_target(state, entity, entity.target_uid)
+                invalid = not self._valid_target(
+                    state, entity, entity.target_uid, reserved_uids=reserved_uids
+                )
                 definition = self._definition(entity)
                 if (
                     not invalid
@@ -53,6 +66,7 @@ class TargetingMixin:
                             state,
                             entity,
                             alive_entities=alive_entities,
+                            reserved_uids=reserved_uids,
                         )
                         if replacement is not None and replacement != current.uid:
                             old_target = entity.target_uid
@@ -76,12 +90,20 @@ class TargetingMixin:
                     state,
                     entity,
                     alive_entities=alive_entities,
+                    reserved_uids=reserved_uids,
                 )
                 if target_uid is not None:
                     entity.target_uid = target_uid
                     self._emit(state, "target_changed", uid=entity.uid, old_target=None, target_uid=target_uid)
 
-    def _valid_target(self, state: BattleState, source: EntityState, target_uid: int) -> bool:
+    def _valid_target(
+        self,
+        state: BattleState,
+        source: EntityState,
+        target_uid: int,
+        *,
+        reserved_uids: set[int] | None = None,
+    ) -> bool:
         target = state.entities.get(target_uid)
         return bool(
             target
@@ -90,8 +112,18 @@ class TargetingMixin:
             and target.owner != source.owner
             and self._targetable_for_acquisition(state, target)
             and self._target_allowed(source, target)
-            and not self._projectile_lethally_reserved(state, target)
+            and not self._target_reserved(state, target, reserved_uids)
         )
+
+    def _target_reserved(
+        self,
+        state: BattleState,
+        target: EntityState,
+        reserved_uids: set[int] | None,
+    ) -> bool:
+        if reserved_uids is not None:
+            return target.uid in reserved_uids
+        return self._projectile_lethally_reserved(state, target)
 
     def _target_is_locked(self, source: EntityState, target: EntityState) -> bool:
         """Return whether a primary target has entered attack commitment.
@@ -204,6 +236,7 @@ class TargetingMixin:
         source: EntityState,
         *,
         alive_entities: list[EntityState] | None = None,
+        reserved_uids: set[int] | None = None,
     ) -> int | None:
         definition = self._definition(source)
         alive = self._alive_entities(state) if alive_entities is None else alive_entities
@@ -231,7 +264,7 @@ class TargetingMixin:
                 and target.kind != "tower"
                 and self._targetable_for_acquisition(state, target)
                 and self._target_allowed(source, target)
-                and not self._projectile_lethally_reserved(state, target)
+                and not self._target_reserved(state, target, reserved_uids)
                 and self._edge_distance(source, target) <= sight
             ]
             return self._nearest_uid(source, nearby)
@@ -239,6 +272,7 @@ class TargetingMixin:
             state,
             source,
             alive_entities=alive,
+            reserved_uids=reserved_uids,
         )
         min_attack_range = int(definition.mechanics.get("min_attack_range_mtile") or 0)
         nearby.extend(
@@ -248,7 +282,7 @@ class TargetingMixin:
             and target.kind == "tower"
             and self._target_allowed(source, target)
             and self._edge_distance(source, target) <= sight
-            and not self._projectile_lethally_reserved(state, target)
+            and not self._target_reserved(state, target, reserved_uids)
             and self._edge_distance(source, target)
             >= min_attack_range
         )
@@ -266,7 +300,7 @@ class TargetingMixin:
             and target.kind == "tower"
             and target.role != "king"
             and self._target_allowed(source, target)
-            and not self._projectile_lethally_reserved(state, target)
+            and not self._target_reserved(state, target, reserved_uids)
             and self._edge_distance(source, target) >= min_attack_range
         ]
         if not towers:
@@ -276,7 +310,7 @@ class TargetingMixin:
                 if target.owner != source.owner
                 and target.kind == "tower"
                 and self._target_allowed(source, target)
-                and not self._projectile_lethally_reserved(state, target)
+                and not self._target_reserved(state, target, reserved_uids)
                 and self._edge_distance(source, target) >= min_attack_range
             ]
         return self._nearest_uid(source, towers)
@@ -287,6 +321,7 @@ class TargetingMixin:
         source: EntityState,
         *,
         alive_entities: list[EntityState] | None = None,
+        reserved_uids: set[int] | None = None,
     ) -> list[EntityState]:
         definition = self._definition(source)
         if definition.sight_range_mtile is None or definition.damage is None:
@@ -301,7 +336,7 @@ class TargetingMixin:
             and target.kind != "tower"
             and self._targetable_for_acquisition(state, target)
             and self._target_allowed(source, target)
-            and not self._projectile_lethally_reserved(state, target)
+            and not self._target_reserved(state, target, reserved_uids)
             and self._edge_distance(source, target) <= sight
             and self._edge_distance(source, target) >= min_attack_range
         ]

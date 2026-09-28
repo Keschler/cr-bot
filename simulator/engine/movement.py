@@ -276,22 +276,24 @@ class MovementMixin:
             entity.navigation_goal_y_mtile = target.y_mtile
             return goal
         radius = self._collision_radius(entity)
-        obstacles = self._navigation_obstacles(state, target.uid)
-        if self._definition(entity).mechanics.get("river_jump") and segment_is_walkable(
-            self.ruleset.arena,
-            start,
-            goal,
-            agent_radius_mtile=radius,
-            obstacles=obstacles,
-            allow_river_crossing=True,
-        ):
-            entity.navigation_waypoints = [goal]
-            entity.navigation_cursor = 0
-            entity.navigation_target_uid = target.uid
-            entity.navigation_revision = state.navigation_revision
-            entity.navigation_goal_x_mtile = target.x_mtile
-            entity.navigation_goal_y_mtile = target.y_mtile
-            return goal
+        river_jump = self._definition(entity).mechanics.get("river_jump")
+        if river_jump:
+            obstacles = self._navigation_obstacles(state, target.uid)
+            if segment_is_walkable(
+                self.ruleset.arena,
+                start,
+                goal,
+                agent_radius_mtile=radius,
+                obstacles=obstacles,
+                allow_river_crossing=True,
+            ):
+                entity.navigation_waypoints = [goal]
+                entity.navigation_cursor = 0
+                entity.navigation_target_uid = target.uid
+                entity.navigation_revision = state.navigation_revision
+                entity.navigation_goal_x_mtile = target.x_mtile
+                entity.navigation_goal_y_mtile = target.y_mtile
+                return goal
         cache_valid = (
             entity.navigation_target_uid == target.uid
             and entity.navigation_revision == state.navigation_revision
@@ -321,6 +323,8 @@ class MovementMixin:
             else:
                 return start
 
+        if not river_jump:
+            obstacles = self._navigation_obstacles(state, target.uid)
         if segment_is_walkable(
             self.ruleset.arena,
             start,

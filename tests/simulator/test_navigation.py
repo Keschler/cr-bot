@@ -1,15 +1,47 @@
 from __future__ import annotations
 
-from simulator.fixed import distance_mtile
+from random import Random
+
+from simulator.fixed import ceil_div, distance_mtile
 from simulator.geometry import cell_center_mtile, is_basic_deploy_cell
 from simulator.navigation import (
+    NAVIGATION_SAMPLE_MTILE,
     NavigationObstacle,
-    _fixed_visibility_edges,
+    _fixed_visibility_graph,
+    _plan_route_cached,
     plan_route,
     point_is_walkable,
     segment_is_walkable,
 )
 from simulator.ruleset import load_ruleset
+
+
+def test_fast_river_visibility_matches_pointwise_sampling() -> None:
+    arena = load_ruleset().arena
+    rng = Random(81642)
+    for _ in range(1_000):
+        start = (rng.randrange(0, arena.width_mtile), rng.randrange(0, arena.height_mtile))
+        end = (rng.randrange(0, arena.width_mtile), rng.randrange(0, arena.height_mtile))
+        radius = rng.randrange(0, 900)
+        samples = max(
+            1,
+            ceil_div(
+                max(abs(end[0] - start[0]), abs(end[1] - start[1])),
+                NAVIGATION_SAMPLE_MTILE,
+            ),
+        )
+        expected = all(
+            point_is_walkable(
+                arena,
+                start[0] + (end[0] - start[0]) * index // samples,
+                start[1] + (end[1] - start[1]) * index // samples,
+                radius,
+            )
+            for index in range(samples + 1)
+        )
+        assert segment_is_walkable(
+            arena, start, end, agent_radius_mtile=radius
+        ) == expected
 
 
 def test_route_crosses_river_only_through_a_bridge() -> None:
@@ -21,6 +53,7 @@ def test_route_crosses_river_only_through_a_bridge() -> None:
         agent_radius_mtile=600,
     )
 
+    assert route == ((9_000, 23_000), (3_500, 16_000), (9_000, 9_000))
     assert len(route) >= 3
     for start, end in zip(route, route[1:]):
         assert segment_is_walkable(
@@ -51,6 +84,7 @@ def test_route_avoids_an_inflated_building_obstacle() -> None:
         obstacles=(obstacle,),
     )
 
+    assert route == ((5_000, 24_000), (9_000, 22_646), (13_000, 24_000))
     assert len(route) >= 3
     assert any(y != 24_000 for _, y in route[1:-1])
     for start, end in zip(route, route[1:]):
@@ -66,7 +100,8 @@ def test_route_avoids_an_inflated_building_obstacle() -> None:
 def test_repeated_topology_reuses_fixed_visibility_without_changing_route() -> None:
     arena = load_ruleset().arena
     obstacles = (NavigationObstacle(100, 9_000, 24_000, 600),)
-    _fixed_visibility_edges.cache_clear()
+    _plan_route_cached.cache_clear()
+    _fixed_visibility_graph.cache_clear()
 
     first = plan_route(
         arena,
@@ -75,7 +110,7 @@ def test_repeated_topology_reuses_fixed_visibility_without_changing_route() -> N
         agent_radius_mtile=600,
         obstacles=obstacles,
     )
-    after_first = _fixed_visibility_edges.cache_info()
+    after_first = _fixed_visibility_graph.cache_info()
     second = plan_route(
         arena,
         (5_100, 24_000),
@@ -83,7 +118,7 @@ def test_repeated_topology_reuses_fixed_visibility_without_changing_route() -> N
         agent_radius_mtile=600,
         obstacles=obstacles,
     )
-    after_second = _fixed_visibility_edges.cache_info()
+    after_second = _fixed_visibility_graph.cache_info()
 
     assert first and second
     assert after_first.misses == 1

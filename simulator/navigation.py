@@ -144,11 +144,24 @@ def _segment_is_walkable_uncached(
             first = max(0, samples - reverse_stop + 1)
             stop = min(samples + 1, samples - reverse_first + 1)
 
-        for index in range(first, stop):
-            x = start[0] + dx * index // samples
-            y = start[1] + dy * index // samples
-            if not point_is_walkable(arena, x, y, agent_radius_mtile):
-                return False
+        if first < stop:
+            # Sample x is monotone. If its two extremes fit inside one bridge,
+            # every intervening river sample fits as well. Keep the original
+            # point-wise check for paths that span openings or their gaps.
+            first_x = start[0] + dx * first // samples
+            last_x = start[0] + dx * (stop - 1) // samples
+            low_x, high_x = min(first_x, last_x), max(first_x, last_x)
+            inside_one_bridge = any(
+                bridge_start + agent_radius_mtile <= low_x
+                and high_x <= bridge_end - agent_radius_mtile
+                for bridge_start, bridge_end in arena.bridge_x_ranges_mtile
+            )
+            if not inside_one_bridge:
+                for index in range(first, stop):
+                    x = start[0] + dx * index // samples
+                    y = start[1] + dy * index // samples
+                    if not point_is_walkable(arena, x, y, agent_radius_mtile):
+                        return False
     for obstacle in obstacles:
         inflated = agent_radius_mtile + obstacle.radius_mtile + NAVIGATION_CLEARANCE_MTILE
         if _segment_intersects_circle(start, end, obstacle, inflated):
@@ -243,60 +256,71 @@ def _bridge_waypoints(arena: ArenaGeometry, radius: int) -> tuple[tuple[int, int
     return tuple(result)
 
 
+@dataclass(slots=True)
+class _VisibilityGraph:
+    """Memoize fixed edges only when a route expands their endpoint."""
+
+    nodes: tuple[tuple[int, int], ...]
+    # Upper-triangle edge costs: -1 unknown, -2 blocked, nonnegative visible.
+    edge_costs: list[list[int]]
+    adjacency: list[tuple[tuple[int, int], ...] | None]
+
+    def neighbors(
+        self,
+        index: int,
+        arena: ArenaGeometry,
+        agent_radius_mtile: int,
+        obstacle_rows: tuple[NavigationObstacle, ...],
+    ) -> tuple[tuple[int, int], ...]:
+        cached = self.adjacency[index]
+        if cached is not None:
+            return cached
+        result: list[tuple[int, int]] = []
+        for other in range(len(self.nodes)):
+            if other == index:
+                continue
+            left, right = min(index, other), max(index, other)
+            cost = self.edge_costs[left][right]
+            if cost == -1:
+                # Keep the original node-index direction. Integer terrain
+                # sampling is not necessarily symmetric after floor division.
+                start, end = self.nodes[left], self.nodes[right]
+                cost = (
+                    distance_mtile(*start, *end)
+                    if segment_is_walkable(
+                        arena,
+                        start,
+                        end,
+                        agent_radius_mtile=agent_radius_mtile,
+                        obstacles=obstacle_rows,
+                    )
+                    else -2
+                )
+                self.edge_costs[left][right] = cost
+            if cost >= 0:
+                result.append((other, cost))
+        cached = tuple(result)
+        self.adjacency[index] = cached
+        return cached
+
+
 @lru_cache(maxsize=256)
-def _fixed_visibility_edges(
+def _fixed_visibility_graph(
     arena: ArenaGeometry,
     agent_radius_mtile: int,
     obstacle_rows: tuple[NavigationObstacle, ...],
-) -> tuple[
-    tuple[tuple[int, int], ...],
-    dict[tuple[tuple[int, int], tuple[int, int]], int],
-]:
-    """Cache visibility among topology-fixed bridge/structure waypoints."""
+) -> _VisibilityGraph:
+    """Share an ordered visibility graph across routes through one layout."""
 
     raw_nodes = list(_bridge_waypoints(arena, agent_radius_mtile))
     for obstacle in obstacle_rows:
         raw_nodes.extend(_obstacle_waypoints(arena, obstacle, agent_radius_mtile))
     nodes = tuple(dict.fromkeys(raw_nodes))
-    edges: dict[tuple[tuple[int, int], tuple[int, int]], int] = {}
-    for index, left in enumerate(nodes):
-        for right in nodes[index + 1 :]:
-            if segment_is_walkable(
-                arena,
-                left,
-                right,
-                agent_radius_mtile=agent_radius_mtile,
-                obstacles=obstacle_rows,
-            ):
-                key = (left, right) if left < right else (right, left)
-                edges[key] = distance_mtile(*left, *right)
-    return nodes, edges
-
-
-@lru_cache(maxsize=256)
-def _fixed_visibility_adjacency(
-    arena: ArenaGeometry,
-    agent_radius_mtile: int,
-    obstacle_rows: tuple[NavigationObstacle, ...],
-) -> tuple[
-    tuple[tuple[int, int], ...],
-    tuple[tuple[tuple[int, int], int], ...],
-]:
-    """Cache the topology adjacency used by every route through one layout."""
-
-    nodes, edges = _fixed_visibility_edges(
-        arena,
-        agent_radius_mtile,
-        obstacle_rows,
+    return _VisibilityGraph(
+        nodes,
+        [[-1] * len(nodes) for _ in nodes],
+        [None] * len(nodes),
     )
-    indices = {node: index for index, node in enumerate(nodes)}
-    adjacency: list[list[tuple[int, int]]] = [[] for _ in nodes]
-    for (left, right), cost in edges.items():
-        adjacency[indices[left]].append((indices[right], cost))
-        adjacency[indices[right]].append((indices[left], cost))
-    for neighbors in adjacency:
-        neighbors.sort(key=lambda item: item[0])
-    return nodes, tuple(tuple(neighbors) for neighbors in adjacency)
 
 
 def _plan_route_uncached(
@@ -323,9 +347,10 @@ def _plan_route_uncached(
     ):
         return start, goal
 
-    fixed_nodes, fixed_adjacency = _fixed_visibility_adjacency(
+    fixed_graph = _fixed_visibility_graph(
         arena, agent_radius_mtile, obstacle_rows
     )
+    fixed_nodes = fixed_graph.nodes
     raw_nodes = [start, goal]
     raw_nodes.extend(fixed_nodes)
     nodes = tuple(dict.fromkeys(raw_nodes))
@@ -360,7 +385,6 @@ def _plan_route_uncached(
     fixed_node_indices = tuple(node_indices[node] for node in fixed_nodes)
     fixed_indices = {node: index for index, node in enumerate(fixed_nodes)}
     start_neighbors: list[tuple[int, int]] = []
-    goal_costs: dict[int, int] = {}
 
     for node in fixed_nodes:
         node_index = node_indices[node]
@@ -374,14 +398,6 @@ def _plan_route_uncached(
             obstacles=obstacle_rows,
         ):
             start_neighbors.append((node_index, distance_mtile(*start, *node)))
-        if segment_is_walkable(
-            arena,
-            node,
-            goal,
-            agent_radius_mtile=agent_radius_mtile,
-            obstacles=obstacle_rows,
-        ):
-            goal_costs[node_index] = distance_mtile(*node, *goal)
     start_neighbors.sort(key=lambda item: item[0])
 
     infinity = 1 << 62
@@ -407,12 +423,22 @@ def _plan_route_uncached(
                 continue
             neighbors = [
                 (fixed_node_indices[neighbor], cost)
-                for neighbor, cost in fixed_adjacency[fixed_index]
+                for neighbor, cost in fixed_graph.neighbors(
+                    fixed_index, arena, agent_radius_mtile, obstacle_rows
+                )
                 if fixed_node_indices[neighbor] != current
             ]
-            goal_cost = goal_costs.get(current)
-            if goal_cost is not None:
-                neighbors.append((goal_index, goal_cost))
+            # Only nodes reached by the search need a boundary edge to goal.
+            # Unvisited nodes cannot contribute to the route, and checking
+            # their visibility eagerly dominates route-planning time.
+            if segment_is_walkable(
+                arena,
+                nodes[current],
+                goal,
+                agent_radius_mtile=agent_radius_mtile,
+                obstacles=obstacle_rows,
+            ):
+                neighbors.append((goal_index, distance_mtile(*nodes[current], *goal)))
         for neighbor, cost in neighbors:
             if visited[neighbor]:
                 continue
