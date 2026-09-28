@@ -1,0 +1,303 @@
+# V4 three-arm comparison — proposed execution plan
+
+Status: **awaiting user approval**. This document specifies the next experiment;
+it is not a claim that all prerequisites are implemented or that training has
+started. After approval, complete the prerequisites and pilot before the main
+comparison. Do not spend the main-run budget if a gate fails.
+
+## Questions and arms
+
+| Arm | Initial actor | Training | Question |
+| --- | --- | --- | --- |
+| A | Random V4 weights | Reward-only, match-start PPO | How well does RL work without a teacher? |
+| B | Rules-teacher bootstrap | Same PPO configuration as A | Does teacher initialization help PPO? |
+| C | Same bootstrap checkpoint as B | Outcome-search distillation | How does search distillation compare with PPO? |
+
+The teacher is a potentially useful prior, not an optimal policy. Correct
+sampling weights reproduce its behavior more faithfully; they cannot correct
+bad teacher decisions. A versus B tests whether that prior helps. B versus C
+compares downstream methods at a shared starting point. A versus C compares
+the complete pipelines. Do not select the best random seed or omit failed runs.
+
+Use three independent replicate seeds: **0, 1, 2**. For each seed, save the
+random initial actor before bootstrap optimization; A starts from those exact
+weights, and B/C share the resulting bootstrap actor. All arms use the same
+V4 architecture, learner deck, public observation contract, ruleset, and source
+revision. Keep heuristic opponent controllers fixed. Frozen learned opponents
+and self-play are a later experiment.
+
+## 1. Implement and verify the prerequisites
+
+1. **Correct bootstrap sampling weights.** Keep sampling across full matches
+   and retaining plentiful PLAY examples. Record every eligible teacher label
+   before sampling. For match `e` and mode `m`, retain the original count
+   `N[e,m]` and sampled count `n[e,m]`; attach weight `N[e,m] / n[e,m]` to each
+   retained record. Apply these weights only to the PLAY/WAIT cross-entropy,
+   replacing its current class balancing. Normalize weights once against the
+   full retained dataset and average weighted losses in uniformly shuffled
+   minibatches. Continue to normalize card/placement losses over PLAY records.
+   This targets the natural decision distribution of the collected teacher
+   trajectories; it does not prescribe a fixed action frequency.
+2. **Preserve sampling support.** Predeclare the collection batch of complete
+   matches and retain at least one record from every observed match/mode group.
+   A nonempty group with zero retained records cannot be repaired with a
+   weight. Treat 50/50 as a coverage preference, not a hard requirement that
+   discards an entire group. Record any resulting departure from 1,024 samples.
+   Start with three complete matches per bootstrap archetype, 1,440 decisions
+   maximum per match, and at most 32 retained records per mode per match.
+3. **Separate development and final evaluation in the runners.** Learning
+   curves must use development opponents and development frontier diagnostics.
+   The current curve runner evaluates its supplied sealed entries at every
+   point and defaults to the reserved real decks; those defaults are unsuitable
+   for checkpoint selection. Add explicit split identity/validation and a
+   final-evaluation path that does not perform training or checkpoint selection.
+   Avoid generating final-deck matches as a side effect of development runs.
+4. **Audit deck separation.** Check bootstrap opponent decks as well as PPO
+   and search decks against the ten reserved evaluation identities. If a
+   bootstrap deck overlaps, replace that bootstrap opponent with a compatible
+   training-catalog deck before sealing the protocol. Save the actual lists.
+5. **Record cost and checkpoints consistently.** Record actual simulator
+   decisions, completed/truncated matches, search branch decisions, optimizer
+   examples/steps, worker CPU time, GPU time where used, hardware, and wall time.
+   Distillation must export plain actors at the scheduled development points.
+   Save the initial random actor explicitly; do not assume that equal seed
+   numbers alone prove identical weights.
+
+Required checks: weighted loss reconstructs a known unsampled example;
+unequal episode lengths and missing modes are handled; full-match reservoirs
+retain late PLAY/WAIT states; action labels remain legal; identical seeds are
+deterministic; train/development/final overlap is rejected; checkpoint loading
+and a real optimizer update succeed for every arm. Verify frozen B/C anchors
+have identical hashes and A matches the bootstrap's pre-training actor.
+
+These are prerequisites, not features already present. In particular, the
+current bootstrap has full-match balanced sampling but still lacks the
+sampling-weight correction. Resolve relevant test failures; record unrelated
+environment/dependency skips separately. Commit the experiment source before
+the main run and use fresh output directories.
+
+## 2. Freeze the data and seed protocol
+
+Use the existing 40-deck catalog: **30 training decks, ten final evaluation
+decks**. The learner continues to use its fixed base Hog-cycle deck. Real
+opponent decks do not imply human-quality opponent behavior.
+
+For replicate `s` in `0,1,2`:
+
+| Purpose | Seed allocation | Decks / count |
+| --- | --- | --- |
+| Training openings | pool seed `20261011 + 100*s` | 24 matches per archetype: 120 total, four per training deck |
+| Search development collection | pool seed `20261012 + 100*s` | 12 matches per archetype: 60 total, two per training deck |
+| Development complete matches | seeds `20263000..20263003` | Four fresh seeds for each of the 30 training decks |
+| Final complete matches | seeds `20264000..20264019` | Twenty fresh seeds for each of the ten reserved decks |
+
+Assert actual match identities and deck coverage, not just different numeric
+seed labels. Development shares training deck identities but uses fresh match
+seeds; final evaluation tests unseen complete deck identities. Match the
+deck/seed pairs across all actors, using controlled actor/opponent RNG streams.
+
+Both PPO arms receive the same **search-free match openings**. Search collects
+trajectories from the corresponding bootstrap actor at those same openings.
+PPO never consumes frontier states, search verdicts, or teacher targets.
+Development trajectories and final matches are never training inputs.
+
+Store under `outputs/v4/comparison_v1/seed_<s>/`: `random/`, `bootstrap/`,
+`starts/`, `search_train/`, `search_dev/`, `ppo_random/`, `ppo_bootstrap/`,
+`distill/`, and `development/`. Reserve a separate `final/` directory until
+checkpoint selection is frozen. Record source, deck-catalog, checkpoint, and
+artifact hashes in a top-level experiment manifest.
+
+## 3. Run a bounded pilot, then freeze the main settings
+
+Use a separate pilot seed **900**, train/development pool seeds **20269001**
+and **20269002**, and no final decks. Run bootstrap collection and fitting, one actual PPO update for each
+initialization, and search/distillation on one match per training archetype.
+The pilot only checks legality, finite losses/gradients, checkpoint exports,
+coverage, accepted-label yield, and runtime. Do not choose methods by pilot wins.
+
+Require both bootstrap modes and usable later-match observations; correctly
+weighted counts; valid exported actors; nonempty independent search corrections
+in training and development; and clean evaluation pairing. A search pool with
+too few corrections is a collection failure, not evidence against the method.
+Use a predeclared main-run minimum of 100 training and 30 development
+corrections per replicate, with every training archetype represented in both.
+If this fails, stop and revise collection rather than weakening acceptance
+criteria or examining final scores.
+
+The initial fixed-work study uses these settings, which must be recorded
+explicitly rather than inherited from changing CLI defaults:
+
+| Component | Proposed settings |
+| --- | --- |
+| Bootstrap B/C | Full-match collection above; eight epochs, batch 64, learning rate `3e-4` |
+| PPO A/B | 32 updates; eight lanes; 1,440 rollout decisions and episode cap; `training-source=match-start`, `bc-coef=0`, `reward-mode=tower-delta`; actor LR `3e-4`, critic LR `1e-4`, gamma `.99`, GAE lambda `.95`, one PPO epoch |
+| Search C | 16 candidates/match; seven branches; horizon 128; eight discovery plus eight independent confirmation replicas; match cap 1,440 |
+| Distillation C | `soft-kl` only; context 32; 20 epochs; batch 8; LR `1e-5`; retention weight 1; temperature `.25`; one optimizer seed `s` per replicate |
+| Development points | PPO updates `0,1,2,4,8,16,32`; distillation epochs `0,1,2,4,8,16,20` |
+| Evaluation | 1,440 decisions maximum; seeded stochastic sampling from each masked policy for all arms; no search at inference |
+
+The runner's default distillation method/context/seed sweep must be overridden;
+it would otherwise create extra variants and unequal selection opportunities.
+Record all remaining search acceptance, retention, entry-cap, and optimizer
+settings in the manifest. Derive explicit worker/device settings and a runtime
+estimate from the pilot before launching the main jobs. Hardware and monetary
+budget have not yet been supplied; do not infer authorization to rent compute.
+
+## 4. Train and select using development data only
+
+For each replicate, train A from the saved random actor and B from the
+bootstrap actor using identical PPO settings and openings. Generate and audit
+independently confirmed search labels, then train C from B's exact bootstrap
+checkpoint. Keep bootstrap generation/fitting costs for both B and C, even if
+the physical artifact is shared. Include all search and label-validation costs
+in C. Include failed attempts and retries in cost reporting.
+
+Evaluate the seven scheduled checkpoints of each arm on the same development
+complete matches. Select the checkpoint with the highest mean match score
+over the 30 development decks; break ties by lower cumulative training cost,
+then earlier checkpoint. Include point zero so regressions can select the
+initial actor. Distillation label losses and frontier regret are diagnostics,
+not an extra route to selecting on final data. Keep all three replicate seeds.
+
+Freeze selected checkpoint hashes and the selection report before any final
+evaluation. Keep the final endpoint checkpoint too, so the report can show
+whether early selection hid a later regression.
+
+## 5. Run final evaluation once and report uncertainty
+
+Evaluate the nine selected actors (three arms by three replicates) on the same
+200 deck/seed matches each: **1,800 complete-match attempts**. This is an initial
+comparison capable of finding substantial differences, not a guarantee of
+resolving small gains. Do not increase the final sample after seeing scores.
+
+Primary outcome: mean match score, with win=1, draw=.5, loss=0, equal weight per
+reserved deck. Report paired A/B, B/C, A/C differences, results for every
+replicate and deck, and 95% uncertainty intervals. Respect pairing and cluster
+by training replicate and match seed when estimating uncertainty; do not treat
+all 1,800 games as independent training runs. Three training seeds provide
+limited evidence about training variability. Treat the three contrasts as
+exploratory unless a multiple-comparison rule is declared before evaluation.
+
+Report truncations separately; never turn them into draws or silently discard
+them. Show score bounds for unresolved matches and make no winner claim if
+censoring can reverse the ranking. Invalid actions, crashes, or inconsistent
+pairing trigger investigation rather than a clean performance conclusion.
+Report crown/HP outcomes and action counts as secondary diagnostics, without
+assuming an action-rate target or inventing a reliable "premature play" label.
+
+Shared sealed frontier regret may be reported as a secondary diagnostic after
+selection, using the same frozen states for all arms and recording the policy
+that generated those states. It is a search-selected state distribution and
+must not replace the complete-match comparison.
+
+## 6. Interpret quality and cost separately
+
+This first study fixes **work settings**, not equal total compute. A/B have the
+same PPO update budget, but B additionally pays for bootstrap. C has different
+collection and fitting costs. Report development quality against cumulative
+measured cost and final quality alongside total end-to-end cost. Report
+evaluation cost separately and shared costs both physically paid and charged
+to each complete pipeline. Equal updates or epochs across methods are not a
+fair efficiency comparison.
+
+Do not call the higher-scoring arm more compute-efficient unless its cost
+supports that claim. If curves leave the choice unclear, the next experiment
+must predeclare matched total budgets using pilot measurements; do not choose
+budgets retrospectively to favor an arm. An inconclusive comparison is a valid
+result. Simulator-only results also do not change `training_ready: false` or
+establish performance against real players.
+
+Approval covers this protocol and its prerequisite work. The deliverables are
+the corrected bootstrap weighting, split-safe evaluation, test evidence,
+versioned run manifest, costed pilot report, three-arm training artifacts, and
+paired final report. Main runs remain gated on prerequisite/pilot success and
+an identified compute environment within the user's authorized budget.
+
+## Runtime estimate from local probes (2026-09-28)
+
+These timing probes were requested separately; they do not constitute approval
+of the main experiment. Measurements used the local i9-13900H CPU, one Torch
+thread, the compact V4 model, training-catalog opponents, and a smoke-trained
+actor. No reserved-deck results were examined. Scripts and raw measurements are
+local artifacts under `outputs/v4/comparison_runtime_probe_20260928/`.
+
+| Measured workload | Wall time |
+| --- | --- |
+| PPO collection, eight lanes × 128 decisions | 4.46 seconds |
+| PPO optimizer update on that rollout | 5.35 seconds |
+| Search, four distinct branches × eight replicas × 128 decisions, early state | 23.69 seconds |
+| Same search workload, later state, discovery / confirmation | 57.07 / 60.72 seconds |
+| Five complete stochastic evaluation matches, one per training archetype | 5.62–20.73 seconds each; mean 10.39 seconds |
+| Synthetic distillation optimizer probe, context 32, batch eight, eight updates plus small validation | 5.82 seconds |
+| Earlier full bootstrap collection, 1,024 records from 18 matches | 420 seconds |
+
+The complete proposal has 8,640 candidate evaluations if every match supplies
+16 candidates. The measured four-branch search costs extrapolate to roughly
+**114–283 single-worker hours** for discovery plus confirmation alone.
+More branches or denser late-game boards can raise this. Confirmation currently
+reruns all branches, even though its selected target is frozen. Source replay,
+prefix-cache generation, and independent distillation outcome checks add work.
+
+Development evaluation comprises 7,560 matches, final evaluation another
+1,800: **9,360 matches**, or about **27 hours** at the measured average before
+allowing for stronger actors and longer/denser games. The two PPO arms across
+three seeds extrapolate to roughly six hours from short opening rollouts;
+allow 6–15 hours for planning. Full 1,440-step optimizer memory/throughput has
+not been benchmarked, so linear scaling is provisional. Distillation optimizer
+timing used synthetic cached inputs; it excludes cache construction and paired
+simulator validation.
+
+Budget **about 5–10 days of elapsed local compute** for the initial proposed
+comparison, assuming three search workers with imperfect scaling, sequential
+evaluation/training, and allowances for cache/validation work. Parallel
+throughput itself was not measured. A serial execution is roughly 1–2 weeks,
+potentially longer at the expensive end of the samples. This is a broad
+planning estimate, not a deadline or an estimate of time to convergence.
+It excludes prerequisite implementation/debugging and any later extension
+beyond 32 PPO updates. No GPU/cloud speedup is inferred from these CPU tests.
+
+### Local RTX 2050 follow-up
+
+The user requested a GPU comparison. CUDA was inaccessible inside the sandbox
+but usable outside it on the local RTX 2050 (4 GiB). One Torch CPU thread,
+identical small workloads, warm-up, and CUDA synchronization gave:
+
+| Workload | CPU | GPU | Speedup |
+| --- | ---: | ---: | ---: |
+| PPO collection, eight lanes × 128 steps (two-run mean) | 4.58 s | 3.59 s | 1.27× |
+| PPO update on that rollout (two-run mean) | 6.06 s | 1.11 s | 5.47× |
+| Search, one replica, four branches × 128 steps, including state replay | 10.19 s | 10.11 s | 1.01× |
+| Synthetic context-32 distillation, eight updates plus small validation | 4.74 s | 0.84 s | 5.62× |
+
+Unmodified CUDA PPO failed with `cudnn RNN backward can only be called in
+training mode`: the updater deliberately uses evaluation mode. The successful
+GPU timings disable cuDNN only around PPO updates in the benchmark script;
+this is not yet a repository fix. Add a CUDA regression test and resolve this
+before GPU PPO training. Distillation required no such workaround.
+
+PPO collection plus update was about 2.26× faster overall in this short probe.
+Peak allocated GPU memory reached about 1.1 GiB at 128 steps; the planned
+1,440-step update has not been tested and must not be assumed to fit 4 GiB.
+Do not silently shorten rollouts to fit memory, since that changes the study.
+The frontier-generation CLI currently hardcodes CPU despite its underlying
+evaluation functions accepting a device. The measured search workload gains
+essentially nothing from GPU, so retain CPU search for now. GPU training may
+save hours, but does not justify reducing the overall 5–10-day planning range
+when search and evaluation dominate. Full-match GPU evaluation and sustained
+parallel throughput have not been measured. Raw GPU results and both benchmark
+scripts are saved beside the CPU probes.
+
+### Result-preserving replay reuse
+
+The frontier generator now replays each source match once and caches the exact
+simulator state and actor memory at selected candidate decisions. Discovery,
+independent confirmation, and accepted-entry materialization reuse that cache.
+It still evaluates every original branch and replica with the same seeds and
+continuation horizon. A 512-decision, 16-candidate local probe reduced prefix
+replay from 4,246 to 506 decisions, taking **2.93 instead of 21.35 seconds**
+for the replay portion (7.29×). Exact state hashes, recurrent tensors,
+complete discovery/confirmation verdicts, and serialized entry state matched
+the original path in regression checks. Continuation rollouts remain the
+dominant cost, so do not apply 7.29× to the whole search estimate. The prior
+5–10-day planning range remains conservative until full-match throughput is
+measured after this change.

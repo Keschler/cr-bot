@@ -15,11 +15,14 @@ while the actor, training loop, evaluation, and simulator throughput improve.
 This permits provisional experiments only; it does not satisfy the fidelity
 gates or authorize a `training_ready` claim.
 
-The active V4 policy is trained from scratch with the simulator bootstrap,
-then evaluated through frontier generation, search distillation, and controlled
-PPO experiments. A fresh checkout has no promoted model checkpoint or measured
-policy strength. See the [V4 training guide](../docs/v4_training.md) for the
+The active V4 workflow compares reward-only match-start PPO with search
+distillation from the same simulator bootstrap, plus a randomly initialized
+PPO baseline. Frontier-initialized PPO is a separate experiment. A fresh
+checkout has no promoted model checkpoint or measured policy strength. See
+the [V4 training guide](../docs/v4_training.md) for the
 reproducible commands and evaluation boundary.
+The [concrete three-arm comparison plan](../docs/v4_comparison_plan.md) awaits
+approval and lists the remaining weighting and evaluation-split prerequisites.
 
 ## Setup and tests
 
@@ -259,6 +262,10 @@ Current search, distillation, PPO, and evaluation code lives in [rl/v4/](rl/v4/)
 Shared tensor utilities and opponent pools live
 in [rl/foundation/](rl/foundation/). See the [V4 training guide](../docs/v4_training.md)
 for the bootstrap, dataset splits, recurrent context, and evaluation gates.
+The reward-only PPO and frontier paths can use a pinned catalog of complete
+base-card decks from RoyaleAPI and Deck Shop. Its train and evaluation decks
+are disjoint. The random mixed pool remains a stress-test option, and frozen
+V4 actors can serve as mirror opponents in PPO.
 
 The earlier prototype and NumPy PPO learners, historical Stage-2 proof,
 synthetic/timing curricula, and experiment-specific runners have been retired.

@@ -1,13 +1,23 @@
 # V4 training and evaluation
 
-V4 has one from-scratch path and one evaluation path. The bootstrap trains a
-compatible actor from public observations collected in the deterministic
-simulator. Frontier generation then mines difficult states with that actor;
-teacher audit, search distillation, and PPO are separate experiments that can
-be evaluated independently. Historical Stage-1/Stage-2 generators, timing
-curricula, and serialized search-dataset builders are retired.
+V4 has a shared evaluation protocol for three distinct training arms: pure
+reward-only PPO from a random actor, reward-only PPO from the bootstrap actor,
+and search distillation from that same bootstrap actor. The bootstrap trains a
+compatible actor from public simulator observations; frontier generation mines
+difficult states for distillation. Frontier-initialized PPO remains a separate
+experiment and must not be reported as raw RL. Historical Stage-1/Stage-2
+generators, timing curricula, and serialized search-dataset builders are
+retired.
 
-## Start from random initialization
+The next experiment is specified in the
+[three-arm comparison plan](v4_comparison_plan.md), **awaiting user approval**.
+It defines the prerequisites, seeds, work budgets, development-only selection,
+and final evaluation. The commands below document existing runner interfaces;
+they are not an approved launch sequence for that comparison. In particular,
+bootstrap sampling weights and strict development/final separation still need
+implementation before the planned main run.
+
+## Teacher bootstrap for the bootstrap-initialized arms
 
 Run the bootstrap with the project environment:
 
@@ -28,10 +38,27 @@ counts, loss curve, and actor hash. The actor is compatible with
 frontier stage. The bootstrap uses only the public V4 observation, a
 deterministic opponent pool, and the retained rules teacher. It does not read
 the opponent's private hand or authoritative elixir.
-Collection allocates states evenly across the six opponent archetypes; the
-supervised mode loss balances PLAY and WAIT classes because ordinary matches
-contain many more WAIT decisions. Check the manifest's target counts and loss
-history before using its actor for collection.
+Collection allocates states evenly across the six opponent archetypes and
+balances PLAY/WAIT records within each archetype (odd remainders alternate).
+It rolls each match to termination or the 1,440-decision cap (360 simulated
+seconds), then retains a deterministic uniform reservoir per action mode.
+The default `--samples-per-episode 64` permits at most 32 records per mode
+from one match, so 1,024 states require at least three matches per archetype.
+Reaching a record quota never truncates the trajectory. Collection fails with
+an explicit shortfall if bounded retries cannot fill both action quotas;
+short decision caps can cause this. The bootstrap continues to use the six
+scripted opponent archetypes; the real-deck catalog is used downstream.
+The manifest records collection settings and per-archetype match, mode,
+phase, and elapsed-time coverage alongside the loss history. Check these
+before using its actor for collection. Balanced sampling deliberately changes
+the observed PLAY/WAIT frequency; it is not an estimate of natural play rate.
+The supervised mode loss also balances the classes within each training batch.
+This is the current implementation, not the proposed comparison objective:
+the plan replaces that mode-loss balancing with weights derived from original
+versus retained match/mode counts. The goal is to preserve teacher decision
+frequencies while retaining enough PLAY examples for card and placement
+training. Neither corrected weights nor teacher agreement establish optimal
+actions. The random-initialized PPO arm bypasses this bootstrap entirely.
 
 For a dependency and wiring check:
 
@@ -58,6 +85,11 @@ code. The train split is used for fitting and the sealed split is reserved for
 final evaluation. Check `summary.json` before training: if either split has
 too few accepted frontiers, collect more matches rather than treating an
 empty or narrow pool as a performance result.
+The generator replays each source match once to cache its selected decision
+states and recurrent actor memory. Discovery, independent confirmation, and
+entry materialization reuse those verified states; branch choices, replica
+seeds, continuation lengths, and scoring are unchanged. This only removes
+repeated prefix work, so full continuation rollouts still dominate runtime.
 
 Search distillation also requires a separate development-validation frontier
 run. Use different pool seeds so its match states are disjoint from the
@@ -99,11 +131,172 @@ PYTHONPATH=.:src outputs/venv/bin/python scripts/run_v4_search_distillation.py \
 Search distillation is an outcome-search experiment. Its corrections require
 independent paired simulator replicas; a single replica cannot certify a
 change. The package under `simulator/rl/v4/search_distillation/` owns cached
-prefix records, target construction, validation, and resumable training.
+prefix records, target construction, validation, and resumable training. Each
+completed run exports a plain actor state dict under
+`outputs/v4/search_distillation_seed0/actors/<label>.pt`; the similarly named
+file under `checkpoints/` also contains optimizer state and cannot be passed
+directly to the V4 evaluator. Freeze method/context settings using development
+data before looking at sealed outcomes; report all predeclared replicate seeds
+rather than selecting the best seed. The comparison plan fixes one method and
+context in advance.
 
-## PPO evaluation
+## Raw RL versus search distillation
 
-Run a controlled PPO curve only after train and sealed frontier entries exist:
+Create search-free match-opening entries for PPO. The default pool seed and
+match count reproduce the training match openings used by the frontier
+generator, without its policy trajectories, search verdicts, or teacher
+targets:
+
+```bash
+PYTHONPATH=.:src outputs/venv/bin/python scripts/run_v4_raw_ppo_starts.py \
+  --pool-seed 20261001 --matches-per-archetype 20 \
+  --out outputs/v4/raw_match_starts_seed0.pt
+```
+
+The `pinned` profile above is the controlled six-archetype baseline. For the
+main deck-distribution experiment, use `--profile real` for PPO and
+`--train-profile real` for frontier generation. Both use the same versioned
+[real deck catalog](../simulator/rl/v4/real_decks.json), seeded match openings,
+and five training archetypes. The catalog currently contains 30 complete
+training decks and ten disjoint evaluation decks from RoyaleAPI and Deck Shop
+(six training and two evaluation decks per archetype),
+captured on 2026-09-28. Every source URL encodes the exact eight card forms.
+The loader rejects card-list mismatches, duplicates, unsupported cards, and
+Evo/Hero variants; it never converts special forms to base cards. The source
+pages include both tracked RoyaleAPI decks and published Deck Shop deck pages,
+so these are source-linked real deck lists rather than a claim that every one
+is currently popular or strong. RoyaleAPI's displayed usage changes over time;
+the catalog pins deck identity, not a live popularity statistic.
+
+Use the same train pool seed and match count for the two methods. The real
+frontier run draws its sealed split from the catalog's ten evaluation decks
+with a separate match seed. Full-match learning-curve evaluation defaults to
+those same ten held-out deck identities with fresh match seeds. Changing the
+catalog requires new output directories and regenerated raw starts/frontiers.
+These reserved decks must not drive checkpoint selection. For the planned
+comparison, add explicit development evaluation using training decks with
+fresh seeds and reserve the ten unseen decks for the frozen final actors.
+The current curve defaults do not enforce this boundary; see the prerequisite
+work in the comparison plan.
+The current raw loader requires `raw-ppo-starts-v3` and verifies the catalog
+hash and train-deck identities in real-profile entries.
+
+```bash
+PYTHONPATH=.:src outputs/venv/bin/python scripts/run_v4_frontier_generation.py \
+  --checkpoint outputs/v4/bootstrap_seed0/actor.pt \
+  --train-profile real --train-pool-seed 20261011 \
+  --out outputs/v4/frontier_real_seed0
+PYTHONPATH=.:src outputs/venv/bin/python scripts/run_v4_raw_ppo_starts.py \
+  --profile real --pool-seed 20261011 --matches-per-archetype 20 \
+  --out outputs/v4/real_match_starts_seed0.pt
+```
+
+For the real-deck comparison, also generate development-validation frontiers
+with `--train-profile real` and different pool seeds. Pass the real frontier
+run as `--dataset-root`, the real validation run as `--validation-root`, and
+`outputs/v4/real_match_starts_seed0.pt` as PPO `--train-entries`. Use
+`outputs/v4/frontier_real_seed0/frontier_sealed.pt` as the shared sealed
+entries for the learning curve. Keep PPO `--training-source match-start
+--bc-coef 0` and select the distillation checkpoint on the separate real
+development-validation run before final comparison.
+
+The optional `mixed` profile fills archetype decks with random legal cards;
+some combinations are strategically incoherent. Use it for simulator stress
+tests and action-coverage checks. `pinned`, `mixed`, and `real` are distinct
+experiments. Keep the profile and opponent list fixed within each comparison.
+
+After the controlled comparison, add frozen V4 actors to a real-deck PPO pool
+from previous runs. Each `--policy-opponent` adds one mirror-match cohort of
+the configured match count; repeat it for distinct older checkpoints. The
+runner records an absolute path and SHA-256 for each actor, verifies the hash
+when loading it, and keeps the actor frozen for the whole match. Store these
+checkpoints in stable local paths throughout training:
+
+```bash
+PYTHONPATH=.:src outputs/venv/bin/python scripts/run_v4_raw_ppo_starts.py \
+  --pool-seed 20261011 --matches-per-archetype 20 --profile real \
+  --policy-opponent outputs/v4/search_distillation_seed0/actors/context32_soft-kl_seed0.pt \
+  --out outputs/v4/real_with_policy_match_starts_seed0.pt
+```
+
+The checkpoint path above is illustrative: use a plain V4 actor state dict
+that actually exists, such as an exported search-distillation actor. A saved
+PPO optimizer wrapper is not a valid opponent checkpoint. Use the new starts
+with `--training-source match-start --bc-coef 0`. Freeze the opponent list for
+each comparison run, then add a new actor only between runs. Frozen V4 actors
+currently play the learner's deck in mirror matches, while scripted opponents
+cover the other decks.
+
+First run reward-only PPO from the bootstrap actor. The example comparison
+checkpoint below is illustrative; replace it with the actor selected from the
+distillation development-validation reports. `--training-source match-start`
+rejects search-labelled entries, and `--bc-coef 0` removes anchor imitation.
+Use a full-match rollout and episode cap so updates include late decisions:
+
+```bash
+PYTHONPATH=.:src outputs/venv/bin/python scripts/run_v4_learning_curve.py \
+  --checkpoint outputs/v4/bootstrap_seed0/actor.pt \
+  --train-entries outputs/v4/raw_match_starts_seed0.pt \
+  --training-source match-start --bc-coef 0 \
+  --rollout-decisions 1200 --episode-cap 1200 --rollout-lanes 8 \
+  --sealed-entries outputs/v4/frontier_seed0/frontier_sealed.pt \
+  --compare-checkpoint outputs/v4/search_distillation_seed0/actors/context32_soft-kl_seed0.pt \
+  --updates 0,1,2,4,8 \
+  --out outputs/v4/bootstrap_raw_ppo_vs_distill_seed0
+```
+
+For a strictly random-initialized RL baseline, create an untrained actor with
+the same V4 architecture and use it in an otherwise identical match-start PPO
+run:
+
+```bash
+PYTHONPATH=.:src outputs/venv/bin/python scripts/run_v4_random_actor.py \
+  --seed 0 --out outputs/v4/random_actor_seed0.pt
+PYTHONPATH=.:src outputs/venv/bin/python scripts/run_v4_learning_curve.py \
+  --checkpoint outputs/v4/random_actor_seed0.pt \
+  --train-entries outputs/v4/raw_match_starts_seed0.pt \
+  --training-source match-start --bc-coef 0 \
+  --rollout-decisions 1200 --episode-cap 1200 --rollout-lanes 8 \
+  --sealed-entries outputs/v4/frontier_seed0/frontier_sealed.pt \
+  --compare-checkpoint outputs/v4/search_distillation_seed0/actors/context32_soft-kl_seed0.pt \
+  --updates 0,1,2,4,8 \
+  --out outputs/v4/random_raw_ppo_vs_distill_seed0
+```
+
+The `--compare-checkpoint` actor and every PPO curve point use the same held-out
+opponents, fresh evaluation seeds, and sealed frontier entries within each
+report. The defaults are the same across the two commands; pin explicit
+`--eval-seeds` and `--opponents-json` for a larger controlled study. Compare
+paired complete-match results, truncations, per-opponent outcomes, and sealed
+choice regret in each `learning_curve.json`. The
+`comparison_checkpoints[].versus_final_curve_point.full_match` field directly
+pairs the selected distillation actor with the final raw PPO point by opponent
+and seed; a positive score delta favors distillation. The bootstrap-start comparison
+isolates the training method; the random-start arm measures the value of the
+bootstrap as well. Report PPO environment decisions, distillation optimizer
+examples, counterfactual search replicas/horizon, and wall time alongside
+quality. Do not draw a performance conclusion from an empty or heavily
+truncated set of paired matches. Equal update counts alone are not an equal
+compute budget.
+
+The default full-match evaluation pool uses the catalog's ten reserved real
+decks. Evaluation still shares heuristic controllers with training, so it
+measures transfer to unseen complete decks under known controller styles.
+It does not establish robustness against learned adversaries or real players.
+Keep this evaluation pool fixed
+while comparing actors, and report per-opponent results so weakness against
+one style is visible. A future learned-opponent pool needs a player-one V4
+actor pool with diverse decks; the current frozen V4 opponent adapter supports
+mirror matches and maintains player-one public memory and recurrent state per
+episode. The `--opponents-json` evaluation argument can include pinned
+`{"kind":"v4-checkpoint","archetype":"name","checkpoint":"/absolute/path/actor.pt","sha256":"...","deck":[...]}`
+specs, but their deck must match the actor's trained hand vocabulary. For the
+current V4 actor, use the learner deck. Keep any learned evaluation opponents
+out of the training starts and predeclare their checkpoints before examining
+final scores.
+
+The existing frontier-initialized PPO curve is a separate search-conditioned
+experiment. Run it only after train and sealed frontier entries exist:
 
 ```bash
 PYTHONPATH=.:src outputs/venv/bin/python scripts/run_v4_learning_curve.py \
@@ -111,13 +304,12 @@ PYTHONPATH=.:src outputs/venv/bin/python scripts/run_v4_learning_curve.py \
   --train-entries outputs/v4/frontier_seed0/frontier_train.pt \
   --sealed-entries outputs/v4/frontier_seed0/frontier_sealed.pt \
   --updates 0,1,2,4,8 \
-  --out outputs/v4/learning_curve_seed0
+  --out outputs/v4/frontier_ppo_curve_seed0
 ```
 
-The runner evaluates update zero before applying PPO and uses the same sealed
-entries, opponent specifications, and evaluation seeds at every point. A
-match reaching the full-match decision cap is recorded as truncated rather
-than as a draw. No checkpoint is promoted automatically.
+The runner evaluates update zero before applying PPO. A match reaching the
+full-match decision cap is recorded as truncated rather than as a draw. No
+checkpoint is promoted automatically.
 
 The runtime executes one simulator decision per WAIT. Therefore WAIT duration
 is retained in the supervised bootstrap target but is excluded from the PPO
@@ -131,6 +323,9 @@ action distribution and entropy. Public history is synchronized through
 | `v4/bootstrap.py` | Real-simulator public-state collection and bootstrap batches |
 | `v4/hand_features.py` | The V4 learner-deck hand-token contract |
 | `v4/supervised.py` | Finite legality-masked bootstrap loss |
+| `v4/raw_ppo.py` | Search-free match-opening entries for reward-only PPO |
+| `v4/real_decks.py` and `real_decks.json` | Validated source-linked training/evaluation deck catalog |
+| `v4/policy_opponent.py` | Frozen V4 mirror opponents with player-one public memory |
 | `v4/simulator_teacher.py` | Small public-state rules labeler used for bootstrap and audit |
 | `v4/model_v4.py` | Recurrent actor, action heads, and legality masks |
 | `v4/v4_ppo/` | Checkpoint loading, rollouts, updates, diagnostics, and value helpers |

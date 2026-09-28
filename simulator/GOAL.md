@@ -26,22 +26,36 @@ decision interval.
 
 ## From-scratch workflow
 
-1. Bootstrap a V4 actor from real simulator observations with a seeded teacher
-   dataset. Save a plain actor state dict and a manifest with code, ruleset,
-   observation, model, generator, seed, and checkpoint identity.
+The [three-arm comparison plan](../docs/v4_comparison_plan.md) is the concrete
+next experiment and awaits user approval. Its prerequisites include correcting
+bootstrap sampling weights and separating development from final evaluation.
+
+1. Save a random V4 actor for reward-only PPO. Bootstrap a copy from real
+   simulator observations with a seeded teacher dataset for the other two
+   arms. Correct mode-loss sampling weights; teacher behavior is a prior whose
+   value must be measured, not presumed optimal. Save plain actor state dicts
+   and manifests with code, ruleset, observation, model, generator, seed, and
+   checkpoint identity.
 2. Generate disjoint train and sealed frontier pools using that explicit
    checkpoint. Keep source matches, search verdicts, and checkpoint hashes
    together; regenerate labels after simulator or search changes.
-3. Audit search labels and run search distillation or controlled PPO as
-   separate experiments. Each candidate starts from a declared checkpoint and
-   uses only the training split for fitting.
-4. Evaluate update zero and candidates on paired held-out seeds, complete
-   matches, and the sealed split without tuning on that split. Record wins,
-   crowns, truncation, invalid actions, behavior changes, and uncertainty.
+3. Audit search labels, then run search distillation and reward-only PPO from
+   the same bootstrap checkpoint. Add a random-initialized PPO arm to measure
+   the bootstrap's contribution. Select distillation variants on a separate
+   development-validation pool; never select any arm on sealed outcomes or
+   select the best replicate seed.
+4. Compare all arms on the same held-out opponents, seeds, complete matches,
+   and sealed frontier entries. Record wins, crowns, truncation, invalid
+   actions, behavior changes, uncertainty, and simulator/search compute cost.
 5. Preserve the smallest reproducer for any simulator exploit, observation
    leak, invalid mask, replay mismatch, or performance regression. Fix the
    underlying contract, add a regression test, and restart contaminated
    collection before drawing conclusions.
+6. For the large training run, use the versioned catalog of complete real decks
+   that the simulator supports. Keep deck identities disjoint
+   between training and final evaluation. Use random deck mixtures only for
+   stress testing, and report frozen V4 mirror opponents separately from
+   non-mirror matchups.
 
 The executable commands and package responsibilities are in
 [V4 training and evaluation](../docs/v4_training.md).
