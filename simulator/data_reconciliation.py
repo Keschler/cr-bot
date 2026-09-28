@@ -309,18 +309,23 @@ def reconcile_card(
         elif not_applicable:
             resolved = simulator_value
             status = "not_applicable"
-        elif matching_additional:
-            resolved = simulator_value
-            status = "independent_structured_match"
         elif structured_value is None and source_row is not None and simulator_value is None:
             resolved = simulator_value
             status = "not_applicable"
+        elif structured_value is not None and simulator_value == structured_value:
+            resolved = simulator_value
+            status = "structured_match"
+        elif matching_additional and structured_value is None:
+            # An additional structured source may corroborate a value the
+            # primary snapshot does not carry, but it must never resolve a
+            # conflict: a single dissenting row is not independent evidence
+            # against the primary source.  Conflicts stay fail-closed until an
+            # official scalar or a held-out measurement resolves them.
+            resolved = simulator_value
+            status = "independent_structured_match"
         elif structured_value is None:
             resolved = simulator_value
             status = "unresolved_missing_source"
-        elif simulator_value == structured_value:
-            resolved = simulator_value
-            status = "structured_match"
         else:
             resolved = simulator_value
             status = "unresolved_source_conflict"

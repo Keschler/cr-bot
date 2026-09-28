@@ -95,7 +95,7 @@ def test_roster_contains_current_explicit_patch_values() -> None:
     assert cards["graveyard"]["mechanics"]["persistent_effect"]["spawn"]["max_spawns"] == 12
     assert cards["goblin-curse"]["damage"] == 210
     assert cards["goblin-curse"]["mechanics"]["persistent_effect"]["damage_per_tick"] == 35
-    assert cards["goblin-curse"]["mechanics"]["persistent_effect"]["crown_damage_per_tick"] == 7
+    assert cards["goblin-curse"]["mechanics"]["persistent_effect"]["crown_damage_per_tick"] == 10
     assert cards["goblin-curse"]["mechanics"]["persistent_effect"]["status"]["on_death_spawn_card_id"] == "goblin"
 
 
@@ -120,7 +120,9 @@ def test_generated_card_builder_limits_area_and_does_not_turn_huts_into_turrets(
     # splash burst and recoil, while the generic range fallback remains
     # disabled for non-area ranged cards.
     assert cards["firecracker"]["area_radius_mtile"] == 1_500
-    assert cards["firecracker"]["mechanics"]["recoil_mtile"] == 1_500
+    # The August 2025 official scalar reduced the recoil from the 1.5-tile
+    # authored default to one tile.
+    assert cards["firecracker"]["mechanics"]["recoil_mtile"] == 1_000
     assert cards["electro-dragon"]["area_radius_mtile"] is None
     for card_id in ("barbarian-hut", "goblin-hut", "tombstone"):
         assert cards[card_id]["attack_interval_us"] is None
@@ -128,7 +130,7 @@ def test_generated_card_builder_limits_area_and_does_not_turn_huts_into_turrets(
     furnace = cards["furnace"]
     assert furnace["kind"] == "troop"
     assert furnace["hitpoints"] == 727
-    assert furnace["damage"] == 135
+    assert furnace["damage"] == 179
     assert furnace["attack_interval_us"] == 1_700_000
     assert furnace["range_mtile"] == 5_500
     assert furnace["move_speed_mtile_per_s"] == 1_200
@@ -157,11 +159,57 @@ def test_reconciliation_is_fail_closed_for_missing_and_conflicting_fields() -> N
     # Troop ``duration_s`` values are not body lifetimes (see the
     # reconciliation comment); remaining unresolved rows must therefore be
     # genuine missing/conflicting fields, not polymorphic duration noise.
-    # Furnace intentionally exposes the old structured snapshot disagreement
-    # after the August 2025 moving-troop rework.  DeckShop's current Level-11
-    # row is executable corroboration, but until an official scalar table or
-    # held-out video resolves the conflict it must remain fail-closed.
-    assert any(row["card_id"] == "furnace" for row in report["unresolved"])
+    assert all(
+        row["status"].startswith("unresolved_") for row in report["unresolved"]
+    )
+    # The Furnace's structured disagreement after the August 2025 moving-troop
+    # rework is now resolved by an official August 2026 scalar (5.5-tile
+    # range), so it is no longer an unresolved row.  The disagreement must
+    # still be retained and visible rather than dropped.
+    furnace_range = next(
+        row
+        for row in report["rows"]
+        if row["card_id"] == "furnace" and row["field"] == "range_mtile"
+    )
+    assert furnace_range["status"] == "official_override_conflict"
+    assert furnace_range["simulator_value"] == 5_500
+    assert furnace_range["structured_value"] == 6_000
+    assert furnace_range["official_value"] == 5_500
+
+
+def test_additional_structured_source_never_resolves_a_primary_conflict() -> None:
+    """One dissenting additional row must not promote a conflicting value.
+
+    The primary structured snapshot and the executable value disagree for
+    ``fireball.damage`` (689 versus 688).  Supplying an additional source that
+    happens to agree with the simulator value is not independent evidence
+    against the primary source, so the row must stay fail-closed.
+    """
+
+    base = reconcile_ruleset(load_ruleset("2026-08-04-roster"))
+    conflict = next(
+        row
+        for row in base["rows"]
+        if row["card_id"] == "fireball" and row["field"] == "damage"
+    )
+    assert conflict["status"] == "unresolved_source_conflict"
+
+    corroborating = {"cards": {"fireball": {"damage": conflict["simulator_value"]}}}
+    report = reconcile_ruleset(
+        load_ruleset("2026-08-04-roster"),
+        additional_sources=(("corroborating", corroborating),),
+    )
+    row = next(
+        row
+        for row in report["rows"]
+        if row["card_id"] == "fireball" and row["field"] == "damage"
+    )
+    assert row["status"] == "unresolved_source_conflict"
+    assert row["additional_structured_values"]["corroborating"] == conflict["simulator_value"]
+    assert any(
+        entry["card_id"] == "fireball" and entry["field"] == "damage"
+        for entry in report["unresolved"]
+    )
 
 
 def test_reconciliation_can_include_deckshop_as_an_additional_source() -> None:
