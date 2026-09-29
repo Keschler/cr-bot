@@ -48,6 +48,7 @@ from simulator.rl.v4.search_distillation import (
     train_one,
 )
 from simulator.rl.v4.search_distillation.preparation import parse_entry_id, match_json_path
+from simulator.rl.v4.search_distillation.training import ACTOR_EXPORT_EPOCHS
 from simulator.rl.v4.v4_ppo import load_frozen_anchor
 
 
@@ -192,7 +193,12 @@ def _implementation_identity() -> dict[str, str]:
     return {
         str(path.relative_to(REPO_ROOT)): file_sha256(path)
         for path in sorted(paths)
-        if "__pycache__" not in path.parts and "tests" not in path.parts
+        if (
+            "__pycache__" not in path.parts
+            and "tests" not in path.parts
+            and "outputs" not in path.parts
+            and "dist" not in path.parts
+        )
     }
 
 
@@ -271,7 +277,53 @@ def _deadline_from_args(args: argparse.Namespace) -> float | None:
     return float(value) if value is not None else None
 
 
-def _run_is_complete(run_manifest: Mapping[str, Any], report_path: Path, checkpoint_path: Path, label: str) -> bool:
+def _actor_exports_valid(
+    report: Mapping[str, Any], *, expected_epochs: int | None = None,
+) -> bool:
+    """Check recorded scheduled actors before treating a run as complete."""
+
+    if not isinstance(expected_epochs, int) or isinstance(expected_epochs, bool):
+        return False
+    if expected_epochs < 0:
+        return False
+    raw_exports = report.get("actor_checkpoints")
+    if not isinstance(raw_exports, (list, tuple)):
+        return False
+    by_epoch: dict[int, Mapping[str, Any]] = {}
+    for raw in raw_exports:
+        if not isinstance(raw, Mapping):
+            return False
+        try:
+            epoch = int(raw["epoch"])
+            path = Path(str(raw["path"]))
+            expected = str(raw["sha256"])
+        except (KeyError, TypeError, ValueError):
+            return False
+        if str(raw.get("format", "plain_state_dict")) != "plain_state_dict":
+            return False
+        if epoch in by_epoch or not path.is_file():
+            return False
+        try:
+            payload = torch.load(path, map_location="cpu", weights_only=True)
+            digest = file_sha256(path)
+        except Exception:
+            return False
+        if (
+            not isinstance(payload, Mapping)
+            or not payload
+            or not all(isinstance(value, torch.Tensor) for value in payload.values())
+            or digest != expected
+        ):
+            return False
+        by_epoch[epoch] = raw
+    required = {epoch for epoch in ACTOR_EXPORT_EPOCHS if epoch <= expected_epochs}
+    return required.issubset(by_epoch)
+
+
+def _run_is_complete(
+    run_manifest: Mapping[str, Any], report_path: Path, checkpoint_path: Path,
+    label: str, *, expected_epochs: int | None = None,
+) -> bool:
     if run_manifest.get("status") != "complete" or not report_path.is_file() or not checkpoint_path.is_file():
         return False
     try:
@@ -286,6 +338,7 @@ def _run_is_complete(run_manifest: Mapping[str, Any], report_path: Path, checkpo
         and saved_report.get("status") == "complete"
         and saved_report.get("method") == report.get("method")
         and int(saved_report.get("seed", -1)) == int(report.get("seed", -2))
+        and _actor_exports_valid(report, expected_epochs=expected_epochs)
     )
 
 
@@ -393,11 +446,22 @@ def _run_experiment(
             f"existing {label} uses different data, code, or optimizer settings; "
             "choose a new --out directory"
         )
-    if existing.get("spec") == run_spec and _run_is_complete(existing, report_path, checkpoint_path, label):
+    if existing.get("spec") == run_spec and _run_is_complete(
+        existing, report_path, checkpoint_path, label,
+        expected_epochs=int(run_spec["epochs"]),
+    ):
         report = json.loads(report_path.read_text(encoding="utf-8"))
         report["actor_checkpoint"] = str(actor_path)
         report["actor_sha256"] = _export_actor_checkpoint(checkpoint_path, actor_path)
         _atomic_json(report_path, report)
+        _atomic_json(run_manifest_path, {
+            **existing,
+            "status": "complete",
+            "actor_export_epochs": list(ACTOR_EXPORT_EPOCHS),
+            "actor_checkpoints": report.get("actor_checkpoints", []),
+            "actor_checkpoint": str(actor_path),
+            "actor_sha256": report["actor_sha256"],
+        })
         print(f"[search-distill] skip completed {label}", flush=True)
         return report
     print(f"[search-distill] start {label} device={device}", flush=True)
@@ -405,6 +469,7 @@ def _run_experiment(
         "status": "running", "spec": run_spec,
         "started_at": time.time(), "report": str(report_path),
         "checkpoint": str(checkpoint_path),
+        "actor_export_epochs": list(ACTOR_EXPORT_EPOCHS),
     })
     try:
         report = train_one(
@@ -414,6 +479,8 @@ def _run_experiment(
             learning_rate=run_spec["learning_rate"], retention_weight=run_spec["retention_weight"],
             temperature=run_spec["temperature"], device=device,
             checkpoint_path=checkpoint_path,
+            actor_export_dir=out / "actors",
+            actor_export_prefix=label,
             deadline_epoch=effective_deadline,
         )
         report["label"] = label
@@ -436,6 +503,10 @@ def _run_experiment(
         "finished_at": time.time(), "report": str(report_path),
         "checkpoint": str(checkpoint_path),
         "optimizer_steps": int(report.get("optimizer_steps", 0)),
+        "actor_export_epochs": list(ACTOR_EXPORT_EPOCHS),
+        "actor_checkpoints": report.get("actor_checkpoints", []),
+        "actor_checkpoint": report.get("actor_checkpoint"),
+        "actor_sha256": report.get("actor_sha256"),
     })
     return report
 
@@ -542,6 +613,12 @@ def main(argv: list[str] | None = None) -> int:
             },
             "cache": str(cache_path),
             "reports": [report.get("label") for report in reports],
+            "actor_export_epochs": list(ACTOR_EXPORT_EPOCHS),
+            "actor_checkpoints": {
+                str(report.get("label")): report.get("actor_checkpoints", [])
+                for report in reports
+                if report.get("label") is not None
+            },
             "elapsed_seconds": round(time.perf_counter() - started, 2),
         }
         _atomic_json(out / "manifest.json", manifest)
@@ -566,6 +643,7 @@ def main(argv: list[str] | None = None) -> int:
             "checkpoint_sha256": model_hash,
             "source_hashes": source_hashes,
             "data_identity": data_identity,
+            "actor_export_epochs": list(ACTOR_EXPORT_EPOCHS),
         }
         report = _run_experiment(
             run_spec, out=out, anchor=anchor, train_records=train_records,

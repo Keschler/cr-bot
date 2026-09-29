@@ -119,6 +119,11 @@ def _replay_selected_prefixes_with_legal(
     if not requested:
         return {}, {}, {}
     decisions = match["decisions"]
+    invalid = [offset for offset in requested if offset < 0 or offset >= len(decisions)]
+    if invalid:
+        raise ValueError(
+            f"selected prefix offset(s) outside recorded decisions: {invalid}"
+        )
     env = _fresh_env(dict(match))
     from simulator.public_state_estimator import PublicStateEstimator
 
@@ -130,6 +135,18 @@ def _replay_selected_prefixes_with_legal(
     for index in range(maximum + 1):
         _check_deadline(deadline_epoch)
         inputs, legal, _, _ = _observe_inputs(env, "cpu", estimator)
+        if index in requested:
+            expected_hash = decisions[index].get("state_hash")
+            if not isinstance(expected_hash, str) or not expected_hash:
+                raise ValueError(
+                    f"selected prefix decision t={index} lacks a recorded state_hash"
+                )
+            actual_hash = env.state.state_hash()
+            if actual_hash != expected_hash:
+                raise ValueError(
+                    f"prefix replay diverged at t={index}: "
+                    f"{actual_hash[:12]} != {expected_hash[:12]}"
+                )
         all_inputs[index] = _required_observation_inputs(inputs)
         all_inputs[index]["legal_play"] = np.asarray(legal, dtype=bool).copy()
         all_wait[index] = bool(inputs.get("legal_wait", True))
@@ -173,6 +190,10 @@ def prepare_records(
     by_match: dict[tuple[str, str], dict[str, Any]] = {}
     match_paths: dict[tuple[str, str], Path] = {}
     selected: dict[tuple[str, str], set[int]] = {}
+    # Validate every entry's source state, including entries whose verdict does
+    # not pass the correction gate.  Otherwise a stale frontier file with zero
+    # accepted corrections and no retention rows would never be replayed.
+    verify_offsets: dict[tuple[str, str], set[int]] = {}
     corrections: list[ValidatedCorrection] = []
     requested_splits: set[str] = set()
     for raw in entries:
@@ -185,6 +206,7 @@ def prepare_records(
             path = match_json_path(root, split, match_id)
             by_match[key] = json.loads(path.read_text(encoding="utf-8"))
             match_paths[key] = path
+        verify_offsets.setdefault(key, set()).add(offset)
         verdict = _load_verdict(root, split, match_id, offset)
         accepted, target, stats = validated_correction(
             verdict, min_lcb=min_lcb, require_independent=require_independent,
@@ -245,7 +267,12 @@ def prepare_records(
             if not progressed:
                 break
     prefixes: dict[tuple[str, str], tuple[dict[int, list[dict[str, np.ndarray]]], dict[int, list[np.ndarray]], dict[int, list[bool]]]] = {}
+    replay_offsets = {
+        key: set(offsets) for key, offsets in verify_offsets.items()
+    }
     for key, offsets in selected.items():
+        replay_offsets.setdefault(key, set()).update(offsets)
+    for key, offsets in replay_offsets.items():
         _check_deadline(deadline_epoch)
         prefixes[key] = _replay_selected_prefixes_with_legal(
             by_match[key], sorted(offsets), context=context, deadline_epoch=deadline_epoch,
@@ -299,4 +326,3 @@ def prepare_records(
     corrections_out = [r for r in records if r.is_correction]
     retention_out = [r for r in records if not r.is_correction]
     return corrections_out + (retention_out if retention_count > 0 else [])
-

@@ -41,11 +41,13 @@ from .artifacts import (
     git_revision,
 )
 from .training import (
+    ACTOR_EXPORT_EPOCHS,
     train_one,
 )
 
 __all__ = [
     "ActionTarget",
+    "ACTOR_EXPORT_EPOCHS",
     "CachedPrefix",
     "CacheConfig",
     "FactorizedTarget",

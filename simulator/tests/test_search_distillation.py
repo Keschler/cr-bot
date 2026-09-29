@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import math
 import pytest
 import torch
 from types import SimpleNamespace
@@ -70,6 +71,19 @@ def test_parse_entry_id_and_paired_advantage_use_common_replicas() -> None:
     assert np.isclose(stats["mean"], 0.2)
     assert np.isclose(stats["se"], 0.0)
     assert np.isclose(stats["lcb95"], 0.2)
+
+
+def test_paired_advantage_without_replica_uncertainty_is_unresolved() -> None:
+    stats = paired_advantage({
+        "branches": [
+            {"source": "sim", "mode": 0, "mean": 0.1},
+            {"source": "search", "mode": 1, "slot": 0, "row": 1, "col": 1,
+             "mean": 0.4},
+        ]
+    })
+    assert stats["mean"] == pytest.approx(0.3)
+    assert math.isinf(stats["se"])
+    assert stats["lcb95"] == -float("inf")
 
 
 def test_soft_target_retains_unsearched_prior_and_normalizes_factors() -> None:

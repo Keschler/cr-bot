@@ -10,11 +10,80 @@ import numpy as np
 import torch
 
 from ..model_v4 import RecurrentV4Policy
-from .artifacts import DistillationDeadline, _check_deadline, _save_training_state
+from .artifacts import (
+    DistillationDeadline,
+    _check_deadline,
+    _save_training_state,
+    atomic_torch_save,
+    file_sha256,
+)
 from .batching import _stack_records
 from .evaluation import evaluate_records
 from .losses import compute_batch_loss
 from .records import CachedPrefix, DEFAULT_TEMPERATURE
+
+
+# These are the predeclared development points for the comparison.  Epoch zero
+# is the untouched anchor actor; later points are exported immediately after
+# their corresponding epoch has completed.
+ACTOR_EXPORT_EPOCHS: tuple[int, ...] = (0, 1, 2, 4, 8, 16, 20)
+
+
+def _plain_state_dict(policy: Any) -> dict[str, torch.Tensor]:
+    """Copy a policy state dict to CPU in the plain-actor format."""
+
+    state = policy.state_dict()
+    if not isinstance(state, Mapping) or not state or not all(
+        isinstance(value, torch.Tensor) for value in state.values()
+    ):
+        raise ValueError("actor state dict must contain tensors")
+    return {
+        str(name): value.detach().cpu().clone()
+        for name, value in state.items()
+    }
+
+
+def _export_plain_actor(policy: Any, path: Path) -> str:
+    """Write or verify one plain actor checkpoint and return its hash."""
+
+    state = _plain_state_dict(policy)
+    if path.is_file():
+        try:
+            existing = torch.load(path, map_location="cpu", weights_only=True)
+        except Exception as exc:
+            raise RuntimeError(f"cannot read actor export {path}") from exc
+        if not isinstance(existing, Mapping) or existing.keys() != state.keys() or any(
+            not isinstance(existing[key], torch.Tensor)
+            or not torch.equal(existing[key], value)
+            for key, value in state.items()
+        ):
+            raise ValueError(f"actor export differs from current epoch state: {path}")
+    else:
+        atomic_torch_save(state, path)
+    return file_sha256(path)
+
+
+def _validate_actor_export(record: Mapping[str, Any]) -> None:
+    """Verify one recorded export before resuming from its training state."""
+
+    try:
+        path = Path(str(record["path"]))
+        expected = str(record["sha256"])
+        format_name = str(record.get("format", "plain_state_dict"))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RuntimeError("invalid actor checkpoint metadata") from exc
+    if format_name != "plain_state_dict":
+        raise RuntimeError(f"actor export has unsupported format: {path}")
+    if not path.is_file() or file_sha256(path) != expected:
+        raise RuntimeError(f"actor export hash mismatch: {path}")
+    try:
+        state = torch.load(path, map_location="cpu", weights_only=True)
+    except Exception as exc:
+        raise RuntimeError(f"cannot read actor export {path}") from exc
+    if not isinstance(state, Mapping) or not state or not all(
+        isinstance(value, torch.Tensor) for value in state.values()
+    ):
+        raise RuntimeError(f"actor export is not a plain state dict: {path}")
 
 
 def _training_report(
@@ -58,6 +127,8 @@ def train_one(
     temperature: float = DEFAULT_TEMPERATURE,
     device: torch.device | str = "cpu",
     checkpoint_path: Path | None = None,
+    actor_export_dir: Path | None = None,
+    actor_export_prefix: str | None = None,
     deadline_epoch: float | None = None,
 ) -> dict[str, Any]:
     """Train one deterministic method/seed and return report metadata.
@@ -87,6 +158,15 @@ def train_one(
         raise ValueError(f"no active training records for {method}")
     if int(epochs) <= 0 or int(batch_size) <= 0:
         raise ValueError("epochs and batch_size must be positive")
+    if actor_export_dir is not None:
+        actor_export_dir = Path(actor_export_dir)
+        actor_export_prefix = str(
+            actor_export_prefix
+            if actor_export_prefix is not None
+            else (checkpoint_path.stem if checkpoint_path is not None else "actor")
+        )
+        if not actor_export_prefix:
+            raise ValueError("actor_export_prefix must be non-empty")
 
     # Equal optimizer budget: all methods use the full train-record cardinality
     # to determine steps, while method-specific pools determine labels.
@@ -97,6 +177,7 @@ def train_one(
     retention_examples = 0
     start_epoch = 0
     resumed_from_epoch = 0
+    actor_exports: dict[int, dict[str, Any]] = {}
     if checkpoint_path is not None and checkpoint_path.is_file():
         try:
             saved = torch.load(checkpoint_path, map_location=device, weights_only=False)
@@ -125,10 +206,55 @@ def train_one(
             correction_examples = int(saved_report.get("correction_examples_seen", 0))
             retention_examples = int(saved_report.get("retention_examples_seen", 0))
             start_epoch = int(saved.get("epoch_completed", len(history)))
+            raw_exports = saved_report.get("actor_checkpoints", ())
+            if not isinstance(raw_exports, (list, tuple)):
+                raise RuntimeError(
+                    f"invalid actor checkpoint metadata in {checkpoint_path}"
+                )
+            for raw_export in raw_exports:
+                if not isinstance(raw_export, Mapping):
+                    raise RuntimeError(
+                        f"invalid actor checkpoint metadata in {checkpoint_path}"
+                    )
+                try:
+                    export_epoch = int(raw_export["epoch"])
+                    export_path = str(raw_export["path"])
+                    export_hash = str(raw_export["sha256"])
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise RuntimeError(
+                        f"invalid actor checkpoint metadata in {checkpoint_path}"
+                    ) from exc
+                if export_epoch in actor_exports:
+                    raise RuntimeError(
+                        f"duplicate actor checkpoint epoch {export_epoch} in {checkpoint_path}"
+                    )
+                actor_exports[export_epoch] = {
+                    "epoch": export_epoch,
+                    "path": export_path,
+                    "sha256": export_hash,
+                    "format": str(raw_export.get("format", "plain_state_dict")),
+                }
+                _validate_actor_export(actor_exports[export_epoch])
         except Exception as exc:
+            if isinstance(exc, RuntimeError) and str(exc).startswith(
+                "invalid actor checkpoint metadata"
+            ):
+                raise
             raise RuntimeError(f"invalid resumable distillation checkpoint: {checkpoint_path}") from exc
         resumed_from_epoch = start_epoch
         print(f"[search-distill] resumed method={method} seed={seed} context={context} epoch={start_epoch}", flush=True)
+
+    def export_actor(epoch: int, policy: Any) -> None:
+        if actor_export_dir is None or epoch not in ACTOR_EXPORT_EPOCHS:
+            return
+        path = actor_export_dir / f"{actor_export_prefix}_epoch{epoch}.pt"
+        digest = _export_plain_actor(policy, path)
+        actor_exports[epoch] = {
+            "epoch": int(epoch),
+            "path": str(path),
+            "sha256": digest,
+            "format": "plain_state_dict",
+        }
 
     def make_report(status: str, metrics: Mapping[str, Any] | None = None) -> dict[str, Any]:
         payload = _training_report(
@@ -141,7 +267,28 @@ def train_one(
         payload["parameters"] = int(sum(p.numel() for p in student.parameters() if p.requires_grad))
         if checkpoint_path is not None:
             payload["checkpoint"] = str(checkpoint_path)
+        payload["actor_export_epochs"] = list(ACTOR_EXPORT_EPOCHS)
+        payload["actor_checkpoints"] = [
+            dict(actor_exports[epoch]) for epoch in sorted(actor_exports)
+        ]
         return payload
+
+    # Export the exact untouched anchor before any optimizer step.  On resume,
+    # this also verifies that an existing epoch-zero artifact has not drifted.
+    export_actor(0, anchor)
+    if start_epoch in ACTOR_EXPORT_EPOCHS and start_epoch > 0:
+        # A partial checkpoint is written after each completed epoch, so the
+        # in-memory student is the state for this boundary when resuming.
+        export_actor(start_epoch, student)
+    if actor_export_dir is not None:
+        missing_exports = [
+            epoch for epoch in ACTOR_EXPORT_EPOCHS
+            if epoch <= start_epoch and epoch not in actor_exports
+        ]
+        if missing_exports:
+            raise RuntimeError(
+                f"resumable checkpoint lacks actor exports for epochs {missing_exports}"
+            )
 
     # A deadline inside epoch zero must resume from the untouched initial
     # state. Save that boundary before the first optimizer step.
@@ -189,6 +336,7 @@ def train_one(
                 "correction_examples": float(epoch_corrections),
                 "retention_examples": float(epoch_retention),
             })
+            export_actor(epoch + 1, student)
             if checkpoint_path is not None:
                 partial = make_report("partial")
                 _save_training_state(
@@ -215,4 +363,3 @@ def train_one(
             report=payload, epoch_completed=int(epochs),
         )
     return payload
-

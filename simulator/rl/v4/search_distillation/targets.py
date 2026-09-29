@@ -153,7 +153,11 @@ def paired_advantage(verdict: Mapping[str, Any], *, require_independent: bool = 
         se = float(diffs.std(ddof=1) / math.sqrt(len(diffs))) if len(diffs) > 1 else float("inf")
     else:
         mean = _branch_mean(best) - _branch_mean(sim)
-        se = float(best.get("se", 0.0)) + float(sim.get("se", 0.0))
+        # A branch without replica values or an explicit uncertainty estimate
+        # cannot certify a correction, even in exploratory discovery mode.
+        se = float(best.get("se", float("inf"))) + float(
+            sim.get("se", float("inf"))
+        )
     return {
         "mean": mean,
         "se": se,
