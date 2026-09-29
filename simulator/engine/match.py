@@ -27,10 +27,18 @@ class MatchMixin:
         elif king_deaths:
             self._collapse_remaining_crown_towers(state, king_deaths)
             self._end_match(state, 1 - next(iter(king_deaths)), "king_tower_destroyed")
-        elif state.phase == "overtime":
-            crowns = (state.players[0].crowns, state.players[1].crowns)
-            if crowns[0] != crowns[1]:
-                self._end_match(state, 0 if crowns[0] > crowns[1] else 1, "overtime_sudden_death")
+        elif state.phase == "overtime" and len(destroyed) == 1:
+            # Overtime is unconditional sudden death: the first player to
+            # destroy any Tower immediately wins, whatever the crown totals
+            # are.  Entering overtime trailing and then taking a tower must
+            # end the match, not leave it at a tie.  Two towers falling in the
+            # same batch is the documented rare case where overtime continues,
+            # and a King death has already been resolved above.
+            self._end_match(
+                state,
+                1 - destroyed[0].owner,
+                "overtime_sudden_death",
+            )
 
     def _collapse_remaining_crown_towers(
         self, state: BattleState, owners: set[int]

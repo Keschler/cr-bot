@@ -58,6 +58,7 @@
     {"id": "heal-spirit.impact-heal", "status": "open", "answer": "A 532-HP one-shot impact heal for friendly air/ground troops within a provisional 1.5-tile radius is executable; exact edge, ordering, and full-health event semantics remain unresolved.", "evidence": ["deckshop-heal-spirit-2026-08-16", "official-august-2026"]},
     {"id": "cannon-cart.health-transform", "status": "open", "answer": "At or below 50% of its shared Level-11 HP pool, Cannon Cart keeps its UID/remaining HP and becomes a stationary building with the cart weapon and a provisional 30-second lifetime decay.", "evidence": ["official-may-2025-cannon-cart-rework", "official-january-2025-cannon-cart", "official-august-2024-cannon-cart"]},
     {"id": "void.pulse-timing", "status": "open", "answer": null, "evidence": null},
+    {"id": "area-effect.victim-hitbox", "status": "open", "answer": null, "evidence": null},
     {"id": "missing-card-data", "status": "open", "answer": null, "evidence": null}
   ]
 }
