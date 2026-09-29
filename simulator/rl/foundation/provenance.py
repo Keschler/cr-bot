@@ -75,6 +75,27 @@ def code_revision() -> dict[str, Any]:
     }
 
 
+def revision_guard_status(
+    start: Mapping[str, Any],
+    current: Mapping[str, Any],
+) -> str:
+    """Return the drift verdict for two provenance snapshots.
+
+    ``stable`` and ``drifted`` are both conclusions drawn from evidence. An
+    unavailable identity is neither: without a commit there is nothing to
+    compare, so the honest answer is ``unknown``. Callers key exit codes on
+    this value, and an unknown identity must not pass as stable.
+    """
+
+    if not _has_identity(start) or not _has_identity(current):
+        return "unknown"
+    return "drifted" if revision_changed(start, current) else "stable"
+
+
+def _has_identity(snapshot: Mapping[str, Any]) -> bool:
+    return isinstance(snapshot.get("commit"), str)
+
+
 def revision_changed(
     start: Mapping[str, Any],
     current: Mapping[str, Any],
@@ -85,8 +106,9 @@ def revision_changed(
     artifacts may not contain a worktree hash; comparing two such snapshots
     retains compatibility, while mixing an old snapshot with a hashed one
     fails closed.  If Git is unavailable in either snapshot, there is no
-    reliable identity to compare and this helper returns ``False``; the
-    snapshots still preserve that limitation in the artifact.
+    reliable identity to compare and this helper returns ``False``; use
+    :func:`revision_guard_status` when the difference between "unchanged" and
+    "cannot tell" matters, because it reports ``unknown`` in that case.
     """
 
     start_commit = start.get("commit")
@@ -104,4 +126,4 @@ def revision_changed(
     return (isinstance(start_hash, str)) != (isinstance(current_hash, str))
 
 
-__all__ = ["code_revision", "revision_changed"]
+__all__ = ["code_revision", "revision_changed", "revision_guard_status"]

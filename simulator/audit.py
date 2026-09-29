@@ -34,15 +34,20 @@ def _code_revision() -> dict[str, object]:
     return code_revision()
 
 
-def _revision_changed(
+def _revision_guard_status(
     start: dict[str, object],
     current: dict[str, object],
-) -> bool:
-    """Compare run-boundary provenance without importing RL at module load."""
+) -> str:
+    """Classify run-boundary provenance as stable, drifted, or unknown.
 
-    from .rl.foundation.provenance import revision_changed
+    An identity Git could not supply is ``unknown``, not ``stable``: the guard
+    exists to prove the run used one code revision, and a packaged copy without
+    repository metadata cannot prove that.
+    """
 
-    return revision_changed(start, current)
+    from .rl.foundation.provenance import revision_guard_status
+
+    return revision_guard_status(start, current)
 
 
 class DeterminismAuditError(RuntimeError):
@@ -447,11 +452,7 @@ def _run_audit(
         code_revision=end_code_revision,
         run_code_revision=run_code_revision,
         revision_guard={
-            "status": (
-                "drifted"
-                if _revision_changed(run_code_revision, end_code_revision)
-                else "stable"
-            ),
+            "status": _revision_guard_status(run_code_revision, end_code_revision),
             "start": run_code_revision,
             "end": end_code_revision,
         },

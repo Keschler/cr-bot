@@ -43,3 +43,26 @@ def test_code_revision_is_explicit_when_git_is_available() -> None:
         hashed,
         {**hashed, "tracked_worktree_hash": "sha256:" + "2" * 64},
     ) is True
+
+
+def test_unavailable_provenance_is_unknown_not_stable() -> None:
+    """An identity Git cannot supply must not pass the drift guard.
+
+    ``revision_changed`` answers "did the code change", and a missing identity
+    has no answer, so it stays ``False`` for callers that only need that
+    boolean. Callers that key an exit code on the guard use
+    ``revision_guard_status``, which reports ``unknown`` instead of letting an
+    unpackaged copy exit clean.
+    """
+
+    from simulator.rl.foundation.provenance import revision_guard_status
+
+    stable = {"source": "git", "commit": "abc1234", "worktree_dirty": True}
+    unavailable = {"source": "unavailable", "commit": None, "worktree_dirty": None}
+    drifted = {"source": "git", "commit": "def5678", "worktree_dirty": True}
+
+    assert revision_guard_status(stable, stable) == "stable"
+    assert revision_guard_status(stable, drifted) == "drifted"
+    assert revision_guard_status(stable, unavailable) == "unknown"
+    assert revision_guard_status(unavailable, stable) == "unknown"
+    assert revision_guard_status(unavailable, unavailable) == "unknown"

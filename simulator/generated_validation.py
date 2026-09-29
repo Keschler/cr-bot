@@ -38,12 +38,12 @@ def _code_revision() -> dict[str, Any]:
     return code_revision()
 
 
-def _revision_changed(start: Mapping[str, Any], current: Mapping[str, Any]) -> bool:
-    """Compare run-boundary provenance without importing RL at module load."""
+def _revision_guard_status(start: Mapping[str, Any], current: Mapping[str, Any]) -> str:
+    """Classify run-boundary provenance as stable, drifted, or unknown."""
 
-    from .rl.foundation.provenance import revision_changed
+    from .rl.foundation.provenance import revision_guard_status
 
-    return revision_changed(start, current)
+    return revision_guard_status(start, current)
 
 
 def _manifest_hash(payload: Mapping[str, Any]) -> str:
@@ -482,11 +482,7 @@ def validate_generated_scenarios(
         "code_revision": end_code_revision,
         "run_code_revision": run_code_revision,
         "revision_guard": {
-            "status": (
-                "drifted"
-                if _revision_changed(run_code_revision, end_code_revision)
-                else "stable"
-            ),
+            "status": _revision_guard_status(run_code_revision, end_code_revision),
             "start": run_code_revision,
             "end": end_code_revision,
         },
