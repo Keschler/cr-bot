@@ -23,6 +23,7 @@ from typing import Any, Mapping
 from cr_bot.domain.card_metadata import CARD_METADATA
 
 from .data_reconciliation import (
+    BALANCE_PENDING_FILENAME,
     LEVEL11_SOURCE_ID,
     apply_official_overrides,
     load_level11_source,
@@ -2953,6 +2954,10 @@ def build_roster_ruleset_raw(base_raw: Mapping[str, Any] | None = None) -> dict[
             "field-level Level-11 reconciliation",
             "card-specific mechanic tests and held-out video evidence",
         ],
+        # Name the file that records which post-snapshot balance notes are
+        # deliberately unapplied, so a reader can audit the staleness gap
+        # instead of inferring it from the generated_at date.
+        "balance_pending_record": BALANCE_PENDING_FILENAME,
     }
     raw["sources"] = {
         **dict(raw.get("sources", {})),

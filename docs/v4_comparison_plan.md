@@ -75,7 +75,13 @@ The bootstrap now predeclares three complete matches per archetype, records
 original and retained match/mode counts, uses dataset-normalized
 inverse-retention weights for mode loss, preserves each observed group's
 support, saves the initial random actor, and rejects overlap with reserved
-evaluation decks. Distillation now exports hashed plain actors at the planned
+evaluation decks. The ruleset is a pinned `2026-08-14` snapshot, so any balance
+note released after that date is absent from it by construction; the gap is
+recorded in `simulator/sources/balance_pending.json`, which the generated ruleset
+names, and `training_ready` remains false until that is closed. Comparing arms
+under one pinned ruleset stays valid because the ruleset is identical across
+arms; the staleness limits what the result says about the live game, not the
+comparison itself. Distillation now exports hashed plain actors at the planned
 development epochs. The curve runner now keeps development matches on the
 training catalog and has a frozen-only final path; scripted frontier entries
 require an explicit opt-in. An end-to-end comparison pilot, measured cost audit,

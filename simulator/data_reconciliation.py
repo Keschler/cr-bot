@@ -30,8 +30,27 @@ OFFICIAL_OVERRIDE_PATH = SOURCE_DIRECTORY / "official_level11_overrides.json"
 DECKSHOP_SOURCE_PATH = SOURCE_DIRECTORY / "deckshop_level11.json"
 DECKSHOP_CORE_SOURCE_PATH = SOURCE_DIRECTORY / "deckshop_core_level11.json"
 DECKSHOP_HEAL_SPIRIT_SOURCE_PATH = SOURCE_DIRECTORY / "deckshop_heal_spirit_level11.json"
+BALANCE_PENDING_PATH = SOURCE_DIRECTORY / "balance_pending.json"
+BALANCE_PENDING_FILENAME = BALANCE_PENDING_PATH.name
 LEVEL11_SOURCE_ID = "local-level11-card-stats-2026-04-12"
 RECONCILIATION_SCHEMA_VERSION = 1
+
+
+def load_balance_pending() -> dict[str, Any]:
+    """Read the record of balance notes deliberately left unapplied.
+
+    The generated ruleset is a pinned snapshot, so any patch released after it
+    is absent by construction. This file is the explicit, reviewable list of
+    that gap; it is a reminder and never a source of truth.
+    """
+
+    payload = _read_json(BALANCE_PENDING_PATH)
+    if payload.get("kind") != "simulator_balance_pending":
+        raise ValueError("balance pending record has an unexpected kind")
+    items = payload.get("items")
+    if not isinstance(items, list):
+        raise ValueError("balance pending record must contain an items list")
+    return payload
 
 
 def _read_json(path: Path) -> dict[str, Any]:

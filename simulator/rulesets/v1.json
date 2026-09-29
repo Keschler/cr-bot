@@ -12480,7 +12480,7 @@
       ]
     }
   },
-  "content_hash": "sha256:1c59c76c2ae0c370dd18244520f23d5160446d3c9692e287f75c9452045805ef",
+  "content_hash": "sha256:02ab25da274367671ced1593ad0ff99efd3d537e61331d697454dac64bde8d76",
   "interaction_set": [
     "archers",
     "arrows",
@@ -12609,6 +12609,7 @@
     "arena_provenance": [
       "policy-grid-2026-08-11"
     ],
+    "balance_pending_record": "balance_pending.json",
     "external_ids": {
       "cannon": 27000000,
       "fireball": 28000000,

@@ -296,3 +296,50 @@ def test_unapplied_mechanics_override_blocks_full_verification() -> None:
         if row["status"] == "official_override_unapplied":
             assert row["simulator_value"] != row["official_value"]
             assert row in report["unresolved"]
+
+
+def test_balance_pending_record_is_valid_and_named_by_the_ruleset() -> None:
+    """The staleness gap must be auditable, not inferred from a date.
+
+    The generated ruleset is a pinned snapshot, so any patch released after it
+    is absent by construction. A reader previously had to compare
+    ``generated_at`` against the outside world to notice. The record names the
+    gap explicitly and the ruleset points at it.
+    """
+
+    from simulator.data_reconciliation import (
+        BALANCE_PENDING_FILENAME,
+        load_balance_pending,
+    )
+
+    record = load_balance_pending()
+    assert record["kind"] == "simulator_balance_pending"
+    assert isinstance(record["items"], list)
+    # The record must state that it is a reminder rather than a source.
+    assert "never be promoted" in record["instructions"]
+
+    ruleset = load_ruleset("v1")
+    assert ruleset.metadata["balance_pending_record"] == BALANCE_PENDING_FILENAME
+    # Still not a release: the gap is recorded, not closed.
+    assert ruleset.metadata["training_ready"] is False
+    assert ruleset.metadata["training_blockers"]
+
+
+def test_balance_pending_record_does_not_assert_unverified_values() -> None:
+    """Nothing in the record may masquerade as applied simulator truth.
+
+    Every entry is a reminder that a note exists and is unapplied. A value
+    recorded here would be an unsourced override, which is exactly what the
+    reconciliation gate exists to prevent.
+    """
+
+    from simulator.data_reconciliation import load_balance_pending
+
+    record = load_balance_pending()
+    for item in record["items"]:
+        assert "status" in item, item
+        assert item["status"] == "unapplied", item
+        assert "source" in item or "note" in item, item
+        # A recorded value would need an official override row to take effect;
+        # the record must not carry one on its own.
+        assert "value" not in item or item.get("applied_via_override") is None, item

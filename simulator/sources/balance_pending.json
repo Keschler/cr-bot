@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "kind": "simulator_balance_pending",
+  "ruleset_id": "v1",
+  "generated_at": "2026-08-14",
+  "instructions": "Balance notes that postdate the pinned snapshot and are therefore NOT applied to the generated ruleset. This file records the gap so staleness is auditable rather than inferred from a date. It is a reminder, not a source: nothing here is authoritative, and a value here must never be promoted into simulator truth without the same evidence an override row requires. An item moves to applied only by landing as an official override row in official_level11_overrides.json with a source record, at which point it is deleted from this file.",
+  "snapshot": {
+    "note": "Every source record in official_level11_overrides.json was retrieved on or before 2026-08-30 and no published_at later than 2026-08-04 is present. Balance notes released after the snapshot date are therefore unrepresented in the generated ruleset by construction, not by oversight.",
+    "latest_source_retrieved_at": "2026-08-30",
+    "latest_source_published_at": "2026-08-04",
+    "reconciliation_status": "The ruleset metadata already records training_ready=false and the training_blockers list. This file is the per-patch detail those blockers point at."
+  },
+  "policy": {
+    "release_cutoff_exclusive": "2025-12-01",
+    "roster_id": "opponent-base-pre-2025-12-01",
+    "note": "The roster is deliberately a pre-cutoff snapshot, so cards released on or after 2025-12-01 are classified out of scope in rosters/opponent-base-pre-2025-12-01.json rather than balanced here."
+  },
+  "items": []
+}
