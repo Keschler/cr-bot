@@ -48,8 +48,15 @@ def move_towards(
         return target_x, target_y
     if remaining == 0:
         return x, y
-    next_x = x + dx * distance // remaining
-    next_y = y + dy * distance // remaining
+    # Divide the magnitude before restoring the direction. Python's ``//``
+    # rounds negative values toward negative infinity, which gives a mirrored
+    # vector one extra milli-tile of displacement whenever a component is
+    # negative. Magnitude division keeps the result deterministic and
+    # equivariant under arena mirroring.
+    step_x = abs(dx) * distance // remaining
+    step_y = abs(dy) * distance // remaining
+    next_x = x + (step_x if dx >= 0 else -step_x)
+    next_y = y + (step_y if dy >= 0 else -step_y)
     # Integer division can produce no progress for extremely small diagonal
     # steps. The simulator's normal step is much larger, but keep the helper
     # total for fuzzed rulesets.

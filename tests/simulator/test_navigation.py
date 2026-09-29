@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from random import Random
 
-from simulator.fixed import ceil_div, distance_mtile
+from simulator.fixed import distance_mtile
 from simulator.geometry import cell_center_mtile, is_basic_deploy_cell
 from simulator.navigation import (
-    NAVIGATION_SAMPLE_MTILE,
     NavigationObstacle,
     _fixed_visibility_graph,
     _plan_route_cached,
+    _river_segment_is_walkable_continuous,
     plan_route,
     point_is_walkable,
     segment_is_walkable,
@@ -16,32 +16,65 @@ from simulator.navigation import (
 from simulator.ruleset import load_ruleset
 
 
-def test_fast_river_visibility_matches_pointwise_sampling() -> None:
+def test_river_visibility_matches_continuous_interval_geometry() -> None:
     arena = load_ruleset().arena
     rng = Random(81642)
     for _ in range(1_000):
         start = (rng.randrange(0, arena.width_mtile), rng.randrange(0, arena.height_mtile))
         end = (rng.randrange(0, arena.width_mtile), rng.randrange(0, arena.height_mtile))
         radius = rng.randrange(0, 900)
-        samples = max(
-            1,
-            ceil_div(
-                max(abs(end[0] - start[0]), abs(end[1] - start[1])),
-                NAVIGATION_SAMPLE_MTILE,
-            ),
-        )
-        expected = all(
-            point_is_walkable(
+        expected = (
+            point_is_walkable(arena, *start, radius)
+            and point_is_walkable(arena, *end, radius)
+            and _river_segment_is_walkable_continuous(
                 arena,
-                start[0] + (end[0] - start[0]) * index // samples,
-                start[1] + (end[1] - start[1]) * index // samples,
+                start,
+                end,
                 radius,
             )
-            for index in range(samples + 1)
         )
         assert segment_is_walkable(
             arena, start, end, agent_radius_mtile=radius
         ) == expected
+        assert segment_is_walkable(
+            arena, end, start, agent_radius_mtile=radius
+        ) == expected
+
+
+def test_continuous_river_entry_clearance_rejects_unsampled_bridge_clip() -> None:
+    arena = load_ruleset().arena
+    start = (5_000, 14_750)
+    target = (2_500, 17_150)
+    radius = 400
+
+    # The line enters the river at x ~= 4,739.  A radius-400 unit must stay
+    # at or below x=4,600 in the left bridge, but a 250-mtile sampler starts
+    # checking only after the line has already moved into the opening.
+    assert not segment_is_walkable(arena, start, target, agent_radius_mtile=radius)
+    route = plan_route(arena, start, target, agent_radius_mtile=radius)
+    assert route and route != (start, target)
+    assert all(
+        segment_is_walkable(arena, route_start, route_end, agent_radius_mtile=radius)
+        for route_start, route_end in zip(route, route[1:])
+    )
+
+
+def test_river_jumper_can_retarget_while_airborne_outside_a_bridge() -> None:
+    arena = load_ruleset().arena
+    start = (9_000, 16_000)
+    target = (3_500, 25_500)
+
+    assert not segment_is_walkable(
+        arena, start, target, agent_radius_mtile=600
+    )
+    assert segment_is_walkable(
+        arena, start, target, agent_radius_mtile=600,
+        allow_river_crossing=True,
+    )
+    assert not segment_is_walkable(
+        arena, (100, 16_000), target, agent_radius_mtile=600,
+        allow_river_crossing=True,
+    )
 
 
 def test_route_crosses_river_only_through_a_bridge() -> None:

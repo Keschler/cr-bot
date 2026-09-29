@@ -3,7 +3,12 @@ from __future__ import annotations
 from simulator.actions import PlayCardAction
 from simulator.engine import BattleEngine
 from simulator.fixed import distance_mtile
-from simulator.navigation import plan_route, point_is_walkable, segment_is_walkable
+from simulator.navigation import (
+    _river_segment_is_walkable_continuous,
+    plan_route,
+    point_is_walkable,
+    segment_is_walkable,
+)
 from simulator.roster import PLAYER_DECK
 from simulator.ruleset import load_ruleset
 from simulator.state import EntityState, ProjectileState
@@ -629,11 +634,8 @@ def test_diagonal_river_segment_checks_horizontal_span_too() -> None:
     )
 
 
-def test_optimized_river_check_matches_pointwise_sampling() -> None:
+def test_river_check_matches_continuous_interval_geometry() -> None:
     from random import Random
-
-    from simulator.fixed import ceil_div
-    from simulator.navigation import NAVIGATION_SAMPLE_MTILE
 
     rng = Random(20260928)
     arena = RULESET.arena
@@ -641,20 +643,19 @@ def test_optimized_river_check_matches_pointwise_sampling() -> None:
         start = (rng.randrange(arena.width_mtile), rng.randrange(arena.height_mtile))
         end = (rng.randrange(arena.width_mtile), rng.randrange(arena.height_mtile))
         radius = rng.choice((0, 105, 250, 500))
-        dx, dy = end[0] - start[0], end[1] - start[1]
-        samples = max(1, ceil_div(max(abs(dx), abs(dy)), NAVIGATION_SAMPLE_MTILE))
-        pointwise = all(
-            point_is_walkable(
+        continuous = (
+            point_is_walkable(arena, *start, radius)
+            and point_is_walkable(arena, *end, radius)
+            and _river_segment_is_walkable_continuous(
                 arena,
-                start[0] + dx * index // samples,
-                start[1] + dy * index // samples,
+                start,
+                end,
                 radius,
             )
-            for index in range(samples + 1)
         )
         assert segment_is_walkable(
             arena, start, end, agent_radius_mtile=radius
-        ) == pointwise
+        ) == continuous
 
 
 def test_large_ground_units_can_route_through_the_three_tile_bridge() -> None:

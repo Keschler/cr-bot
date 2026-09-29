@@ -41,12 +41,17 @@ class NavigationObstacle:
     radius_mtile: int
 
 
+def _point_is_in_bounds(arena: ArenaGeometry, x: int, y: int, radius: int) -> bool:
+    return (
+        radius <= x < arena.width_mtile - radius
+        and radius <= y < arena.height_mtile - radius
+    )
+
+
 def point_is_walkable(arena: ArenaGeometry, x: int, y: int, radius: int = 0) -> bool:
     """Return whether a ground-unit center can occupy an arena point."""
 
-    if not (radius <= x < arena.width_mtile - radius):
-        return False
-    if not (radius <= y < arena.height_mtile - radius):
+    if not _point_is_in_bounds(arena, x, y, radius):
         return False
     if arena.river_y_min_mtile < y < arena.river_y_max_mtile:
         # The center must leave a full unit radius inside the bridge opening.
@@ -56,6 +61,67 @@ def point_is_walkable(arena: ArenaGeometry, x: int, y: int, radius: int = 0) -> 
             for start, end in arena.bridge_x_ranges_mtile
         )
     return True
+
+
+def _river_segment_is_walkable_continuous(
+    arena: ArenaGeometry,
+    start: tuple[int, int],
+    end: tuple[int, int],
+    agent_radius_mtile: int,
+) -> bool:
+    """Check the exact bridge interval swept by a straight river crossing.
+
+    The open river strip is bounded by horizontal lines, and each bridge is a
+    rectangular x interval after inflating it by the unit radius.  A straight
+    segment has a monotone x coordinate over the part of the segment inside
+    that strip, so its two limiting x values are sufficient.  Keep those
+    values as numerators over ``dy`` instead of rounding them to sampled
+    integer points; an entry just outside a bridge must remain blocked.
+    """
+
+    x0, y0 = start
+    x1, y1 = end
+    river_min = arena.river_y_min_mtile
+    river_max = arena.river_y_max_mtile
+    low_y = min(y0, y1)
+    high_y = max(y0, y1)
+    if high_y <= river_min or low_y >= river_max:
+        return True
+
+    if y0 == y1:
+        # The overlap check above means this horizontal segment lies inside
+        # the open river strip.
+        low_x, high_x = sorted((x0, x1))
+        return any(
+            bridge_start + agent_radius_mtile <= low_x
+            and high_x <= bridge_end - agent_radius_mtile
+            for bridge_start, bridge_end in arena.bridge_x_ranges_mtile
+        )
+
+    # Orient the segment from lower y to higher y, giving every rational
+    # interpolation below a positive denominator.
+    if y0 > y1:
+        x0, y0, x1, y1 = x1, y1, x0, y0
+    dy = y1 - y0
+    dx = x1 - x0
+    river_start_y = max(y0, river_min)
+    river_end_y = min(y1, river_max)
+
+    def x_numerator(y: int) -> int:
+        return x0 * dy + dx * (y - y0)
+
+    river_start_x = x_numerator(river_start_y)
+    river_end_x = x_numerator(river_end_y)
+    low_x_numerator, high_x_numerator = sorted((river_start_x, river_end_x))
+    for bridge_start, bridge_end in arena.bridge_x_ranges_mtile:
+        legal_start = (bridge_start + agent_radius_mtile) * dy
+        legal_end = (bridge_end - agent_radius_mtile) * dy
+        if (
+            legal_start <= low_x_numerator
+            and high_x_numerator <= legal_end
+        ):
+            return True
+    return False
 
 
 def _segment_intersects_circle(
@@ -96,72 +162,23 @@ def _segment_is_walkable_uncached(
 ) -> bool:
     """Check terrain and dynamic obstacles along one straight segment."""
 
-    if not point_is_walkable(arena, *start, agent_radius_mtile):
-        return False
-    if not point_is_walkable(arena, *end, agent_radius_mtile):
-        return False
-    low_y = min(start[1], end[1])
-    high_y = max(start[1], end[1])
-    if (
-        not allow_river_crossing
-        and high_y > arena.river_y_min_mtile
-        and low_y < arena.river_y_max_mtile
+    if allow_river_crossing:
+        # Jumpers may already be airborne above an unbridged part of the
+        # river when they retarget. Their endpoints still obey arena bounds.
+        if not all(
+            _point_is_in_bounds(arena, *point, agent_radius_mtile)
+            for point in (start, end)
+        ):
+            return False
+    elif (
+        not point_is_walkable(arena, *start, agent_radius_mtile)
+        or not point_is_walkable(arena, *end, agent_radius_mtile)
     ):
-        dx = end[0] - start[0]
-        dy = end[1] - start[1]
-        span = abs(dx) if dy == 0 else abs(dy)
-        samples = max(1, ceil_div(span, NAVIGATION_SAMPLE_MTILE))
-        # The arena rectangle is convex and both endpoints already passed the
-        # bounds check. Outside the open river strip every intermediate point
-        # is therefore terrain-valid. Binary-search only the sample indices
-        # whose y coordinate can be in the river; this is exactly equivalent
-        # to checking all samples and avoids dozens of redundant calls on
-        # long lane-to-tower visibility edges.
-        def ascending_river_indices(start_y: int, delta_y: int) -> tuple[int, int]:
-            if delta_y == 0:
-                return (
-                    (0, samples + 1)
-                    if arena.river_y_min_mtile < start_y < arena.river_y_max_mtile
-                    else (0, 0)
-                )
-            first = ceil_div(
-                (arena.river_y_min_mtile - start_y + 1) * samples,
-                delta_y,
-            )
-            stop = ceil_div(
-                (arena.river_y_max_mtile - start_y) * samples,
-                delta_y,
-            )
-            return max(0, first), min(samples + 1, stop)
-
-        if dy >= 0:
-            first, stop = ascending_river_indices(start[1], dy)
-        else:
-            # Reverse the exact integer sample sequence. For j=samples-i,
-            # start_y + floor(dy*i/samples) equals
-            # end_y + floor((-dy)*j/samples).
-            reverse_first, reverse_stop = ascending_river_indices(end[1], -dy)
-            first = max(0, samples - reverse_stop + 1)
-            stop = min(samples + 1, samples - reverse_first + 1)
-
-        if first < stop:
-            # Sample x is monotone. If its two extremes fit inside one bridge,
-            # every intervening river sample fits as well. Keep the original
-            # point-wise check for paths that span openings or their gaps.
-            first_x = start[0] + dx * first // samples
-            last_x = start[0] + dx * (stop - 1) // samples
-            low_x, high_x = min(first_x, last_x), max(first_x, last_x)
-            inside_one_bridge = any(
-                bridge_start + agent_radius_mtile <= low_x
-                and high_x <= bridge_end - agent_radius_mtile
-                for bridge_start, bridge_end in arena.bridge_x_ranges_mtile
-            )
-            if not inside_one_bridge:
-                for index in range(first, stop):
-                    x = start[0] + dx * index // samples
-                    y = start[1] + dy * index // samples
-                    if not point_is_walkable(arena, x, y, agent_radius_mtile):
-                        return False
+        return False
+    if not allow_river_crossing and not _river_segment_is_walkable_continuous(
+        arena, start, end, agent_radius_mtile
+    ):
+        return False
     for obstacle in obstacles:
         inflated = agent_radius_mtile + obstacle.radius_mtile + NAVIGATION_CLEARANCE_MTILE
         if _segment_intersects_circle(start, end, obstacle, inflated):
