@@ -33,7 +33,6 @@ from .observation_v3 import (
     uniform_hand_belief,
 )
 from .soa import is_visibility_concealed
-from .soa import is_visibility_concealed
 
 
 PUBLIC_ESTIMATOR_VERSION: Final = "public-cycle-history-2"
