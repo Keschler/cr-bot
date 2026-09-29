@@ -1,9 +1,10 @@
 # V4 three-arm comparison — proposed execution plan
 
 Status: **awaiting user approval**. This document specifies the next experiment;
-it is not a claim that all prerequisites are implemented or that training has
-started. After approval, complete the prerequisites and pilot before the main
-comparison. Do not spend the main-run budget if a gate fails.
+training has not started. The bootstrap, checkpoint-export, and split-safe
+evaluation prerequisites are implemented; the end-to-end pilot and cost audit
+remain. After approval, run that pilot before the main comparison. Do not
+spend the main-run budget if a gate fails.
 
 ## Questions and arms
 
@@ -46,12 +47,12 @@ and self-play are a later experiment.
    Start with three complete matches per bootstrap archetype, 1,440 decisions
    maximum per match, and at most 32 retained records per mode per match.
 3. **Separate development and final evaluation in the runners.** Learning
-   curves must use development opponents and development frontier diagnostics.
-   The current curve runner evaluates its supplied sealed entries at every
-   point and defaults to the reserved real decks; those defaults are unsuitable
-   for checkpoint selection. Add explicit split identity/validation and a
-   final-evaluation path that does not perform training or checkpoint selection.
-   Avoid generating final-deck matches as a side effect of development runs.
+   curves use training-catalog opponents with fresh development seeds and
+   optional development frontier diagnostics. They reject reserved deck
+   identities and select only from complete-match results. The separate
+   `--final-evaluation` path accepts frozen actors, defaults to the reserved
+   catalog, and performs no training or checkpoint selection. Keep the final
+   path unused until the selected actor hashes are frozen.
 4. **Audit deck separation.** Check bootstrap opponent decks as well as PPO
    and search decks against the ten reserved evaluation identities. If a
    bootstrap deck overlaps, replace that bootstrap opponent with a compatible
@@ -70,11 +71,18 @@ deterministic; train/development/final overlap is rejected; checkpoint loading
 and a real optimizer update succeed for every arm. Verify frozen B/C anchors
 have identical hashes and A matches the bootstrap's pre-training actor.
 
-These are prerequisites, not features already present. In particular, the
-current bootstrap has full-match balanced sampling but still lacks the
-sampling-weight correction. Resolve relevant test failures; record unrelated
-environment/dependency skips separately. Commit the experiment source before
-the main run and use fresh output directories.
+The bootstrap now predeclares three complete matches per archetype, records
+original and retained match/mode counts, uses dataset-normalized
+inverse-retention weights for mode loss, preserves each observed group's
+support, saves the initial random actor, and rejects overlap with reserved
+evaluation decks. Distillation now exports hashed plain actors at the planned
+development epochs. The curve runner now keeps development matches on the
+training catalog and has a frozen-only final path; scripted frontier entries
+require an explicit opt-in. An end-to-end comparison pilot, measured cost audit,
+and source freeze remain prerequisites. Resolve
+relevant test failures; record unrelated environment/dependency skips
+separately. Commit the experiment source before the main run and use fresh
+output directories.
 
 ## 2. Freeze the data and seed protocol
 
@@ -131,7 +139,7 @@ explicitly rather than inherited from changing CLI defaults:
 | --- | --- |
 | Bootstrap B/C | Full-match collection above; eight epochs, batch 64, learning rate `3e-4` |
 | PPO A/B | 32 updates; eight lanes; 1,440 rollout decisions and episode cap; `training-source=match-start`, `bc-coef=0`, `reward-mode=tower-delta`; actor LR `3e-4`, critic LR `1e-4`, gamma `.99`, GAE lambda `.95`, one PPO epoch |
-| Search C | 16 candidates/match; seven branches; horizon 128; eight discovery plus eight independent confirmation replicas; match cap 1,440 |
+| Search C | 16 candidates/match; branch cap seven (current planner can emit at most six); horizon 128; eight discovery plus eight independent confirmation replicas; match cap 1,440; three workers with `--torch-threads 1` |
 | Distillation C | `soft-kl` only; context 32; 20 epochs; batch 8; LR `1e-5`; retention weight 1; temperature `.25`; one optimizer seed `s` per replicate |
 | Development points | PPO updates `0,1,2,4,8,16,32`; distillation epochs `0,1,2,4,8,16,20` |
 | Evaluation | 1,440 decisions maximum; seeded stochastic sampling from each masked policy for all arms; no search at inference |
@@ -247,7 +255,9 @@ not been benchmarked, so linear scaling is provisional. Distillation optimizer
 timing used synthetic cached inputs; it excludes cache construction and paired
 simulator validation.
 
-Budget **about 5–10 days of elapsed local compute** for the initial proposed
+The following pre-optimization estimate is superseded by the measurements at
+the end of this section. The earlier budget was **about 5–10 days of elapsed
+local compute** for the initial proposed
 comparison, assuming three search workers with imperfect scaling, sequential
 evaluation/training, and allowances for cache/validation work. Parallel
 throughput itself was not measured. A serial execution is roughly 1–2 weeks,
@@ -353,3 +363,109 @@ queries against the original segment checker. These probes do not establish a
 full-search speedup across every deck and board state. Repeating one late
 branch with warm caches reduced its stepping time from 0.705 to 0.541 seconds;
 warm-cache gains depend on how often the search revisits the same layout.
+
+### Updated comparison runtime estimate after stepping optimization
+
+A fresh full candidate evaluation on the optimized code (four actual branches,
+eight discovery and eight confirmation replicas, horizon 128) took **35.14 s**
+at an early state and **67.54 s** at a later state, versus 52.94 s and 122.30 s
+before the stepping changes. This includes actor sampling, observations, forks,
+and simulator stepping. The source match took 4.08 s and caching its 16
+candidate states took 2.16 s; neither is repeated per candidate.
+
+The protocol has 540 source matches across three seeds, or at most 8,640
+candidate evaluations at 16 per match. At four branches, the measured
+candidate range extrapolates to **84–162 single-worker search hours**. Of the
+16 candidates in the measured source match, 11 had four branches and five had
+five; applying that mix gives roughly **91–175 hours**. The current branch
+builder can emit at most six branches, despite the configured cap of seven;
+six throughout would instead be about **126–243 hours**. Full-length matches
+may have denser states than the sampled 512-decision source match.
+
+With three CPU search workers, budget **about 3–8 days of local elapsed time**
+for the complete three-arm, three-seed comparison, including search, PPO,
+distillation, and development/final evaluation. Ideal three-worker search
+scaling would turn the 91–243 serial search hours into 30–81 elapsed hours;
+actual scaling has not been measured. The previously measured 9,360-match
+evaluation workload was about 27 hours before the simulator speedup, and the
+two PPO arms were provisionally 6–15 hours. Those stages, cache construction,
+validation, and imperfect parallel scaling account for the rest of the range.
+Serial search would likely push the complete comparison toward **5–12 days**.
+This remains a planning range, not a measured end-to-end run or a time to
+convergence; the prerequisite pilot must still confirm sustained throughput.
+
+### Next exact-protocol throughput checks
+
+After the stepping change, five stochastic complete matches on the same
+training-deck sample took 11.34, 7.08, 6.77, 6.68, and 4.85 seconds: **7.34 s
+mean**, versus 10.39 s before the change. Scaling that small sample to the
+protocol's 9,360 development/final matches gives **about 19 serial hours**,
+replacing the earlier 27-hour point estimate. Three of those matches took
+25.2 s sequentially and 14.1 s when run in separate one-thread processes;
+their match results were identical. A persistent, ordered process pool should
+be tested on the full evaluation path before claiming this 1.8× group speedup
+at study scale.
+
+The frontier-generation CLI already schedules independent source matches in
+three processes, but does not pin PyTorch's intra-op threads in each worker.
+In one late-branch probe, one thread took 1.74–1.78 s versus 2.03–2.16 s with
+eight threads; all 256 step-state hashes and branch values matched. The pilot
+should sweep one, two, and three or more workers with one or two Torch threads
+per worker, checking exact verdict hashes and sustained matches/hour. Avoid
+CPU oversubscription before raising the worker count.
+
+These throughput changes preserve the declared matches, branches, replicas,
+seeds, horizons, and checkpoint-selection rule. The current confirmation path
+reruns all discovery branches; reducing it to only the selected action would
+change retained confirmation diagnostics and the merge contract, so it is not
+included in these estimates. Sealed-choice diagnostics can separately skip
+duplicate branch rollouts when two policies choose the same action and cache
+fixed champion rollouts across checkpoints, subject to exact output tests.
+
+### Search optimization after the throughput review
+
+Source collection, candidate-prefix replay, and active branch continuations
+now advance simulator physics without constructing two V2 observations that
+their callers discard. The actor still builds its public observation at each
+decision. Prefix replay catches up the second viewer's public memory at every
+retained candidate state. A 256-decision source match produced byte-equivalent
+JSON in 1.55 instead of 1.88 seconds; replay of eight retained states took
+1.00 instead of 1.17 seconds with matching state hashes, actor hidden tensors,
+and both viewer memories.
+
+An A/B run in the same process compared complete discovery plus confirmation
+for four actual branches, eight replicas per stage, and horizon 128. The early
+candidate fell from 46.31 to 38.26 seconds (17%); the later candidate fell
+from 76.78 to 55.28 seconds (28%). Their complete merged verdicts were equal.
+Applying only those relative savings to the earlier 91–175 serial-hour search
+range gives roughly **75–126 serial hours** for the observed branch mix. The
+recent absolute measurements were slower than the earlier machine baseline,
+which widens a prudent planning range to **about 75–145 serial CPU hours**.
+This remains an extrapolation from a 512-decision source match; full matches
+and denser boards need a sustained pilot.
+
+The search CLI now defaults to one PyTorch CPU thread per process. A two-replica
+candidate verdict was identical with one and eight threads. In a concurrent
+three-process probe, the one-thread group finished in 17.2 seconds; the
+eight-thread group remained unfinished after 150 seconds and was stopped.
+That shows severe oversubscription in this environment, but it is not a
+completed throughput ratio for full source matches. Keep the thread count
+explicit in the run manifest and benchmark sustained matches/hour in the pilot.
+
+This comparison uses rule-based search opponents. The optional learned V4
+opponent path now isolates cold checkpoint loading from the learner's Torch
+RNG and seeds branch sampling after opponent construction. Cold and warm
+cache paths have a regression check; learned opponents remain outside this
+comparison protocol.
+
+Terrain visibility now checks the exact continuous bridge interval with
+integer geometry, so it no longer depends on finite samples. The non-jumping
+Knight path from `(5000, 14750)` to `(2500, 17150)` is rejected; Hog Rider
+can jump the river and can now retarget while airborne outside a bridge.
+Navigation visibility is symmetric under endpoint reversal, and movement rounding is
+mirror-symmetric. Frontier reuse
+rejects source-code and match-config mismatches, and distillation prefix
+replay verifies recorded state hashes, including rejected entries. Generate
+fresh source matches and verdicts under these physics changes; do not feed
+pre-fix records into a new distillation run. The 75–145-hour range above is
+provisional until a new sustained throughput pilot measures this revision.
