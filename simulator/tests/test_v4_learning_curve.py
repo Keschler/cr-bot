@@ -1,3 +1,4 @@
+import copy
 import json
 
 import pytest
@@ -516,7 +517,108 @@ def test_quarantined_update_does_not_create_candidate_checkpoint(tmp_path):
     report = run_learning_curve(config, hooks=hooks)
     assert len(report['points']) == 1
     assert report['protocol']['quarantine_stop']['stopped_at_update'] == 1
+    assert report['protocol']['quarantine_stop']['weights_restored'] is True
     assert not (config.output_dir / 'checkpoint_update_000001.pt').exists()
+
+
+def test_quarantined_update_restores_the_pre_update_policy(tmp_path):
+    """A quarantined update must not leave its weights in the model.
+
+    The diagnostics that trigger quarantine are computed after
+    ``optimizer.step()``, so the update has already moved the policy. The run
+    has to put the parameters and optimizer state back, otherwise a quarantined
+    run ends holding exactly the weights that failed its own checks.
+    """
+
+    import torch
+
+    from simulator.rl.v4.learning_curve import (
+        _capture_pre_update_state,
+        _restore_pre_update_state,
+    )
+
+    policy = torch.nn.Linear(3, 2)
+    critic = torch.nn.Linear(2, 1)
+    actor_optimizer = torch.optim.Adam(policy.parameters(), lr=1e-2)
+    critic_optimizer = torch.optim.Adam(critic.parameters(), lr=1e-2)
+
+    def take_a_step() -> None:
+        loss = policy(torch.ones(1, 3)).sum() + critic(torch.ones(1, 2)).sum()
+        actor_optimizer.zero_grad(set_to_none=True)
+        critic_optimizer.zero_grad(set_to_none=True)
+        loss.backward()
+        actor_optimizer.step()
+        critic_optimizer.step()
+
+    # The snapshot the loop takes before each update.
+    snapshot = _capture_pre_update_state(
+        policy=policy,
+        critic=critic,
+        actor_optimizer=actor_optimizer,
+        critic_optimizer=critic_optimizer,
+    )
+    expected_policy = copy.deepcopy(policy.state_dict())
+    expected_critic = copy.deepcopy(critic.state_dict())
+
+    # The update that trips quarantine.
+    for _ in range(20):
+        take_a_step()
+    assert any(
+        not torch.equal(expected_policy[name], value)
+        for name, value in policy.state_dict().items()
+    )
+
+    _restore_pre_update_state(
+        policy=policy,
+        critic=critic,
+        actor_optimizer=actor_optimizer,
+        critic_optimizer=critic_optimizer,
+        snapshot=snapshot,
+    )
+    restored_policy = policy.state_dict()
+    restored_critic = critic.state_dict()
+    assert all(
+        torch.equal(expected_policy[name], value) for name, value in restored_policy.items()
+    )
+    assert all(
+        torch.equal(expected_critic[name], value) for name, value in restored_critic.items()
+    )
+
+
+def test_pre_update_state_tolerates_absent_components():
+    """The hooks boundary allows a run with no critic or optimizer."""
+
+    from simulator.rl.v4.learning_curve import (
+        _capture_pre_update_state,
+        _restore_pre_update_state,
+    )
+
+    class Policy:
+        def __init__(self) -> None:
+            self.values = {"w": 1}
+
+        def state_dict(self):
+            return dict(self.values)
+
+        def load_state_dict(self, state):
+            self.values = dict(state)
+
+    policy = Policy()
+    snapshot = _capture_pre_update_state(
+        policy=policy,
+        critic=None,
+        actor_optimizer=None,
+        critic_optimizer=None,
+    )
+    policy.values["w"] = 99
+    _restore_pre_update_state(
+        policy=policy,
+        critic=None,
+        actor_optimizer=None,
+        critic_optimizer=None,
+        snapshot=snapshot,
+    )
+    assert policy.values == {"w": 1}
 
 
 def test_extra_evaluation_points_do_not_change_training_randomness(tmp_path):

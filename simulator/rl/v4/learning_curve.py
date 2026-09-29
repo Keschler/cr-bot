@@ -1171,22 +1171,29 @@ def _capture_pre_update_state(
     critic: Any,
     actor_optimizer: Any,
     critic_optimizer: Any,
-) -> dict[str, Any]:
+) -> dict[str, Any] | None:
     """Copy the parameters and optimizer state an update would overwrite.
 
     Quarantine diagnostics are computed after ``optimizer.step()``, so a run
     that trips one has already moved its weights. This snapshot lets the loop
     undo the update instead of halting with a policy that failed its own checks.
+
+    Any component a hook did not supply is left out rather than dereferenced:
+    the hooks boundary permits a caller to run without a critic or an
+    optimizer, and a missing component is nothing to restore.
     """
 
-    import copy
-
-    return {
-        "policy": copy.deepcopy(policy.state_dict()),
-        "critic": copy.deepcopy(critic.state_dict()),
-        "actor_optimizer": copy.deepcopy(actor_optimizer.state_dict()),
-        "critic_optimizer": copy.deepcopy(critic_optimizer.state_dict()),
-    }
+    snapshot: dict[str, Any] = {}
+    for name, component in (
+        ("policy", policy),
+        ("critic", critic),
+        ("actor_optimizer", actor_optimizer),
+        ("critic_optimizer", critic_optimizer),
+    ):
+        state_dict = getattr(component, "state_dict", None)
+        if callable(state_dict):
+            snapshot[name] = copy.deepcopy(state_dict())
+    return snapshot or None
 
 
 def _restore_pre_update_state(
@@ -1199,12 +1206,19 @@ def _restore_pre_update_state(
 ) -> None:
     """Restore a snapshot captured by :func:`_capture_pre_update_state`."""
 
-    if snapshot is None:
+    if not snapshot:
         return
-    policy.load_state_dict(snapshot["policy"])
-    critic.load_state_dict(snapshot["critic"])
-    actor_optimizer.load_state_dict(snapshot["actor_optimizer"])
-    critic_optimizer.load_state_dict(snapshot["critic_optimizer"])
+    for name, component in (
+        ("policy", policy),
+        ("critic", critic),
+        ("actor_optimizer", actor_optimizer),
+        ("critic_optimizer", critic_optimizer),
+    ):
+        if name not in snapshot:
+            continue
+        load_state_dict = getattr(component, "load_state_dict", None)
+        if callable(load_state_dict):
+            load_state_dict(snapshot[name])
 
 
 def _quarantine_status(report: Any) -> tuple[bool, list[str]]:

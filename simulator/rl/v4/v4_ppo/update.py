@@ -106,6 +106,13 @@ def update_v4_ppo(
         actor_optimizer.zero_grad(set_to_none=True)
         critic_optimizer.zero_grad(set_to_none=True)
         result.total_loss.backward()
+        # Total-norm clip before stepping, matching the search-distillation
+        # sibling. A single pathological rollout must not be able to take an
+        # unbounded step, because the quarantine checks run after the step and
+        # cannot undo it.
+        max_grad_norm = float(objective_config.max_grad_norm)
+        torch.nn.utils.clip_grad_norm_(policy.parameters(), max_grad_norm)
+        torch.nn.utils.clip_grad_norm_(critic.parameters(), max_grad_norm)
         actor_optimizer.step()
         critic_optimizer.step()
         report = build_update_report(

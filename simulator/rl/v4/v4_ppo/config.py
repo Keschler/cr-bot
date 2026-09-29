@@ -49,6 +49,11 @@ class V4PPOConfig:
     actor_lr: float = 1e-5
     critic_lr: float = 1e-4
     ppo_epochs: int = 2
+    # Total-norm gradient clip applied before each optimizer step. The
+    # search-distillation sibling already clips at 1.0; the reward-only PPO
+    # arm had no clip at all, so a single pathological rollout could take an
+    # unbounded step that no later quarantine check can undo.
+    max_grad_norm: float = 1.0
     seed: int = 0
     device: str = "cpu"
     # Quarantine thresholds are initial values to calibrate, except the
@@ -78,10 +83,13 @@ class V4PPOConfig:
             "max_mean_abs_log_ratio",
             "max_entropy_collapse_fraction",
             "max_placement_grad_ratio",
+            "max_grad_norm",
         ):
             value = float(getattr(self, name))
             if not np.isfinite(value) or value < 0.0:
                 raise ValueError(f"{name} must be a finite non-negative number")
+        if float(self.max_grad_norm) <= 0.0:
+            raise ValueError("max_grad_norm must be positive")
         if not 0.0 < float(self.gamma) <= 1.0:
             raise ValueError("gamma must be in (0, 1]")
         if not 0.0 <= float(self.gae_lambda) <= 1.0:
