@@ -942,6 +942,12 @@ def _build_soa_global_vector(
     global_scalars[9] = float(tower_alive[1, 2])
     global_scalars[10] = float(not tower_alive[1, 0])
     global_scalars[11] = float(not tower_alive[1, 2])
+    # These six are normalized by the exact Level-11 maximum, so the actor
+    # recovers integer tower HP. The device path fills the same channels from
+    # the TowerHPFilter estimate of the HP bar instead. A tower's HP is public
+    # information, so this is a precision gap rather than a privilege leak, but
+    # it bounds what a simulator-only result can claim. See the observation
+    # precision section in simulator/README.md.
     own_left, own_king, own_right = _normalize_soa_tower_hp(tower_hp[0], ruleset)
     enemy_left, enemy_king, enemy_right = _normalize_soa_tower_hp(tower_hp[1], ruleset)
     global_scalars[12:15] = (own_left, own_king, own_right)

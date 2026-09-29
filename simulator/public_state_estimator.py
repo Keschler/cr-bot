@@ -304,6 +304,15 @@ class PublicStateEstimator:
             elif event.kind == "damage_applied" and event.get("target_uid") in towers:
                 owner = towers[event.get("target_uid")]
                 name = "own_tower_damaged" if owner == viewer else "enemy_tower_damaged"
+                # The magnitude here is the exact engine damage. A phone cannot
+                # observe it: the device path synthesizes the same event from
+                # consecutive HP-bar readings, so its magnitude is a
+                # bar-difference estimate carrying ``certainty: inferred``.
+                # Tower HP is public, so this is a sim-to-real precision gap and
+                # not a privilege leak, but it does bound what a
+                # simulator-only result can claim. Quantizing it here would
+                # change the event-history contract, so it is documented in
+                # simulator/README.md instead.
                 self.observe(PublicEvent(name, time, float(event.get("damage", 0)) / 1000.0))
             elif event.kind == "entity_died":
                 # A body that was hidden when it died was never observed, so

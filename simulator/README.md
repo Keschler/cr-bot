@@ -190,6 +190,32 @@ full simulator state -> separate training-only critic
 from video. The actor never receives exact opponent hand/elixir/cycle,
 targets, cooldowns, RNG state, or other privileged physics fields.
 
+### Observation precision
+
+Two actor inputs are *public facts the simulator supplies exactly* but that a
+phone can only estimate, so the simulator's actor is strictly more precise
+than the deployed perception path on those fields:
+
+- **Tower HP.** The six `tower_hp_*` global scalars are normalized by the exact
+  Level-11 maximum, so the actor recovers the integer HP of both sides'
+  towers. On device, the same six channels are filled from the
+  `TowerHPFilter` output, which is a median-filtered estimate of the HP bar
+  rather than the authoritative value.
+- **Damage magnitudes.** The magnitude column of `own_tower_damaged` and
+  `enemy_tower_damaged` carries the exact `damage_applied` value on a 0.1 kHP
+  scale, so the actor can tell a Fireball from a Log. On device, the same
+  events are synthesized from consecutive HP-bar readings, so the magnitude is a
+  bar-difference estimate recorded with `confidence 0.90` and
+  `certainty: inferred`.
+
+This is a sim-to-real precision gap, not a privilege leak: a tower's HP is
+public information that any player can read, so no contract is violated. It is
+recorded here because it bounds what a simulator-only result can claim. Any
+claim of live performance must either re-measure these two channels through the
+device path or state the gap explicitly. Quantizing the simulator's values to
+match a bar-reading resolution is a deliberate future change, not a silent one,
+because it would invalidate existing checkpoints and the contract hash.
+
 The object-based Python engine remains the reference oracle. Optimized
 backends must preserve canonical state and public-event hashes across reviewed
 scenarios, randomized streams, save/reload boundaries, and long seeded matches.

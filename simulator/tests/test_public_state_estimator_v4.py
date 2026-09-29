@@ -204,3 +204,48 @@ def test_death_of_a_concealed_body_is_not_part_of_the_public_stream() -> None:
 
     assert death_count(concealed=False) == 1
     assert death_count(concealed=True) == 0
+
+
+def test_tower_damage_magnitude_is_the_exact_engine_damage() -> None:
+    """Pin the precision the actor actually receives, so the gap stays visible.
+
+    The actor receives the exact ``damage_applied`` magnitude, and the tower HP
+    globals are normalized by the exact Level-11 maximum so the actor recovers
+    integer HP. A phone can only estimate both. This is a sim-to-real precision
+    gap, not a privilege leak, and it is documented in simulator/README.md. The
+    test exists so that closing the gap cannot happen silently: any change to
+    quantize these values has to update the documentation in the same commit.
+    """
+
+    from simulator.engine import BattleEngine
+    from simulator.public_state_estimator import EVENT_TYPE_INDEX
+    from simulator.ruleset import load_ruleset
+
+    ruleset = load_ruleset("v1")
+    deck = ("hog-rider", "cannon", "musketeer", "skeletons", "fireball", "log", "ice-golem", "ice-spirit")
+    engine = BattleEngine(ruleset)
+    state = engine.new_battle(decks=(deck, deck), seed=17, shuffle_decks=False)
+    enemy_tower = next(
+        entity
+        for entity in state.entities.values()
+        if entity.kind == "tower" and entity.owner == 1
+    )
+    before = enemy_tower.hp
+    engine.step(state)
+    # Apply a known authoritative amount through the normal damage path.
+    engine._deal_damage(state, enemy_tower, 123, None, "fireball", 1)
+
+    estimator = PublicStateEstimator()
+    estimator.sync_from_env(SimpleNamespace(state=state, engine=engine))
+    history = estimator.snapshot().event_history
+    index = EVENT_TYPE_INDEX["enemy_tower_damaged"]
+    assert any(row[index] == 1.0 for row in history), (
+        "the enemy tower damage event must reach the actor memory"
+    )
+    # The magnitude column is the exact engine damage on a 0.1 kHP scale, so the
+    # actor can still distinguish a Fireball from a Log. A phone derives the
+    # same event from HP-bar differences instead.
+    magnitudes = [row[7] for row in history if row[7] > 0.0]
+    assert magnitudes, "the damage magnitude column must be populated"
+    assert max(magnitudes) == pytest.approx(123.0 / 1000.0 / 10.0, rel=1e-5)
+    assert enemy_tower.hp == before - 123
