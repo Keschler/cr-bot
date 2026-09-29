@@ -413,11 +413,20 @@ def compare_observation_to_replay(
     *,
     position_tolerance_mtile: int = 200,
     timing_tolerance_us: int = 10_000,
+    min_comparable_events: int = 1,
 ) -> ComparisonReport:
-    """Compare using stable card/owner/role selectors, never detector UIDs."""
+    """Compare using stable card/owner/role selectors, never detector UIDs.
+
+    A comparison with no comparable events on either side is not evidence of
+    agreement. Every agreement rate is 0 or 0/0 there, so the report was
+    eligible with a zero agreement score and the caller exited clean. Require
+    a floor of comparable events unless the caller explicitly sets it to zero.
+    """
 
     if position_tolerance_mtile < 0 or timing_tolerance_us < 0:
         raise PhysicalLabError("comparison tolerances must be non-negative")
+    if type(min_comparable_events) is not int or min_comparable_events < 0:
+        raise PhysicalLabError("min_comparable_events must be a non-negative integer")
     reasons: list[str] = []
     if observation.status.value == "rejected":
         reasons.append("observation manifest is rejected")
@@ -483,6 +492,14 @@ def compare_observation_to_replay(
     event_common = sum((Counter(real_event_keys) & Counter(sim_event_keys)).values())
     event_denominator = max(len(real_event_keys), len(sim_event_keys), 1)
     event_agreement = event_common / event_denominator
+    if event_common < min_comparable_events:
+        # The agreement denominators above are 0/0 or 0/1 when nothing is
+        # comparable, which reads as 0.0 agreement but is really an absence of
+        # evidence. Report the comparable count so a caller can refuse it.
+        if "comparable event count" not in " ".join(reasons):
+            reasons.append(
+                f"comparable event count {event_common} is below required {min_comparable_events}"
+            )
     real_all_keys = [_event_key(row) for row, _event in real_scorable_rows]
     sim_all_keys = [_event_key(row) for row in simulated_events]
     target_real = [

@@ -235,6 +235,15 @@ def _parser() -> argparse.ArgumentParser:
     compare.add_argument("--json-out", type=Path, required=True)
     compare.add_argument("--position-tolerance-mtile", type=int, default=200)
     compare.add_argument("--timing-tolerance-us", type=int, default=10_000)
+    compare.add_argument(
+        "--min-comparable-events",
+        type=int,
+        default=1,
+        help=(
+            "minimum events the observation and replay must share before the "
+            "comparison is eligible; an empty comparison is not agreement"
+        ),
+    )
 
     fidelity = subparsers.add_parser(
         "fidelity",
@@ -746,6 +755,7 @@ def _compare_command(args: argparse.Namespace) -> int:
         replay,
         position_tolerance_mtile=args.position_tolerance_mtile,
         timing_tolerance_us=args.timing_tolerance_us,
+        min_comparable_events=args.min_comparable_events,
     )
     _write_json(args.json_out, report.to_dict())
     _write_json(None, report.to_dict())
@@ -878,6 +888,12 @@ def _stored_evaluate_command(args: argparse.Namespace) -> int:
     output_path = args.json_out if args.json_out.is_absolute() else repository_root / args.json_out
     evaluation_hash = write_stored_evaluation(output_path, payload)
     _write_json(None, {**payload, "evaluation_hash": evaluation_hash, "json_out": str(output_path)})
+    # An empty corpus evaluated cleanly: zero cases means zero rejected cases,
+    # and ``mean_score`` is null rather than a number. A corpus root that
+    # exists but holds no usable case is a mistyped path, not a passing
+    # evaluation, so it must not exit clean.
+    if payload["case_count"] == 0 or payload["evaluated_case_count"] == 0:
+        return 2
     return 0 if payload["rejected_artifact_count"] == 0 else 2
 
 
