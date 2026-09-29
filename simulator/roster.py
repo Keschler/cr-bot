@@ -105,7 +105,15 @@ def validate_roster_against_catalog(
     catalog_cards = frozenset(catalog)
     classified = roster.all_classified_cards
     missing = sorted(catalog_cards - classified)
-    unknown = sorted(classified - catalog_cards)
+    # An excluded card may legitimately be absent from the catalog: the
+    # exclusion list is how a release that postdates the catalog snapshot is
+    # recorded as deliberately out of scope. An *eligible* card absent from the
+    # catalog is a real inconsistency, because the simulator would be asked to
+    # execute a card it has no definition for.
+    unknown = sorted(set(roster.eligible_cards) - catalog_cards)
+    excluded_absent_from_catalog = sorted(
+        set(roster.excluded_cards) - catalog_cards
+    )
     duplicate_player_cards = sorted(set(PLAYER_DECK) - catalog_cards)
     release_unverified = []
     if require_release_verification and roster.release_date_status != "exact":
@@ -118,6 +126,7 @@ def validate_roster_against_catalog(
         "excluded_count": len(roster.excluded_cards),
         "missing_catalog_classification": missing,
         "unknown_roster_cards": unknown,
+        "excluded_absent_from_catalog": excluded_absent_from_catalog,
         "missing_player_cards": duplicate_player_cards,
         "release_date_unverified": release_unverified,
         "complete": not (missing or unknown or duplicate_player_cards or release_unverified),

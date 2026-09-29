@@ -111,3 +111,45 @@ def test_coverage_graph_exposes_all_exceptional_v1_components() -> None:
     assert {"shield"} <= by_card["guards"]
     assert {"line_piercing"} <= by_card["magic-archer"]
     assert {"returning_projectile"} <= by_card["executioner"]
+
+
+def test_roster_ruleset_id_resolves_to_a_ruleset_carrying_its_cards() -> None:
+    """The declared ruleset must be able to run the roster it describes.
+
+    The roster pointed at the eight-card base artifact while describing 109
+    opponent cards. The base set contains exactly the eight player-deck cards,
+    so the declaration was not merely cosmetic: any use of the field would have
+    raised on the first opponent card.
+    """
+
+    from simulator.ruleset import load_ruleset
+
+    roster = load_opponent_roster()
+    ruleset = load_ruleset(roster.ruleset_id)
+
+    assert ruleset.ruleset_id == roster.ruleset_id
+    missing = [card for card in roster.eligible_cards if card not in ruleset.cards]
+    assert missing == []
+    assert len(ruleset.cards) >= len(roster.eligible_cards)
+
+
+def test_excluded_releases_absent_from_the_catalog_are_reported_separately() -> None:
+    """A card excluded because it postdates the catalog is not an unknown.
+
+    Ronin and Minion Giant are real releases with no catalog entry, and the
+    exclusion list is how the roster records that they are deliberately out of
+    scope. They must not be reported as unknown eligible cards, but they must
+    stay visible so an incomplete catalog is still auditable.
+    """
+
+    from cr_bot.domain.card_metadata import CARD_METADATA
+
+    roster = load_opponent_roster()
+    report = validate_roster_against_catalog(roster, CARD_METADATA)
+
+    assert report["unknown_roster_cards"] == []
+    assert "ronin" in report["excluded_absent_from_catalog"]
+    assert "minion-giant" in report["excluded_absent_from_catalog"]
+    # They are classified, not silently absent from the roster's own scope.
+    assert {"ronin", "minion-giant"} <= roster.all_classified_cards
+    assert not {"ronin", "minion-giant"} & set(roster.eligible_cards)
