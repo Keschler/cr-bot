@@ -125,13 +125,35 @@ def _stable_sim_event(event: Any, replay: SimulatorReplay | None = None) -> dict
                 "hp_after": data.get("hp_after"),
             },
         }
+    # Authoritative events name entities by uid. The observation side names them
+    # by card and role, so the uids are resolved here; without this a
+    # simulator event could never share a semantic key with the observation it
+    # is supposed to match, and every comparison was vacuously empty.
+    source_entity = None
+    if replay is not None and type(data.get("uid")) is int:
+        source_entity = replay.final_state.entities.get(int(data["uid"]))
+    if source_entity is None and type(data.get("source_uid")) is int and replay is not None:
+        source_entity = replay.final_state.entities.get(int(data["source_uid"]))
+    target_role = data.get("target_role") or data.get("target_tower_role")
+    if target is not None and target_role is None and target.kind == "tower":
+        target_role = getattr(target, "role", None)
     return {
         "kind": event.kind,
-        "card_id": data.get("card_id") or data.get("source_card_id"),
-        "owner": data.get("owner", data.get("player")),
+        "card_id": (
+            data.get("card_id")
+            or data.get("source_card_id")
+            or (source_entity.card_id if source_entity is not None else None)
+        ),
+        "owner": (
+            data.get("owner", data.get("player"))
+            if data.get("owner", data.get("player")) is not None
+            else (source_entity.owner if source_entity is not None else None)
+        ),
         "source_card_id": data.get("source_card_id"),
-        "target_role": data.get("target_role") or data.get("target_tower_role"),
-        "target_card_id": data.get("target_card_id"),
+        "target_role": target_role,
+        "target_card_id": data.get("target_card_id") or (
+            target.card_id if target is not None else None
+        ),
         "tick": event.tick,
         "values": {
             key: value

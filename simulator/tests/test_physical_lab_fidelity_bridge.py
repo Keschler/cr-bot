@@ -123,6 +123,10 @@ def test_admitted_physical_observation_flows_to_standard_fidelity_report(
     corpus_path = tmp_path / "fidelity-corpus.json"
     report_path = tmp_path / "fidelity-report.json"
 
+    # The defaults now require 20 held-out observations at 0.98, which a
+    # single-case fixture cannot supply. The bridge contract is what this test
+    # covers, so the thresholds a one-case corpus can satisfy are passed
+    # explicitly; the default refusal is asserted below.
     assert physical_lab_main(
         [
             "fidelity",
@@ -137,6 +141,10 @@ def test_admitted_physical_observation_flows_to_standard_fidelity_report(
             str(report_path),
             "--require-mechanic",
             "hog_cannon_pull_targeting",
+            "--min-observations",
+            "1",
+            "--min-agreement-rate",
+            "1.0",
         ]
     ) == 0
 
@@ -145,6 +153,26 @@ def test_admitted_physical_observation_flows_to_standard_fidelity_report(
     assert report["mechanics"]["hog_cannon_pull_targeting"]["traces"]["count"] == 1
     assert report["gate"]["passed"] is True
     assert json.loads(corpus_path.read_text(encoding="utf-8"))["cases"]
+
+    # Without those explicit thresholds the same single-case corpus no longer
+    # claims a fidelity pass, which is the point of matching the release gate.
+    default_report = tmp_path / "fidelity-report-defaults.json"
+    assert physical_lab_main(
+        [
+            "fidelity",
+            str(observation_path),
+            "--run",
+            str(run_path),
+            "--replay-cache",
+            str(cache_seal.path),
+            "--json-out",
+            str(default_report),
+            "--require-mechanic",
+            "hog_cannon_pull_targeting",
+        ]
+    ) == 2
+    default_payload = json.loads(default_report.read_text(encoding="utf-8"))
+    assert default_payload["gate"]["passed"] is False
 
 
 def test_fidelity_bridge_rejects_a_hash_without_the_recognized_cache(

@@ -191,7 +191,13 @@ def _comparison_report_for_event(kind: str):
                 source_frame_indices=(1,),
                 card_id="hog-rider",
                 owner="A",
-                target_role="princess-tower",
+                # The fixture must describe an event the replay actually
+                # contains. The Hog Rider acquires the opponent's right
+                # Princess Tower, so target_role has to be "right"; with
+                # "princess-tower" the observation named an event the
+                # simulator never produced and the comparison was empty.
+                target_role="right",
+                target_card_id="princess-tower",
             ),
         ),
     )
