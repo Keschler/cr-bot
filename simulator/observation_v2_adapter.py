@@ -249,12 +249,19 @@ def build_public_entity_rows_from_soa(
         row[_FEATURE_INDEX["confidence"]] = 1.0
         rows.append((uid, row))
 
-    rows.sort(key=lambda item: item[0])
     # Graveyard and swarm-heavy states can legitimately exceed the fixed V2
-    # token budget.  Keep the producer total and deterministic: UID order is
-    # stable, and the direct PolicyObservationV2 constructor remains strict
-    # for callers that supply an already-materialized tensor.
-    rows = rows[:ENTITY_TOKEN_MAX]
+    # token budget, so the producer stays total and deterministic by keeping a
+    # fixed slice. The slice is the *newest* rows: UIDs are monotonic, so the
+    # highest UIDs are the most recent plays, and a fresh Graveyard or swarm is
+    # the state where dropping the arriving threat matters most. Keeping the
+    # lowest UIDs instead showed the actor stale bodies while the board raster,
+    # which is not truncated, showed the swarm arriving. Emission order stays
+    # ascending by UID so the row order contract is unchanged for any state
+    # under the budget.
+    rows.sort(key=lambda item: item[0])
+    if len(rows) > ENTITY_TOKEN_MAX:
+        rows = rows[-ENTITY_TOKEN_MAX:]
+        rows.sort(key=lambda item: item[0])
     if not rows:
         return np.zeros((0, ENTITY_TOKEN_DIM), dtype=np.float32)
     return np.ascontiguousarray(np.stack([row for _, row in rows], axis=0), dtype=np.float32)
@@ -312,7 +319,11 @@ def build_public_entity_rows(
         rows_with_order.append((sort_key, row))
 
     rows_with_order.sort(key=lambda item: item[0])
-    rows_with_order = rows_with_order[:ENTITY_TOKEN_MAX]
+    # Same newest-first selection as the reference projection: a track ID is
+    # monotonic, so the highest IDs are the most recent detections.
+    if len(rows_with_order) > ENTITY_TOKEN_MAX:
+        rows_with_order = rows_with_order[-ENTITY_TOKEN_MAX:]
+        rows_with_order.sort(key=lambda item: item[0])
     if not rows_with_order:
         return np.zeros((0, ENTITY_TOKEN_DIM), dtype=np.float32)
     return np.ascontiguousarray(

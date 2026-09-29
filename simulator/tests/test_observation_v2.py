@@ -201,3 +201,65 @@ def test_metadata_and_entity_row_aliases_cannot_be_ambiguous() -> None:
     rows = np.zeros((1, D), dtype=np.float32)
     with pytest.raises(TypeError, match="only one"):
         PolicyObservationV2.from_v1(_v1(), rows, entity_rows=rows)
+
+
+def test_entity_token_truncation_keeps_the_newest_units() -> None:
+    """A swarm over budget must keep the arriving units, not the stale ones.
+
+    UIDs are monotonic, so ascending order is oldest-first. Truncating on that
+    order dropped the units that had just been played, which is exactly wrong
+    in the Graveyard and swarm states that overflow the budget. The board raster
+    is not truncated, so the two views of the same state must agree on which
+    units are present.
+    """
+
+    from simulator.engine import BattleEngine
+    from simulator.observation_v2_adapter import build_public_entity_rows_from_soa
+    from simulator.ruleset import load_fixed_ruleset
+    from simulator.soa import ObservationSoA
+    from simulator.state import EntityState
+
+    ruleset = load_fixed_ruleset()
+    deck = (
+        "hog-rider",
+        "cannon",
+        "musketeer",
+        "skeletons",
+        "fireball",
+        "log",
+        "ice-golem",
+        "ice-spirit",
+    )
+    engine = BattleEngine(ruleset)
+    state = engine.new_battle(decks=(deck, deck), seed=5, shuffle_decks=False)
+    card = ruleset.card("skeletons")
+    uids: list[int] = []
+    for index in range(ENTITY_TOKEN_MAX + 72):
+        entity = EntityState(
+            uid=state.next_uid,
+            card_id="skeletons",
+            owner=1,
+            kind="troop",
+            x_mtile=3_000 + (index % 12) * 1_000,
+            y_mtile=6_000 + (index // 12) * 1_000,
+            hp=int(card.hitpoints or 1),
+            max_hp=int(card.hitpoints or 1),
+            spawn_tick=state.tick,
+            parent_uid=None,
+        )
+        state.next_uid += 1
+        state.entities[entity.uid] = entity
+        uids.append(entity.uid)
+
+    soa = ObservationSoA(capacity=len(uids) + 8)
+    soa.sync(state, lambda card_id: card_id, ruleset)
+    rows = build_public_entity_rows_from_soa(
+        state, viewer=0, soa_state=soa, public_entity_uids=uids
+    )
+
+    expected = set(uids[-ENTITY_TOKEN_MAX:])
+    assert rows.shape[0] == ENTITY_TOKEN_MAX
+    assert set(uids) - expected, "the fixture must overflow the token budget"
+    # The most recently spawned unit survives the slice.
+    assert uids[-1] in expected
+    assert uids[0] not in expected
