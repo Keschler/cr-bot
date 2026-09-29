@@ -58,6 +58,12 @@ DEFAULT_EVAL_MAX_DECISIONS = 1200
 DEFAULT_ROLLOUT_DECISIONS = 128
 DEFAULT_ROLLOUT_LANES = 8
 DEFAULT_EPISODE_CAP = 128
+# The V4 rollout env advances one decision every 250 ms. ``reward_mode=terminal``
+# can only pay when an episode actually reaches a match outcome, so the cap must
+# cover a whole regulation period; anything shorter yields a zero reward and a
+# zero advantage on every step.
+DEFAULT_DECISION_INTERVAL_US = 250_000
+MIN_TERMINAL_BUDGET_US = 180_000_000
 
 
 def _json_default(value: Any) -> Any:
@@ -400,6 +406,24 @@ class LearningCurveConfig:
             raise ValueError("device cannot be empty")
         if self.reward_mode not in ("terminal", "tower-delta", "truncation"):
             raise ValueError("reward_mode must be terminal, tower-delta, or truncation")
+        if self.reward_mode == "terminal" and not self.smoke:
+            # ``terminal`` pays the env's sparse outcome only, and that outcome
+            # arrives when a match ends. An episode is cut at ``episode_cap``
+            # decisions, so the cap has to span a whole match or the reward is
+            # identically zero and the advantages with it. The default cap of 128
+            # decisions at the 250 ms decision cadence is 32 s against a 180 s
+            # regulation, so this combination trained nothing while passing
+            # configuration validation.
+            budget_us = self.episode_cap * DEFAULT_DECISION_INTERVAL_US
+            if budget_us < MIN_TERMINAL_BUDGET_US:
+                raise ValueError(
+                    f"reward_mode=terminal needs an episode long enough to finish a match: "
+                    f"episode_cap={self.episode_cap} at {DEFAULT_DECISION_INTERVAL_US} us per decision "
+                    f"covers {budget_us} us, below the {MIN_TERMINAL_BUDGET_US} us minimum. "
+                    f"Raise episode_cap to at least "
+                    f"{-(-MIN_TERMINAL_BUDGET_US // DEFAULT_DECISION_INTERVAL_US)}, or use "
+                    f"reward_mode=truncation or tower-delta, which pay on a cut episode"
+                )
         if self.training_source not in ("frontier", "match-start"):
             raise ValueError("training_source must be frontier or match-start")
         if self.training_source == "match-start" and self.bc_coef != 0.0:

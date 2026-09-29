@@ -638,3 +638,38 @@ def test_extra_evaluation_points_do_not_change_training_randomness(tmp_path):
         draws.append(observed)
     assert len(draws[0]) == 2
     assert draws[0] == draws[1]
+
+
+def test_terminal_reward_mode_requires_an_episode_long_enough_to_finish_a_match() -> None:
+    """``terminal`` pays only on a match outcome, so a short cap pays nothing.
+
+    The env pays the sparse terminal outcome, and an episode is cut at
+    ``episode_cap`` decisions. The default cap of 128 decisions at the 250 ms
+    decision cadence covers 32 s against a 180 s regulation, so every reward was
+    zero and every advantage with it. That configuration used to pass
+    validation, so a run reported a successful learning curve that could not
+    have learned anything.
+    """
+
+    from simulator.rl.v4.learning_curve import (
+        DEFAULT_DECISION_INTERVAL_US,
+        MIN_TERMINAL_BUDGET_US,
+    )
+
+    default = LearningCurveConfig()
+    assert default.reward_mode == "tower-delta"
+    assert default.episode_cap * DEFAULT_DECISION_INTERVAL_US < MIN_TERMINAL_BUDGET_US
+
+    with pytest.raises(ValueError, match="reward_mode=terminal needs an episode"):
+        LearningCurveConfig(reward_mode="terminal")
+
+    # Enough budget to finish a match is accepted.
+    enough = -(-MIN_TERMINAL_BUDGET_US // DEFAULT_DECISION_INTERVAL_US)
+    assert LearningCurveConfig(reward_mode="terminal", episode_cap=enough).reward_mode == "terminal"
+
+    # The modes that pay on a cut episode are unaffected at the default cap.
+    assert LearningCurveConfig(reward_mode="truncation").reward_mode == "truncation"
+    assert LearningCurveConfig(reward_mode="tower-delta").reward_mode == "tower-delta"
+
+    # A smoke run is explicitly short by design and stays constructible.
+    assert LearningCurveConfig(reward_mode="terminal", smoke=True).reward_mode == "terminal"

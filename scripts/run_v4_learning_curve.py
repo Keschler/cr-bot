@@ -162,7 +162,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--reward-mode", choices=("terminal", "tower-delta", "truncation"),
         default="tower-delta",
-        help="frontier PPO reward mode (tower-delta is the controlled default)",
+        help=(
+            "frontier PPO reward mode (tower-delta is the controlled default); "
+            "terminal pays only when a match ends, so it also needs an episode "
+            "cap long enough to finish one"
+        ),
     )
     parser.add_argument("--choice-replicas", type=int, default=8)
     parser.add_argument(
