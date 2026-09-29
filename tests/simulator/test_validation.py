@@ -103,10 +103,10 @@ def _heldout_case(engine: BattleEngine) -> dict[str, object]:
             {
                 "sample_id": "heldout:cannon-final-hp",
                 "mechanic": "cannon_combat",
-                # Synthetic fixture pinned to the current engine outcome. The
-                # remaining 12 HP includes placement-started linear lifetime
-                # decay and deployment-time Hog target acquisition.
-                "observed_value": 12,
+                # Synthetic fixture pinned to the full 160-tick scenario.
+                # Three Hog hits, including the final hit at tick 149, reduce
+                # the Cannon to zero after placement-started lifetime decay.
+                "observed_value": 0,
                 "tolerance": {"absolute": 0},
                 "extractor": {
                     "type": "final_entity_hp",
@@ -130,6 +130,11 @@ def _heldout_case(engine: BattleEngine) -> dict[str, object]:
                         "tick": 30,
                         "kind": "target_changed",
                         "values": {"target_card_id": "cannon"},
+                    },
+                    {
+                        "tick": 150,
+                        "kind": "target_changed",
+                        "values": {"target_card_id": "princess-tower"},
                     },
                 ],
             }
@@ -523,3 +528,72 @@ def test_ambiguous_final_entity_selector_fails_instead_of_choosing_one() -> None
 
     with pytest.raises(ValidationCorpusError, match="matched 3 final entities"):
         evaluate_fidelity_corpus(engine, validation_corpus_from_dict(raw))
+
+
+def test_required_mechanic_is_judged_on_its_own_observations() -> None:
+    """Naming a mechanic must be evidence about that mechanic.
+
+    The agreement rate used to be pooled across every mechanic, so thousands of
+    agreeing samples from other mechanics could carry a required mechanic that
+    agreed on nothing. The gate must fail when the required mechanic's own rate
+    is below the threshold even though the pooled rate passes.
+    """
+
+    from dataclasses import replace
+    from types import MappingProxyType
+
+    engine = BattleEngine()
+    report, _, _ = evaluate_fidelity_corpus(
+        engine,
+        validation_corpus_from_dict(_corpus(engine)),
+    )
+    base = report.mechanics["hog_cannon_targeting"]
+    mechanics = dict(report.mechanics)
+    mechanics["hog_cannon_targeting"] = {
+        "samples": {
+            **base["samples"],
+            "count": 5_000,
+            "agreement_count": 5_000,
+            "agreement_rate": 1.0,
+        },
+        "traces": {
+            **base["traces"],
+            "count": 5_000,
+            "agreement_count": 5_000,
+            "agreement_rate": 1.0,
+        },
+        "evidence": base["evidence"],
+    }
+    mechanics["hog_speed"] = {
+        "samples": {
+            **base["samples"],
+            "count": 1,
+            "agreement_count": 0,
+            "agreement_rate": 0.0,
+        },
+        "traces": {**base["traces"], "count": 0, "agreement_count": 0, "agreement_rate": None},
+        "evidence": base["evidence"],
+    }
+    padded = replace(
+        report,
+        mechanics=MappingProxyType(mechanics),
+        overall={
+            **report.overall,
+            "samples": {**report.overall["samples"], "count": 10_001, "agreement_count": 10_000},
+            "traces": {**report.overall["traces"], "count": 5_000, "agreement_count": 5_000},
+        },
+    )
+
+    gated = apply_fidelity_gate(
+        padded,
+        min_observations=1,
+        min_agreement_rate=0.98,
+        required_mechanics=("hog_speed",),
+    )
+
+    # The pooled rate is high enough to pass on its own.
+    assert gated.gate is not None
+    assert gated.gate["agreement_rate"] > 0.98
+    assert gated.gate["passed"] is False
+    assert any("hog_speed" in reason for reason in gated.gate["failures"])
+    assert gated.gate["per_mechanic"]["hog_speed"]["agreement_rate"] == 0.0

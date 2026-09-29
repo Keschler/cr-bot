@@ -1364,6 +1364,26 @@ def apply_fidelity_gate(
         )
     if missing_mechanics:
         failures.append("missing required mechanics: " + ", ".join(missing_mechanics))
+    # A required mechanic is judged on its own observations. A pooled rate let
+    # thousands of agreeing samples from other mechanics carry a required
+    # mechanic that agreed on nothing, so naming a mechanic bought no evidence
+    # about that mechanic at all. The observation floor stays corpus-level
+    # because that is what ``--min-observations`` documents; the *rate* is what
+    # pooling made meaningless.
+    per_mechanic: dict[str, dict[str, object]] = {}
+    for mechanic in required:
+        if mechanic in missing_mechanics:
+            continue
+        per_mechanic[mechanic] = _mechanic_gate_metrics(
+            report.mechanics[mechanic],
+            min_observations=min_observations,
+            min_agreement_rate=min_agreement_rate,
+        )
+        if per_mechanic[mechanic]["failures"]:
+            failures.extend(
+                f"mechanic {mechanic}: {reason}"
+                for reason in per_mechanic[mechanic]["failures"]
+            )
     return replace(
         report,
         gate=MappingProxyType(
@@ -1375,10 +1395,46 @@ def apply_fidelity_gate(
                 "min_observations": min_observations,
                 "min_agreement_rate": min_agreement_rate,
                 "required_mechanics": list(required),
+                # Plain nested dicts: the gate is serialized as JSON.
+                "per_mechanic": per_mechanic,
                 "failures": failures,
             }
         ),
     )
+
+
+def _mechanic_gate_metrics(
+    mechanic: Mapping[str, object],
+    *,
+    min_observations: int,
+    min_agreement_rate: float | None,
+) -> dict[str, object]:
+    """Summarize one mechanic's own evidence against the gate thresholds."""
+
+    samples = mechanic.get("samples")
+    traces = mechanic.get("traces")
+    if not isinstance(samples, Mapping) or not isinstance(traces, Mapping):
+        raise ValidationCorpusError("mechanic report is missing its sample or trace metrics")
+    count = int(samples["count"]) + int(traces["count"])
+    agreeing = int(samples["agreement_count"]) + int(traces["agreement_count"])
+    rate = agreeing / count if count else None
+    failures: list[str] = []
+    # Only the rate is enforced per mechanic. The observation floor is a
+    # corpus-level criterion, which is what ``--min-observations`` states; a
+    # required mechanic is not required to have as many samples as the whole
+    # corpus.
+    if min_agreement_rate is not None and (rate is None or rate < min_agreement_rate):
+        failures.append(
+            f"agreement_rate {rate!r} is below required {min_agreement_rate}"
+        )
+    return {
+        "observation_count": count,
+        "agreement_count": agreeing,
+        "agreement_rate": rate,
+        "corpus_min_observations": min_observations,
+        "min_agreement_rate": min_agreement_rate,
+        "failures": failures,
+    }
 
 
 __all__ = [
