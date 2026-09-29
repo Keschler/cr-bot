@@ -260,9 +260,28 @@ def _parser() -> argparse.ArgumentParser:
     fidelity.add_argument("--corpus-out", type=Path)
     fidelity.add_argument("--json-out", type=Path, required=True)
     fidelity.add_argument("--position-tolerance-mtile", type=int, default=250)
-    fidelity.add_argument("--min-observations", type=int, default=1)
-    fidelity.add_argument("--min-agreement-rate", type=float)
-    fidelity.add_argument("--require-mechanic", action="append", default=[])
+    # These mirror the release gate in ``readiness`` and the simulator-side
+    # fidelity command.  Defaulting to a single observation and no rate
+    # requirement let a permissive measurement exit clean and be read as
+    # evidence.
+    fidelity.add_argument(
+        "--min-observations",
+        type=int,
+        default=20,
+        help="minimum held-out observations required for the gate to pass",
+    )
+    fidelity.add_argument(
+        "--min-agreement-rate",
+        type=float,
+        default=0.98,
+        help="minimum agreement rate required per named mechanic",
+    )
+    fidelity.add_argument(
+        "--require-mechanic",
+        action="append",
+        default=[],
+        help="mechanic that must meet the thresholds; repeatable",
+    )
 
     extract_run = subparsers.add_parser(
         "extract-run",

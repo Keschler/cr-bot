@@ -597,3 +597,54 @@ def test_required_mechanic_is_judged_on_its_own_observations() -> None:
     assert gated.gate["passed"] is False
     assert any("hog_speed" in reason for reason in gated.gate["failures"])
     assert gated.gate["per_mechanic"]["hog_speed"]["agreement_rate"] == 0.0
+
+
+def test_fidelity_command_defaults_match_the_release_gate() -> None:
+    """A permissive fidelity invocation must not exit clean by default.
+
+    ``fidelity`` is a measurement command whose exit code mirrors its own gate,
+    so its defaults are what most invocations get. They used to require one
+    observation, no agreement rate, and no named mechanic, which passed on a
+    single agreeing sample. The release gate in ``readiness`` requires 20
+    held-out observations at 0.98 per mechanic, and the measurement defaults
+    now match it.
+    """
+
+    from simulator.cli import main as simulator_main
+    from simulator.cli import _parser
+
+    args = _parser().parse_args(
+        ["fidelity", "corpus.json", "--json-out", "report.json"]
+    )
+    assert args.min_observations == 20
+    assert args.min_agreement_rate == 0.98
+    assert args.require_mechanic == []
+
+    from simulator.readiness import (
+        build_training_readiness_report,
+    )
+    import inspect
+
+    signature = inspect.signature(build_training_readiness_report)
+    assert signature.parameters["minimum_heldout_observations"].default == args.min_observations
+    assert signature.parameters["minimum_heldout_agreement_rate"].default == args.min_agreement_rate
+
+
+def test_lab_fidelity_command_defaults_match_the_simulator_side() -> None:
+    from simulator.physical_lab.workflow.cli import _parser as lab_parser
+
+    args = lab_parser().parse_args(
+        [
+            "fidelity",
+            "observation.json",
+            "--run",
+            "run.json",
+            "--replay-cache",
+            "cache.json",
+            "--json-out",
+            "report.json",
+        ]
+    )
+    assert args.min_observations == 20
+    assert args.min_agreement_rate == 0.98
+    assert args.require_mechanic == []

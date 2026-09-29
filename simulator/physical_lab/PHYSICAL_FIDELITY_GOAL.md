@@ -229,3 +229,11 @@ is only a candidate until both captures are sealed, synchronization and
 lifecycle checks pass, a recognized replay cache and normalized observation
 manifest are admitted, and the fidelity/readiness gates pass. The campaign
 does not turn a candidate capture into ground truth automatically.
+
+`fidelity` and `lab fidelity` are measurement commands: they compile one report
+and exit non-zero when that report's own gate fails. Their defaults now match
+the release gate — at least 20 held-out observations and a 0.98 agreement rate
+— so a permissive invocation cannot exit clean and be read as evidence. The
+release decision itself belongs to `readiness`, which is per-mechanic, requires
+two independent held-out groups, and additionally requires
+`ruleset.metadata.training_ready`, so it cannot pass for a provisional ruleset.
