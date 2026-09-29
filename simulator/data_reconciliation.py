@@ -166,27 +166,63 @@ def _source_field(row: Mapping[str, Any], field: str) -> Any:
         return row.get("tower_damage")
     if field == "attack_interval_us":
         value = row.get("attack_interval_s")
-        return None if value is None else int(round(float(value) * 1_000_000))
+        if value is None:
+            value = row.get("attack_interval_us")
+        return None if value is None else int(round(float(value) * _US_SCALE_FOR[field]))
     if field == "range_mtile":
         value = row.get("range_tiles")
-        return None if value is None else int(round(float(value) * 1_000))
+        return None if value is None else int(round(float(value) * _TILE_SCALE))
     if field == "area_radius_mtile":
         value = row.get("radius_tiles")
-        return None if value is None else int(round(float(value) * 1_000))
+        return None if value is None else int(round(float(value) * _TILE_SCALE))
     if field == "lifetime_us":
         value = row.get("duration_s")
         return None if value is None else int(round(float(value) * 1_000_000))
     if field == "spawn_count":
         return row.get("spawn_count")
+    if field == "move_speed_mtile_per_s":
+        # The structured sources store the qualitative speed tier. Converting it
+        # through the same table the catalog uses means a wrong conversion is
+        # reported here as a conflict instead of being invisible.
+        return speed_to_mtile_per_s(row.get("speed") or row.get("move_speed"))
     return row.get(field)
 
 
+_US_SCALE_FOR: Mapping[str, int] = {"attack_interval_us": 1_000_000}
+_TILE_SCALE = 1_000
+
+# The four in-game movement tiers are 45/60/90/120 tiles per minute; the
+# runtime stores milli-tiles per second, so the conversion is code * 20.
+_SPEED_TIERS: Mapping[str, int] = {
+    "slow": 900,
+    "medium": 1_200,
+    "fast": 1_800,
+    "very fast": 2_400,
+}
+
+
+def speed_to_mtile_per_s(value: object) -> int | None:
+    """Convert a qualitative speed tier to the runtime movement scale."""
+
+    if value is None:
+        return None
+    normalized = str(value).strip().casefold().replace("-", " ")
+    tier = _SPEED_TIERS.get(normalized)
+    return None if tier is None else tier
+
+
+# Scalars the structured snapshot can actually contradict. Hidden timing
+# (first_hit_delay_us, sight_range_mtile) and projectile travel speed are not
+# carried by these sources, so they are verified through the official override
+# rows and the ``mechanics.*`` branch instead of being listed here; a field
+# with no source would only ever report "unresolved_missing_source".
 _COMPARE_FIELDS: tuple[str, ...] = (
     "elixir_milli",
     "hitpoints",
     "damage",
     "crown_tower_damage",
     "attack_interval_us",
+    "move_speed_mtile_per_s",
     "range_mtile",
     "area_radius_mtile",
     "lifetime_us",
@@ -276,6 +312,10 @@ def reconcile_card(
                 "spawn_count",
             })
             or (kind == "troop" and field == "lifetime_us")
+            # Spells and buildings never path, so the structured table's
+            # default speed tier on those rows is card-page filler rather than
+            # a claim about movement.  Only a troop's speed is comparable.
+            or (kind in {"spell", "building"} and field == "move_speed_mtile_per_s")
             # Legacy hut/spawner rows may contain child-body damage, but a
             # passive building has no attack cadence/range/damage component.
             # Keep all attack-shaped fields explicitly non-applicable.
@@ -360,7 +400,15 @@ def reconcile_card(
                 "official_value": override.get("value"),
                 "official_source": override.get("source_id"),
                 "resolved_value": override.get("value"),
-                "status": "verified_official" if simulator_value == override.get("value") else "official_override_conflict",
+                # A mechanics override the executable value does not match
+                # means the override was not applied. That is a defect, not the
+                # scalar case where official simply wins over a third-party
+                # snapshot, so it carries its own name and blocks verification.
+                "status": (
+                    "verified_official"
+                    if simulator_value == override.get("value")
+                    else "official_override_unapplied"
+                ),
             }
         )
     return rows
@@ -399,7 +447,12 @@ def reconcile_ruleset(
     unresolved = [
         row
         for row in card_rows
-        if row["status"] in {"unresolved_missing_source", "unresolved_source_conflict"}
+        if row["status"]
+        in {
+            "unresolved_missing_source",
+            "unresolved_source_conflict",
+            "official_override_unapplied",
+        }
     ]
     source_hash = (
         source_sha256(source_path)

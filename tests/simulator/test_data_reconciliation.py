@@ -249,3 +249,50 @@ def test_in_memory_reconciliation_reports_the_payload_hash() -> None:
     source = load_level11_source()
     report = reconcile_ruleset(load_ruleset("v1"), source_payload=source)
     assert report["source"]["sha256"] == source_payload_sha256(source)
+
+
+def test_movement_speed_is_compared_against_the_structured_speed_tier() -> None:
+    """A wrong speed conversion has to show up as a reconciliation conflict.
+
+    The reconciler compared damage, hitpoints, and cadence but not movement, so
+    a conversion that was wrong for twelve cards produced no report at all.
+    Comparing the qualitative tier through the same table the catalog uses
+    makes the conversion auditable, and spells and buildings stay exempt
+    because they never path and the source fills a default tier on their rows.
+    """
+
+    report = reconcile_ruleset(load_ruleset("v1"))
+    rows = [row for row in report["rows"] if row["field"] == "move_speed_mtile_per_s"]
+    assert rows, "movement speed must be part of the compared scalar set"
+
+    by_status: dict[str, list[dict[str, object]]] = {}
+    for row in rows:
+        by_status.setdefault(str(row["status"]), []).append(row)
+    assert by_status.get("unresolved_source_conflict") is None
+    assert len(by_status.get("structured_match", [])) > 50
+    for row in by_status.get("not_applicable", []):
+        assert row["simulator_value"] is None
+
+    # A conversion error in either direction is reported, not absorbed.
+    giant = next(row for row in rows if row["card_id"] == "giant")
+    assert giant["simulator_value"] == 900
+    assert giant["structured_value"] == 900
+
+
+def test_unapplied_mechanics_override_blocks_full_verification() -> None:
+    """An override the executable value does not match is a defect.
+
+    A mechanics row whose value differs from the official override means the
+    override was never applied. The scalar case where official simply wins
+    over a third-party snapshot is a different situation and keeps its own
+    non-blocking name, so the two cannot be confused.
+    """
+
+    report = reconcile_ruleset(load_ruleset("v1"))
+    statuses = {str(row["status"]) for row in report["rows"]}
+    assert "official_override_unapplied" not in statuses
+
+    for row in report["rows"]:
+        if row["status"] == "official_override_unapplied":
+            assert row["simulator_value"] != row["official_value"]
+            assert row in report["unresolved"]

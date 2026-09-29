@@ -576,7 +576,11 @@ def _parser() -> argparse.ArgumentParser:
 
     reconcile = subparsers.add_parser(
         "reconcile-data",
-        help="compare every opponent-card field with Level-11 structured data and official overrides",
+        help=(
+            "compare every opponent-card scalar the structured sources carry, "
+            "plus every officially overridden mechanic field, against Level-11 "
+            "data and official overrides"
+        ),
     )
     reconcile.add_argument(
         "--source-json",
@@ -1276,14 +1280,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
         try:
-            # A bare reconciliation command audits the complete V1 opponent
-            # roster.  Pass ``--ruleset 2026-08-04`` explicitly only when the
-            # eight-card base interaction set is desired.
-            audit_ruleset = (
-                load_ruleset("2026-08-04-roster")
-                if args.ruleset == "2026-08-04"
-                else engine.ruleset
-            )
+            # ``--ruleset`` selects the ruleset that is audited.  The comment
+            # claimed the eight-card base set was reachable through this flag
+            # while the code substituted the 124-card roster artifact, so the
+            # base set could never be audited and the report identified a
+            # ruleset the caller did not ask for.
+            audit_ruleset = load_ruleset(args.ruleset)
             additional_paths = list(args.additional_source_json)
             if DECKSHOP_SOURCE_PATH not in additional_paths:
                 additional_paths.insert(0, DECKSHOP_SOURCE_PATH)
