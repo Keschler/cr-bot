@@ -32,6 +32,8 @@ from .observation_v3 import (
     PolicyObservationV3,
     uniform_hand_belief,
 )
+from .soa import is_visibility_concealed
+from .soa import is_visibility_concealed
 
 
 PUBLIC_ESTIMATOR_VERSION: Final = "public-cycle-history-2"
@@ -305,7 +307,16 @@ class PublicStateEstimator:
                 name = "own_tower_damaged" if owner == viewer else "enemy_tower_damaged"
                 self.observe(PublicEvent(name, time, float(event.get("damage", 0)) / 1000.0))
             elif event.kind == "entity_died":
-                self.observe(PublicEvent("unit_died", time, 1.0))
+                # A body that was hidden when it died was never observed, so
+                # its death is not part of the public stream. Emitting it told
+                # the actor that something died at a time when the board showed
+                # nothing, which is a hidden-information leak even though the
+                # event carries no card identity. A concealed body is
+                # re-checked here rather than at the time of the event because
+                # the retention rules mean the flags can still be read.
+                died = state.entities.get(event.get("uid"))
+                if died is not None and not is_visibility_concealed(died):
+                    self.observe(PublicEvent("unit_died", time, 1.0))
         self._tick = elapsed
         estimate = self._memory.opponent_elixir_est
         self._elixir_lo = self._elixir_hi = estimate

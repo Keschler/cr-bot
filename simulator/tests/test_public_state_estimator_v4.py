@@ -9,6 +9,7 @@ from simulator.observation import ObservationMemory
 from simulator.public_state_estimator import PublicEvent, PublicStateEstimator, belief_index
 from simulator.rl.v4.frontier_ppo import make_frontier_env
 from simulator.roster import PLAYER_DECK
+from simulator.state import EntityState, StatusState
 
 
 def env():
@@ -114,6 +115,11 @@ def test_sync_never_reads_opponent_private_player_state():
 def test_tower_damage_own_deploy_death_events_are_classified_once():
     game = env()
     tower = next(e for e in game.state.entities.values() if e.kind == 'tower' and e.owner == 0)
+    game.state.entities[999] = EntityState(
+        uid=999, card_id='skeletons', owner=1, kind='troop',
+        x_mtile=5000, y_mtile=17000, hp=0, max_hp=1,
+        spawn_tick=0, alive=False,
+    )
     append_event(game, 'card_played', player=0, card_id='skeletons', cost_milli=1000)
     append_event(game, 'damage_applied', target_uid=tower.uid, damage=200)
     append_event(game, 'entity_died', player=1, card_id='skeletons', uid=999)
@@ -123,6 +129,20 @@ def test_tower_damage_own_deploy_death_events_are_classified_once():
     for kind in ('own_deploy', 'action_taken', 'own_tower_damaged', 'unit_died'):
         assert first.event_history[:, EVENT_TYPES.index(kind)].sum() == 1
     assert_snapshot_same(first, est.sync_from_env(game))
+
+
+def test_sync_omits_concealed_death_from_public_history():
+    game = env()
+    game.state.entities[999] = EntityState(
+        uid=999, card_id='skeletons', owner=1, kind='troop',
+        x_mtile=5000, y_mtile=17000, hp=0, max_hp=1,
+        spawn_tick=0, alive=False,
+        statuses=[StatusState(kind='stealth', remaining_us=1000)],
+    )
+    append_event(game, 'entity_died', player=1, card_id='skeletons', uid=999)
+    snapshot = PublicStateEstimator().sync_from_env(game)
+    from simulator.observation_v3 import EVENT_TYPES
+    assert snapshot.event_history[:, EVENT_TYPES.index('unit_died')].sum() == 0
 
 
 def test_rewritten_history_and_viewer_switch_reconstruct():
@@ -137,3 +157,50 @@ def test_rewritten_history_and_viewer_switch_reconstruct():
     assert changed.opp_out_of_cycle[belief_index('log')]
     assert not changed.opp_out_of_cycle[belief_index('cannon')]
     assert not est.sync_from_env(game, viewer=1).opp_out_of_cycle.any()
+
+
+def test_death_of_a_concealed_body_is_not_part_of_the_public_stream() -> None:
+    """A hidden body that dies was never observed, so its death is not public.
+
+    The event carries no card identity, but it still told the actor that
+    something died at a time when the board showed nothing, which is a
+    hidden-information leak. A visible body dying is still reported.
+    """
+
+    from simulator.engine import BattleEngine
+    from simulator.public_state_estimator import EVENT_TYPE_INDEX
+    from simulator.ruleset import load_ruleset
+
+    ruleset = load_ruleset("v1")
+    deck = ("hog-rider", "cannon", "musketeer", "skeletons", "fireball", "log", "ice-golem", "ice-spirit")
+    death_index = EVENT_TYPE_INDEX["unit_died"]
+
+    def death_count(*, concealed: bool) -> int:
+        engine = BattleEngine(ruleset)
+        state = engine.new_battle(decks=(deck, deck), seed=3, shuffle_decks=False)
+        card = ruleset.card("royal-ghost")
+        flags = {"stealth_active": True} if concealed else {}
+        ghost = EntityState(
+            uid=state.next_uid,
+            card_id="royal-ghost",
+            owner=1,
+            kind="troop",
+            x_mtile=4_000,
+            y_mtile=6_000,
+            hp=int(card.hitpoints),
+            max_hp=int(card.hitpoints),
+            spawn_tick=state.tick,
+            parent_uid=None,
+            **flags,
+        )
+        state.next_uid += 1
+        state.entities[ghost.uid] = ghost
+        engine.step(state)
+        ghost.hp = 0
+        engine.step(state)
+        estimator = PublicStateEstimator()
+        estimator.sync_from_env(SimpleNamespace(state=state, engine=engine))
+        return int(estimator.snapshot().event_history[:, death_index].sum())
+
+    assert death_count(concealed=False) == 1
+    assert death_count(concealed=True) == 0

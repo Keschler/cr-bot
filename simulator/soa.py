@@ -53,6 +53,41 @@ _HIDDEN_STATUS_KINDS = frozenset(
 )
 
 
+def is_visibility_concealed(entity: object) -> bool:
+    """Return whether an entity is hidden by an active concealment form.
+
+    This is :func:`is_public_observation_entity` without the liveness and
+    hit-point tests, so it answers "would this body have been visible?".
+    Consumers that reason about something which already happened — an event
+    naming a unit that has since died — need exactly that question, and
+    cannot use the public predicate because it returns ``False`` for every
+    dead body regardless of how it died.
+
+    The visibility contract is fail-closed for both sides: the public contract
+    carries no provenance bit that distinguishes an actor's own known hidden
+    unit from an opponent's, so every active stealth, burrow, and concealment
+    form uses the same rule.
+    """
+
+    if bool(getattr(entity, "stealth_active", False)):
+        return True
+    if bool(getattr(entity, "burrow_active", False)):
+        return True
+    if bool(getattr(entity, "concealed_active", False)):
+        return True
+    for status in getattr(entity, "statuses", ()):
+        status_kind = getattr(status, "kind", None)
+        remaining_us = getattr(status, "remaining_us", 0)
+        if (
+            isinstance(status_kind, str)
+            and type(remaining_us) is int
+            and remaining_us > 0
+            and normalize_identifier(status_kind) in _HIDDEN_STATUS_KINDS
+        ):
+            return True
+    return False
+
+
 def is_public_observation_entity(entity: object) -> bool:
     """Return whether an entity may be rendered in the public observation.
 
@@ -69,23 +104,8 @@ def is_public_observation_entity(entity: object) -> bool:
         return False
     if not bool(getattr(entity, "alive", False)) or int(getattr(entity, "hp", 0)) <= 0:
         return False
-    if bool(getattr(entity, "stealth_active", False)):
-        return False
-    if bool(getattr(entity, "burrow_active", False)):
-        return False
-    if bool(getattr(entity, "concealed_active", False)):
-        return False
-    for status in getattr(entity, "statuses", ()):
-        status_kind = getattr(status, "kind", None)
-        remaining_us = getattr(status, "remaining_us", 0)
-        if (
-            isinstance(status_kind, str)
-            and type(remaining_us) is int
-            and remaining_us > 0
-            and normalize_identifier(status_kind) in _HIDDEN_STATUS_KINDS
-        ):
-            return False
-    return True
+    return not is_visibility_concealed(entity)
+
 
 _POLICY_GRID_CELLS: tuple[tuple[int, int], ...] = tuple(
     (col, row)

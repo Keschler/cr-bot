@@ -26,11 +26,13 @@ try:
     from ...engine import BattleEngine
     from ...ruleset import Ruleset, load_fixed_ruleset
     from ...roster import PLAYER_DECK
+    from ...soa import is_visibility_concealed
 except ImportError:  # pragma: no cover - top-level ``rl`` layout
     from simulator.actions import PlayCardAction, SimAction, WaitAction
     from simulator.engine import BattleEngine
     from simulator.ruleset import Ruleset, load_fixed_ruleset
     from simulator.roster import PLAYER_DECK
+    from simulator.soa import is_visibility_concealed
 
 
 DECK_SIZE = 8
@@ -533,10 +535,24 @@ def _player_rows(player: int) -> tuple[int, int, int, int]:
 
 
 def _enemy_entities(state: Any, player: int) -> list[Any]:
+    """Return the visible enemy bodies a scripted opponent can react to.
+
+    A concealed body is excluded for the same reason the public observation
+    excludes it: the scripted opponent plays the opponent's seat, so a
+    stealthed, burrowed, or concealed unit it can see is information no real
+    player or the learner's own observation has. Targeting such a unit would
+    teach the policy against an opponent with a hidden-information advantage.
+    Engine troops already refuse to acquire these units, so this only closes
+    the placement and prioritisation side of the same leak.
+    """
+
     return [
         entity
         for entity in state.entities.values()
-        if entity.alive and entity.owner != player and entity.kind != "tower"
+        if entity.alive
+        and entity.owner != player
+        and entity.kind != "tower"
+        and not is_visibility_concealed(entity)
     ]
 
 

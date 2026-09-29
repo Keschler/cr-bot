@@ -147,3 +147,54 @@ def test_all_controllers_emit_legal_actions_for_both_players_over_steps() -> Non
                 assert action.player == player if isinstance(action, (PlayCardAction, WaitAction)) else False
                 assert engine.validate_action(state, action) is None
             engine.step(state, actions)
+
+
+def test_scripted_opponent_cannot_react_to_a_concealed_body() -> None:
+    """Concealment must hide a unit from the scripted opponent too.
+
+    The opponent plays the opponent's seat, so a stealthed or burrowed unit it
+    can see is information no real player or the learner's own observation has.
+    Engine troops already refuse to acquire these units; this pins the
+    placement and prioritisation side of the same leak.
+    """
+
+    from simulator.rl.foundation.opponent_pool import _enemy_troops
+    from simulator.state import EntityState
+
+    ruleset = load_fixed_ruleset()
+    deck = (
+        "hog-rider",
+        "cannon",
+        "musketeer",
+        "skeletons",
+        "fireball",
+        "log",
+        "ice-golem",
+        "ice-spirit",
+    )
+    engine = BattleEngine(ruleset)
+    state = engine.new_battle(decks=(deck, deck), seed=11, shuffle_decks=False)
+
+    def add(card_id: str, x: int, y: int, **flags) -> None:
+        card = ruleset.card(card_id)
+        entity = EntityState(
+            uid=state.next_uid,
+            card_id=card_id,
+            owner=1,
+            kind=card.kind,
+            x_mtile=x,
+            y_mtile=y,
+            hp=int(card.hitpoints or 1),
+            max_hp=int(card.hitpoints or 1),
+            spawn_tick=state.tick,
+            parent_uid=None,
+            **flags,
+        )
+        state.next_uid += 1
+        state.entities[entity.uid] = entity
+
+    add("giant", 6_000, 6_000)
+    add("royal-ghost", 4_000, 6_000, stealth_active=True)
+    add("miner", 8_000, 9_000, burrow_active=True)
+
+    assert [entity.card_id for entity in _enemy_troops(state, 0)] == ["giant"]
