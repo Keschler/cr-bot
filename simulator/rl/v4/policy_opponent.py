@@ -23,9 +23,15 @@ from .v4_ppo.runtime import (
 
 @lru_cache(maxsize=8)
 def _frozen_actor(path: str, sha256: str) -> Any:
-    actor = load_frozen_anchor(
-        path, frontier_model_config(), expected_sha256=sha256, device="cpu"
-    )
+    # Model construction initializes parameters before loading the checkpoint.
+    # Keep that one-time initialization inside an isolated RNG scope so a cold
+    # cache does not consume the caller's Torch stream while a warm cache does
+    # not.  The loaded weights, rather than the initialization values, define
+    # the actor used below.
+    with torch.random.fork_rng(devices=[]):
+        actor = load_frozen_anchor(
+            path, frontier_model_config(), expected_sha256=sha256, device="cpu"
+        )
     configure_v4_runtime(actor)
     return actor
 

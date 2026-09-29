@@ -325,7 +325,8 @@ def test_frontier_ppo_script_eval_wiring_flags():
     )
     for flag in ("--choice-replicas", "--adaptive-choice-replicas",
                  "--choice-max-replicas", "--choice-se-k",
-                 "--eval-only-checkpoint", "--updates", "--train-entries", "--sealed-entries"):
+                 "--eval-only-checkpoint", "--final-evaluation", "--deterministic-policy", "--updates",
+                 "--train-entries", "--sealed-entries"):
         assert flag in proc.stdout, flag
 
 
@@ -461,3 +462,4 @@ def test_summary_does_not_trust_old_singleton_confidence_label():
     summary = summarize_choice_regret([row])
     assert summary["n_improved"] == 0
     assert summary["n_unresolved"] == 1
+    assert summary["mean_se"] is None

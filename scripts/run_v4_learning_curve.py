@@ -10,8 +10,9 @@ For a dependency-free protocol check:
 
     python scripts/run_v4_learning_curve.py --smoke --out /tmp/v4-curve-smoke
 
-For a real run, pass a supplied V4 actor checkpoint and both frontier files;
-the historical simx12 checkpoint is intentionally not invented when absent.
+For a real development run, pass a supplied V4 actor checkpoint and training
+frontier file; sealed entries are optional secondary diagnostics. The
+historical simx12 checkpoint is intentionally not invented when absent.
 """
 
 from __future__ import annotations
@@ -39,6 +40,7 @@ from simulator.rl.v4.learning_curve import (  # noqa: E402
     DEFAULT_UPDATE_SCHEDULE,
     LearningCurveConfig,
     parse_update_schedule,
+    run_final_evaluation,
     run_learning_curve,
     smoke_hooks,
 )
@@ -110,7 +112,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--sealed-entries",
         type=Path,
-        help="held-out sealed entries used only for evaluation",
+        help="optional sealed entries used only for secondary diagnostics; never checkpoint selection",
+    )
+    parser.add_argument(
+        "--allow-scripted-frontier-entries", action="store_true",
+        help=(
+            "permit non-catalog scripted frontier entries for separate pinned/mixed "
+            "experiments; the real-deck comparison keeps catalog validation enabled"
+        ),
     )
     parser.add_argument(
         "--out", "--output-dir", dest="output_dir", type=Path,
@@ -145,6 +154,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--eval-max-decisions", type=int, default=DEFAULT_EVAL_MAX_DECISIONS,
         help="full-match evaluation decision cap; capped matches are censored",
+    )
+    parser.add_argument(
+        "--deterministic-policy", action="store_true",
+        help="use deterministic masked-policy actions; default uses seeded stochastic sampling",
     )
     parser.add_argument(
         "--reward-mode", choices=("terminal", "tower-delta", "truncation"),
@@ -195,6 +208,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="mark the supplied --checkpoint as an evaluation-only baseline",
     )
     parser.add_argument(
+        "--final-evaluation", "--final-eval", action="store_true",
+        help=(
+            "evaluate frozen actors on reserved evaluation decks without training, "
+            "sealed diagnostics, or checkpoint selection"
+        ),
+    )
+    parser.add_argument(
         "--smoke", action="store_true",
         help="run a lightweight synthetic protocol smoke; output makes no quality claim",
     )
@@ -208,6 +228,10 @@ def main(argv: list[str] | None = None) -> int:
     evaluation_only = bool(args.evaluation_only or args.evaluation_only_checkpoint is not None)
     if args.smoke and args.evaluation_only_checkpoint is not None:
         parser.error("--smoke cannot be combined with --evaluation-only-checkpoint")
+    if args.final_evaluation and args.smoke:
+        parser.error("--final-evaluation cannot be combined with --smoke")
+    if args.final_evaluation and evaluation_only:
+        parser.error("--final-evaluation cannot be combined with --evaluation-only")
     try:
         schedule = parse_update_schedule(args.updates)
         opponents = _load_opponents(args.opponents_json)
@@ -226,6 +250,7 @@ def main(argv: list[str] | None = None) -> int:
             rollout_lanes=args.rollout_lanes,
             episode_cap=args.episode_cap,
             eval_max_decisions=args.eval_max_decisions,
+            deterministic_policy=args.deterministic_policy,
             choice_replicas=args.choice_replicas,
             choice_horizon=args.choice_horizon,
             choice_adaptive_replicas=args.adaptive_choice_replicas,
@@ -244,22 +269,36 @@ def main(argv: list[str] | None = None) -> int:
             comparison_checkpoints=tuple(args.compare_checkpoint),
             opponent_specs=opponents,
             evaluation_only=evaluation_only,
+            allow_scripted_frontier_entries=args.allow_scripted_frontier_entries,
         )
-        report = run_learning_curve(
-            config,
-            hooks=smoke_hooks(args.seed) if args.smoke else None,
-        )
+        if args.final_evaluation:
+            report = run_final_evaluation(config)
+        else:
+            report = run_learning_curve(
+                config,
+                hooks=smoke_hooks(args.seed) if args.smoke else None,
+            )
     except (FileNotFoundError, RuntimeError, ValueError, OSError) as exc:
         parser.error(str(exc))
-    points = report["points"]
+    points = report.get("points", [])
     print(
         json.dumps(
             {
-                "curve": str((config.output_dir / "learning_curve.json").resolve()),
+                "curve": str(
+                    (
+                        config.output_dir
+                        / ("final_evaluation.json" if args.final_evaluation else "learning_curve.json")
+                    ).resolve()
+                ),
+                "final_evaluation_report": (
+                    str((config.output_dir / "final_evaluation.json").resolve())
+                    if args.final_evaluation else None
+                ),
                 "points": len(points),
                 "updates": [point["update"] for point in points],
                 "smoke": config.smoke,
                 "evaluation_only": config.evaluation_only,
+                "final_evaluation": bool(args.final_evaluation),
                 "quality_claim": report["provenance"]["quality_claim"],
             },
             sort_keys=True,

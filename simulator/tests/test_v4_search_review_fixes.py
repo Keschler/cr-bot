@@ -57,12 +57,18 @@ def test_horizon_gate_counts_missing_fixed_action_comparisons():
     reference = _verdict(
         "state",
         best=dict(action, mean=1.0),
-        branches=[_branch("sim", mean=0.0), _branch("rule", row=1, col=1, mean=1.0)],
+        branches=[
+            _branch("sim", mean=0.0, values=(0.0, 0.0)),
+            _branch("rule", row=1, col=1, mean=1.0, values=(1.0, 1.0)),
+        ],
     )
     short = _verdict(
         "state",
         best=dict(action, mean=1.0),
-        branches=[_branch("sim", mean=0.0), _branch("rule", row=1, col=1, mean=1.0)],
+        branches=[
+            _branch("sim", mean=0.0, values=(0.0, 0.0)),
+            _branch("rule", row=1, col=1, mean=1.0, values=(1.0, 1.0)),
+        ],
     )
     gate = fixed_action_horizon_gate(
         {56: [short], 112: [reference]}, reference=112, required_horizons=(28, 56)

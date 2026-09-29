@@ -92,7 +92,7 @@ def summarize_choice_regret(
     if n == 0:
         return {
             "n": 0, "n_same": 0, "n_changed": 0,
-            "mean_delta": 0.0, "mean_se": 0.0,
+            "mean_delta": 0.0, "mean_se": None,
             "median_delta": 0.0, "trimmed_mean": 0.0,
             "n_improved": 0, "n_regressed": 0, "n_unresolved": 0,
             "n_catastrophic": 0, "catastrophic_ids": [],
@@ -102,7 +102,10 @@ def summarize_choice_regret(
         }
     deltas = [float(r["delta"]) for r in rows]
     mean = sum(deltas) / n
-    mean_se = (statistics.stdev(deltas) / math.sqrt(n)) if n >= 2 else 0.0
+    # A single sealed state has an observed mean but no across-state
+    # uncertainty estimate.  Returning zero here would let a singleton look
+    # like a precise aggregate in downstream reports.
+    mean_se = (statistics.stdev(deltas) / math.sqrt(n)) if n >= 2 else None
     median = statistics.median(deltas)
     cut = int(n * trim_fraction)
     if n >= 6:
@@ -132,14 +135,14 @@ def summarize_choice_regret(
     mean_without_top = sum(rest) / len(rest) if rest else 0.0
     dominated = (
         (mean > 0) != (mean_without_top > 0)
-        or abs(mean - mean_without_top) > mean_se
+        or (mean_se is not None and abs(mean - mean_without_top) > mean_se)
     ) if n >= 2 else False
     return {
         "n": n,
         "n_same": n_same,
         "n_changed": n - n_same,
         "mean_delta": round(mean, 5),
-        "mean_se": round(mean_se, 5),
+        "mean_se": round(mean_se, 5) if mean_se is not None else None,
         "median_delta": round(median, 5),
         "trimmed_mean": round(trimmed_mean, 5),
         "n_improved": len(improved_ids),

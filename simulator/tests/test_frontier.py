@@ -1,5 +1,7 @@
 """Tests for data-driven frontier discovery (frontier + frontier_eval)."""
 
+import hashlib
+import math
 import os
 
 import pytest
@@ -17,6 +19,8 @@ from simulator.rl.v4.frontier_eval import (
     build_distribution,
     classify_verdict,
     continuation_value,
+    fixed_action_horizon_gate,
+    fixed_action_metrics,
     headroom_bin,
     horizon_stability,
     is_ranking_flip,
@@ -154,6 +158,111 @@ def test_headroom_bin_and_horizon_stability():
     summary = horizon_stability(reports)
     assert summary["chosen_horizon"] == 64
     assert summary["horizons"][64]["top1_agree"] == 1.0
+
+
+def _fixed_action_verdict(*, replica_indices=(0,), sim_values=(0.0,), alt_values=(1.0,)):
+    return {
+        "state_hash": "singleton-state",
+        "best_action": {"source": "rule", "mode": 1, "slot": 0, "row": 5, "col": 4},
+        "branches": [
+            {
+                "source": "sim", "mode": 0, "slot": 0, "row": 0, "col": 0,
+                "replicas": [
+                    {"replica_index": index, "value": value}
+                    for index, value in zip(replica_indices, sim_values)
+                ],
+            },
+            {
+                "source": "rule", "mode": 1, "slot": 0, "row": 5, "col": 4,
+                "replicas": [
+                    {"replica_index": index, "value": value}
+                    for index, value in zip(replica_indices, alt_values)
+                ],
+            },
+        ],
+    }
+
+
+def test_fixed_action_metrics_marks_singleton_uncertainty_unbounded():
+    verdict = _fixed_action_verdict()
+    metrics = fixed_action_metrics(verdict, verdict["best_action"])
+    assert metrics["available"] is True
+    assert metrics["n"] == 1
+    assert math.isinf(metrics["sd_delta"])
+    assert math.isinf(metrics["se_delta"])
+    assert metrics["se_delta"] > 0
+    assert metrics["lcb95"] == -float("inf")
+    assert metrics["ucb95"] == float("inf")
+
+
+def test_fixed_action_horizon_gate_rejects_singleton_confidence():
+    reference = _fixed_action_verdict()
+    current = dict(reference, state_hash="singleton-state")
+    gate = fixed_action_horizon_gate(
+        {112: [reference], 64: [current]}, reference=112, required_horizons=(64,)
+    )
+    assert gate["pass"] is False
+    assert gate["comparisons"]["64"]["compared"] == 0
+    assert gate["comparisons"]["64"]["unavailable"] == 1
+
+
+def test_evaluate_candidate_reports_unresolved_singleton_branch_se(monkeypatch):
+    from simulator.rl.v4 import frontier_eval
+
+    branches = [
+        frontier_eval.BranchSpec(source="sim", mode=0),
+        frontier_eval.BranchSpec(source="rule", mode=1, slot=0, row=5, col=4),
+    ]
+    monkeypatch.setattr(frontier_eval, "replay_to_state", lambda *args, **kwargs: (object(), object()))
+    monkeypatch.setattr(frontier_eval, "plan_branches", lambda *args, **kwargs: branches)
+    monkeypatch.setattr(
+        frontier_eval,
+        "run_branch",
+        lambda **kwargs: {"value": 0.0 if kwargs["branch"].source == "sim" else 1.0,
+                          "winner": None, "terminal": False, "decisions_run": 1},
+    )
+    verdict = frontier_eval.evaluate_candidate(
+        match={"config": {"strategy": "cycle"}},
+        candidate={
+            "match_id": "m", "archetype": "cycle", "t": 0, "tick": 0,
+            "state_hash": "state", "tags": {}, "filter": {},
+        },
+        policy=object(),
+        eval_cfg=frontier_eval.EvalConfig(n_replicas=1, max_branches=2),
+    )
+    assert all(math.isinf(branch["se"]) for branch in verdict["branches"])
+
+
+def test_learned_opponent_cold_and_warm_cache_preserve_replica_rng(tmp_path):
+    import torch
+
+    from simulator.rl.v4 import policy_opponent
+    from simulator.rl.v4.frontier import frontier_model_config
+    from simulator.rl.v4.frontier_ppo.environment import make_frontier_env
+    from simulator.rl.v4.frontier_eval import BranchSpec, run_branch
+    from simulator.rl.v4.model_v4 import RecurrentV4Policy
+
+    checkpoint = tmp_path / "actor.pt"
+    torch.save(RecurrentV4Policy(frontier_model_config()).state_dict(), checkpoint)
+    digest = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    spec = {"kind": "v4-checkpoint", "checkpoint": str(checkpoint), "sha256": digest}
+    policy = RecurrentV4Policy(frontier_model_config()).eval()
+    env = make_frontier_env()
+    env.reset_v2(seed=27, shuffle_decks=False)
+    hidden = policy.initial_hidden(1, device="cpu")
+    branch = BranchSpec(source="wait", mode=0)
+
+    policy_opponent._frozen_actor.cache_clear()
+    cold = run_branch(
+        env=env, hidden=hidden, branch=branch, opponent_spec=spec,
+        replica_seed=123, horizon=2, policy=policy, device="cpu",
+    )
+    warm = run_branch(
+        env=env, hidden=hidden, branch=branch, opponent_spec=spec,
+        replica_seed=123, horizon=2, policy=policy, device="cpu",
+    )
+    assert cold == warm
+    policy_opponent._frozen_actor.cache_clear()
 
 
 def test_build_distribution_stratifies_and_caps():

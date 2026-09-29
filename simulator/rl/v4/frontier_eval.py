@@ -16,9 +16,10 @@ heuristic opponents recomputed from state (seeded only for random-legal).
 from __future__ import annotations
 
 import hashlib
+import math
 import random
 from dataclasses import dataclass, field
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 
@@ -407,13 +408,17 @@ def run_branch(
     from simulator.public_state_estimator import PublicStateEstimator
 
     child = env.fork()  # full fork: continuation builds observations
+    before = tower_fracs(child.state)
+    # Construct an optional learned opponent before opening the replica's
+    # policy RNG stream.  Cold checkpoint construction can initialize a model
+    # and consume Torch randomness; warm cached construction must not change
+    # the learner's samples for the same replica seed.
+    opponent = make_opponent(opponent_spec, replica_seed, env=child)
     torch.manual_seed(replica_seed & 0xFFFFFFFF)
     try:
         torch.cuda.manual_seed_all(replica_seed & 0xFFFFFFFF)
     except Exception:
         pass
-    before = tower_fracs(child.state)
-    opponent = make_opponent(opponent_spec, replica_seed, env=child)
     from .v4_ppo import configure_v4_runtime
     configure_v4_runtime(policy)
     policy.eval()
@@ -607,11 +612,15 @@ def fixed_action_metrics(
         }
     deltas = [alt_values[index] - sim_values[index] for index in indices]
     mean = float(sum(deltas) / len(deltas))
-    variance = (
-        sum((value - mean) ** 2 for value in deltas) / (len(deltas) - 1)
-        if len(deltas) > 1 else 0.0
-    )
-    se = float(variance / len(deltas)) ** 0.5
+    if len(deltas) < 2:
+        # A singleton has a defined observed delta but no sample variance.
+        # Treat its uncertainty as unbounded so it cannot look like a
+        # confident confirmation merely because arithmetic returned zero.
+        sd = se = float("inf")
+    else:
+        variance = sum((value - mean) ** 2 for value in deltas) / (len(deltas) - 1)
+        sd = float(variance) ** 0.5
+        se = float(variance / len(deltas)) ** 0.5
     return {
         "available": True,
         "frozen_action": action_identity(frozen_action),
@@ -620,7 +629,7 @@ def fixed_action_metrics(
         "n": len(indices),
         "deltas": [round(value, 6) for value in deltas],
         "mean_delta": round(mean, 6),
-        "sd_delta": round(variance ** 0.5, 6),
+        "sd_delta": round(sd, 6),
         "se_delta": round(se, 6),
         "lcb95": round(mean - 1.96 * se, 6),
         "ucb95": round(mean + 1.96 * se, 6),
@@ -630,8 +639,10 @@ def fixed_action_metrics(
 
 def _summary_stats(values: Sequence[float]) -> tuple[float, float]:
     if not values:
-        return 0.0, 0.0
+        return 0.0, float("inf")
     mean = float(sum(values) / len(values))
+    if len(values) < 2:
+        return mean, float("inf")
     variance = sum((value - mean) ** 2 for value in values) / len(values)
     return mean, float(variance / len(values)) ** 0.5
 
@@ -806,12 +817,20 @@ def evaluate_candidate(
     for i, branch in enumerate(branches):
         vals = per_branch[i]
         mean = float(sum(vals) / len(vals))
-        var = sum((v - mean) ** 2 for v in vals) / len(vals)
+        # A single replica has no empirical variance. Keep its observed mean,
+        # but expose unresolved uncertainty instead of reporting se=0.
+        se = (
+            float("inf")
+            if len(vals) < 2
+            else (
+                sum((v - mean) ** 2 for v in vals) / len(vals) / len(vals)
+            ) ** 0.5
+        )
         branch_reports.append(
             {
                 "source": branch.source, "mode": branch.mode, "slot": branch.slot,
                 "row": branch.row, "col": branch.col,
-                "mean": round(mean, 5), "se": round((var / len(vals)) ** 0.5, 5),
+                "mean": round(mean, 5), "se": round(se, 5),
                 "values": [round(v, 5) for v in vals],
                 # ``values`` remains the compact legacy representation.  The
                 # replica records are the authoritative representation for
@@ -1071,6 +1090,19 @@ def _payload_fixed_metrics(
     return fixed_action_metrics(_audit_verdict(payload), frozen)
 
 
+def _fixed_metrics_have_confidence(metrics: Mapping[str, Any]) -> bool:
+    """Return whether fixed-action metrics have finite replica uncertainty."""
+
+    if not metrics.get("available"):
+        return False
+    try:
+        n = int(metrics["n"])
+        se = float(metrics.get("se_delta", metrics.get("se")))
+    except (KeyError, TypeError, ValueError):
+        return False
+    return n >= 2 and math.isfinite(se)
+
+
 def fixed_action_horizon_gate(
     reports_by_horizon: dict[int, list[dict[str, Any]]],
     *,
@@ -1131,7 +1163,10 @@ def fixed_action_horizon_gate(
                 continue
             reference_metrics = _payload_fixed_metrics(reference_payload, frozen)
             current_metrics = _payload_fixed_metrics(current, frozen)
-            if not reference_metrics.get("available") or not current_metrics.get("available"):
+            if (
+                not _fixed_metrics_have_confidence(reference_metrics)
+                or not _fixed_metrics_have_confidence(current_metrics)
+            ):
                 unavailable += 1
                 continue
             compared += 1
