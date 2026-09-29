@@ -595,7 +595,11 @@ class CombatMixin:
                 radius_mtile=int(getattr(definition, "area_radius_mtile", 0) or projectile_definition.radius_mtile),
                 status_kind=None if not status else str(status.get("kind")),
                 status_duration_us=0 if not status else int(status.get("duration_us") or 0),
-                status_magnitude_permille=PERMILLE if not status else int(status.get("speed_multiplier_milli") or 0),
+                status_magnitude_permille=(
+                    PERMILLE
+                    if not status
+                    else _status_magnitude_permille(status, "speed_multiplier_milli")
+                ),
                 status_hit_speed_magnitude_permille=(
                     PERMILLE if not status else int(status.get("hit_speed_multiplier_milli") or PERMILLE)
                 ),

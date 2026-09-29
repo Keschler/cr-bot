@@ -200,9 +200,15 @@ class StatusMixin:
             if target.hp > 0 and effect.pull_to_center_mtile:
                 self._apply_pull_to_center(state, target, effect)
         if effect.friendly_status_kind and effect.friendly_status_duration_us > 0:
+            # A unit keeps the aura for ``linger_us`` after it leaves the
+            # field.  The linger is folded into the applied duration instead of
+            # being tracked separately: the status is only refreshed while the
+            # unit is inside the field, so the extra time is exactly what
+            # survives the exit.
+            linger_us = int(effect.friendly_status_linger_us or 0)
             friendly_status = {
                 "kind": effect.friendly_status_kind,
-                "duration_us": effect.friendly_status_duration_us,
+                "duration_us": effect.friendly_status_duration_us + linger_us,
                 "speed_multiplier_milli": effect.friendly_status_magnitude_permille,
                 "hit_speed_multiplier_milli": effect.friendly_status_magnitude_permille,
             }
@@ -561,7 +567,9 @@ class StatusMixin:
         status_kind = None if not status else str(status.get("kind"))
         status_duration = 0 if not status else int(status.get("duration_us") or 0)
         status_magnitude = (
-            1_000 if not status else int(status.get("speed_multiplier_milli") or 1_000)
+            PERMILLE
+            if not status
+            else _status_magnitude_permille(status, "speed_multiplier_milli")
         )
         status_hit_speed_magnitude = (
             1_000
@@ -608,9 +616,9 @@ class StatusMixin:
             0 if not friendly_status else int(friendly_status.get("duration_us") or 0)
         )
         friendly_status_magnitude = (
-            1_000
+            PERMILLE
             if not friendly_status
-            else int(friendly_status.get("speed_multiplier_milli") or 1_000)
+            else _status_magnitude_permille(friendly_status, "speed_multiplier_milli")
         )
         friendly_status_linger = (
             0 if not friendly_status else int(friendly_status.get("linger_us") or 0)
@@ -1084,7 +1092,13 @@ class StatusMixin:
         status = raw_status
         kind = str(status.get("kind"))
         duration = int(status.get("duration_us") or 0)
-        magnitude = int(status.get("speed_multiplier_milli") or 0)
+        # A status that omits the key means "no slow"; only an explicit 0
+        # is an authored freeze or stun.
+        magnitude = (
+            int(status["speed_multiplier_milli"])
+            if status.get("speed_multiplier_milli") is not None
+            else PERMILLE
+        )
         hit_speed_magnitude = int(
             status.get("hit_speed_multiplier_milli")
             if status.get("hit_speed_multiplier_milli") is not None

@@ -52,6 +52,20 @@ class DeathsMixin:
                 # removed from play.
                 entity.statuses.clear()
         for entity in state.entities.values():
+            # A dead body keeps no attack state.  The sweep above only clears a
+            # lock whose *target* has died, so a body killed mid-windup while
+            # its own target survives kept a stale target lock, pending
+            # target, and first-attack clock on the retained record.  Nothing
+            # could act on it, but strict validation and replay diffs still
+            # carried it.
+            if not entity.alive or entity.hp <= 0:
+                entity.target_uid = None
+                entity.pending_target_uid = None
+                entity.windup_remaining_us = 0
+                entity.attack_load_remaining_us = 0
+                entity.secondary_pending_target_uid = None
+                entity.secondary_windup_remaining_us = 0
+                continue
             if entity.target_uid is not None and not state.entities[entity.target_uid].alive:
                 entity.target_uid = None
             if entity.pending_target_uid is not None and not state.entities[entity.pending_target_uid].alive:

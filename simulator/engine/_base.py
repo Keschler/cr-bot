@@ -65,6 +65,25 @@ _CARD_CYCLE_COOLDOWN_SINGLE_US = 2_000_000
 _CARD_CYCLE_COOLDOWN_ACCELERATED_US = 1_000_000
 
 
+def _status_magnitude_permille(status: object, key: str) -> int:
+    """Return a status magnitude, defaulting a missing key to "no slow".
+
+    A status that omits ``speed_multiplier_milli``/``hit_speed_multiplier_milli``
+    means the effect does not scale that clock, so the multiplier is
+    ``PERMILLE``.  Only an explicit ``0`` is an authored freeze or stun, and
+    every call site must agree on that distinction: a missing key previously
+    defaulted to zero in some paths and to one in others, so the same authored
+    status could freeze a troop in one component and do nothing in another.
+    """
+
+    if not hasattr(status, "get"):
+        return PERMILLE
+    value = status.get(key)
+    if value is None:
+        return PERMILLE
+    return int(value)
+
+
 # The policy action grid is fixed by the observation contract.  Keeping its
 # valid cells as immutable tuples lets the legality path avoid rebuilding the
 # same coordinate pairs for every hand slot.

@@ -156,11 +156,20 @@ def test_rage_deals_no_damage_and_refreshes_a_friendly_aura() -> None:
     for _ in range(10):
         engine._advance_area_effects(state)
     assert giant.hp == 1_000
+
+    # Leaving the field keeps the authored one-second linger, so the buff is
+    # still active a full second after the last refresh and only then expires.
     hog.x_mtile = 15_000
     for _ in range(20):
         engine._advance_area_effects(state)
         engine._advance_statuses_and_lifetimes(state)
+    assert any(status.kind == "rage" for status in hog.statuses)
+    assert engine._speed_multiplier(hog) == 1_300
+    for _ in range(20):
+        engine._advance_area_effects(state)
+        engine._advance_statuses_and_lifetimes(state)
     assert not any(status.kind == "rage" for status in hog.statuses)
+    assert engine._speed_multiplier(hog) == 1_000
     engine.validate_state(state)
 
 

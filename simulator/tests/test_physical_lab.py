@@ -685,3 +685,89 @@ def test_physical_run_blocks_before_capture_when_reserved_space_is_unavailable(t
     ) == 2
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["status"] == "blocked_workspace_budget"
+
+
+def _runner_with(spec, phone_a, phone_b, calibration_a, calibration_b):
+    """Build a runner over two adb-transport phones with fixed calibrations."""
+
+    from simulator.physical_lab.capture.devices import (
+        FakeScreenCapture,
+        LogicalPhone,
+    )
+    from simulator.physical_lab.workflow.runner import PhysicalLabRunner
+
+    return PhysicalLabRunner(
+        phones={
+            "A": LogicalPhone(phone_a, calibration_a),
+            "B": LogicalPhone(phone_b, calibration_b),
+        },
+        captures={
+            "A": FakeScreenCapture("A", frame_source=phone_a.screenshot),
+            "B": FakeScreenCapture("B", frame_source=phone_b.screenshot),
+        },
+        lifecycle=LifecycleMachine(
+            {"A": ScriptedLifecycleDetector(LIFECYCLE_PATH),
+             "B": ScriptedLifecycleDetector(LIFECYCLE_PATH)},
+            policy=LifecyclePolicy(),
+            sleep=lambda _interval: None,
+        ),
+    )
+
+
+def test_two_phone_preflight_rejects_a_calibration_with_no_device_binding() -> None:
+    """A real phone must not be driven by an unbound calibration artifact.
+
+    ``--calibration-a`` pointed at the other phone's saved artifact has to be
+    rejected. A calibration file that records no device serial hash cannot be
+    checked for a mismatch, so the preflight fails closed instead of silently
+    tapping the wrong device. The offline harness has no real device to bind
+    to and is unaffected.
+    """
+
+    from simulator.physical_lab.capture.devices import (
+        FakePhoneController,
+        FakeScreenCapture,
+        LogicalPhone,
+    )
+
+    class RealTransportPhone(FakePhoneController):
+        def device_info(self) -> DeviceInfo:
+            info = super().device_info()
+            return DeviceInfo(
+                device_id=info.device_id,
+                serial_hash=info.serial_hash,
+                model="test-phone",
+                os_version="test-os",
+                screen_width_px=info.screen_width_px,
+                screen_height_px=info.screen_height_px,
+                transport="adb",
+                connected=info.connected,
+                observed_at_monotonic_us=info.observed_at_monotonic_us,
+            )
+
+    spec = hog_cannon_probe()
+    unbound = CalibrationArtifact.for_screen(
+        device_label="unbound", screen_width_px=1080, screen_height_px=2400
+    )
+    bound_a = replace(
+        CalibrationArtifact.for_screen(
+            device_label="bound-a", screen_width_px=1080, screen_height_px=2400
+        ),
+        device_serial_hash=spec.devices["A"].serial_hash,
+    )
+    bound_b = replace(
+        CalibrationArtifact.for_screen(
+            device_label="bound-b", screen_width_px=1080, screen_height_px=2400
+        ),
+        device_serial_hash=spec.devices["B"].serial_hash,
+    )
+    phone_a = RealTransportPhone("A", serial_label="A")
+    phone_b = RealTransportPhone("B", serial_label="B")
+
+    unbound_run = _runner_with(spec, phone_a, phone_b, unbound, bound_b)
+    _, reasons = unbound_run._preflight(spec)
+    assert any("A records no device serial hash" in reason for reason in reasons)
+
+    bound_run = _runner_with(spec, phone_a, phone_b, bound_a, bound_b)
+    _, reasons = bound_run._preflight(spec)
+    assert reasons == []

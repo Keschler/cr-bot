@@ -112,18 +112,36 @@ class TargetingMixin:
             and target.owner != source.owner
             and self._targetable_for_acquisition(state, target)
             and self._target_allowed(source, target)
-            and not self._target_reserved(state, target, reserved_uids)
+            and not self._target_reserved(state, source, target, reserved_uids)
         )
 
     def _target_reserved(
         self,
         state: BattleState,
+        source: EntityState,
         target: EntityState,
         reserved_uids: set[int] | None,
     ) -> bool:
+        """Return whether ``target`` is reserved by a *different* shooter.
+
+        A shooter's own in-flight shot reserves the target for itself. The
+        reservation exists so no *other* attacker wastes a shot on a body that
+        is already guaranteed to die; it must not drop the shooter's own lock,
+        which would leave the shooter idling for the whole flight whenever the
+        reserved victim is the only enemy on the board.
+        """
+
         if reserved_uids is not None:
-            return target.uid in reserved_uids
-        return self._projectile_lethally_reserved(state, target)
+            if target.uid not in reserved_uids:
+                return False
+        elif not self._projectile_lethally_reserved(state, target):
+            return False
+        return any(
+            projectile.alive
+            and projectile.source_uid not in (None, source.uid)
+            and projectile.target_uid == target.uid
+            for projectile in state.projectiles.values()
+        )
 
     def _target_is_locked(self, source: EntityState, target: EntityState) -> bool:
         """Return whether a primary target has entered attack commitment.
@@ -264,7 +282,7 @@ class TargetingMixin:
                 and target.kind != "tower"
                 and self._targetable_for_acquisition(state, target)
                 and self._target_allowed(source, target)
-                and not self._target_reserved(state, target, reserved_uids)
+                and not self._target_reserved(state, source, target, reserved_uids)
                 and self._edge_distance(source, target) <= sight
             ]
             return self._nearest_uid(source, nearby)
@@ -282,7 +300,7 @@ class TargetingMixin:
             and target.kind == "tower"
             and self._target_allowed(source, target)
             and self._edge_distance(source, target) <= sight
-            and not self._target_reserved(state, target, reserved_uids)
+            and not self._target_reserved(state, source, target, reserved_uids)
             and self._edge_distance(source, target)
             >= min_attack_range
         )
@@ -300,7 +318,7 @@ class TargetingMixin:
             and target.kind == "tower"
             and target.role != "king"
             and self._target_allowed(source, target)
-            and not self._target_reserved(state, target, reserved_uids)
+            and not self._target_reserved(state, source, target, reserved_uids)
             and self._edge_distance(source, target) >= min_attack_range
         ]
         if not towers:
@@ -310,7 +328,7 @@ class TargetingMixin:
                 if target.owner != source.owner
                 and target.kind == "tower"
                 and self._target_allowed(source, target)
-                and not self._target_reserved(state, target, reserved_uids)
+                and not self._target_reserved(state, source, target, reserved_uids)
                 and self._edge_distance(source, target) >= min_attack_range
             ]
         return self._nearest_uid(source, towers)
@@ -336,7 +354,7 @@ class TargetingMixin:
             and target.kind != "tower"
             and self._targetable_for_acquisition(state, target)
             and self._target_allowed(source, target)
-            and not self._target_reserved(state, target, reserved_uids)
+            and not self._target_reserved(state, source, target, reserved_uids)
             and self._edge_distance(source, target) <= sight
             and self._edge_distance(source, target) >= min_attack_range
         ]

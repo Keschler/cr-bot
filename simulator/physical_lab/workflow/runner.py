@@ -253,7 +253,16 @@ class PhysicalLabRunner:
             if info.serial_hash != expected_hash:
                 reasons.append(f"device {side} serial hash does not match experiment specification")
             calibration_hash = getattr(self.phones[side].calibration, "device_serial_hash", None)
-            if calibration_hash is not None and calibration_hash != info.serial_hash:
+            if calibration_hash is None:
+                # A calibration artifact that records no device hash cannot be
+                # bound to a serial, so a swapped artifact would drive taps at
+                # the wrong phone. The offline harness has no real device to
+                # bind to and keeps its previous behavior.
+                if info.transport != "fake":
+                    reasons.append(
+                        f"calibration artifact for {side} records no device serial hash"
+                    )
+            elif calibration_hash != info.serial_hash:
                 reasons.append(f"device {side} serial hash does not match calibration artifact")
         return infos, reasons
 
