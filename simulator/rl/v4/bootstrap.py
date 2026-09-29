@@ -24,6 +24,7 @@ try:
     from ...ruleset import load_fixed_ruleset
     from ..foundation.opponent_pool import OpponentPool
     from .hand_features import build_hand_tokens
+    from .real_decks import load_real_decks
     from .simulator_teacher import (
         TeacherError,
         TeacherTarget,
@@ -39,6 +40,7 @@ except ImportError:  # pragma: no cover - top-level ``rl`` imports
     from simulator.ruleset import load_fixed_ruleset
     from simulator.rl.foundation.opponent_pool import OpponentPool
     from simulator.rl.v4.hand_features import build_hand_tokens
+    from simulator.rl.v4.real_decks import load_real_decks
     from simulator.rl.v4.simulator_teacher import (
         TeacherError,
         TeacherTarget,
@@ -47,7 +49,7 @@ except ImportError:  # pragma: no cover - top-level ``rl`` imports
     )
 
 
-BOOTSTRAP_VERSION = "v4-bootstrap-sim-v2"
+BOOTSTRAP_VERSION = "v4-bootstrap-sim-v3"
 BOOTSTRAP_ARCHETYPES: tuple[str, ...] = (
     "deterministic-cycle",
     "aggressive-pressure",
@@ -71,6 +73,8 @@ class BootstrapConfig:
     seed: int = 0
     max_decisions: int = 1440
     samples_per_episode: int = 64
+    episodes_per_archetype: int | None = None
+    require_terminal: bool = False
     archetypes: tuple[str, ...] = BOOTSTRAP_ARCHETYPES
 
     def __post_init__(self) -> None:
@@ -82,6 +86,13 @@ class BootstrapConfig:
             raise ValueError("max_decisions must be a positive integer")
         if type(self.samples_per_episode) is not int or self.samples_per_episode < 2:
             raise ValueError("samples_per_episode must be an integer of at least two")
+        if self.episodes_per_archetype is not None and (
+            type(self.episodes_per_archetype) is not int
+            or self.episodes_per_archetype <= 0
+        ):
+            raise ValueError("episodes_per_archetype must be a positive integer")
+        if type(self.require_terminal) is not bool:
+            raise ValueError("require_terminal must be boolean")
         if not self.archetypes or any(
             not isinstance(value, str) or not value for value in self.archetypes
         ):
@@ -109,6 +120,21 @@ class BootstrapSample:
     target: TeacherTarget
     soft_placement: np.ndarray
     provenance: dict[str, object]
+    mode_weight: float = 1.0
+
+
+@dataclass(frozen=True, slots=True)
+class BootstrapEpisodeSummary:
+    episode: int
+    archetype: str
+    opponent_deck_id: str
+    opponent_deck_cards: tuple[str, ...]
+    decisions: int
+    terminal: bool
+    eligible_wait: int
+    eligible_play: int
+    retained_wait: int
+    retained_play: int
 
 
 def _target_action(target: TeacherTarget, *, player: int) -> Any:
@@ -213,15 +239,24 @@ def _capture_sample(
     return sample, _target_action(target, player=0)
 
 
-def generate_bootstrap_dataset(config: BootstrapConfig) -> list[BootstrapSample]:
-    """Sample whole trajectories with balanced modes and bounded match influence.
+def generate_bootstrap_dataset(
+    config: BootstrapConfig,
+    *,
+    episode_summaries: list[BootstrapEpisodeSummary] | None = None,
+) -> list[BootstrapSample]:
+    """Sample whole trajectories with mode coverage and bounded match influence.
 
     Independent per-mode reservoirs sample uniformly over each trajectory.
-    Quotas control retained records, never how early a trajectory stops.
+    Quotas prefer balanced retained records, never truncate a trajectory or
+    discard every record from a nonempty episode/mode group. Each retained
+    label receives the inverse sampling probability for its own group.
     """
 
     ruleset = load_fixed_ruleset()
     pool = OpponentPool(ruleset, seed=config.seed)
+    reserved_decks = {
+        frozenset(deck.cards) for deck in load_real_decks() if deck.split == "eval"
+    }
     samples: list[BootstrapSample] = []
     quotas = {
         archetype: config.n_states // len(config.archetypes)
@@ -242,12 +277,23 @@ def generate_bootstrap_dataset(config: BootstrapConfig) -> list[BootstrapSample]
     }
     family_episodes = dict.fromkeys(config.archetypes, 0)
     episode = 0
-    while len(samples) < config.n_states:
+    fixed_episode_count = (
+        None if config.episodes_per_archetype is None
+        else config.episodes_per_archetype * len(config.archetypes)
+    )
+    while (
+        episode < fixed_episode_count
+        if fixed_episode_count is not None
+        else any(any(counts.values()) for counts in remaining.values())
+    ):
         archetype = config.archetypes[episode % len(config.archetypes)]
-        if not any(remaining[archetype].values()):
+        if fixed_episode_count is None and not any(remaining[archetype].values()):
             episode += 1
             continue
-        if family_episodes[archetype] >= episode_limits[archetype]:
+        if (
+            fixed_episode_count is None
+            and family_episodes[archetype] >= episode_limits[archetype]
+        ):
             raise RuntimeError(
                 f"bootstrap could not fill PLAY/WAIT quotas for {archetype} "
                 f"after {family_episodes[archetype]} episodes: "
@@ -255,7 +301,16 @@ def generate_bootstrap_dataset(config: BootstrapConfig) -> list[BootstrapSample]
                 "inspect teacher action coverage"
             )
         family_episodes[archetype] += 1
-        capacities = {mode: min(mode_cap, count) for mode, count in remaining[archetype].items()}
+        # An observed group must retain support even if its preferred quota is
+        # already filled while the other mode still needs examples.
+        capacities = (
+            {0: mode_cap, 1: mode_cap}
+            if fixed_episode_count is not None
+            else {
+                mode: min(mode_cap, max(1, count))
+                for mode, count in remaining[archetype].items()
+            }
+        )
         reservoirs: dict[int, list[BootstrapSample]] = {0: [], 1: []}
         seen = {0: 0, 1: 0}
         rng = random.Random(_stable_seed(config.seed, "bootstrap-reservoir", episode))
@@ -266,6 +321,10 @@ def generate_bootstrap_dataset(config: BootstrapConfig) -> list[BootstrapSample]
             strategy="deterministic-cycle",
             allow_variants=False,
         )
+        if frozenset(scenario.deck.cards) in reserved_decks:
+            raise RuntimeError(
+                f"bootstrap opponent deck overlaps final evaluation: {scenario.deck.deck_id}"
+            )
         env = SimulatorEnv(
             BattleEngine(ruleset, validate_every_tick=False),
             decision_interval_us=250_000,
@@ -274,6 +333,7 @@ def generate_bootstrap_dataset(config: BootstrapConfig) -> list[BootstrapSample]
         env.reset_v2(seed=episode_seed, decks=decks, shuffle_decks=True)
         estimator = PublicStateEstimator()
         opponent = scenario.build_controller()
+        decisions_run = 0
         for decision in range(config.max_decisions):
             if env.state is None or env.state.terminal:
                 break
@@ -295,6 +355,8 @@ def generate_bootstrap_dataset(config: BootstrapConfig) -> list[BootstrapSample]
                 )
             else:
                 sample, learner_action = captured
+                sample.provenance["opponent_deck_id"] = scenario.deck.deck_id
+                sample.provenance["opponent_deck_cards"] = tuple(scenario.deck.cards)
                 mode = sample.target.mode
                 seen[mode] += 1
                 bucket = reservoirs[mode]
@@ -306,12 +368,53 @@ def generate_bootstrap_dataset(config: BootstrapConfig) -> list[BootstrapSample]
                         bucket[replacement] = sample
             opponent_action = opponent.choose_action(env.engine, env.state, 1)
             env.step_v2((learner_action, opponent_action))
+            decisions_run += 1
+        terminal = bool(env.state is not None and env.state.terminal)
+        if config.require_terminal and not terminal:
+            raise RuntimeError(
+                f"bootstrap {archetype} episode {episode} reached the "
+                f"{config.max_decisions}-decision cap before termination"
+            )
         retained = reservoirs[0] + reservoirs[1]
         retained.sort(key=lambda sample: int(sample.provenance["decision"]))
+        if episode_summaries is not None:
+            episode_summaries.append(BootstrapEpisodeSummary(
+                episode=episode,
+                archetype=archetype,
+                opponent_deck_id=scenario.deck.deck_id,
+                opponent_deck_cards=tuple(scenario.deck.cards),
+                decisions=decisions_run,
+                terminal=terminal,
+                eligible_wait=seen[0],
+                eligible_play=seen[1],
+                retained_wait=len(reservoirs[0]),
+                retained_play=len(reservoirs[1]),
+            ))
+        for mode, bucket in reservoirs.items():
+            if seen[mode] and not bucket:
+                raise RuntimeError("bootstrap lost an observed episode/mode group")
+            for sample in bucket:
+                sample.mode_weight = seen[mode] / len(bucket)
+                sample.provenance["eligible_mode_count"] = seen[mode]
+                sample.provenance["retained_mode_count"] = len(bucket)
+                sample.provenance["episode_terminal"] = terminal
+                sample.provenance["episode_decisions"] = decisions_run
         samples.extend(retained)
         for mode in (0, 1):
-            remaining[archetype][mode] -= len(reservoirs[mode])
+            remaining[archetype][mode] = max(
+                0, remaining[archetype][mode] - len(reservoirs[mode])
+            )
         episode += 1
+    # Normalize once for the complete dataset. Minibatches then use the mean
+    # of weighted per-record losses without rebalancing each minibatch.
+    total_weight = sum(sample.mode_weight for sample in samples)
+    if not total_weight:
+        raise RuntimeError("bootstrap retained no labeled states")
+    scale = len(samples) / total_weight
+    for sample in samples:
+        sample.mode_weight *= scale
+    if fixed_episode_count is not None and {sample.target.mode for sample in samples} != {0, 1}:
+        raise RuntimeError("fixed bootstrap match batch did not observe both PLAY and WAIT")
     return samples
 
 
@@ -367,6 +470,9 @@ def to_torch_batch(samples: Sequence[BootstrapSample]) -> dict[str, object]:
         "soft_placement": torch.stack(
             [torch.as_tensor(sample.soft_placement, dtype=torch.float32) for sample in samples]
         ).unsqueeze(1),
+        "mode_weights": torch.tensor(
+            [sample.mode_weight for sample in samples], dtype=torch.float32
+        ).reshape(-1, 1),
         "reset_mask": torch.ones(len(samples), 1, dtype=torch.bool),
         "families": [sample.family for sample in samples],
     }
@@ -403,6 +509,7 @@ __all__ = [
     "BOOTSTRAP_ARCHETYPES",
     "BOOTSTRAP_VERSION",
     "BootstrapConfig",
+    "BootstrapEpisodeSummary",
     "BootstrapSample",
     "generate_bootstrap_dataset",
     "move_batch_to_device",

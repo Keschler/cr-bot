@@ -41,6 +41,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--max-decisions", type=int, default=1440)
     parser.add_argument("--samples-per-episode", type=int, default=64)
+    parser.add_argument(
+        "--episodes-per-archetype", type=int, default=3,
+        help="predeclared complete matches per archetype (smoke uses one)",
+    )
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--out", type=Path, default=Path("outputs/v4/bootstrap"))
@@ -128,11 +132,20 @@ def _train(args: argparse.Namespace) -> dict[str, Any]:
     device = torch.device(args.device)
     collection_config = BootstrapConfig(
         n_states=states, seed=args.seed, max_decisions=max_decisions,
-        samples_per_episode=args.samples_per_episode,
+        samples_per_episode=(8 if args.smoke else args.samples_per_episode),
+        episodes_per_archetype=(1 if args.smoke else args.episodes_per_archetype),
+        require_terminal=not args.smoke,
     )
-    samples = generate_bootstrap_dataset(collection_config)
+    episode_summaries = []
+    samples = generate_bootstrap_dataset(
+        collection_config, episode_summaries=episode_summaries
+    )
     config = frontier_model_config()
     policy = RecurrentV4Policy(config).to(device)
+    initial_actor = {
+        name: value.detach().cpu().clone()
+        for name, value in policy.state_dict().items()
+    }
     optimizer = torch.optim.Adam(policy.parameters(), lr=float(args.lr))
     history: list[dict[str, float]] = []
     policy.train()
@@ -154,6 +167,7 @@ def _train(args: argparse.Namespace) -> dict[str, Any]:
             loss, detail = v4_supervised_loss(
                 logits, batch["masks"], batch["actions"],
                 soft_placement=batch["soft_placement"],
+                mode_weights=batch["mode_weights"],
             )
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
@@ -171,6 +185,8 @@ def _train(args: argparse.Namespace) -> dict[str, Any]:
 
     args.out.mkdir(parents=True, exist_ok=True)
     actor_path = args.out / "actor.pt"
+    random_actor_path = args.out / "random_actor.pt"
+    torch.save(initial_actor, random_actor_path)
     torch.save(policy.state_dict(), actor_path)
     coverage = {}
     for family in sorted({sample.family for sample in samples}):
@@ -184,10 +200,37 @@ def _train(args: argparse.Namespace) -> dict[str, Any]:
             "elapsed_us_max": max(elapsed),
             "phases": dict(Counter(sample.provenance["phase"] for sample in family_samples)),
         }
+    mode_groups: dict[tuple[int, int], tuple[int, int]] = {}
+    opponent_decks: dict[str, tuple[str, ...]] = {}
+    for episode_summary in episode_summaries:
+        deck_id = episode_summary.opponent_deck_id
+        deck_cards = episode_summary.opponent_deck_cards
+        if deck_id in opponent_decks and opponent_decks[deck_id] != deck_cards:
+            raise RuntimeError("bootstrap deck identity changed during collection")
+        opponent_decks[deck_id] = deck_cards
+    for sample in samples:
+        key = (int(sample.provenance["episode"]), sample.target.mode)
+        counts = (
+            int(sample.provenance["eligible_mode_count"]),
+            int(sample.provenance["retained_mode_count"]),
+        )
+        if key in mode_groups and mode_groups[key] != counts:
+            raise RuntimeError("inconsistent bootstrap episode/mode counts")
+        mode_groups[key] = counts
+    eligible_modes = {
+        "wait": sum(counts[0] for (_, mode), counts in mode_groups.items() if mode == 0),
+        "play": sum(counts[0] for (_, mode), counts in mode_groups.items() if mode == 1),
+    }
     manifest = {
-        "schema_version": "v4-bootstrap-manifest-v3",
+        "schema_version": "v4-bootstrap-manifest-v4",
         "generator": BOOTSTRAP_VERSION,
         "collection_config": asdict(collection_config),
+        "episodes": [asdict(row) for row in episode_summaries],
+        "collection_outcomes": {
+            "completed": sum(row.terminal for row in episode_summaries),
+            "truncated": sum(not row.terminal for row in episode_summaries),
+            "simulator_decisions": sum(row.decisions for row in episode_summaries),
+        },
         "coverage": coverage,
         "seed": args.seed,
         "n_states": len(samples),
@@ -202,7 +245,27 @@ def _train(args: argparse.Namespace) -> dict[str, Any]:
             "wait": sum(sample.target.mode == 0 for sample in samples),
             "play": sum(sample.target.mode == 1 for sample in samples),
         },
+        "mode_weighting": {
+            "method": "episode_mode_inverse_retention_v1",
+            "normalization": "dataset_mean_one",
+            "eligible": eligible_modes,
+            "observed_episode_mode_groups": len(mode_groups),
+            "groups": [
+                {
+                    "episode": episode,
+                    "mode": "play" if mode == 1 else "wait",
+                    "eligible": counts[0],
+                    "retained": counts[1],
+                }
+                for (episode, mode), counts in sorted(mode_groups.items())
+            ],
+        },
+        "opponent_decks": {
+            deck_id: list(cards) for deck_id, cards in sorted(opponent_decks.items())
+        },
         "history": history,
+        "random_actor": random_actor_path.name,
+        "random_actor_sha256": _sha256(random_actor_path),
         "actor": actor_path.name,
         "actor_sha256": _sha256(actor_path),
         "provenance": {

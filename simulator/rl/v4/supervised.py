@@ -56,12 +56,20 @@ def v4_supervised_loss(
     actions: V4ActionBatch,
     *,
     soft_placement: torch.Tensor | None = None,
+    mode_weights: torch.Tensor | None = None,
     weights: V4SupervisedWeights = V4SupervisedWeights(),
 ) -> tuple[torch.Tensor, dict[str, float]]:
     """Compute finite masked cross-entropy for one-step or sequence targets."""
 
     if masks.mode.shape[:-1] != actions.mode.shape:
         raise ValueError("masks and actions batch/time dimensions must match")
+    if mode_weights is not None:
+        if mode_weights.shape != actions.mode.shape:
+            raise ValueError("mode_weights must match actions.mode shape")
+        if not bool(torch.isfinite(mode_weights).all()) or not bool(
+            (mode_weights >= 0).all()
+        ):
+            raise ValueError("mode_weights must be finite and non-negative")
     is_wait = (actions.mode == 0).to(logits.mode.dtype)
     play_rows = (actions.mode == 1).reshape(-1)
     wait_rows = (actions.mode == 0).reshape(-1)
@@ -72,13 +80,18 @@ def v4_supervised_loss(
         raise ValueError("a PLAY target has no legal card")
 
     mode_nll = _masked_nll(logits.mode, masks.mode, actions.mode)
-    # A real match yields far more WAIT than PLAY decisions. Give each mode
-    # equal weight when both occur so duplicating idle frames cannot erase the
-    # rare action signal needed to bootstrap the actor.
+    # Episode/mode reservoirs change the retained PLAY/WAIT frequency. Their
+    # weights are normalized once over the full dataset, so averaging the
+    # weighted losses here reconstructs the unsampled teacher distribution.
+    # Keep the unweighted caller's historical equal-mode objective.
     mode_loss = (
-        0.5 * (mode_nll[actions.mode == 0].mean() + mode_nll[actions.mode == 1].mean())
-        if n_wait and n_play
-        else mode_nll.mean()
+        (mode_nll * mode_weights).mean()
+        if mode_weights is not None
+        else (
+            0.5 * (mode_nll[actions.mode == 0].mean() + mode_nll[actions.mode == 1].mean())
+            if n_wait and n_play
+            else mode_nll.mean()
+        )
     )
     duration_nll = F.cross_entropy(
         logits.wait_duration.reshape(-1, logits.wait_duration.shape[-1]),
