@@ -919,7 +919,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                     ),
                 },
             )
-            return 0
+            # Match mine-replay-batch: a track set with no accepted source is
+            # not a successful mining run, and the discovery commands read this
+            # manifest as their input.
+            return 0 if manifest["accepted"] else 2
         except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as error:
             raise SystemExit(str(error)) from error
 
@@ -1005,7 +1008,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "rejected_count": len(manifest["rejected"]),
                 },
             )
-            return 0
+            return 0 if manifest["accepted"] else 2
         except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as error:
             raise SystemExit(str(error)) from error
 
@@ -1355,7 +1358,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "corpus_hash": result.corpus.content_hash,
                 },
             )
-            return 0
+            return 0 if result.corpus.cases else 2
         except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as error:
             raise SystemExit(str(error)) from error
 
@@ -1507,7 +1510,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.discarded_out:
             _write_json(args.discarded_out, summary)
         _write_json(None, summary)
-        return 0
+        # These compile a confidence-gated corpus that a fidelity gate later
+        # reads. An empty corpus is a failed mining run, not a clean one.
+        return 0 if result.corpus.cases else 2
 
     if args.command == "mine-replay":
         from .mining import compile_replay_cache_movement, corpus_to_dict
@@ -1535,7 +1540,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.discarded_out:
             _write_json(args.discarded_out, summary)
         _write_json(None, summary)
-        return 0
+        # These compile a confidence-gated corpus that a fidelity gate later
+        # reads. An empty corpus is a failed mining run, not a clean one.
+        return 0 if result.corpus.cases else 2
 
     if args.command == "mine-pulls":
         from .mining import compile_replay_cache_hog_cannon_pulls, corpus_to_dict
@@ -1553,7 +1560,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         _write_json(args.json_out, corpus_to_dict(result.corpus))
         _write_json(None, result.summary())
-        return 0
+        return 0 if result.corpus.cases else 2
 
     if args.command == "discover-cannon-lifetime":
         from .mining import discover_replay_cache_cannon_lifetimes
@@ -1576,7 +1583,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "json_out": str(args.json_out),
             },
         )
-        return 0
+        # Match discover-replay-interactions, which already fails closed for
+        # automation: a discovery pass that found nothing is a failed search,
+        # not a successful one.
+        return 0 if report["candidates"] else 2
 
     if args.command == "discover-replay-interactions":
         from .mining import discover_replay_cache_interactions_batch
@@ -1659,7 +1669,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "json_out": str(args.json_out),
             },
         )
-        return 0
+        return 0 if report["candidates"] else 2
 
     if args.command == "discover-log-motion":
         from .mining import discover_replay_cache_log_motion
@@ -1682,7 +1692,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "json_out": str(args.json_out),
             },
         )
-        return 0
+        # Match discover-replay-interactions, which already fails closed for
+        # automation: a discovery pass that found nothing is a failed search,
+        # not a successful one.
+        return 0 if report["candidates"] else 2
 
     if args.command == "discover-fireball-flight":
         from .mining import discover_replay_cache_fireball_flights
@@ -1705,7 +1718,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "json_out": str(args.json_out),
             },
         )
-        return 0
+        # Match discover-replay-interactions, which already fails closed for
+        # automation: a discovery pass that found nothing is a failed search,
+        # not a successful one.
+        return 0 if report["candidates"] else 2
 
     if args.command == "check-determinism":
         if args.repeats < 2:
