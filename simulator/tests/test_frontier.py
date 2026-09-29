@@ -4,6 +4,7 @@ import hashlib
 import math
 import os
 
+import numpy as np
 import pytest
 
 from simulator.rl.v4.frontier import (
@@ -25,6 +26,110 @@ from simulator.rl.v4.frontier_eval import (
     horizon_stability,
     is_ranking_flip,
 )
+
+
+def test_search_physics_only_step_preserves_next_policy_inputs() -> None:
+    """Skipped V2 projections must not change later public actor features."""
+
+    from simulator.actions import PlayCardAction, WaitAction
+    from simulator.public_state_estimator import PublicStateEstimator
+    from simulator.rl.v4.frontier_ppo.environment import make_frontier_env
+    from simulator.rl.v4.v4_ppo.runtime import observe_v4_inputs
+
+    reference = make_frontier_env()
+    reference.reset_v2(seed=27, shuffle_decks=False)
+    fast = reference.fork()
+    ref_estimator = PublicStateEstimator()
+    fast_estimator = PublicStateEstimator()
+    actions = [(WaitAction(0), WaitAction(1))] * 3 + [
+        (PlayCardAction(0, 0, (8, 20)), WaitAction(1))
+    ] + [(WaitAction(0), WaitAction(1))] * 8
+
+    for pair in actions:
+        old = reference.step_v2(pair)
+        _, terminated, truncated, info = fast._step_core(pair)
+        assert (old.terminated, old.truncated, old.info) == (
+            terminated, truncated, info
+        )
+        assert reference.state.state_hash() == fast.state.state_hash()
+        _, ref_inputs, _, _ = observe_v4_inputs(reference, ref_estimator)
+        _, fast_inputs, _, _ = observe_v4_inputs(fast, fast_estimator)
+        assert ref_inputs.keys() == fast_inputs.keys()
+        for key in ref_inputs:
+            expected, actual = ref_inputs[key], fast_inputs[key]
+            if isinstance(expected, np.ndarray):
+                assert np.array_equal(expected, actual), key
+            else:
+                assert expected == actual, key
+
+    fast.observe_v2_for_viewer(1)
+    for viewer in (0, 1):
+        old_memory = reference._memories[viewer]
+        new_memory = fast._memories[viewer]
+        assert all(
+            getattr(old_memory, field) == getattr(new_memory, field)
+            for field in old_memory.__dataclass_fields__
+            if field != "_processed_event_list"
+        )
+
+
+def test_search_skipped_observations_preserve_source_replay_and_branch(monkeypatch) -> None:
+    """Search results agree with eagerly projecting both viewers after each step."""
+
+    import torch
+
+    from simulator.env import SimulatorEnv
+    from simulator.rl.v4.frontier import (
+        PoolMatchConfig,
+        collect_pool_match,
+        frontier_model_config,
+    )
+    from simulator.rl.v4.frontier_eval import BranchSpec, replay_to_state, run_branch
+    from simulator.rl.v4.model_v4 import RecurrentV4Policy
+
+    policy = RecurrentV4Policy(frontier_model_config()).eval()
+    config = PoolMatchConfig(
+        archetype="aggressive-pressure", match_index=1,
+        pool_seed=29, max_decisions=24,
+    )
+    core = SimulatorEnv._step_core
+
+    def eager_core(self, actions):
+        result = core(self, actions)
+        self.observe_v2()
+        return result
+
+    with monkeypatch.context() as eager:
+        eager.setattr(SimulatorEnv, "_step_core", eager_core)
+        reference_match = collect_pool_match(policy=policy, cfg=config, device="cpu")
+    match = collect_pool_match(policy=policy, cfg=config, device="cpu")
+    assert match == reference_match
+
+    candidate_t = 16
+    with monkeypatch.context() as eager:
+        eager.setattr(SimulatorEnv, "_step_core", eager_core)
+        reference_env, reference_hidden = replay_to_state(match, candidate_t, policy, "cpu")
+    env, hidden = replay_to_state(match, candidate_t, policy, "cpu")
+    assert env.state.state_hash() == reference_env.state.state_hash()
+    torch.testing.assert_close(hidden, reference_hidden, rtol=0, atol=0)
+    for viewer in (0, 1):
+        expected = reference_env._memories[viewer]
+        actual = env._memories[viewer]
+        assert all(
+            getattr(expected, field) == getattr(actual, field)
+            for field in expected.__dataclass_fields__
+            if field != "_processed_event_list"
+        )
+
+    args = dict(
+        env=env, hidden=hidden, branch=BranchSpec(source="wait", mode=0),
+        opponent_spec={"strategy": match["config"]["strategy"]},
+        replica_seed=91, horizon=8, policy=policy, device="cpu",
+    )
+    with monkeypatch.context() as eager:
+        eager.setattr(SimulatorEnv, "_step_core", eager_core)
+        reference_branch = run_branch(**args)
+    assert run_branch(**args) == reference_branch
 
 
 def _decisions():
@@ -344,8 +449,30 @@ def test_frontier_entry_round_trip():
             mine = PlayCardAction(0, int(acts.card_slot[0, 0]),
                                   (int(acts.placement[0, 0, 1]), int(acts.placement[0, 0, 0])))
         opp = loaded["opponent"].choose_action(env.engine, env.state, 1)
+        tick_before = env.state.tick
+        state_hash_before = env.state.state_hash()
+        event_count_before = len(env.state.events)
         result = env.step_v2((mine, opp))
-    assert result.terminated is False or True  # stepping works either way
+    # The step must actually advance physics, and the decision contract must
+    # hold.  The previous assertion here was `terminated is False or True`,
+    # which is true of any value and so could not fail.
+    assert env.state.tick == tick_before + 1
+    assert env.state.state_hash() != state_hash_before
+    assert isinstance(result.terminated, bool) and isinstance(result.truncated, bool)
+    assert not (result.terminated and result.truncated)
+    assert len(result.observations) == 2
+    assert len(result.rewards) == 2
+    assert all(isinstance(value, float) for value in result.rewards)
+    # A legal masked sample must decode to an action the engine accepts.
+    # apply_actions rejects rather than raises, so an illegal decode would
+    # otherwise pass unnoticed. The restored event history already contains
+    # rejections from earlier in the match, so only this step's events count.
+    rejected = [
+        event
+        for event in env.state.events[event_count_before:]
+        if event.kind == "action_rejected"
+    ]
+    assert rejected == [], f"the sampled action was rejected: {rejected}"
 
 
 CKPT = "outputs/v4/bootstrap_seed0/actor.pt"
