@@ -6,6 +6,60 @@ from ._base import *
 
 
 class DeathsMixin:
+    def _prune_consumed_records(self, state: BattleState) -> None:
+        """Drop spent projectiles that nothing can reach again.
+
+        Every loop in the engine walks the retained projectile mapping, and
+        nothing ever released a spent shot, so a match paid for its whole
+        projectile history on every tick: cost grew with total elapsed shots
+        rather than with the shots in flight. A spent projectile is a leaf, so
+        removing it cannot invalidate a uid another record resolves.
+
+        Dead *bodies* are deliberately retained. Historical events name a
+        ``target_uid`` that consumers resolve to a card id against the final
+        state, so releasing a corpse would make those events unresolvable; the
+        corpus extractors depend on that lookup. Pruning projectiles captures
+        almost the whole cost difference, so the bodies stay.
+
+        Pruning changes ``state_hash`` and ``replay_hash`` for any match that
+        discards a record, so replay and corpus artifacts captured before this
+        change no longer compare equal against a re-run.
+        """
+
+        referenced: set[int] = set()
+        for entity in state.entities.values():
+            if not entity.alive:
+                continue
+            for uid in (
+                entity.parent_uid,
+                entity.jump_target_uid,
+                entity.carried_by_uid,
+                entity.target_uid,
+                entity.pending_target_uid,
+                entity.secondary_pending_target_uid,
+            ):
+                if uid is not None:
+                    referenced.add(uid)
+        for projectile in state.projectiles.values():
+            if not projectile.alive:
+                continue
+            if projectile.source_uid is not None:
+                referenced.add(projectile.source_uid)
+            referenced.update(projectile.chain_target_uids)
+        for effect in state.effects.values():
+            if effect.alive and effect.source_uid is not None:
+                referenced.add(effect.source_uid)
+
+        removed = [
+            uid
+            for uid, projectile in state.projectiles.items()
+            if not projectile.alive and uid not in referenced
+        ]
+        for uid in removed:
+            del state.projectiles[uid]
+        if removed:
+            self._emit(state, "records_pruned", projectiles=len(removed))
+
     def _resolve_deaths(self, state: BattleState) -> list[EntityState]:
         destroyed_towers: list[EntityState] = []
         while True:

@@ -35,6 +35,7 @@ class SchedulerMixin:
         self._advance_projectiles(state)
         destroyed_towers = self._resolve_deaths(state)
         self._resolve_tower_outcomes(state, destroyed_towers)
+        self._prune_consumed_records(state)
         self._advance_match_clock(state)
         state.tick += 1
         if self.validate_every_tick:
