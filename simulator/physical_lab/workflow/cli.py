@@ -158,6 +158,22 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         help="sealed reviewed screen-state template manifest for physical device B",
     )
+    run.add_argument(
+        "--lifecycle-timeout-us",
+        type=int,
+        default=30_000_000,
+        help=(
+            "per-state screen wait limit in microseconds for ADB mode; "
+            "a real screenshot takes far longer than a microsecond, so the "
+            "previous hardcoded limit rejected every run before the first action"
+        ),
+    )
+    run.add_argument(
+        "--lifecycle-poll-us",
+        type=int,
+        default=100_000,
+        help="interval between lifecycle screen polls in microseconds",
+    )
     run.add_argument("--repository-root", type=Path, default=_default_repository_root())
     run.add_argument(
         "--retention-manifest",
@@ -542,13 +558,22 @@ def _adb_runner(args: argparse.Namespace, spec: ExperimentSpec):
         )
         for side, path in zip(("A", "B"), template_paths, strict=True)
     }
+    # The lifecycle machine is driven by a real monotonic clock, so a
+    # one-microsecond budget is exhausted by the first screenshot. Poll with a
+    # real sleep rather than a no-op so the deadline is measured against wall
+    # time. The offline harness keeps its scripted clock and sleep.
+    if args.lifecycle_timeout_us <= 0:
+        raise PhysicalLabError("--lifecycle-timeout-us must be a positive integer")
+    if args.lifecycle_poll_us <= 0:
+        raise PhysicalLabError("--lifecycle-poll-us must be a positive integer")
     lifecycle = LifecycleMachine(
         detectors,
         policy=LifecyclePolicy(
-            timeout_us={state: 1 for state in LIFECYCLE_PATH},
-            poll_interval_us=1,
+            timeout_us={
+                state: args.lifecycle_timeout_us for state in LIFECYCLE_PATH
+            },
+            poll_interval_us=args.lifecycle_poll_us,
         ),
-        sleep=lambda _interval: None,
     )
     return PhysicalLabRunner(
         phones,
