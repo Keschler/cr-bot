@@ -251,6 +251,9 @@ class OwnActionTracker:
         elixir_pending_to_confirm = self._pending_for_current_elixir_drop(
             elixir, now, preferred_pending=rolling_spell_pending_to_confirm,
         )
+        numeric_pending_ids = self._numeric_elixir_evidence_recipients(
+            elixir, now, preferred_pending=elixir_pending_to_confirm,
+        )
         for pending in self.pending:
             is_spell = self._is_spell_card(pending.card)
             cost = CARD_METADATA.get(pending.card, {}).get("elixir_cost")
@@ -258,12 +261,7 @@ class OwnActionTracker:
             required_drop = self._required_numeric_elixir_drop(pending)
             pending_elixir_drop = pending.elixir_before - elixir
             selected_global_elixir_drop = pending is elixir_pending_to_confirm
-            own_elixir_confirms = (
-                required_drop is not None
-                and pending_elixir_drop >= required_drop
-                and 0 <= pending.started_at_s - now <= OWN_ACTION_TRACK_AFTER_DROP_WINDOW_S
-            )
-            elixir_confirms = selected_global_elixir_drop or own_elixir_confirms
+            elixir_confirms = id(pending) in numeric_pending_ids
             if elixir_confirms and pending.numeric_elixir_drop_time_s is None:
                 pending.numeric_elixir_drop_time_s = now
                 pending.numeric_elixir_drop_video_time_s = video_time_s
@@ -361,6 +359,15 @@ class OwnActionTracker:
                     self._debug(f"pending cancelled card={pending.card} slot={pending.slot_idx}")
 
         self.pending = still_pending
+        if numeric_pending_ids:
+            # A numeric drop assigned to another pending action cannot also
+            # remain in this pending action's cumulative elixir baseline.
+            for pending in self.pending:
+                if (
+                    id(pending) not in numeric_pending_ids
+                    and pending.numeric_elixir_drop_time_s is None
+                ):
+                    pending.elixir_before = elixir
         if not had_pending and not self.pending:
             self._record_new_track_actions(new_tracks, game_state.hud.hand_cards, arena_px, now, clock_boxes)
 
@@ -510,7 +517,7 @@ class OwnActionTracker:
         elixir_drop = self.last_elixir - elixir
         candidates = []
         for pending in self.pending:
-            if pending.spell_elixir_confirmed:
+            if pending.spell_elixir_confirmed or pending.numeric_elixir_drop_time_s is not None:
                 continue
             required_drop = self._required_numeric_elixir_drop(pending)
             if required_drop is None or elixir_drop < required_drop:
@@ -523,6 +530,55 @@ class OwnActionTracker:
             return None
         candidates.sort(key=lambda item: (not item[0], item[1]))
         return candidates[0][2]
+
+    def _numeric_elixir_evidence_recipients(
+        self, elixir: float, now: float, preferred_pending: PendingOwnPlay | None = None,
+    ) -> set[int]:
+        """Assign one observed elixir budget across plausible pending plays.
+
+        The cumulative drop from ``elixir_before`` can span frames, but it
+        cannot independently justify every stale pending action. A visible
+        rolling spell receives priority; other eligible plays share the
+        remaining budget, with one regeneration allowance for the whole drop.
+        """
+        candidates = []
+        for pending in self.pending:
+            if (
+                pending.spell_elixir_confirmed
+                or pending.numeric_elixir_drop_time_s is not None
+            ):
+                continue
+            required_drop = self._required_numeric_elixir_drop(pending)
+            if required_drop is None:
+                continue
+            elapsed_s = pending.started_at_s - now
+            if not 0 <= elapsed_s <= OWN_ACTION_TRACK_AFTER_DROP_WINDOW_S:
+                continue
+            if (
+                pending is preferred_pending
+                or pending.elixir_before - elixir >= required_drop
+            ):
+                candidates.append(pending)
+        if not candidates:
+            return set()
+        baselines = [pending.elixir_before for pending in self.pending]
+        if self.last_elixir is not None:
+            baselines.append(self.last_elixir)
+        available = max(baselines) - elixir + 1.5
+        candidates.sort(
+            key=lambda pending: (
+                pending is not preferred_pending, pending.started_at_s - now,
+            )
+        )
+        selected: set[int] = set()
+        for pending in candidates:
+            cost = CARD_METADATA[pending.card]["elixir_cost"]
+            if pending.played_via == "mirror":
+                cost += 1
+            if cost <= available:
+                selected.add(id(pending))
+                available -= cost
+        return selected
 
     def _required_numeric_elixir_drop(self, pending):
         cost = CARD_METADATA.get(pending.card, {}).get("elixir_cost")
