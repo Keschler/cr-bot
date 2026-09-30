@@ -391,12 +391,14 @@ def collect_pool_match(
                     "tick": int(env.state.tick),
                 }
             )
-            result = env.step_v2((learner_action, opp_action))
+            _, terminated, truncated, info = env._step_core(
+                (learner_action, opp_action)
+            )
             needs_reset = False
             hidden = next_hidden.detach()
-            if result.terminated or result.truncated:
-                winner = result.info.get("winner")
-                terminal_reason = str(result.info.get("terminal_reason", ""))
+            if terminated or truncated:
+                winner = info.get("winner")
+                terminal_reason = str(info.get("terminal_reason", ""))
                 break
     if verbose:
         print(f"match {cfg.archetype}#{cfg.match_index}: {len(decisions)} decisions winner={winner}", flush=True)

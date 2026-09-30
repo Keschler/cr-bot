@@ -195,7 +195,7 @@ def replay_to_state(
             _, _, hidden = policy.forward_step(_step_inputs(inputs, device), hidden=hidden)
             if i == t:
                 break
-            env.step_v2((
+            env._step_core((
                 _recorded_action(rec["learner"], 0),
                 _recorded_action(rec["opponent"], 1),
             ))
@@ -204,6 +204,11 @@ def replay_to_state(
         raise ValueError(
             f"prefix replay diverged at t={t}: {actual[:12]} != {decisions[t]['state_hash'][:12]}"
         )
+    # The recorded prefix historically advanced both observation memories on
+    # every step. The learner view has already been built above; bring the
+    # second view current before returning a forkable state. ObservationMemory
+    # is schedule-invariant for this append-only event history.
+    env.observe_v2_for_viewer(1)
     return env, hidden
 
 
@@ -246,9 +251,10 @@ def replay_candidate_states(
                         f"prefix replay diverged at t={i}: "
                         f"{actual[:12]} != {rec['state_hash'][:12]}"
                     )
+                env.observe_v2_for_viewer(1)
                 retained[i] = (env.fork(), hidden.detach().clone())
             if i < max(requested):
-                env.step_v2((
+                env._step_core((
                     _recorded_action(rec["learner"], 0),
                     _recorded_action(rec["opponent"], 1),
                 ))
@@ -430,11 +436,15 @@ def run_branch(
     first = _sim_action(branch, 0)
     with torch.no_grad():
         opp = opponent.choose_action(child.engine, child.state, 1)
-        result = child.step_v2((first, opp))
+        # The next decision constructs its own learner observation. Building
+        # both V2 views here would discard them immediately, then rebuild the
+        # learner view at the start of the next iteration. The physics-only
+        # step retains the same state, rewards, terminal flags, and info.
+        _, terminated, truncated, info = child._step_core((first, opp))
         ran = 1
-        if result.terminated or result.truncated:
-            terminal = bool(result.terminated) and not bool(result.truncated)
-            winner = result.info.get("winner") if terminal else None
+        if terminated or truncated:
+            terminal = bool(terminated) and not bool(truncated)
+            winner = info.get("winner") if terminal else None
         else:
             for _ in range(horizon - 1):
                 if child.state is None or child.state.terminal:
@@ -462,11 +472,11 @@ def run_branch(
                                    row=int(acts.placement[0, 0, 0]), col=int(acts.placement[0, 0, 1])), 0,
                     )
                 opp = opponent.choose_action(child.engine, child.state, 1)
-                result = child.step_v2((mine, opp))
+                _, terminated, truncated, info = child._step_core((mine, opp))
                 ran += 1
-                if result.terminated or result.truncated:
-                    terminal = bool(result.terminated) and not bool(result.truncated)
-                    winner = result.info.get("winner") if terminal else None
+                if terminated or truncated:
+                    terminal = bool(terminated) and not bool(truncated)
+                    winner = info.get("winner") if terminal else None
                     break
     after = tower_fracs(child.state)
     return {

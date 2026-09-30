@@ -59,6 +59,13 @@ def positive(value):
     return value
 
 
+def nonnegative(value):
+    value = int(value)
+    if value < 0:
+        raise argparse.ArgumentTypeError("must be non-negative")
+    return value
+
+
 def parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--checkpoint", type=Path, required=True,
@@ -70,7 +77,10 @@ def parser():
     )
     p.add_argument("--train-matches-per-archetype", type=positive, default=20)
     p.add_argument("--train-profile", choices=("pinned", "mixed", "real"), default="pinned")
-    p.add_argument("--sealed-matches-per-archetype", type=positive, default=8)
+    p.add_argument(
+        "--sealed-matches-per-archetype", type=nonnegative, default=8,
+        help="set to 0 for train-only collection without reserved-deck matches",
+    )
     p.add_argument("--train-pool-seed", type=int, default=20261001)
     p.add_argument("--sealed-pool-seed", type=int, default=20261002)
     p.add_argument("--candidates-per-match", type=positive, default=16)
@@ -84,6 +94,8 @@ def parser():
     p.add_argument("--max-entries-per-split", type=positive, default=512)
     p.add_argument("--per-archetype-cap", type=positive, default=96)
     p.add_argument("--workers", type=positive, default=3)
+    p.add_argument("--torch-threads", type=positive, default=1,
+                   help="CPU intra-op threads per search worker (default: 1)")
     return p
 
 
@@ -165,6 +177,10 @@ def run_match(task):
     )
     from simulator.rl.v4.v4_ppo import load_frozen_anchor
     config, split,seed,arch,index=task
+    # Branch continuations are mostly simulator work and invoke the compact
+    # actor one decision at a time. Multiple intra-op pools per worker add
+    # overhead and can oversubscribe CPUs when matches run in parallel.
+    torch.set_num_threads(int(config.get("torch_threads", 1)))
     real_profile = config["train_profile"] == "real"
     allow_variants = not real_profile and (split == "sealed" or config["train_profile"] == "mixed")
     ROOT = Path(config["out"])
@@ -279,7 +295,7 @@ def main():
     from simulator.rl.v4.frontier import FilterConfig
     from simulator.rl.v4.frontier_eval import ClassifyConfig
     args = parser().parse_args()
-    if args.train_pool_seed == args.sealed_pool_seed:
+    if args.sealed_matches_per_archetype and args.train_pool_seed == args.sealed_pool_seed:
         raise ValueError("train and sealed pool seeds must differ")
     if args.branches < 2:
         raise ValueError("at least two branches are required")
@@ -392,7 +408,7 @@ def main():
     counts = {k:len(v) for k,v in all_entries.items()}
     save(ROOT / "summary.json", dict(counts=counts, candidates={k:len(v) for k,v in by_split.items()}))
     print("COMPLETE", counts, flush=True)
-    if counts["train"] < 100 or counts["sealed"] < 30:
+    if counts["train"] < 100 or (args.sealed_matches_per_archetype and counts["sealed"] < 30):
         print("Small frontier set: inspect coverage before interpreting PPO results.", flush=True)
 
 if __name__=='__main__':

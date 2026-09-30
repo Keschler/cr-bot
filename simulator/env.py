@@ -639,6 +639,8 @@ class SimulatorEnv:
         process backend uses this core operation in workers and projects each
         observation once in the parent, avoiding two discarded NumPy
         allocations per lane and preserving parent-owned observation memory.
+        Search rollouts also use it when their next decision builds the needed
+        public view itself.
         """
 
         state = self._require_state()

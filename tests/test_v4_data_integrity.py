@@ -3,6 +3,7 @@
 import importlib.util
 import json
 from pathlib import Path
+import sys
 
 import pytest
 
@@ -37,6 +38,20 @@ def test_source_manifests_exclude_generated_simulator_outputs() -> None:
     assert all("/simulator/outputs/" not in path for path in frontier_paths)
     assert all("simulator/outputs/" not in path for path in distillation_paths)
     assert "simulator/rl/v4/search_distillation/preparation.py" in distillation_paths
+
+
+def test_frontier_runner_accepts_train_only_collection(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "argv", [
+        "run_v4_frontier_generation.py", "--checkpoint", "actor.pt",
+        "--out", "frontier", "--sealed-matches-per-archetype", "0",
+    ])
+    assert frontier.parser().parse_args().sealed_matches_per_archetype == 0
+    with pytest.raises(SystemExit):
+        monkeypatch.setattr(sys, "argv", [
+            "run_v4_frontier_generation.py", "--checkpoint", "actor.pt",
+            "--out", "frontier", "--sealed-matches-per-archetype", "-1",
+        ])
+        frontier.parser().parse_args()
 
 
 def test_reuse_manifest_requires_matching_sources_and_collection_config(tmp_path: Path) -> None:
