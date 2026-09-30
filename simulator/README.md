@@ -1,28 +1,30 @@
 # Deterministic Level-11 Simulator
 
 This directory contains the headless, versioned Clash Royale simulator used
-for deterministic testing, sim-to-real fidelity work, and reinforcement
-learning. [GOAL.md](GOAL.md) is the authoritative roadmap and release
-definition.
+for deterministic testing, policy learning, and sim-to-real work. The
+[GOAL.md](GOAL.md) states the strategic Hog 2.6 policy goal and the boundaries
+of what simulator evidence can claim.
 
-The current `v1` ruleset contains 124 definitions, including the complete
-109-card eligible opponent roster, but remains `training_ready: false`. It is
-an executable research ruleset, not a claim that every live-game mechanic has
-been measured.
+The current `v1` ruleset contains 124 definitions, including the 109-card
+eligible opponent roster. The source-linked real-deck catalog currently has
+40 decks: 30 training and 10 evaluation decks across five archetypes. It is an
+executable research ruleset, not a claim that every live-game mechanic or
+enemy deck has been measured. Its metadata remains `training_ready: false`.
 
-The current execution priority is RL-first: physical-lab evidence is deferred
-while the actor, training loop, evaluation, and simulator throughput improve.
-This permits provisional experiments only; it does not satisfy the fidelity
-gates or authorize a `training_ready` claim.
+The current execution priority is the bounded V4 pilot: improve the actor,
+training loop, evaluation, simulator throughput, and opponent breadth. The
+`training_ready` status records open fidelity evidence; it does not block
+simulator learning or checkpoint evaluation. Physical validation remains
+available when a learned policy provides evidence that transfer measurement is
+the useful next step.
 
-The active V4 workflow compares reward-only match-start PPO with search
-distillation from the same simulator bootstrap, plus a randomly initialized
-PPO baseline. Frontier-initialized PPO is a separate experiment. A fresh
+The active V4 pilot checks reward-only match-start PPO from a random actor,
+the same PPO from a simulator bootstrap, and search distillation from that
+bootstrap. Frontier-initialized PPO is a separate experiment. A fresh
 checkout has no promoted model checkpoint or measured policy strength. See
-the [V4 training guide](../docs/v4_training.md) for the
-reproducible commands and evaluation boundary.
-The [concrete three-arm comparison plan](../docs/v4_comparison_plan.md) awaits
-approval and lists the remaining weighting and evaluation-split prerequisites.
+the [V4 training guide](../docs/v4_training.md) and the
+[bounded comparison notes](../docs/v4_comparison_plan.md) for current
+commands, integrity checks, and the evaluation boundary.
 
 ## Setup and tests
 
@@ -81,9 +83,9 @@ and behavioral-obligation failures.
 
 ### Physical-fidelity lab
 
-Physical-lab evidence is deferred for the current RL-first pass. The software
-harness remains available for the later release gate and can be exercised
-offline before connecting devices:
+The physical-lab harness remains available for causal, version-sensitive
+measurements and transfer validation when policy evidence makes those useful.
+It can be exercised offline before connecting devices:
 
 ```bash
 PYTHONPATH=.:..:../src ../outputs/venv/bin/python -m simulator lab plan \
@@ -127,10 +129,11 @@ flags. See [RUN_PROTOTYPE_LIVE.md](RUN_PROTOTYPE_LIVE.md) for the device and
 safety workflow. The earlier released prototype binary and checkpoint use a
 different model format and do not represent the V4 actor.
 
-### Fidelity readiness
+### Fidelity evidence report (when needed)
 
-Run the fail-closed readiness report only on sealed, provenance-carrying
-reports:
+Run the fail-closed report when preparing a simulator-to-real or live-game
+claim, and only on sealed, provenance-carrying reports. It is not a
+prerequisite for simulator training:
 
 ```bash
 PYTHONPATH=.:..:../src ../outputs/venv/bin/python -m simulator readiness \
@@ -143,9 +146,9 @@ PYTHONPATH=.:..:../src ../outputs/venv/bin/python -m simulator readiness \
 ```
 
 The controlled physical lab is primary for causal, version-sensitive
-measurements. Public-video mining is supplementary discovery and
-validation; candidates and inferred-only observations never satisfy a
-held-out gate.
+measurements. Public-video mining is supplementary discovery and validation;
+candidates and inferred-only observations do not become held-out physical
+evidence.
 
 ## What is implemented
 
@@ -168,8 +171,10 @@ held-out gate.
   invariant/fuzz/soak checks, replay-cache mining, fidelity corpora, and
   first-divergence reports.
 
-Implemented means dispatchable. `fidelity_ready` and `training_ready` require
-the evidence gates below.
+Implemented means dispatchable. Fidelity reports use the evidence workflow
+below when a simulator-to-real or live-game claim needs it. Those checks do
+not block simulator learning; `training_ready` remains a status description
+of unresolved fidelity work.
 
 ## Architecture
 

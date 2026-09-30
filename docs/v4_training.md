@@ -1,21 +1,32 @@
 # V4 training and evaluation
 
-V4 has a shared evaluation protocol for three distinct training arms: pure
-reward-only PPO from a random actor, reward-only PPO from the bootstrap actor,
-and search distillation from that same bootstrap actor. The bootstrap trains a
-compatible actor from public simulator observations; frontier generation mines
-difficult states for distillation. Frontier-initialized PPO remains a separate
-experiment and must not be reported as raw RL. Historical Stage-1/Stage-2
-generators, timing curricula, and serialized search-dataset builders are
-retired.
+The strategic target is a very strong policy for the fixed Hog 2.6 deck
+against the broadest enemy-deck set the simulator can represent. V4 provides
+three useful training paths: reward-only PPO from a random actor, reward-only
+PPO from a public-observation bootstrap actor, and outcome-search distillation
+from that same bootstrap actor. The paths are tools for reaching the policy
+goal, not a permanent requirement to run one fixed comparison. Frontier-
+initialized PPO remains a separate experiment and must not be reported as raw
+RL. Historical Stage-1/Stage-2 generators, timing curricula, and serialized
+search-dataset builders are retired.
 
-The next experiment is specified in the
-[three-arm comparison plan](v4_comparison_plan.md), **awaiting user approval**.
-It defines the prerequisites, seeds, work budgets, development-only selection,
-and final evaluation. The commands below document existing runner interfaces;
-they are not an approved launch sequence for that comparison. In particular,
-the predeclared bootstrap match batch and strict development/final separation
-still need an end-to-end pilot before the planned main run.
+The current experiment is the bounded pilot in the
+[comparison notes](v4_comparison_plan.md). It uses fresh real-deck training
+and development pools, checks public-only legality, bootstrap coverage,
+independent search corrections, actor exports, and measured cost, and fits
+within a local one-day decision window when the current throughput estimate
+holds. It does not require or authorize a large fixed main run. The 40-deck
+catalog (30 training and 10 reserved evaluation decks across five
+archetypes) is the present data boundary; the longer-term goal includes all
+supported enemy decks and special card forms.
+
+The commands below document the runner interfaces. Use fresh output roots and
+record the source revision before each experiment. For the current pilot,
+override broad defaults explicitly: use `--train-profile real
+--train-matches-per-archetype 1`, `--sealed-matches-per-archetype 0`, and a
+distinct pool seed for the development root. Run distillation with `--contexts 32
+--methods soft-kl --seeds 900`; otherwise the runner starts its larger
+method/context/seed sweep.
 
 ## Teacher bootstrap for the bootstrap-initialized arms
 

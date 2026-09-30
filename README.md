@@ -196,19 +196,25 @@ PyInstaller build instructions.
 
 ## Simulator and RL status
 
-The policy is trained against a deterministic, versioned Level-11 simulator.
-The actor receives public observations only; privileged simulator state is
-restricted to the training critic. The V4 workflow includes a simulator
-bootstrap, frontier search, search distillation, recurrent PPO, and held-out
-evaluation.
+The strategic goal is a very strong policy for the fixed Hog 2.6 deck against
+the broadest enemy-deck set the project can represent, eventually including
+all supported enemy decks and special card forms. The policy is trained
+against a deterministic, versioned Level-11 simulator. The actor receives
+public observations only; privileged simulator state is restricted to the
+training critic. The V4 workflow includes a simulator bootstrap, frontier
+search, search distillation, recurrent PPO, and held-out evaluation.
 
-The V1 research ruleset contains 124 definitions and the complete 109-card
-eligible opponent roster, but remains explicitly `training_ready: false` until
-its physical-fidelity evidence gates are satisfied. Current checkpoint results
-are simulator evidence, not proof of live-game strength.
+The V1 research ruleset contains 124 definitions, including the 109-card
+eligible opponent roster. The current source-linked real-deck catalog is
+limited to 40 decks: 30 training and 10 evaluation decks across five
+archetypes. Its metadata remains explicitly `training_ready: false` because
+fidelity evidence is incomplete; that status does not block simulator
+learning. Current checkpoint results are simulator evidence, not proof of
+live-game strength or coverage of every enemy deck.
 
-Detailed simulator architecture, training commands, evaluation gates, and
-performance notes are in [`simulator/README.md`](simulator/README.md).
+The current training step is the bounded V4 pilot. Detailed simulator
+architecture, training commands, evaluation boundaries, and performance notes
+are in [`simulator/README.md`](simulator/README.md).
 
 For V4 active-search distillation and controlled PPO learning curves, see
 [the V4 training workflow](docs/v4_training.md). It documents public-history
