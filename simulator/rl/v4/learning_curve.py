@@ -1986,6 +1986,8 @@ def run_learning_curve(
     evaluates one supplied checkpoint and performs no rollout/update calls.
     """
 
+    from simulator.viewer.recording import publish_progress
+
     output_dir = _validate_output_dir(config.output_dir)
     _validate_input_paths(config)
     hooks = hooks or _default_hooks()
@@ -2044,6 +2046,14 @@ def run_learning_curve(
     if len(set(eval_seeds)) != len(eval_seeds):
         raise ValueError("evaluation seeds must be unique")
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    viewer_progress: dict[str, Any] = {
+        "source": "training", "run_id": str(output_dir.resolve()),
+        "output_dir": str(output_dir.resolve()), "status": "running",
+        "phase": "initializing", "current_update": 0,
+        "config": config.as_dict(), "updates": {}, "points": [],
+    }
+    publish_progress(viewer_progress)
 
     resolved_model_config = model_config if model_config is not None else config.model_config
     model_config_record = _model_config_payload(resolved_model_config)
@@ -2188,6 +2198,9 @@ def run_learning_curve(
                 "update": _serialise(report),
             }
             update_reports[current_update] = serialised_update
+            viewer_progress.update(phase="update", current_update=current_update)
+            viewer_progress["updates"][str(current_update)] = serialised_update
+            publish_progress(viewer_progress)
             is_quarantined, reasons = _quarantine_status(report)
             if is_quarantined:
                 # Quarantine is detected after the optimizer has stepped, so
@@ -2208,6 +2221,8 @@ def run_learning_curve(
                     "weights_restored": True,
                     "update_report": serialised_update,
                 }
+                viewer_progress.update(status="quarantined", quarantine_stop=quarantine_stop)
+                publish_progress(viewer_progress)
                 stopped = True
                 break
         if stopped:
@@ -2237,6 +2252,9 @@ def run_learning_curve(
                 str(key): value for key, value in update_reports.items() if key <= target_update
             },
         })
+        viewer_progress.update(phase="evaluation", current_update=target_update)
+        viewer_progress["points"] = _serialise(points)
+        publish_progress(viewer_progress)
 
     # Comparison checkpoints are evaluated through the same held-out hooks;
     # they are never silently reduced to a hash-only annotation.  A different
@@ -2374,6 +2392,11 @@ def run_learning_curve(
     # Rewrite the curve once with its artifact map.  The map intentionally
     # excludes the curve's own final hash to avoid a self-referential digest.
     curve_path.write_text(canonical_json(report) + "\n", encoding="utf-8")
+    viewer_progress.update(
+        status="quarantined" if quarantine_stop else "complete", phase="finished",
+        report_path=str(curve_path.resolve()),
+    )
+    publish_progress(viewer_progress)
     return report
 
 

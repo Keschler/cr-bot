@@ -1,0 +1,377 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Arena Lab · Simulator</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <script type="module" src="/static/app.js">
+</script>
+</head>
+<body>
+  <header class="app-header">
+    <a class="brand" href="/" aria-label="Arena Lab home">
+<span class="brand-mark" aria-hidden="true">A</span>
+<span>Arena <strong>Lab</strong>
+<small>V4 SIMULATOR</small>
+</span>
+</a>
+    <nav class="main-tabs" aria-label="Workspace">
+<button class="tab active" data-page="watch" aria-selected="true">Watch</button>
+<button class="tab" data-page="training" aria-selected="false">Training</button>
+<button class="tab" data-page="compare" aria-selected="false">Compare</button>
+</nav>
+    <div class="header-meta">
+<span class="local-dot">
+</span> LOCAL WORKSPACE <button id="help-button" class="icon-button" aria-label="Recording and keyboard help">?</button>
+</div>
+  </header>
+  <div id="notice" class="notice" role="status" hidden>
+</div>
+  <main>
+    <section id="watch-page" class="page active" aria-label="Match viewer">
+      <aside class="library-panel">
+        <div class="panel-heading">
+<div>
+<span class="eyebrow">YOUR WORKSPACE</span>
+<h1>Match library</h1>
+</div>
+<button id="refresh-library" class="icon-button" title="Refresh library" aria-label="Refresh library">↻</button>
+</div>
+        <button id="launch-button" class="button primary wide">
+<span aria-hidden="true">＋</span> Launch exhibition</button>
+        <label class="search-box">
+<span aria-hidden="true">⌕</span>
+<input id="match-search" type="search" placeholder="Search matches or runs" aria-label="Search matches or runs">
+</label>
+        <div class="filter-tabs" role="group" aria-label="Match source">
+<button class="active" data-source="all">All</button>
+<button data-source="training">Training</button>
+<button data-source="frontier">Replays</button>
+<button data-source="exhibition">Exhibitions</button>
+</div>
+        <div class="library-caption">
+<span id="match-count">Loading matches…</span>
+<span id="library-updated">
+</span>
+</div>
+        <div id="match-list" class="match-list" aria-label="Saved matches" aria-live="polite">
+</div>
+        <div class="library-footer">
+<span class="local-dot">
+</span>
+<div>Live recordings appear here automatically.<button class="text-button" id="recording-help">Set up training capture ↗</button>
+</div>
+</div>
+      </aside>
+      <div class="watch-main">
+        <div class="match-heading">
+<div>
+<span class="eyebrow" id="match-source">TACTICAL REPLAY</span>
+<h2 id="match-title">Choose a match to inspect</h2>
+<p id="match-subtitle">Saved replays, live training, and checkpoint exhibitions.</p>
+</div>
+<span id="match-status" class="status-pill">READY</span>
+</div>
+        <div class="battle-layout">
+          <div class="arena-column">
+            <div class="arena-toolbar">
+<div class="arena-caption">
+<span class="dot red">
+</span> OPPONENT <span class="vs">vs</span> <span class="dot blue">
+</span> LEARNER</div>
+<button id="fit-arena" class="text-button" title="Clear selection">Clear selection</button>
+</div>
+            <div id="opponent-state" class="player-strip opponent">
+</div>
+            <div class="arena-wrap">
+<canvas id="arena" tabindex="0" aria-label="Tactical arena. Click a unit to inspect its health, target, and range.">
+</canvas>
+<div id="arena-empty" class="arena-empty">
+<div class="empty-glyph" aria-hidden="true">⌖</div>
+<h3>The arena is ready</h3>
+<p>Open a match from your library or launch a checkpoint exhibition.</p>
+<button class="button primary" id="empty-launch">Launch a match</button>
+</div>
+<div class="arena-score">
+<span id="score-red">0</span>
+<span id="match-clock">00:00</span>
+<span id="score-blue">0</span>
+</div>
+<span id="arena-phase" class="arena-phase" hidden>
+</span>
+</div>
+            <div id="learner-state" class="player-strip learner">
+</div>
+            <fieldset class="overlay-toggles">
+<legend class="sr-only">Arena overlays</legend>
+<label>
+<input type="checkbox" id="overlay-grid">Grid</label>
+<label>
+<input type="checkbox" id="overlay-labels" checked>Names</label>
+<label>
+<input type="checkbox" id="overlay-targets" checked>Targets</label>
+<label>
+<input type="checkbox" id="overlay-ranges">Ranges</label>
+<label>
+<input type="checkbox" id="overlay-heatmap" title="Placement probability given Play, combined across playable cards. Brightness is relative to this frame.">Policy heatmap</label>
+</fieldset>
+          </div>
+          <aside class="inspector">
+            <div class="inspector-tabs" role="group" aria-label="Match inspector">
+<button class="active" data-inspector="overview">Overview</button>
+<button data-inspector="policy">Policy</button>
+<button data-inspector="events">Events</button>
+</div>
+            <div id="overview-inspector" class="inspector-content active">
+<section class="inspector-section">
+<div class="section-label">MATCH SNAPSHOT</div>
+<div id="snapshot" class="stat-grid">
+<div>
+<span>Tick</span>
+<strong>—</strong>
+</div>
+<div>
+<span>Entities</span>
+<strong>—</strong>
+</div>
+<div>
+<span>Reward</span>
+<strong>—</strong>
+</div>
+<div>
+<span>Phase</span>
+<strong>—</strong>
+</div>
+</div>
+</section>
+<section class="inspector-section">
+<div class="section-label">SELECTED ENTITY</div>
+<div id="entity-detail" class="empty-detail">Click a unit or tower on the arena to inspect it.</div>
+</section>
+<section class="inspector-section">
+<div class="section-label">DECISIONS AT THIS FRAME</div>
+<div id="frame-actions" class="empty-detail">No match selected.</div>
+</section>
+<section class="inspector-section">
+<div class="section-label">MATCH DETAILS</div>
+<div id="match-details">
+</div>
+</section>
+</div>
+            <div id="policy-inspector" class="inspector-content">
+<section class="inspector-section">
+<div class="section-label">LEARNER POLICY</div>
+<p class="muted small">Probabilities from the policy that produced this decision. The arena heatmap shows placement probability.</p>
+<div id="policy-detail" class="empty-detail">Policy data becomes available in recorded V4 matches and checkpoint exhibitions.</div>
+</section>
+</div>
+            <div id="events-inspector" class="inspector-content">
+<div class="inspector-section">
+<div class="section-label">ACTION & EVENT HISTORY</div>
+<label class="search-box compact">
+<input id="event-search" type="search" aria-label="Filter event history" placeholder="Filter events…">
+</label>
+<div id="event-list" class="event-list empty-detail">No events yet.</div>
+</div>
+</div>
+          </aside>
+        </div>
+        <section class="transport" aria-label="Playback controls">
+<div class="timeline-labels">
+<span id="elapsed-label">00:00.0</span>
+<span id="duration-label">00:00.0</span>
+</div>
+<div id="timeline-events" class="timeline-events" aria-label="Card plays on the match timeline">
+</div>
+<input id="scrubber" class="scrubber" type="range" min="0" max="1" step="0.01" value="0" disabled aria-label="Match time">
+<div class="transport-bottom">
+<div class="transport-controls">
+<button id="step-back" class="icon-button" disabled aria-label="Previous frame" title="Previous frame (←; Shift + ← for 10)">⏮</button>
+<button id="play-pause" class="play-button" disabled aria-label="Play" title="Play / pause (Space)">▶</button>
+<button id="step-forward" class="icon-button" disabled aria-label="Next frame" title="Next frame (→; Shift + → for 10)">⏭</button>
+<select id="playback-speed" aria-label="Playback speed">
+<option value="0.25">0.25×</option>
+<option value="0.5">0.5×</option>
+<option value="1" selected>1×</option>
+<option value="2">2×</option>
+<option value="4">4×</option>
+<option value="8">8×</option>
+</select>
+<span id="frame-counter" class="frame-counter">FRAME —</span>
+</div>
+<div class="transport-controls">
+<button id="stop-match" class="text-button danger" hidden>Stop exhibition</button>
+<button id="follow-live" class="live-button" disabled>
+<span class="local-dot">
+</span> Follow live</button>
+<button id="keyboard-help" class="icon-button" aria-label="Keyboard shortcuts">⌨</button>
+</div>
+</div>
+</section>
+      </div>
+    </section>
+    <section id="training-page" class="page analytics-page" aria-label="Training metrics">
+<div class="analytics-heading">
+<div>
+<span class="eyebrow">LEARNING IN MOTION</span>
+<h1>Training runs</h1>
+<p>Inspect local V4 progress, checkpoint metrics, and saved match samples.</p>
+</div>
+<label class="select-label">Run<select id="training-run">
+<option value="">Select a run</option>
+</select>
+</label>
+</div>
+<div id="training-body" class="analytics-empty">
+<div class="empty-glyph">↗</div>
+<h2>Select a training run</h2>
+<p>Available local run directories will appear in the selector.</p>
+</div>
+</section>
+    <section id="compare-page" class="page analytics-page" aria-label="Run comparison">
+<div class="analytics-heading">
+<div>
+<span class="eyebrow">SIDE BY SIDE</span>
+<h1>Compare runs</h1>
+<p>Align local training histories by step and inspect checkpoint differences.</p>
+</div>
+<div class="compare-selects">
+<label class="select-label">
+<span class="dot blue">
+</span> Run A<select id="compare-run-a">
+<option value="">Select a run</option>
+</select>
+</label>
+<label class="select-label">
+<span class="dot amber">
+</span> Run B<select id="compare-run-b">
+<option value="">Select a run</option>
+</select>
+</label>
+</div>
+</div>
+<div id="compare-body" class="analytics-empty">
+<div class="empty-glyph">⇄</div>
+<h2>Choose two runs</h2>
+<p>Compare win rate, reward, losses, entropy, and recorded metrics without leaving the workspace.</p>
+</div>
+</section>
+  </main>
+  <dialog id="launch-dialog" class="launch-dialog">
+<form id="launch-form">
+<div class="dialog-heading">
+<div>
+<span class="eyebrow">CHECKPOINT EXHIBITION</span>
+<h2>Set up a match</h2>
+</div>
+<button type="button" class="icon-button" data-close-dialog aria-label="Close">×</button>
+</div>
+<p class="muted">Run a local V4 checkpoint against a scripted opponent or another checkpoint.</p>
+<label class="field">Learner checkpoint<select id="launch-checkpoint" name="checkpoint" required>
+<option value="">Select a checkpoint</option>
+</select>
+</label>
+<div class="form-grid">
+<label class="field">Opponent<select id="launch-opponent" name="opponent">
+<option value="scripted">Scripted opponent</option>
+<option value="checkpoint">Another checkpoint</option>
+</select>
+</label>
+<label class="field">Scripted archetype<select id="launch-archetype" name="archetype">
+</select>
+</label>
+</div>
+<label class="field" id="opponent-checkpoint-field" hidden>Opponent checkpoint<select id="launch-opponent-checkpoint" name="opponent_checkpoint">
+<option value="">Select a checkpoint</option>
+</select>
+</label>
+<div class="form-grid">
+<label class="field">Learner deck<select id="launch-learner-deck">
+<option value="">Checkpoint / default deck</option>
+</select>
+</label>
+<label class="field">Opponent deck<select id="launch-opponent-deck">
+<option value="">Default opponent deck</option>
+</select>
+</label>
+</div>
+<details class="custom-decks">
+<summary>Custom decks</summary>
+<label class="field">Learner · 8 comma-separated card names<input id="learner-custom-deck" placeholder="Reorder the checkpoint’s eight supported cards" autocomplete="off">
+</label>
+<label class="field">Opponent · 8 comma-separated card names<input id="opponent-custom-deck" placeholder="Leave blank to use selected deck" autocomplete="off">
+</label>
+</details>
+<div class="form-grid">
+<label class="field">Random seed<input name="seed" type="number" min="0" max="2147483647" value="42" required>
+</label>
+<label class="field">Maximum decisions<input name="max_decisions" type="number" min="1" max="1440" value="1200" required>
+</label>
+</div>
+<p class="small muted">Inference runs on this machine. Training checkpoints remain unchanged.</p>
+<p id="launch-error" class="form-error" role="alert" hidden>
+</p>
+<div class="dialog-footer">
+<button type="button" class="button secondary" data-close-dialog>Cancel</button>
+<button type="submit" class="button primary" id="launch-submit">Launch exhibition →</button>
+</div>
+</form>
+</dialog>
+  <dialog id="help-dialog">
+<div class="dialog-heading">
+<div>
+<span class="eyebrow">WORKSPACE GUIDE</span>
+<h2>Watch your training</h2>
+</div>
+<button class="icon-button" data-close-dialog aria-label="Close">×</button>
+</div>
+<p>To save sampled matches from a new local V4 training run, prefix your usual training command with:</p>
+<pre>
+<code>CR_SIM_VIEWER_DIR="$PWD/outputs/v4/RUN/viewer" \
+CR_SIM_VIEWER_EVERY=5 \
+&lt;your training command&gt;</code>
+</pre>
+<p class="muted">Replace RUN with the run name. Capture is opt-in for newly started training processes. The first episode and every fifth episode start on lane 0 are sampled; a sample can be truncated or begin mid-match. Open an active recording to follow new frames as they arrive. Existing checkpoint files can be watched by launching an exhibition.</p>
+<div class="section-label">KEYBOARD SHORTCUTS</div>
+<dl class="shortcut-list">
+<div>
+<dt>
+<kbd>Space</kbd>
+</dt>
+<dd>Play / pause</dd>
+</div>
+<div>
+<dt>
+<kbd>←</kbd> <kbd>→</kbd>
+</dt>
+<dd>Previous / next frame</dd>
+</div>
+<div>
+<dt><kbd>Shift</kbd> + <kbd>←</kbd> / <kbd>→</kbd></dt>
+<dd>Back / forward 10 frames</dd>
+</div>
+<div>
+<dt>
+<kbd>Home</kbd> <kbd>End</kbd>
+</dt>
+<dd>First / latest frame</dd>
+</div>
+<div>
+<dt>
+<kbd>L</kbd>
+</dt>
+<dd>Follow live</dd>
+</div>
+<div>
+<dt>
+<kbd>Esc</kbd>
+</dt>
+<dd>Clear selection / close dialog</dd>
+</div>
+</dl>
+<p class="small muted">Times show simulator match time. Playback speed is independent of recording cadence.</p>
+</dialog>
+</body>
+</html>

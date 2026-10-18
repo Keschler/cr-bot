@@ -426,13 +426,10 @@ class TargetingMixin:
             # class must not make placed buildings valid victims.
             return self._counts_as_troop(target) and str(self._movement_layer(target)) in targets
         if target.kind == "tower":
-            # The August 2026 Spirit rules explicitly remove an unassisted
-            # Crown-Tower connection.  This is distinct from the authored
-            # movement/impact target classes: Spirits may still acquire and
-            # attack ordinary ground/building targets, but a bare Crown Tower
-            # must not be selected as their fallback target.
-            if mechanics.get("crown_tower_connection") == "expected-no-unassisted-connection":
-                return False
+            # Spirit Crown-Tower connection metadata describes an expected
+            # combat outcome after the HP nerf, not a targeting restriction.
+            # Spirits still advance toward towers; tower fire determines
+            # whether an unassisted spirit survives long enough to connect.
             return "crown_tower" in targets or "ground" in targets or "building" in targets
         if target.kind == "building":
             if self._counts_as_troop(target):

@@ -12,6 +12,21 @@ scrub the frame timeline, edit labels, and export results.
 
 <img src="docs/images/frontend-banner.png" alt="Arena Replay Analyst frontend showing live gameplay, action history, detected objects, and policy suggestions" width="1600" />
 
+## Watch simulator and training matches
+
+The separate **V4 Arena Lab** app provides a tactical simulator arena, recorded
+match playback, live sampled training episodes, checkpoint exhibitions, policy
+overlays, training charts, and run comparisons:
+
+```bash
+PYTHONPATH=.:src outputs/venv/bin/python -m sim_viewer
+```
+
+Open **http://127.0.0.1:8010/**. It discovers local V4 artifacts under
+`outputs/v4/`. Live training episodes require opt-in recording on newly started
+runs. See the [viewer guide](src/sim_viewer/README.md) for recording setup,
+controls, and checkpoint compatibility.
+
 ## Run the frontend
 
 Complete the [development setup](#development), then run from the repository

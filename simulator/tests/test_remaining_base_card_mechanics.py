@@ -241,14 +241,29 @@ def test_goblin_drill_emergence_and_death_payloads_are_distinct() -> None:
     "card_id",
     ("fire-spirit", "ice-spirit", "heal-spirit", "electro-spirit"),
 )
-def test_spirits_do_not_unassisted_connect_to_towers(card_id: str) -> None:
+@pytest.mark.parametrize("owner", (0, 1))
+def test_spirits_advance_but_do_not_unassisted_connect_to_towers(
+    card_id: str, owner: int,
+) -> None:
     engine, state = _state()
-    spirit = _entity(state, card_id, 0, 14_500, 8_000)
-    # August 2026 makes the no-unassisted-connection rule explicit.  The
-    # 215-HP value remains independently pinned, but it must not be used as a
-    # substitute for the Crown-Tower target filter.
+    spirit = _entity(state, card_id, owner, 14_500, 17_500 if owner == 0 else 14_500)
+    initial_position = (spirit.x_mtile, spirit.y_mtile)
+    target_uid = engine._choose_target(state, spirit)
+    assert target_uid is not None
+    target = state.entities[target_uid]
+    assert target.kind == "tower"
+    assert target.owner == 1 - owner
+    # The 215-HP nerf produces this outcome through tower damage and timing,
+    # while leaving the authored ground/building targeting classes intact.
     assert spirit.max_hp == 215
-    assert engine._choose_target(state, spirit) is None
+    for _ in range(150):
+        engine.step(state)
+
+    assert (spirit.x_mtile, spirit.y_mtile) != initial_position
+    assert not spirit.alive
+    assert spirit.attack_count == 0
+    assert target.attack_count == 2
+    assert target.hp == target.max_hp
 
 
 def test_mortar_respects_its_minimum_range_blind_spot() -> None:
