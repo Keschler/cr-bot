@@ -128,6 +128,7 @@ def collect_frontier_rollout(
     from ..v4_ppo import decode_v4_sim_actions, configure_v4_runtime
     from ..v4_ppo.rollout_utils import _stack_rollout, post_step_value
     from simulator.public_state_estimator import PublicStateEstimator
+    from simulator.viewer.recording import TrainingRecorder
 
     if episode_cap < 1 or type(episode_cap) is not int:
         raise ValueError("episode_cap must be a positive integer")
@@ -148,6 +149,7 @@ def collect_frontier_rollout(
     hidden = policy.initial_hidden(n_lanes, device=device)
     anchor_hidden = anchor.initial_hidden(n_lanes, device=device) if anchor is not None else None
     cursor = int(seed) % len(entries)
+    viewer = TrainingRecorder(seed=seed, episode_cap=episode_cap)
     truncation_bonuses: list[float] = []
 
     steps: list[dict[str, torch.Tensor]] = []
@@ -163,6 +165,8 @@ def collect_frontier_rollout(
                 if lanes[i].needs_entry:
                     entry = entries[(cursor + i + lanes[i].visits * n_lanes) % len(entries)]
                     _start_entry(lanes[i], entry, seed, truncation_reward or step_tower_reward)
+                    if i == 0:
+                        viewer.start_episode(lanes[i].env, entry, lanes[i].visits)
                     hidden[:, i : i + 1, :] = 0.0
                     episodes += 1
             array_inputs, legals, masks = _observe_lanes(lanes, device)
@@ -208,6 +212,10 @@ def collect_frontier_rollout(
             boundary_values = [float("nan")] * n_lanes
             for i in range(n_lanes):
                 opp_action = lanes[i].opponent.choose_action(lanes[i].env.engine, lanes[i].env.state, 1)
+                if i == 0:
+                    viewer.before_step(
+                        lanes[i].env, (decoded[i], opp_action), logits, masks, actions,
+                    )
                 result = lanes[i].env.step_v2((decoded[i], opp_action))
                 step_reward = float(result.rewards[0])
                 lanes[i].steps += 1
@@ -233,6 +241,14 @@ def collect_frontier_rollout(
                     step_reward += (prev_enemy - now[0]) - (prev_own - now[1])
                     lanes[i].towers_prev = now
                 rewards.append(step_reward)
+                if i == 0:
+                    reason = (
+                        "terminated" if done else
+                        "environment_truncated" if result.truncated else
+                        "episode_cap" if cut else
+                        "rollout_boundary" if decision_index == n_decisions - 1 else None
+                    )
+                    viewer.after_step(lanes[i].env, step_reward, reason=reason)
                 if not done and (cut or decision_index == n_decisions - 1):
                     boundary_values[i] = post_step_value(
                         policy, critic, lanes[i].env, lanes[i].estimator, next_hidden[:, i:i + 1], device,

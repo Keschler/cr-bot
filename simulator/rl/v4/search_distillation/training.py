@@ -141,6 +141,8 @@ def train_one(
     automatically when the same run is invoked again.
     """
 
+    from simulator.viewer.recording import publish_progress, viewer_directory
+
     device = torch.device(device)
     torch.manual_seed(int(seed))
     np.random.seed(int(seed) & 0xFFFFFFFF)
@@ -273,6 +275,29 @@ def train_one(
         ]
         return payload
 
+    def publish_training_progress(status: str, phase: str, report: dict[str, Any] | None = None) -> None:
+        if viewer_directory() is None:
+            return
+        output_directory = None
+        if checkpoint_path is not None:
+            output_directory = checkpoint_path.resolve().parent
+            if output_directory.name == "checkpoints":
+                output_directory = output_directory.parent
+        elif actor_export_dir is not None:
+            output_directory = actor_export_dir.resolve().parent
+        label = actor_export_prefix or f"{method}_seed{seed}_context{context}"
+        publish_progress({
+            **(report if report is not None else make_report("partial")),
+            "source": "distillation", "status": status, "phase": phase,
+            "run_id": f"{output_directory or 'distillation'}:{label}",
+            "label": label, "output_dir": str(output_directory) if output_directory else None,
+            "current_epoch": len(history), "current_update": optimizer_steps,
+            "config": {
+                "method": method, "seed": seed, "context": context, "epochs": epochs,
+                "batch_size": batch_size, "learning_rate": learning_rate,
+            },
+        })
+
     # Export the exact untouched anchor before any optimizer step.  On resume,
     # this also verifies that an existing epoch-zero artifact has not drifted.
     export_actor(0, anchor)
@@ -297,6 +322,7 @@ def train_one(
             checkpoint_path=checkpoint_path, student=student, optimizer=optimizer,
             report=make_report("partial"), epoch_completed=0,
         )
+    publish_training_progress("running", "initializing")
 
     try:
         for epoch in range(start_epoch, int(epochs)):
@@ -343,6 +369,7 @@ def train_one(
                     checkpoint_path=checkpoint_path, student=student, optimizer=optimizer,
                     report=partial, epoch_completed=epoch + 1,
                 )
+            publish_training_progress("running", "epoch")
             print(f"[search-distill] method={method} seed={seed} epoch={epoch + 1}/{epochs} loss={history[-1]['loss']:.6f} steps={updates_per_epoch}", flush=True)
         metrics = evaluate_records(
             student, anchor_device, validation_records, context=context,
@@ -354,6 +381,7 @@ def train_one(
         partial["deadline_reason"] = str(exc)
         # The latest completed epoch, or the untouched initial state, remains
         # on disk. Discard any partial-epoch updates when resuming.
+        publish_training_progress("partial", "deadline", partial)
         return partial
 
     payload = make_report("complete", metrics)
@@ -362,4 +390,5 @@ def train_one(
             checkpoint_path=checkpoint_path, student=student, optimizer=optimizer,
             report=payload, epoch_completed=int(epochs),
         )
+    publish_training_progress("complete", "finished", payload)
     return payload
