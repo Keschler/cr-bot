@@ -240,6 +240,14 @@ The opponent manifest covers eligible base cards released before
 dependencies, and unresolved conflicts. The ruleset and engine are immutable
 within a version; behavior-changing edits require a new version.
 
+Engine `reference-0.37.1` restores normal tower targeting and movement for
+Ice Spirit. The authored expectation that an unassisted Ice Spirit does not
+connect to a defended crown tower is enforced by normal combat, rather than
+by preventing the spirit from approaching towers. Existing JSONL snapshots
+retain their recorded behavior; start a new match or training process to use
+the corrected engine. Action-only replays from an earlier engine revision
+still require that revision to satisfy their pinned identities/state hashes.
+
 Check roster coverage and source reconciliation with:
 
 ```bash
