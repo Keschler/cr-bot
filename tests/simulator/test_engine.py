@@ -23,7 +23,7 @@ from simulator.state import (
     StatusState,
     battle_state_from_primitive,
 )
-from simulator.ruleset import load_ruleset
+from simulator.ruleset import load_fixed_ruleset, load_ruleset
 
 
 def _deck_with_first(card_id: str) -> tuple[str, ...]:
@@ -190,7 +190,15 @@ def test_complete_headless_match_reaches_a_declared_terminal_outcome() -> None:
     assert state.elapsed_us <= (
         engine.ruleset.match.regulation_us + engine.ruleset.match.overtime_us
     )
-    assert state.events[-1].kind == "match_ended"
+    assert sum(event.kind == "match_ended" for event in state.events) == 1
+    # The terminal combat tick can still prune consumed projectile records.
+    last_gameplay_event = next(
+        event for event in reversed(state.events) if event.kind != "records_pruned"
+    )
+    assert last_gameplay_event.kind == "match_ended"
+    terminal_events = tuple(state.events)
+    assert engine.step(state) == ()
+    assert tuple(state.events) == terminal_events
     engine.validate_state(state)
 
 
@@ -1091,16 +1099,56 @@ def test_unassisted_august_ice_spirit_does_not_connect_to_crown_tower() -> None:
 
     engine.step(state, (PlayCardAction(0, 0, (3, 17)),))
     spirit = _unit(state, "ice-spirit", owner=0)
-    # The August ruleset removes the bare Crown Tower from Spirit target
-    # acquisition.  With no other enemy body present the Spirit therefore
-    # remains idle instead of self-destructing on an unassisted tower hit.
+    initial_position = (spirit.x_mtile, spirit.y_mtile)
+    # The August HP nerf prevents an unassisted connection through ordinary
+    # tower fire. It must not prevent the spirit from advancing toward it.
     for _ in range(150):
         engine.step(state)
 
-    assert spirit.alive
-    assert engine._choose_target(state, spirit) is None
+    assert (spirit.x_mtile, spirit.y_mtile) != initial_position
+    assert not spirit.alive
     assert spirit.attack_count == 0
+    assert target.attack_count == 2
     assert target.hp == target.max_hp
+
+
+@pytest.mark.parametrize("player", (0, 1))
+@pytest.mark.parametrize("controller_name", ("engine", "pool"))
+def test_deterministic_cycle_ice_spirit_moves_when_deployment_finishes(
+    player: int, controller_name: str,
+) -> None:
+    if controller_name == "pool":
+        pytest.importorskip("torch")
+        from simulator.rl.foundation.opponent_pool import (
+            DeterministicCycleController as controller_type,
+        )
+    else:
+        controller_type = DeterministicCycleController
+    engine = BattleEngine(load_fixed_ruleset())
+    deck = _deck_with_first("ice-spirit")
+    state = engine.new_battle((deck, deck), seed=0, shuffle_decks=False)
+    action = controller_type().choose_action(engine, state, player)
+    assert isinstance(action, PlayCardAction)
+    assert state.players[player].hand[action.card_slot] == "ice-spirit"
+    assert action.cell == (3, 23 if player == 0 else 8)
+
+    engine.step(state, (action,))
+    spirit = _unit(state, "ice-spirit", owner=player)
+    initial_position = (spirit.x_mtile, spirit.y_mtile)
+    while spirit.deploy_remaining_us > engine.ruleset.tick_us:
+        engine.step(state)
+        assert (spirit.x_mtile, spirit.y_mtile) == initial_position
+        assert spirit.target_uid is None
+
+    engine.step(state)
+
+    assert spirit.deploy_remaining_us == 0
+    assert spirit.target_uid is not None
+    assert state.entities[spirit.target_uid].kind == "tower"
+    assert state.entities[spirit.target_uid].owner == 1 - player
+    assert spirit.x_mtile == initial_position[0]
+    expected_step = (1 if player == 1 else -1) * 120
+    assert spirit.y_mtile == initial_position[1] + expected_step
 
 
 def test_ice_spirit_jump_damages_and_freezes_a_surviving_target() -> None:
