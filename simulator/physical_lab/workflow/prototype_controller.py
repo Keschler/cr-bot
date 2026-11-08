@@ -19,7 +19,8 @@ still identify the selected card before either tap is accepted.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from collections import deque
+from dataclasses import asdict, dataclass, replace
 import argparse
 import json
 import math
@@ -288,15 +289,74 @@ class FrameSource(Protocol):
     def close(self) -> None: ...
 
 
+@dataclass(frozen=True, slots=True)
+class H264CaptureDiagnostics:
+    """Workstation output telemetry; it cannot measure phone-frame age."""
+
+    diagnostics_enabled: bool
+    reader_started: bool
+    reader_alive: bool
+    closed: bool
+    decoded_frames: int
+    recent_decoded_fps: float
+    recent_fps_window_s: float
+    last_decode_publication_monotonic_s: float | None
+    decode_publication_age_ms: float | None
+    output_read_wait_ms: float | None
+    output_read_in_progress_ms: float | None
+    image_conversion_ms: float | None
+    segment_start_attempts: int
+    segment_starts: int
+    segment_restarts: int
+    total_failures: int
+    consecutive_failures: int
+    last_error: str | None
+    terminal_error: str | None
+    recent_errors: tuple[str, ...]
+    native_width_px: int | None
+    native_height_px: int | None
+    stream_width_px: int | None
+    stream_height_px: int | None
+    adb_pid: int | None
+    ffmpeg_pid: int | None
+    adb_stderr_tail: str
+    ffmpeg_stderr_tail: str
+    stderr_capture_error: str | None
+    clock: str = "workstation_decode_publication"
+    phone_to_output_age_ms: None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class _H264StderrDrain:
+    thread: threading.Thread
+    stop_event: threading.Event
+    stream: Any
+
+
 class AdbH264FrameSource:
     """Continuously decode one explicitly selected phone's H.264 stream.
 
     Android's ``screenrecord`` writes an elementary H.264 stream to stdout.
     ``ffmpeg`` decodes that stream to raw BGR frames in a background thread.
-    Only the newest decoded frame is retained, so a slow CPU inference pass
-    cannot create an ever-growing latency backlog.  Android's screenrecord
-    time limit is handled by restarting the segment after EOF.
+    Only the newest decoded frame is retained, avoiding an analysis queue of
+    obsolete decoded pictures. Phone encoding, ADB, and a stalled decoder can
+    still accumulate delay upstream. Android's screenrecord time limit is
+    handled by restarting the segment after EOF.
+
+    ``stream_max_width_px`` optionally reduces the encoded stream dimensions.
+    Frames are restored to the native device dimensions before publication,
+    preserving calibration and tap coordinates while sacrificing image detail.
+    The default keeps the native capture dimensions.
     """
+
+    _DIAGNOSTICS_FPS_WINDOW_S = 5.0
+    _DIAGNOSTICS_FPS_MAX_SAMPLES = 512
+    _DIAGNOSTICS_STDERR_TAIL_BYTES = 8_192
+    _DIAGNOSTICS_ERROR_LIMIT = 8
+    _DIAGNOSTICS_ERROR_CHARS = 512
 
     def __init__(
         self,
@@ -304,11 +364,13 @@ class AdbH264FrameSource:
         *,
         ffmpeg_executable: str = "ffmpeg",
         bit_rate: int = 8_000_000,
+        stream_max_width_px: int | None = None,
         restart_delay_s: float = 0.25,
         stream_read_timeout_s: float = 5.0,
         max_consecutive_failures: int = 3,
         action_frame_max_age_s: float = 1.0,
         action_frame_wait_timeout_s: float = 2.0,
+        diagnostics_enabled: bool = False,
         popen_factory: Callable[..., Any] | None = None,
         sleep_fn: Callable[[float], None] = time.sleep,
         monotonic_fn: Callable[[], float] = time.monotonic,
@@ -319,6 +381,10 @@ class AdbH264FrameSource:
             raise PrototypeControllerError("ffmpeg executable must be a single token")
         if type(bit_rate) is not int or bit_rate <= 0:
             raise PrototypeControllerError("stream bit_rate must be a positive integer")
+        if stream_max_width_px is not None and (
+            type(stream_max_width_px) is not int or stream_max_width_px <= 0
+        ):
+            raise PrototypeControllerError("stream_max_width_px must be a positive integer or None")
         for name, value in (
             ("restart_delay_s", restart_delay_s),
             ("stream_read_timeout_s", stream_read_timeout_s),
@@ -333,11 +399,13 @@ class AdbH264FrameSource:
         self.controller = controller
         self.ffmpeg_executable = ffmpeg_executable
         self.bit_rate = bit_rate
+        self.stream_max_width_px = stream_max_width_px
         self.restart_delay_s = float(restart_delay_s)
         self.stream_read_timeout_s = float(stream_read_timeout_s)
         self.max_consecutive_failures = max_consecutive_failures
         self.action_frame_max_age_s = float(action_frame_max_age_s)
         self.action_frame_wait_timeout_s = float(action_frame_wait_timeout_s)
+        self.diagnostics_enabled = bool(diagnostics_enabled)
         self._popen_factory = popen_factory or subprocess.Popen
         self._sleep_fn = sleep_fn
         self._monotonic_fn = monotonic_fn
@@ -348,12 +416,31 @@ class AdbH264FrameSource:
         self._thread: threading.Thread | None = None
         self._adb_process: Any | None = None
         self._decoder_process: Any | None = None
+        self._native_width: int | None = None
+        self._native_height: int | None = None
         self._stream_width: int | None = None
         self._stream_height: int | None = None
         self._latest: SourceFrame | None = None
         self._last_delivered_frame_index: int | None = None
         self._next_frame_index = 0
         self._error: Exception | None = None
+        self._diagnostics_lock = threading.Lock()
+        self._decoded_frames = 0
+        self._decode_publications: deque[float] = deque(
+            maxlen=self._DIAGNOSTICS_FPS_MAX_SAMPLES
+        )
+        self._last_decode_publication_s: float | None = None
+        self._output_read_started_s: float | None = None
+        self._output_read_wait_ms: float | None = None
+        self._image_conversion_ms: float | None = None
+        self._segment_start_attempts = 0
+        self._segment_starts = 0
+        self._total_failures = 0
+        self._consecutive_failures = 0
+        self._recent_errors: deque[str] = deque(maxlen=self._DIAGNOSTICS_ERROR_LIMIT)
+        self._stderr_tails = {"adb": b"", "ffmpeg": b""}
+        self._stderr_capture_error: str | None = None
+        self._stderr_drains: list[_H264StderrDrain] = []
 
     def _device_dimensions(self) -> tuple[int, int]:
         info = self.controller.device_info()
@@ -367,9 +454,31 @@ class AdbH264FrameSource:
             )
         return width, height
 
+    def _encoded_dimensions(self, native_width: int, native_height: int) -> tuple[int, int]:
+        if self.stream_max_width_px is None:
+            return native_width, native_height
+        # Screenrecord requires even encoded dimensions. Round down so the
+        # requested maximum and the phone's native bounds are never exceeded;
+        # aspect-ratio rounding costs at most two pixels per dimension.
+        width = min(native_width, self.stream_max_width_px)
+        width -= width % 2
+        height = (native_height * width) // native_width
+        height -= height % 2
+        if width < 2 or height < 2:
+            raise PrototypeControllerError(
+                "stream_max_width_px cannot form a positive even stream size for this device"
+            )
+        return width, height
+
     def _start_segment(self) -> None:
+        with self._diagnostics_lock:
+            self._segment_start_attempts += 1
         if self._stream_width is None or self._stream_height is None:
-            self._stream_width, self._stream_height = self._device_dimensions()
+            native_dimensions = self._device_dimensions()
+            stream_dimensions = self._encoded_dimensions(*native_dimensions)
+            with self._process_lock:
+                self._native_width, self._native_height = native_dimensions
+                self._stream_width, self._stream_height = stream_dimensions
 
         adb_command = [
             str(self.controller.adb_executable),
@@ -381,8 +490,10 @@ class AdbH264FrameSource:
             "h264",
             "--bit-rate",
             str(self.bit_rate),
-            "-",
         ]
+        if self.stream_max_width_px is not None:
+            adb_command.extend(["--size", f"{self._stream_width}x{self._stream_height}"])
+        adb_command.append("-")
         decoder_command = [
             self.ffmpeg_executable,
             "-hide_banner",
@@ -390,6 +501,17 @@ class AdbH264FrameSource:
             "error",
             "-flags",
             "low_delay",
+            # The input is already known to be H.264 with parameter sets at
+            # each screenrecord segment's start. Default stream/FPS probing
+            # can retain seconds of live input before releasing any frames.
+            # Keep the first IDR packet: nobuffer discards probed packets and
+            # can leave the decoder waiting for the next keyframe instead.
+            "-probesize",
+            "32",
+            "-analyzeduration",
+            "1",
+            "-fpsprobesize",
+            "0",
             "-f",
             "h264",
             "-i",
@@ -406,15 +528,20 @@ class AdbH264FrameSource:
             "pipe:1",
         ]
         adb_process: Any | None = None
+        decoder_process: Any | None = None
         adb_stdout: Any | None = None
+        stderr_drains: list[_H264StderrDrain] = []
         try:
             adb_process = self._popen_factory(
                 adb_command,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
+                stderr=subprocess.PIPE if self.diagnostics_enabled else subprocess.DEVNULL,
                 bufsize=0,
             )
+            adb_drain = self._start_stderr_drain(adb_process, "adb")
+            if adb_drain is not None:
+                stderr_drains.append(adb_drain)
             adb_stdout = getattr(adb_process, "stdout", None)
             if adb_stdout is None:
                 raise PrototypeControllerError("ADB stream did not expose stdout")
@@ -422,9 +549,12 @@ class AdbH264FrameSource:
                 decoder_command,
                 stdin=adb_stdout,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
+                stderr=subprocess.PIPE if self.diagnostics_enabled else subprocess.DEVNULL,
                 bufsize=0,
             )
+            decoder_drain = self._start_stderr_drain(decoder_process, "ffmpeg")
+            if decoder_drain is not None:
+                stderr_drains.append(decoder_drain)
             # The decoder owns the read end from this point onward. Closing
             # the parent's duplicate is required for clean EOF propagation.
             try:
@@ -435,9 +565,13 @@ class AdbH264FrameSource:
                 if self._stop_event.is_set() or self._closed:
                     self._terminate_process(decoder_process)
                     self._terminate_process(adb_process)
+                    self._stop_stderr_drains(stderr_drains)
                     return
                 self._adb_process = adb_process
                 self._decoder_process = decoder_process
+                self._stderr_drains = stderr_drains
+            with self._diagnostics_lock:
+                self._segment_starts += 1
         except Exception:
             if adb_stdout is not None:
                 try:
@@ -446,7 +580,78 @@ class AdbH264FrameSource:
                     pass
             if adb_process is not None:
                 self._terminate_process(adb_process)
+            if decoder_process is not None:
+                self._terminate_process(decoder_process)
+            self._stop_stderr_drains(stderr_drains)
             raise
+
+    def _start_stderr_drain(self, process: Any, name: str) -> _H264StderrDrain | None:
+        if not self.diagnostics_enabled:
+            return None
+        stream = getattr(process, "stderr", None)
+        if stream is None:
+            return None
+        try:
+            fd = stream.fileno()
+            # Only the diagnostic pipe is non-blocking; decoder input/output
+            # and the capture commands retain their existing behavior.
+            os.set_blocking(fd, False)
+        except (AttributeError, OSError, TypeError, ValueError) as error:
+            with self._diagnostics_lock:
+                self._stderr_capture_error = str(error)[:self._DIAGNOSTICS_ERROR_CHARS]
+            return None
+        stopped = threading.Event()
+
+        def drain() -> None:
+            import select
+
+            # Drain immediately as subprocesses write. The tail is byte-bounded
+            # even if a decoder writes a huge line without a newline. Shutdown
+            # may flush at most 64 chunks, so inherited open writers cannot
+            # leave a thread behind after segment restarts.
+            shutdown_chunks = 0
+            try:
+                while True:
+                    stopping = stopped.is_set()
+                    ready, _, _ = select.select([fd], [], [], 0.0 if stopping else 0.1)
+                    if not ready:
+                        if stopping:
+                            return
+                        continue
+                    try:
+                        chunk = os.read(fd, 4_096)
+                    except BlockingIOError:
+                        continue
+                    if not chunk:
+                        return
+                    with self._diagnostics_lock:
+                        self._stderr_tails[name] = (
+                            self._stderr_tails[name] + chunk
+                        )[-self._DIAGNOSTICS_STDERR_TAIL_BYTES:]
+                    if stopping:
+                        shutdown_chunks += 1
+                        if shutdown_chunks >= 64:
+                            return
+            except (OSError, ValueError) as error:
+                if not stopped.is_set():
+                    with self._diagnostics_lock:
+                        self._stderr_capture_error = str(error)[:self._DIAGNOSTICS_ERROR_CHARS]
+
+        thread = threading.Thread(target=drain, name=f"adb-h264-{name}-stderr", daemon=True)
+        handle = _H264StderrDrain(thread, stopped, stream)
+        thread.start()
+        return handle
+
+    @staticmethod
+    def _stop_stderr_drains(drains: list[_H264StderrDrain]) -> None:
+        for drain in drains:
+            drain.stop_event.set()
+        for drain in drains:
+            drain.thread.join(timeout=1.0)
+            try:
+                drain.stream.close()
+            except (AttributeError, OSError):
+                pass
 
     @staticmethod
     def _terminate_process(process: Any | None) -> None:
@@ -474,12 +679,20 @@ class AdbH264FrameSource:
             adb_process = self._adb_process
             self._decoder_process = None
             self._adb_process = None
+            stderr_drains = self._stderr_drains
+            self._stderr_drains = []
         self._terminate_process(decoder)
         self._terminate_process(adb_process)
+        self._stop_stderr_drains(stderr_drains)
 
-    def _read_exact(self, stream: Any, size: int) -> bytes:
-        chunks: list[bytes] = []
-        remaining = size
+    def _read_exact(self, stream: Any, size: int) -> bytearray:
+        # One private writable allocation per frame. Reading directly into it
+        # avoids accumulating hundreds of pipe chunks, joining them, and then
+        # copying the joined payload again to make a writable NumPy image.
+        payload = bytearray(size)
+        view = memoryview(payload)
+        offset = 0
+        readinto = getattr(stream, "readinto", None)
         stream_fd: int | None = None
         try:
             stream_fd = int(stream.fileno())
@@ -487,9 +700,9 @@ class AdbH264FrameSource:
             # Small in-memory test streams and alternate decoders may not
             # expose a selectable file descriptor.
             pass
-        while remaining > 0:
+        while offset < size:
             if self._stop_event.is_set():
-                return b""
+                return bytearray()
             if stream_fd is not None:
                 import select
 
@@ -503,14 +716,23 @@ class AdbH264FrameSource:
                     raise PrototypeControllerError(
                         "ffmpeg H.264 stream produced no data before the read timeout"
                     )
-            chunk = stream.read(remaining)
-            if not chunk:
-                break
-            if not isinstance(chunk, bytes):
-                raise PrototypeControllerError("ffmpeg stream returned a non-byte frame")
-            chunks.append(chunk)
-            remaining -= len(chunk)
-        return b"".join(chunks)
+            if callable(readinto):
+                count = readinto(view[offset:])
+                if count is None or count == 0:
+                    break
+                if type(count) is not int or count < 0 or count > size - offset:
+                    raise PrototypeControllerError("ffmpeg stream returned an invalid read length")
+            else:
+                # Alternate/test streams may expose only the existing read API.
+                chunk = stream.read(size - offset)
+                if not chunk:
+                    break
+                if not isinstance(chunk, bytes):
+                    raise PrototypeControllerError("ffmpeg stream returned a non-byte frame")
+                count = len(chunk)
+                view[offset:offset + count] = chunk
+            offset += count
+        return payload if offset == size else payload[:offset]
 
     def _publish(self, image: Any) -> None:
         timestamp_s = self._monotonic_fn()
@@ -522,6 +744,11 @@ class AdbH264FrameSource:
             )
             self._next_frame_index += 1
             self._latest = frame
+            with self._diagnostics_lock:
+                self._decoded_frames += 1
+                self._decode_publications.append(timestamp_s)
+                self._last_decode_publication_s = timestamp_s
+                self._consecutive_failures = 0
             self._condition.notify_all()
         # A live decoded frame is stronger transport evidence than the old
         # pre-tap device-info probe. The actual tap still carries -s <serial>
@@ -547,24 +774,70 @@ class AdbH264FrameSource:
                         decoder = self._decoder_process
                     if decoder is None or getattr(decoder, "stdout", None) is None:
                         raise PrototypeControllerError("ffmpeg decoder did not expose stdout")
-                    if self._stream_width is None or self._stream_height is None:
+                    if (
+                        self._stream_width is None or self._stream_height is None
+                        or self._native_width is None or self._native_height is None
+                    ):
                         raise PrototypeControllerError("stream dimensions were not initialized")
                     frame_bytes = self._stream_width * self._stream_height * 3
                     while not self._stop_event.is_set():
-                        payload = self._read_exact(decoder.stdout, frame_bytes)
+                        read_started_s = self._monotonic_fn()
+                        with self._diagnostics_lock:
+                            self._output_read_started_s = read_started_s
+                        try:
+                            payload = self._read_exact(decoder.stdout, frame_bytes)
+                        finally:
+                            read_finished_s = self._monotonic_fn()
+                            with self._diagnostics_lock:
+                                self._output_read_wait_ms = max(
+                                    0.0, (read_finished_s - read_started_s) * 1_000.0
+                                )
+                                self._output_read_started_s = None
                         if len(payload) != frame_bytes:
                             if self._stop_event.is_set():
                                 return
                             raise PrototypeControllerError(
                                 "ffmpeg H.264 stream ended before a complete frame"
                             )
+                        conversion_started_s = self._monotonic_fn()
                         image = np.frombuffer(payload, dtype=np.uint8).reshape(
                             (self._stream_height, self._stream_width, 3)
-                        ).copy()
+                        )
+                        # Production read buffers are private and writable; a
+                        # view keeps them alive for every retained SourceFrame.
+                        # Preserve writable images for injected immutable inputs.
+                        if not image.flags.writeable:
+                            image = image.copy()
+                        if (self._stream_width, self._stream_height) != (
+                            self._native_width, self._native_height
+                        ):
+                            try:
+                                import cv2
+                            except ImportError as error:
+                                raise PrototypeControllerError(
+                                    "resizing decoded stream frames requires OpenCV"
+                                ) from error
+                            # All published pixels, calibration, and action
+                            # verification keep the original native geometry.
+                            image = cv2.resize(
+                                image, (self._native_width, self._native_height),
+                                interpolation=cv2.INTER_LINEAR,
+                            )
+                        with self._diagnostics_lock:
+                            self._image_conversion_ms = max(
+                                0.0, (self._monotonic_fn() - conversion_started_s) * 1_000.0
+                            )
                         self._publish(image)
                         consecutive_failures = 0
                 except Exception as error:
                     consecutive_failures += 1
+                    if not self._stop_event.is_set():
+                        with self._diagnostics_lock:
+                            self._total_failures += 1
+                            self._consecutive_failures = consecutive_failures
+                            self._recent_errors.append(
+                                str(error)[:self._DIAGNOSTICS_ERROR_CHARS]
+                            )
                     if consecutive_failures >= self.max_consecutive_failures:
                         self._set_error(
                             PrototypeControllerError(
@@ -594,6 +867,93 @@ class AdbH264FrameSource:
                     daemon=True,
                 )
                 self._thread.start()
+
+    def start(self) -> None:
+        """Start capture without waiting for a frame or consuming one."""
+
+        self._ensure_started()
+
+    def latest_frame(self) -> SourceFrame | None:
+        """Read the newest decoded frame without affecting inference delivery.
+
+        This does not start capture or wait for input. A preview consumer can
+        share the background source while ``next_frame`` retains its own
+        delivery cursor. Closed or failed capture sources expose no preview.
+        """
+
+        with self._condition:
+            if self._closed or self._error is not None:
+                return None
+            return self._latest
+
+    def diagnostics(self) -> H264CaptureDiagnostics:
+        """Snapshot output progress without starting/waiting for capture.
+
+        FPS uses publication intervals from at most the last five seconds,
+        including idle time since the newest output. Read wait is time spent
+        obtaining one raw frame from ffmpeg, not an isolated decode-kernel
+        measurement. None of these clocks establish phone-to-host latency.
+        """
+
+        now_s = self._monotonic_fn()
+        with self._process_lock:
+            adb_pid = getattr(self._adb_process, "pid", None)
+            ffmpeg_pid = getattr(self._decoder_process, "pid", None)
+            native_width, native_height = self._native_width, self._native_height
+            stream_width, stream_height = self._stream_width, self._stream_height
+        with self._condition:
+            thread = self._thread
+            closed = self._closed
+            terminal_error = (
+                str(self._error)[:self._DIAGNOSTICS_ERROR_CHARS]
+                if self._error is not None else None
+            )
+        with self._diagnostics_lock:
+            recent = [
+                stamp for stamp in self._decode_publications
+                if stamp >= now_s - self._DIAGNOSTICS_FPS_WINDOW_S
+            ]
+            duration_s = now_s - recent[0] if recent else 0.0
+            fps = (len(recent) - 1) / duration_s if len(recent) > 1 and duration_s > 0 else 0.0
+            last_publication = self._last_decode_publication_s
+            read_started = self._output_read_started_s
+            return H264CaptureDiagnostics(
+                diagnostics_enabled=self.diagnostics_enabled,
+                reader_started=thread is not None,
+                reader_alive=thread.is_alive() if thread is not None else False,
+                closed=closed,
+                decoded_frames=self._decoded_frames,
+                recent_decoded_fps=fps,
+                recent_fps_window_s=self._DIAGNOSTICS_FPS_WINDOW_S,
+                last_decode_publication_monotonic_s=last_publication,
+                decode_publication_age_ms=(
+                    max(0.0, (now_s - last_publication) * 1_000.0)
+                    if last_publication is not None else None
+                ),
+                output_read_wait_ms=self._output_read_wait_ms,
+                output_read_in_progress_ms=(
+                    max(0.0, (now_s - read_started) * 1_000.0)
+                    if read_started is not None else None
+                ),
+                image_conversion_ms=self._image_conversion_ms,
+                segment_start_attempts=self._segment_start_attempts,
+                segment_starts=self._segment_starts,
+                segment_restarts=max(0, self._segment_start_attempts - 1),
+                total_failures=self._total_failures,
+                consecutive_failures=self._consecutive_failures,
+                last_error=self._recent_errors[-1] if self._recent_errors else None,
+                terminal_error=terminal_error,
+                recent_errors=tuple(self._recent_errors),
+                native_width_px=native_width,
+                native_height_px=native_height,
+                stream_width_px=stream_width,
+                stream_height_px=stream_height,
+                adb_pid=adb_pid if type(adb_pid) is int else None,
+                ffmpeg_pid=ffmpeg_pid if type(ffmpeg_pid) is int else None,
+                adb_stderr_tail=self._stderr_tails["adb"].decode("utf-8", errors="replace"),
+                ffmpeg_stderr_tail=self._stderr_tails["ffmpeg"].decode("utf-8", errors="replace"),
+                stderr_capture_error=self._stderr_capture_error,
+            )
 
     def next_frame(self) -> SourceFrame:
         self._ensure_started()
@@ -2370,6 +2730,7 @@ __all__ = [
     "DEFAULT_CHECKPOINT",
     "V4_CHECKPOINT_ENV",
     "DecisionRecord",
+    "H264CaptureDiagnostics",
     "LiveDetectionFilter",
     "LivePrototypeRunner",
     "LiveHandStateFilter",
