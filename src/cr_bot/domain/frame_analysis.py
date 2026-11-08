@@ -1,7 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
+
+
+@dataclass(frozen=True, slots=True)
+class TimerReading:
+    text: str
+    overtime: bool
 
 
 @dataclass(slots=True)
@@ -22,6 +28,9 @@ class FrameAnalysisResult(Mapping[str, object]):
     arena_px: tuple[int, int, int, int]
     tower_hp_debug_steps: dict[str, dict]
     timer_debug_steps: dict[str, object]
+    # Optional runtime diagnostics; deliberately excluded from the Mapping
+    # keys so existing analysis/replay schema consumers keep their contract.
+    vision_timing_ms: dict[str, float] = field(default_factory=dict)
 
     def __getitem__(self, key: str) -> object:
         if key == "state":

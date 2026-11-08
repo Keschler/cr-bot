@@ -438,7 +438,9 @@ def _classify_card_with_model(slot_img, checkpoint_path, crop_roi=None):
         probs = torch.softmax(logits, dim=1)
         confidence, pred_idx = probs.max(dim=1)
 
-    return classifier.classes[pred_idx.item()], float(confidence.item() * 100.0)
+    pred_index = pred_idx.detach().cpu().tolist()[0]
+    score = confidence.detach().cpu().tolist()[0]
+    return classifier.classes[pred_index], float(score * 100.0)
 
 
 def _slot_image_tensor(slot_img, crop_roi=None):
@@ -446,7 +448,20 @@ def _slot_image_tensor(slot_img, crop_roi=None):
     match_img = slot_img[y:y + h, x:x + w]
     rgb_img = cv2.cvtColor(match_img, cv2.COLOR_BGR2RGB)
     pil_img = Image.fromarray(rgb_img)
-    return CLASSIFIER_TRANSFORM(pil_img)
+    if torch.get_default_dtype() != torch.float32:
+        return CLASSIFIER_TRANSFORM(pil_img)
+    # Keep the same PIL resize and float32 div/sub/div normalization. Tiny
+    # per-crop Torch operations otherwise enlist the inference thread pool;
+    # NumPy avoids that scheduling work without changing classifier inputs.
+    resized = CLASSIFIER_TRANSFORM.transforms[0](pil_img)
+    normalizer = CLASSIFIER_TRANSFORM.transforms[2]
+    # Normalize contiguous channels so each NumPy inner loop handles a whole
+    # plane, matching ToTensor's layout rather than broadcasting per RGB pixel.
+    pixels = np.array(resized, dtype=np.float32).transpose(2, 0, 1).copy()
+    pixels /= np.float32(255.0)
+    pixels -= np.asarray(normalizer.mean, dtype=np.float32)[:, None, None]
+    pixels /= np.asarray(normalizer.std, dtype=np.float32)[:, None, None]
+    return torch.from_numpy(pixels)
 
 
 def _classify_cards_with_model(slot_imgs, checkpoint_path, crop_roi=None):
@@ -467,12 +482,16 @@ def _classify_cards_with_model(slot_imgs, checkpoint_path, crop_roi=None):
         probs = torch.softmax(logits, dim=1)
         confidences, pred_indices = probs.max(dim=1)
 
+    # Bulk-copy each output head once. On CUDA, reading one scalar at a time
+    # synchronizes once per slot instead of once per small output tensor.
+    indices = pred_indices.detach().cpu().tolist()
+    scores = confidences.detach().cpu().tolist()
     return [
         (
-            classifier.classes[int(pred_idx.item())],
-            float(confidence.item() * 100.0),
+            classifier.classes[pred_index],
+            float(score * 100.0),
         )
-        for confidence, pred_idx in zip(confidences, pred_indices)
+        for pred_index, score in zip(indices, scores)
     ]
 
 def normalize_card_result(best_name, best_score, *, evolved=False):

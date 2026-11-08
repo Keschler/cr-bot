@@ -11,6 +11,7 @@ from cr_bot.domain.constants import (
     OVERTIME_RED_RATIO_THRESHOLD,
 )
 from cr_bot.domain.rois import ROIS
+from cr_bot.domain.frame_analysis import TimerReading
 from cr_bot.vision.image_utils import (
     build_digit_debug_views,
     classify_digit,
@@ -377,11 +378,7 @@ def _locate_timer(frame, debug_steps=None, *, rois=None):
     }
 
 
-def extract_time(frame, debug_steps=None, yolo_templates=None, *, rois=None):
-    if rois is None:
-        located = _locate_timer(frame, debug_steps=debug_steps)
-    else:
-        located = _locate_timer(frame, debug_steps=debug_steps, rois=rois)
+def _time_from_located(located, debug_steps=None):
     timer_debug = debug_steps if debug_steps is not None else None
     time = _read_timer_from_roi(located["timer_frame"], debug_steps=timer_debug, yolo_templates=None)
     normalized = _normalize_timer_text(located["time"])
@@ -392,18 +389,42 @@ def extract_time(frame, debug_steps=None, yolo_templates=None, *, rois=None):
         normalized = re.sub(r':+', ':', str(time)).strip(":")
     return normalized
 
-def is_overtime(frame, *, rois=None):
-    if rois is None:
-        located = _locate_timer(frame)
-    else:
-        located = _locate_timer(frame, rois=rois)
+
+def _overtime_from_located(located):
     timer_box = located["timer_box"]
     red_ratio = _measure_red_ratio(timer_box, False)
     red_text_ratio = _measure_timer_text_red_ratio(located["timer_frame"])
-    if red_ratio >= OVERTIME_RED_RATIO_THRESHOLD or red_text_ratio >= 0.35:
-        return True
+    return red_ratio >= OVERTIME_RED_RATIO_THRESHOLD or red_text_ratio >= 0.35
+
+
+def extract_timer(frame, debug_steps=None, yolo_templates=None, *, rois=None) -> TimerReading:
+    """Read text and overtime from one frame-local timer localization.
+
+    Both legacy entry points search the same HUD. Sharing that search within
+    one frame avoids repeating contour detection and digit recognition while
+    retaining their text, color, fallback, and ROI rules.
+    """
+    if rois is None:
+        located = _locate_timer(frame, debug_steps=debug_steps)
     else:
-        return False
+        located = _locate_timer(frame, debug_steps=debug_steps, rois=rois)
+    return TimerReading(
+        text=_time_from_located(located, debug_steps=debug_steps),
+        overtime=_overtime_from_located(located),
+    )
+
+
+def extract_time(frame, debug_steps=None, yolo_templates=None, *, rois=None):
+    if rois is None:
+        located = _locate_timer(frame, debug_steps=debug_steps)
+    else:
+        located = _locate_timer(frame, debug_steps=debug_steps, rois=rois)
+    return _time_from_located(located, debug_steps=debug_steps)
+
+
+def is_overtime(frame, *, rois=None):
+    located = _locate_timer(frame) if rois is None else _locate_timer(frame, rois=rois)
+    return _overtime_from_located(located)
 
 def parse_time_left_s(timer_text) -> float:
       normalized = _normalize_timer_text(timer_text)
