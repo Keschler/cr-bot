@@ -311,6 +311,7 @@ export function pausePlayback() {
     els['btn-play'].textContent = 'Play';
     els['btn-play'].setAttribute('aria-pressed', 'false');
   }
+  refreshImage();
 }
 
 export function seek(i) {

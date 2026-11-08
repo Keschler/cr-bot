@@ -382,6 +382,81 @@ def test_pump_survives_missing_trackers():
     assert session.history[0].enemy_plays == []
 
 
+def test_live_pump_publishes_every_lobby_frame_without_one_second_throttle(monkeypatch):
+    from src.frontend.runners import pump
+
+    session = FrontendSession(mode="live")
+    source, _ = _source([
+        SimpleNamespace(image=None, frame_index=i, timestamp_s=1.0 + i * 0.1)
+        for i in range(3)
+    ])
+    monkeypatch.setattr(pump.time, "monotonic", lambda: 10.0)
+    monkeypatch.setattr(pump, "encode_jpeg", lambda image: b"jpeg")
+    monkeypatch.setattr(pump, "_try_import_decide_with_scores", lambda: None)
+    summary = _run_pump_loop(
+        frontend_session=session, frame_source=source, detector=object(),
+        actor=SimpleNamespace(reset=lambda: None),
+        match_session=SimpleNamespace(process=lambda *args, **kwargs: SimpleNamespace(
+            in_game=False, should_emit=False,
+        )),
+        observation_builder=lambda step: None, dispatch_fn=lambda *args, **kwargs: None,
+        normalize_frame_fn=lambda image: image,
+        process_frame_fn=lambda *args, **kwargs: object(),
+        filter_live_analysis_fn=None, action_to_dict_fn=lambda action: {"kind": "wait"},
+        record_fn=lambda *args, **kwargs: SimpleNamespace(as_dict=lambda: {}),
+        detection_filter=None, execute=False, phone=None, calibration=None,
+        max_frames=3, poll_interval_s=0.0, min_action_interval_s=0.0,
+        post_action_delay_s=0.0, stop_event=None,
+    )
+    assert summary["frames"] == 3
+    assert summary["emitted_frames"] == 0
+    assert [frame.frame_index for frame in session.history] == [0, 1, 2]
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_live_pump_collects_inner_timings_only_when_enabled(monkeypatch, enabled):
+    from src.frontend.runners import pump
+    from src.frontend.services.live_diagnostics import LiveDiagnostics
+
+    session = FrontendSession(mode="live")
+    if enabled:
+        session.live_diagnostics = LiveDiagnostics(transport="stream")
+    source, _ = _source([SimpleNamespace(image=None, frame_index=77, timestamp_s=1.0)])
+    kwargs_seen = []
+
+    def process_frame(*args, **kwargs):
+        kwargs_seen.append(kwargs)
+        return SimpleNamespace(vision_timing_ms={"detector": 800.0, "hand_state": 125.0})
+
+    monkeypatch.setattr(pump, "encode_jpeg", lambda image: b"jpeg")
+    monkeypatch.setattr(pump, "_try_import_decide_with_scores", lambda: None)
+    summary = _run_pump_loop(
+        frontend_session=session, frame_source=source, detector=object(),
+        actor=SimpleNamespace(reset=lambda: None),
+        match_session=SimpleNamespace(process=lambda *args, **kwargs: _step()),
+        observation_builder=lambda step: None, dispatch_fn=lambda *args, **kwargs: None,
+        normalize_frame_fn=lambda image: image, process_frame_fn=process_frame,
+        filter_live_analysis_fn=None, action_to_dict_fn=lambda action: {"kind": "wait"},
+        record_fn=lambda *args, **kwargs: SimpleNamespace(as_dict=lambda: {}),
+        detection_filter=None, execute=False, phone=None, calibration=None,
+        max_frames=1, poll_interval_s=0.0, min_action_interval_s=0.0,
+        post_action_delay_s=0.0, stop_event=None,
+    )
+    assert summary["frames"] == 1
+    if enabled:
+        assert kwargs_seen[0]["collect_timing"] is True
+        analysis = session.live_diagnostics.snapshot()["analysis"]
+        assert analysis["completed_frames"] == 1
+        assert analysis["last_frame_index"] == 77
+        assert analysis["active_frame_index"] is None
+        assert analysis["last_timing_ms"]["vision.detector"] == 800.0
+        assert analysis["last_timing_ms"]["vision.hand_state"] == 125.0
+        assert session.latest.diagnostics["timing_ms"]["vision.detector"] == 800.0
+    else:
+        assert "collect_timing" not in kwargs_seen[0]
+        assert "vision.detector" not in session.latest.diagnostics["timing_ms"]
+
+
 # ---------------------------------------------------------------------------
 # Label correction / what-if re-evaluation
 # ---------------------------------------------------------------------------

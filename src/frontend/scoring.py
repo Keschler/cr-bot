@@ -195,33 +195,33 @@ def _card_name_at(hand_cards: Sequence | None, slot: int) -> str | None:
     return raw
 
 
-def top_k_suggestions(
+@dataclass(frozen=True, slots=True)
+class _ScoringHeads:
+    """Validated head values copied to Python once per distribution.
+
+    Normalization stays on the input device/dtype; Python floats retain the
+    original double-precision joint and entropy arithmetic.  No tensor scalar
+    reads are needed while visiting placement cells.
+    """
+
+    mode_log_probs: list[float]
+    mode_legal: list[bool]
+    card_log_probs: list[float] | None
+    card_legal: list[bool]
+    placements: list[list[tuple[int, float]]]
+    cols: int
+
+
+def _prepare_scoring_heads(
     mode_logits: torch.Tensor,
     card_logits: torch.Tensor,
     placement_logits: torch.Tensor,
     masks: Any,
-    *,
-    hand_cards: Sequence | None = None,
-    top_k: int = 3,
-) -> list[ScoredAction]:
-    """Rank WAIT plus every legal (card slot, cell) play by joint probability.
-
-    ``mode_logits``/``card_logits`` are 1D slices for ``B=0, T=0`` with shapes
-    ``[2]``/``[K]`` and ``placement_logits`` is ``[K, rows, cols]``; ``masks``
-    carries the same-shaped bool legality tensors (as an ``ActionMasks``, a
-    triple, or a dict).
-
-    The joint of a play is
-    ``P(mode=PLAY) * P(card=s | PLAY) * P(cell | card=s)``.  Candidates are
-    sorted by descending log-probability and truncated to ``top_k``.  When
-    PLAY is illegal only WAIT is returned; a legal card slot whose placement
-    grid has no legal cell is skipped.
-    """
+) -> _ScoringHeads:
+    """Validate and normalize once, with bulk transfers bounded by slots."""
 
     import torch
 
-    if type(top_k) is not int or top_k <= 0:
-        raise ValueError(f"top_k must be a positive integer, got {top_k!r}")
     for name, tensor in (
         ("mode_logits", mode_logits),
         ("card_logits", card_logits),
@@ -273,95 +273,123 @@ def top_k_suggestions(
     if rows < 1 or cols < 1:
         raise ValueError(f"placement grid must be non-empty, got {(rows, cols)}")
 
-    mode_log_probs = masked_log_softmax_1d(mode_logits, mode_mask)
-    wait_legal = bool(mode_mask[_WAIT_INDEX].item())
-    play_legal = bool(mode_mask[_PLAY_INDEX].item())
-    mode_lp_wait = _finite_float("mode log-prob(wait)", mode_log_probs[_WAIT_INDEX].item()) if wait_legal else None
-    mode_lp_play = _finite_float("mode log-prob(play)", mode_log_probs[_PLAY_INDEX].item()) if play_legal else None
-
-    candidates: list[ScoredAction] = []
-    if wait_legal:
-        assert mode_lp_wait is not None
-        probability = _finite_float("P(wait)", math.exp(mode_lp_wait))
-        if not 0.0 - 1e-6 <= probability <= 1.0 + 1e-6:
-            raise ValueError(f"P(wait) out of range: {probability!r}")
-        candidates.append(
-            ScoredAction(
-                kind="wait",
-                card_slot=None,
-                cell=None,
-                probability=probability,
-                log_prob=mode_lp_wait,
-                mode_log_prob=mode_lp_wait,
-                card_log_prob=None,
-                placement_log_prob=None,
-                card_name=None,
-            )
-        )
-
-    if play_legal:
-        assert mode_lp_play is not None
-        if not bool(card_mask.any().item()):
-            # PLAY is nominally legal but no card slot is.  Fail closed when
-            # WAIT cannot cover the decision; otherwise surface WAIT alone.
-            if not wait_legal:
+    mode_log_probs = masked_log_softmax_1d(mode_logits, mode_mask).detach().cpu().tolist()
+    mode_legal = mode_mask.detach().cpu().tolist()
+    card_legal = card_mask.detach().cpu().tolist()
+    placements: list[list[tuple[int, float]]] = [[] for _ in range(card_slots)]
+    card_log_probs = None
+    if mode_legal[_PLAY_INDEX]:
+        if not any(card_legal):
+            # WAIT may cover a nominally legal PLAY with no legal card slots.
+            if not mode_legal[_WAIT_INDEX]:
                 raise ValueError("PLAY is legal but the card mask has no legal slots (fail-closed)")
         else:
-            card_log_probs = masked_log_softmax_1d(card_logits, card_mask)
-            for slot in range(card_slots):
-                if not bool(card_mask[slot].item()):
+            card_log_probs = masked_log_softmax_1d(card_logits, card_mask).detach().cpu().tolist()
+            placement_legal = placement_mask.reshape(card_slots, -1).detach().cpu().tolist()
+            for slot, slot_legal in enumerate(card_legal):
+                if not slot_legal or not any(placement_legal[slot]):
                     continue
-                cell_mask = placement_mask[slot]
-                if not bool(cell_mask.any().item()):
-                    # Legal card with no legal placement: skip this slot.
-                    continue
-                card_lp = _finite_float(f"card log-prob(slot {slot})", card_log_probs[slot].item())
-                flat_logits = placement_logits[slot].reshape(-1)
-                flat_mask = cell_mask.reshape(-1)
-                place_log_probs = masked_log_softmax_1d(flat_logits, flat_mask)
-                legal_indices = torch.nonzero(flat_mask, as_tuple=False).flatten().tolist()
-                for flat_index in legal_indices:
-                    flat_index = int(flat_index)
-                    row, col = divmod(flat_index, cols)
-                    place_lp = _finite_float(
-                        f"placement log-prob(slot {slot} cell {(col, row)})",
-                        place_log_probs[flat_index].item(),
-                    )
-                    joint_log_prob = _finite_float(
-                        f"joint log-prob(slot {slot} cell {(col, row)})",
-                        mode_lp_play + card_lp + place_lp,
-                    )
-                    probability = _finite_float(
-                        f"joint P(slot {slot} cell {(col, row)})",
-                        math.exp(joint_log_prob),
-                    )
-                    if not 0.0 - 1e-6 <= probability <= 1.0 + 1e-6:
-                        raise ValueError(f"joint play probability out of range: {probability!r}")
-                    candidates.append(
-                        ScoredAction(
-                            kind="play",
-                            card_slot=slot,
-                            cell=(col, row),
-                            probability=probability,
-                            log_prob=joint_log_prob,
-                            mode_log_prob=mode_lp_play,
-                            card_log_prob=card_lp,
-                            placement_log_prob=place_lp,
-                            card_name=_card_name_at(hand_cards, slot),
-                        )
-                    )
+                log_probs = masked_log_softmax_1d(
+                    placement_logits[slot].reshape(-1), placement_mask[slot].reshape(-1)
+                ).detach().cpu().tolist()
+                placements[slot] = [
+                    (index, log_prob)
+                    for index, (legal, log_prob) in enumerate(zip(placement_legal[slot], log_probs))
+                    if legal
+                ]
+    return _ScoringHeads(mode_log_probs, mode_legal, card_log_probs, card_legal, placements, cols)
+
+
+def _top_k_from_heads(
+    heads: _ScoringHeads,
+    *,
+    hand_cards: Sequence | None,
+    top_k: int,
+) -> list[ScoredAction]:
+    # Tuple layout: joint log-prob, slot (-1 for WAIT), flat cell, probability,
+    # card log-prob, placement log-prob, card name.  Only the selected entries
+    # become ScoredActions, but validate every candidate before truncating.
+    candidates: list[tuple[float, int, int, float, float | None, float | None, str | None]] = []
+    if heads.mode_legal[_WAIT_INDEX]:
+        mode_lp_wait = _finite_float("mode log-prob(wait)", heads.mode_log_probs[_WAIT_INDEX])
+        probability = _finite_float("P(wait)", math.exp(mode_lp_wait))
+        if not -1e-6 <= probability <= 1.0 + 1e-6:
+            raise ValueError(f"P(wait) out of range: {probability!r}")
+        candidates.append((mode_lp_wait, -1, -1, probability, None, None, None))
+
+    if heads.mode_legal[_PLAY_INDEX] and heads.card_log_probs is not None:
+        mode_lp_play = _finite_float("mode log-prob(play)", heads.mode_log_probs[_PLAY_INDEX])
+        for slot, cells in enumerate(heads.placements):
+            if not cells:
+                continue
+            card_lp = _finite_float(f"card log-prob(slot {slot})", heads.card_log_probs[slot])
+            card_name = _card_name_at(hand_cards, slot)
+            for flat_index, place_lp in cells:
+                row, col = divmod(flat_index, heads.cols)
+                joint_log_prob = _finite_float(
+                    f"joint log-prob(slot {slot} cell {(col, row)})",
+                    mode_lp_play + card_lp + place_lp,
+                )
+                probability = _finite_float(
+                    f"joint P(slot {slot} cell {(col, row)})", math.exp(joint_log_prob)
+                )
+                if not -1e-6 <= probability <= 1.0 + 1e-6:
+                    raise ValueError(f"joint play probability out of range: {probability!r}")
+                candidates.append((joint_log_prob, slot, flat_index, probability, card_lp, place_lp, card_name))
 
     if not candidates:
         raise ValueError("top_k_suggestions: no scorable actions (fail-closed)")
+    # Flat cells are row-major, so this exactly preserves WAIT, slot, row, col
+    # ordering on ties without device-dependent topk tie selection.
+    candidates.sort(key=lambda candidate: (-candidate[0], candidate[1], candidate[2]))
+    suggestions = []
+    for log_prob, slot, flat_index, probability, card_lp, place_lp, card_name in candidates[:top_k]:
+        is_wait = slot == -1
+        row, col = divmod(flat_index, heads.cols)
+        suggestions.append(
+            ScoredAction(
+                kind="wait" if is_wait else "play",
+                card_slot=None if is_wait else slot,
+                cell=None if is_wait else (col, row),
+                probability=probability,
+                log_prob=log_prob,
+                mode_log_prob=heads.mode_log_probs[_WAIT_INDEX if is_wait else _PLAY_INDEX],
+                card_log_prob=card_lp,
+                placement_log_prob=place_lp,
+                card_name=card_name,
+            )
+        )
+    return suggestions
 
-    def _rank_key(action: ScoredAction) -> tuple[float, int, int, int, int]:
-        if action.kind == "wait":
-            return (-action.log_prob, 0, -1, -1, -1)
-        assert action.card_slot is not None and action.cell is not None
-        return (-action.log_prob, 1, action.card_slot, action.cell[1], action.cell[0])
 
-    candidates.sort(key=_rank_key)
-    return candidates[:top_k]
+def top_k_suggestions(
+    mode_logits: torch.Tensor,
+    card_logits: torch.Tensor,
+    placement_logits: torch.Tensor,
+    masks: Any,
+    *,
+    hand_cards: Sequence | None = None,
+    top_k: int = 3,
+) -> list[ScoredAction]:
+    """Rank WAIT plus every legal (card slot, cell) play by joint probability.
+
+    ``mode_logits``/``card_logits`` are 1D slices for ``B=0, T=0`` with shapes
+    ``[2]``/``[K]`` and ``placement_logits`` is ``[K, rows, cols]``; ``masks``
+    carries the same-shaped bool legality tensors (as an ``ActionMasks``, a
+    triple, or a dict).
+
+    The joint of a play is
+    ``P(mode=PLAY) * P(card=s | PLAY) * P(cell | card=s)``.  Candidates are
+    sorted by descending log-probability and truncated to ``top_k``.  Ties
+    prefer WAIT, then slot, row, and column in ascending order.  When PLAY is
+    illegal only WAIT is returned; a legal card slot whose placement grid has
+    no legal cell is skipped.
+    """
+
+    if type(top_k) is not int or top_k <= 0:
+        raise ValueError(f"top_k must be a positive integer, got {top_k!r}")
+    heads = _prepare_scoring_heads(mode_logits, card_logits, placement_logits, masks)
+    return _top_k_from_heads(heads, hand_cards=hand_cards, top_k=top_k)
 
 
 def score_action_heads(
@@ -379,8 +407,6 @@ def score_action_heads(
     the frontend use one probability calculation for both paths.
     """
 
-    import torch
-
     try:
         mode = logits.mode[0, 0]
         card = logits.card[0, 0]
@@ -390,11 +416,16 @@ def score_action_heads(
         placement_mask = masks.placement[0, 0]
     except (AttributeError, IndexError, TypeError) as error:
         raise ValueError("policy heads must expose singleton V4 logits and masks") from error
-    suggestions = top_k_suggestions(
+    if type(top_k) is not int or top_k <= 0:
+        raise ValueError(f"top_k must be a positive integer, got {top_k!r}")
+    heads = _prepare_scoring_heads(
         mode,
         card,
         placement,
         (mode_mask, card_mask, placement_mask),
+    )
+    suggestions = _top_k_from_heads(
+        heads,
         hand_cards=hand_cards,
         top_k=top_k,
     )
@@ -414,43 +445,34 @@ def score_action_heads(
             cell=(int(best.cell[0]), int(best.cell[1])),
         )
 
-    mode_log_probs = masked_log_softmax_1d(mode, mode_mask)
-    wait_legal = bool(mode_mask[_WAIT_INDEX].item())
-    play_legal = bool(mode_mask[_PLAY_INDEX].item())
-    mode_prob_wait = math.exp(float(mode_log_probs[_WAIT_INDEX].item())) if wait_legal else 0.0
-    mode_prob_play = math.exp(float(mode_log_probs[_PLAY_INDEX].item())) if play_legal else 0.0
+    mode_log_probs = heads.mode_log_probs
+    wait_legal = heads.mode_legal[_WAIT_INDEX]
+    play_legal = heads.mode_legal[_PLAY_INDEX]
+    mode_prob_wait = math.exp(mode_log_probs[_WAIT_INDEX]) if wait_legal else 0.0
+    mode_prob_play = math.exp(mode_log_probs[_PLAY_INDEX]) if play_legal else 0.0
 
     entropy = 0.0
     for index, probability in (
         (_WAIT_INDEX, mode_prob_wait),
         (_PLAY_INDEX, mode_prob_play),
     ):
-        if bool(mode_mask[index].item()):
-            entropy -= probability * float(mode_log_probs[index].item())
-    if play_legal and mode_prob_play > 0.0 and bool(card_mask.any().item()):
-        card_log_probs = masked_log_softmax_1d(card, card_mask)
+        if heads.mode_legal[index]:
+            entropy -= probability * mode_log_probs[index]
+    if play_legal and mode_prob_play > 0.0 and heads.card_log_probs is not None:
+        card_log_probs = heads.card_log_probs
         card_entropy = 0.0
         slot_prob: dict[int, float] = {}
-        for slot in range(int(card.shape[0])):
-            if not bool(card_mask[slot].item()):
+        for slot, legal in enumerate(heads.card_legal):
+            if not legal:
                 continue
-            log_prob = float(card_log_probs[slot].item())
+            log_prob = card_log_probs[slot]
             probability = math.exp(log_prob)
             slot_prob[slot] = probability
             card_entropy -= probability * log_prob
         entropy += mode_prob_play * card_entropy
         for slot, probability in slot_prob.items():
-            cell_mask = placement_mask[slot]
-            if not bool(cell_mask.any().item()):
-                continue
-            place_log_probs = masked_log_softmax_1d(
-                placement[slot].reshape(-1), cell_mask.reshape(-1)
-            )
             place_entropy = 0.0
-            for flat_index in torch.nonzero(
-                cell_mask.reshape(-1), as_tuple=False
-            ).flatten().tolist():
-                log_prob = float(place_log_probs[int(flat_index)].item())
+            for _, log_prob in heads.placements[slot]:
                 place_entropy -= math.exp(log_prob) * log_prob
             entropy += mode_prob_play * probability * place_entropy
     entropy = _finite_float("entropy", entropy)

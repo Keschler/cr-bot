@@ -15,7 +15,10 @@ def _frame_dimensions(image: Any) -> tuple[int | None, int | None]:
     return None, None
 
 
-def encode_jpeg(bgr: Any, max_width: int = 720) -> bytes | None:
+def encode_jpeg(
+    bgr: Any, max_width: int = 720, *, quality: int = 85,
+    fast_resize: bool = False,
+) -> bytes | None:
     """Encode a BGR image to JPEG bytes, downscaling to ``max_width``.
 
     Returns ``None`` when OpenCV is unavailable or encoding fails.  Never
@@ -40,11 +43,17 @@ def encode_jpeg(bgr: Any, max_width: int = 720) -> bytes | None:
             scale = max_width / float(width)
             new_height = max(1, int(round(height * scale)))
             image = cv2.resize(
-                bgr, (int(max_width), new_height), interpolation=cv2.INTER_AREA
+                bgr, (int(max_width), new_height),
+                interpolation=cv2.INTER_LINEAR if fast_resize else cv2.INTER_AREA,
             )
-        ok, buf = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        ok, buf = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, quality])
         if not ok or buf is None:
             return None
         return bytes(buf.tobytes())
     except Exception:
         return None
+
+
+def encode_preview_jpeg(bgr: Any) -> bytes | None:
+    """Use a smaller live picture to keep capture and inference responsive."""
+    return encode_jpeg(bgr, max_width=480, quality=80, fast_resize=True)

@@ -3,17 +3,35 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 
-from ..models.requests import LiveStartRequest, StopResponse
+from ..models.requests import LivePreviewMetricsRequest, LiveStartRequest, StopResponse
 from ..runners.live import run_live_session
 from ..services.checkpoints import _default_checkpoint
 from ..services.paths import _resolve_against_repo
 from ..services.devices import resolve_inference_devices
-from .deps import _start_worker, stop_current_session
+from ..services.live_diagnostics import LivePreviewClientMetrics
+from .deps import _get_session, _start_worker, stop_current_session
 
 router = APIRouter()
 DEFAULT_LIVE_CALIBRATION = "simulator/physical_lab/calibrations/phone-a-candidate.json"
+
+
+@router.get("/api/live/diagnostics")
+def api_live_diagnostics() -> dict[str, Any]:
+    session = _get_session()
+    if session.live_diagnostics is None:
+        return {"enabled": False, "enable_with": "CR_BOT_LIVE_DIAGNOSTICS=1"}
+    return session.live_diagnostics.snapshot()
+
+
+@router.post("/api/live/preview-metrics", status_code=204)
+def api_live_preview_metrics(request: LivePreviewMetricsRequest) -> Response:
+    session = _get_session()
+    diagnostics = session.live_diagnostics
+    if session.running and diagnostics is not None and request.session_id == diagnostics.session_id:
+        diagnostics.record_client(LivePreviewClientMetrics(**request.model_dump(exclude={"session_id"})))
+    return Response(status_code=204)
 
 
 @router.post("/api/live/start")
@@ -54,6 +72,7 @@ def api_live_start(request: LiveStartRequest) -> dict[str, Any]:
             kwargs={
                 "serial": serial,
                 "transport": request.transport,
+                "stream_max_width_px": request.stream_max_width_px,
                 "checkpoint": checkpoint,
                 "device": request.device or "auto",
                 "calibration": calibration,

@@ -18,7 +18,7 @@ export const els = {};
   'roi-preview-meta', 'btn-reset-rois',
   'btn-another-frame',
   'input-serial', 'select-transport', 'select-live-checkpoint', 'input-calibration',
-  'select-live-device',
+  'select-live-device', 'select-stream-width',
   'btn-edit-labels',
   'check-execute', 'check-confirm-live', 'live-warning',
   'btn-start-live', 'btn-stop-live',

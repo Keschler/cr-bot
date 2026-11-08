@@ -4,6 +4,15 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
+@dataclass(frozen=True, slots=True)
+class LivePreviewFrame:
+    """Newest captured pixels, independent of the analyzed frame history."""
+
+    frame_index: int
+    timestamp_s: float
+    jpeg_bytes: bytes
+
+
 @dataclass
 class FrontendFrame:
     """One UI-facing frame with decision payload and optional JPEG preview."""

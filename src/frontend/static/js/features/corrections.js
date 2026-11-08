@@ -12,6 +12,7 @@ import { currentFrame, suggestionsOf, diagnosticsOf } from './frames.js';
 import { roiPreviewVisible, roiPreviewImageReady, roiCanvasMouseDown, updateRoiDrag, finishRoiDrag, hitRoi, drawRoiPreviewBoxes } from './roi-editor.js';
 import { drawOverlay } from './overlay.js';
 import { renderCurrent } from './timeline.js';
+import { refreshImage, imageMatchesFrame } from './session.js';
 
 export function detectionRowsOf(frame) {
   if (!frame || !Array.isArray(frame.detections)) return [];
@@ -230,13 +231,14 @@ export function setEditMode(on) {
   } else {
     setCorrectionStatus('');
   }
+  refreshImage();
   renderCurrent();
 }
 
 export function editableFrame() {
   if (!state.editMode) return null;
   const frame = currentFrame();
-  if (!frame || !frame.emitted || !frame.in_game) return null;
+  if (!frame || !frame.emitted || !frame.in_game || !imageMatchesFrame(frame)) return null;
   return frame;
 }
 
@@ -737,7 +739,7 @@ export function bindCanvasEvents() {
       // happens to show now (polls can advance it mid-drag). Discard when
       // edit mode was left mid-drag or the frame was evicted.
       const frame = frameByIndex(drag.fi);
-      if (!state.editMode || !frame) {
+      if (!state.editMode || !frame || !imageMatchesFrame(frame)) {
         renderCurrent();
         return;
       }
@@ -760,7 +762,7 @@ export function bindCanvasEvents() {
     // Same frame pinning as moves: a poll or seek mid-draw must not land the
     // new box on a different frame, and leaving edit mode cancels the draw.
     const frame = frameByIndex(drag.fi);
-    if (!state.editMode || !frame) { renderCurrent(); return; }
+    if (!state.editMode || !frame || !imageMatchesFrame(frame)) { renderCurrent(); return; }
     const rect = containRect();
     const dims = frameDims(frame);
     if (!dims || !rect.w || !rect.h) { renderCurrent(); return; }

@@ -125,6 +125,14 @@
             </label>
           </div>
           <label class="field">
+            <span>Stream capture width</span>
+            <select id="select-stream-width" title="H.264 only. Lower widths reduce phone encoding and workstation decoding load; native keeps the most image detail.">
+              <option value="native" selected>Native — full detail</option>
+              <option value="720">720 px — lower load</option>
+              <option value="480">480 px — lowest load</option>
+            </select>
+          </label>
+          <label class="field">
             <span>Inference device</span>
             <select id="select-live-device" title="CPU is always available; GPU needs CUDA in the server environment">
               <option value="cpu">CPU</option>
@@ -153,7 +161,7 @@
         <dl class="meta">
           <div><dt>Replay ID</dt><dd id="meta-replay-id">—</dd></div>
           <div><dt>Arena</dt><dd id="meta-arena">—</dd></div>
-          <div><dt>Tick</dt><dd id="meta-tick">—</dd></div>
+          <div><dt>Frame ID</dt><dd id="meta-tick" title="Capture frame ID of the selected analyzed frame. IDs can jump because analysis takes the newest available capture.">—</dd></div>
           <div><dt>Phase</dt><dd id="meta-phase">—</dd></div>
         </dl>
       </section>

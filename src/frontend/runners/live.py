@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import logging
+import os
 import threading
 from pathlib import Path
 from typing import Any
 
 from ..models.session import FrontendSession
 from ..services.devices import resolve_inference_devices
+from ..services.live_diagnostics import LiveDiagnostics, collect_runtime_diagnostics
+from ..services.live_preview import LivePreviewProvider
 from .pump import _run_pump_loop
 
 
@@ -14,6 +18,7 @@ def run_live_session(
     *,
     serial: str,
     transport: str = "stream",
+    stream_max_width_px: int | None = None,
     checkpoint: str,
     device: str = "auto",
     calibration: str | Path | None = None,
@@ -21,7 +26,7 @@ def run_live_session(
     confirm_live: bool = False,
     max_frames: int | None = None,
     yolo_image_size: int = 896,
-    poll_interval_s: float = 0.25,
+    poll_interval_s: float = 0.0,
     min_action_interval_s: float = 0.75,
     post_action_delay_s: float = 0.35,
     yolo_tower_hp_detections: bool = False,
@@ -36,6 +41,10 @@ def run_live_session(
     """
 
     session.mode = "live"
+    session.live_frame_clock = (
+        "workstation-decode-publication" if transport == "stream"
+        else "workstation-screenshot-receipt"
+    )
     session.running = True
     session.error = None
     session.summary = None
@@ -43,9 +52,17 @@ def run_live_session(
     # is lent below after loading. Retained actors keep history revisable
     # after a run finishes (what-if only, never execute).
     session.actor = None
+    session.set_live_preview_provider(None)
     session.clear()
+    diagnostics = (
+        LiveDiagnostics(transport=transport, execute=bool(execute))
+        if os.environ.get("CR_BOT_LIVE_DIAGNOSTICS") == "1" else None
+    )
+    session.live_diagnostics = diagnostics
     frame_source: Any = None
     try:
+        if diagnostics is not None:
+            diagnostics.start()
         if execute and (calibration is None or not confirm_live):
             raise ValueError(
                 "live execution requires calibration and confirm_live=True"
@@ -54,6 +71,10 @@ def run_live_session(
             raise ValueError("serial must be a non-empty ADB device serial")
         if transport not in ("stream", "screenshot"):
             raise ValueError("transport must be 'stream' or 'screenshot'")
+        if stream_max_width_px is not None and (
+            type(stream_max_width_px) is not int or stream_max_width_px <= 0
+        ):
+            raise ValueError("stream_max_width_px must be a positive integer or None")
         if max_frames is not None and (
             type(max_frames) is not int or max_frames <= 0
         ):
@@ -117,12 +138,30 @@ def run_live_session(
             adb_executable=adb_executable,
         )
         if transport == "stream":
+            capture_kwargs = {"diagnostics_enabled": True} if diagnostics is not None else {}
             frame_source = AdbH264FrameSource(
                 controller,
                 ffmpeg_executable=ffmpeg_executable,
+                stream_max_width_px=stream_max_width_px,
+                **capture_kwargs,
             )
+            if diagnostics is not None:
+                diagnostics.set_capture_probe(lambda: frame_source.diagnostics().as_dict())
+                diagnostics.set_phase("capture_start")
+            session.set_live_preview_provider(
+                LivePreviewProvider(
+                    frame_source.latest_frame,
+                    normalize_frame=normalize_frame if normalize else None,
+                )
+            )
+            # Drain capture during model warmup and serve fresh preview pixels
+            # without consuming the inference delivery cursor.
+            frame_source.start()
         else:
             frame_source = AdbScreenshotSource(controller)
+
+        if diagnostics is not None:
+            diagnostics.set_phase("model_warmup")
 
         phone: Any = None
         calibration_obj: Any = None
@@ -164,6 +203,17 @@ def run_live_session(
         detector = build_detector(device=yolo_device_name)
         configure_detector_inference_size(detector, yolo_image_size)
         actor = V4Actor(checkpoint, device=actor_device)
+        if diagnostics is not None:
+            try:
+                diagnostics.set_runtime(collect_runtime_diagnostics(
+                    requested_device=device,
+                    yolo_device=yolo_device_name,
+                    policy_device=actor_device,
+                    yolo_image_size=yolo_image_size,
+                ))
+            except Exception:
+                logging.getLogger("uvicorn.error").exception("LIVE_DIAGNOSTICS runtime inspection failed")
+            diagnostics.set_phase("analyzing")
         # Lend the live actor to what-if re-evaluations (borrowed under
         # session.actor_lock with hidden-state save/restore).
         session.actor = actor
@@ -211,9 +261,12 @@ def run_live_session(
         raise
     finally:
         session.actor = None
+        session.set_live_preview_provider(None)
         if frame_source is not None:
             try:
                 frame_source.close()
             except Exception:
                 pass
         session.running = False
+        if diagnostics is not None:
+            diagnostics.close(error=session.error)

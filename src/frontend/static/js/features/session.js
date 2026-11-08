@@ -13,6 +13,7 @@ import { clearRoiAdapt, showRoiAdaptAvailable, roiPreviewVisible, syncRoiPreview
 import { visualStateOf, suggestionsOf, diagnosticsOf, currentFrame, isLiveEdge } from './frames.js';
 import { drawOverlay, renderCenter } from './overlay.js';
 import { renderCurrent, seek, pausePlayback } from './timeline.js';
+import { createLivePreviewPoller } from './live-preview.js';
 import { hideFloatbar, setCorrectionStatus } from './corrections.js';
 
 /* ---------- status + frames polling (with reconnect backoff) ---------- */
@@ -20,10 +21,31 @@ import { hideFloatbar, setCorrectionStatus } from './corrections.js';
 let statusFails = 0;
 let statusTimer = null;
 let statusDownToast = null;
+let sessionStatusError = null;
+
+function renderSessionProgress() {
+  // Count the analyzed frames actually available on this timeline. Metadata
+  // and this count are painted in the same ingest event, rather than waiting
+  // for the next two-second status poll (which may contain an older count).
+  const n = state.history.length;
+  const mode = state.sessionMode || state.mode;
+  if (!statusFails && !sessionStatusError) {
+    if (state.sessionRunning) {
+      setPill('● ' + mode + ' · ' + n + ' history frames', 'is-running',
+        'Analyzed frames available on the timeline. Frame ID identifies the selected capture frame.');
+    } else {
+      setPill(n ? 'Stopped · ' + n + ' history frames' : 'No session', 'is-idle');
+    }
+  }
+  applySessionVisibility({ running: state.sessionRunning, mode, frame_count: n });
+}
 
 export async function pollStatus() {
   try {
     const s = await apiGet('/api/status');
+    state.sessionRunning = !!s.running;
+    state.sessionMode = s.mode;
+    sessionStatusError = s.error || null;
     if (statusFails > 0 && statusDownToast) {
       statusDownToast.dismiss();
       statusDownToast = null;
@@ -40,14 +62,8 @@ export async function pollStatus() {
     }
     showError('');
     if (!s.running) closeStream(); // no producer: don't hold a dead stream
-    if (s && s.running) {
-      const mode = s.mode || state.mode;
-      const n = s.frame_count !== undefined && s.frame_count !== null ? s.frame_count : state.history.length;
-      setPill('● ' + mode + ' · ' + n + ' frames', 'is-running', JSON.stringify(s.summary || ''));
-    } else {
-      setPill(state.history.length ? 'Stopped · ' + state.history.length + ' frames' : 'No session', 'is-idle');
-    }
-    applySessionVisibility(s);
+    renderSessionProgress();
+    refreshImage();
   } catch (err) {
     statusFails++;
     setPill('Backend unreachable — retrying… (click to retry)', 'is-error', String(err && err.message || err));
@@ -133,7 +149,10 @@ export function scheduleFrames() {
 
 export async function pollFrames() {
   try {
-    const data = await apiGet('/api/frames?since=' + encodeURIComponent(state.lastSince) + '&limit=50');
+    // A live reconnect must reach the current edge in one bounded request,
+    // rather than replaying 50-frame batches once per second.
+    const limit = state.sessionMode === 'live' ? 512 : 50;
+    const data = await apiGet('/api/frames?since=' + encodeURIComponent(state.lastSince) + '&limit=' + limit);
     const frames = data && Array.isArray(data.frames) ? data.frames : [];
     ingestFrames(frames);
     refreshImage();
@@ -174,6 +193,7 @@ export function ingestFrames(frames) {
     state.cursor = state.history.length - 1;
   }
   renderCurrent();
+  renderSessionProgress();
   // A resumed replay jumps back to its saved cursor once the
   // re-analysis has caught up (seek pauses, so the jump sticks).
       if (pendingResumeFrame !== null && pendingResumeFrame !== undefined) {
@@ -297,6 +317,12 @@ export function refreshImage() {
     }
     return;
   }
+  if (followsLivePreview()) {
+    livePreview.start();
+    refreshEvictBadge();
+    return;
+  }
+  livePreview.stop();
   syncRoiPreviewClass(false);
   delete img.dataset.preview;
   delete img.dataset.previewFrame;
@@ -306,7 +332,7 @@ export function refreshImage() {
   // detected explicitly instead of stalling silently on a bare <img> src.
   refreshEvictBadge();
   const frame = currentFrame();
-  const atEdge = isLiveEdge();
+  const atEdge = isLiveEdge() && state.playing;
   const now = Date.now();
   if (!frame) {
     // No frames yet: keep showing the live stream while playing, throttled
@@ -343,8 +369,50 @@ let imgRequestId = 0;
 let lastObjectUrl = null;
 let liveImageRequestId = null;
 let pendingLiveImage = null;
+let previewMetricsPending = false;
+
+function followsLivePreview() {
+  return state.sessionRunning && state.sessionMode === 'live' && state.playing
+    && (state.cursor < 0 || isLiveEdge()) && !roiPreviewVisible();
+}
+
+const livePreview = createLivePreviewPoller({
+  isFollowing: followsLivePreview,
+  onMetrics: (metrics) => {
+    if (previewMetricsPending) return;
+    previewMetricsPending = true;
+    // Opt-in diagnostics only; never queue reports behind a slow request.
+    void fetch('/api/live/preview-metrics', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(metrics),
+    }).catch(() => {}).finally(() => { previewMetricsPending = false; });
+  },
+  onFrame: async (preview) => {
+    if (!followsLivePreview()) return;
+    const id = ++imgRequestId;
+    const objUrl = URL.createObjectURL(preview.blob);
+    if (lastObjectUrl) URL.revokeObjectURL(lastObjectUrl);
+    lastObjectUrl = objUrl;
+    delete img.dataset.src;
+    delete img.dataset.fi;
+    img.dataset.preview = 'live';
+    img.dataset.captureAgeMs = preview.captureAgeMs === null ? '' : String(preview.captureAgeMs);
+    img.dataset.analysisAgeMs = preview.analysisAgeMs === null ? '' : String(preview.analysisAgeMs);
+    img.dataset.loadingRequest = String(id);
+    img.src = objUrl;
+    drawOverlay(currentFrame());
+    if (typeof img.decode === 'function') await img.decode();
+    if (id !== imgRequestId || !followsLivePreview()) return;
+    img.dataset.fi = String(preview.frameIndex);
+    img.hidden = false;
+    els['frame-empty'].style.display = 'none';
+    refreshEvictBadge();
+    drawOverlay(currentFrame());
+  },
+});
 
 function cancelFrameImageLoads() {
+  livePreview.stop();
   imgRequestId++;
   liveImageRequestId = null;
   pendingLiveImage = null;
@@ -354,7 +422,11 @@ export function refreshEvictBadge() {
   const badge = els['history-badge'];
   if (!badge) return;
   const frame = currentFrame();
-  if (frame && !isLiveEdge() && evictedFrames.has(String(frame.frame_index))) {
+  if (followsLivePreview() && img.dataset.preview === 'live') {
+    badge.hidden = false;
+    badge.textContent = 'Live · gameplay age unknown';
+    badge.title = 'Newest decoded picture. The stream has no phone capture timestamp, so buffering before decoding is not included in server age headers. Pause to inspect an analyzed frame with matching boxes and suggestions.';
+  } else if (frame && !isLiveEdge() && evictedFrames.has(String(frame.frame_index))) {
     badge.hidden = false;
     badge.textContent = 'frame evicted — showing last image';
     badge.title = 'This frame left the bounded server history; overlays withheld.';
@@ -408,14 +480,23 @@ async function loadFrameImage(url, fi, edge) {
       try { URL.revokeObjectURL(lastObjectUrl); } catch (e) { /* gone */ }
     }
     lastObjectUrl = objUrl;
-    if (fi !== null) {
-      img.dataset.fi = String(fi);
+    const actualFi = res.headers.get('X-Frame-Index') || fi;
+    delete img.dataset.fi;
+    img.dataset.loadingRequest = String(id);
+    img.src = objUrl;
+    drawOverlay(currentFrame());
+    if (typeof img.decode === 'function') {
+      try { await img.decode(); } catch (error) { return; }
+    }
+    if (id !== imgRequestId) return;
+    if (actualFi !== null) {
+      img.dataset.fi = String(actualFi);
       evictedFrames.delete(String(fi));
     } else {
       delete img.dataset.fi;
     }
-    img.src = objUrl;
     refreshEvictBadge();
+    drawOverlay(currentFrame());
   } finally {
     if (edge && liveImageRequestId === id) {
       liveImageRequestId = null;
@@ -437,6 +518,8 @@ export function imageMatchesFrame(frame) {
 
 export function bindImageEvents() {
   img.addEventListener('load', () => {
+    if (img.dataset.preview !== 'roi' && img.dataset.loadingRequest
+        && Number(img.dataset.loadingRequest) !== imgRequestId) return;
     img.hidden = false;
     els['frame-empty'].style.display = 'none';
     // ROI review draws its own boxes, not session overlays.
@@ -455,6 +538,8 @@ export function bindImageEvents() {
   });
 
   img.addEventListener('error', () => {
+    if (img.dataset.preview !== 'roi' && img.dataset.loadingRequest
+        && Number(img.dataset.loadingRequest) !== imgRequestId) return;
     if (!currentFrame()) {
       img.hidden = true;
       els['frame-empty'].style.display = '';
@@ -494,6 +579,14 @@ export function resetSession(label) {
   evictedFrames.clear();
   lastEvictToastFi = null;
   cancelFrameImageLoads();
+  delete img.dataset.src;
+  delete img.dataset.fi;
+  delete img.dataset.preview;
+  img.hidden = true;
+  els['frame-empty'].style.display = '';
+  state.sessionRunning = false;
+  state.sessionMode = null;
+  sessionStatusError = null;
   state.sessionLabel = label || '';
   state.selectedRank = null;
   state.sessionPin = null;
@@ -535,7 +628,7 @@ export function applySessionVisibility(s) {
   if (mini) {
     if (collapsed) {
       mini.hidden = false;
-      mini.textContent = (s && s.mode ? s.mode : state.mode) + ' · ' + n + ' frames';
+      mini.textContent = (s && s.mode ? s.mode : state.mode) + ' · ' + n + ' history frames';
     } else {
       mini.hidden = true;
     }
@@ -601,7 +694,7 @@ export function applyPersistedSettings() {
     }
   }
   for (const [id, key] of [['select-device', 'device'], ['select-live-device', 'liveDevice'],
-      ['select-transport', 'transport']]) {
+      ['select-transport', 'transport'], ['select-stream-width', 'streamWidth']]) {
     const el = els[id];
     if (!el || saved[key] === undefined || saved[key] === null) continue;
     const match = Array.from(el.options).some((o) => o.value === String(saved[key]));
@@ -846,6 +939,8 @@ export async function startVideo() {
     state.roiAdapt.showInMiddle = false;
     syncRoiPreviewClass(false);
     resetSession(basename(state.uploadedVideoName || videoPath));
+    state.sessionRunning = true;
+    state.sessionMode = 'video';
     state.playing = true;
     els['btn-play'].textContent = 'Pause';
     sseFailed = false;
@@ -877,6 +972,8 @@ export async function startLive() {
     await apiPost('/api/live/start', {
       serial,
       transport: els['select-transport'].value,
+      stream_max_width_px: !els['select-stream-width']?.value || els['select-stream-width'].value === 'native'
+        ? null : Number(els['select-stream-width'].value),
       checkpoint: els['select-live-checkpoint'] ? (els['select-live-checkpoint'].value || null) : null,
       device: els['select-live-device'] ? els['select-live-device'].value : 'auto',
       calibration: els['input-calibration'].value.trim(),
@@ -884,11 +981,14 @@ export async function startLive() {
       confirm_live: confirmLive,
     });
     resetSession(serial);
+    state.sessionRunning = true;
+    state.sessionMode = 'live';
     state.playing = true;
     els['btn-play'].textContent = 'Pause';
     sseFailed = false;
     scheduleFrames();
     startStream();
+    refreshImage();
     pollStatus();
     pollFrames();
   } catch (err) {
@@ -901,6 +1001,8 @@ export async function stopSession() {
   closeStream();
   try {
     await apiPost('/api/stop', {});
+    state.sessionRunning = false;
+    refreshImage();
   } catch (err) {
     showError(String(err && err.message || err));
   }
@@ -1102,6 +1204,7 @@ export function bindSessionEvents() {
       state.cursor = state.history.length - 1;
       renderCurrent();
     }
+    refreshImage();
     scheduleFrames();
   });
   els['btn-prev'].addEventListener('click', () => seek(state.cursor - 1));
@@ -1120,6 +1223,7 @@ export function bindSessionEvents() {
   bindPersistedSelect('select-device', 'device');
   bindPersistedSelect('select-live-device', 'liveDevice');
   bindPersistedSelect('select-transport', 'transport');
+  bindPersistedSelect('select-stream-width', 'streamWidth');
   bindPersistedSelect('select-checkpoint', 'videoCheckpoint');
   bindPersistedSelect('select-live-checkpoint', 'liveCheckpoint');
 

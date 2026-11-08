@@ -312,7 +312,6 @@ def _run_pump_loop(
     decide_with_scores = _try_import_decide_with_scores()
     frames = emitted = waits = proposed_plays = dispatched_plays = 0
     last_play_timestamp_s: float | None = None
-    last_lobby_push_monotonic = 0.0
     own_tracker_seen: Any = None
     own_baseline = 0
     enemy_seen_ids: set[str] = set()
@@ -332,6 +331,10 @@ def _run_pump_loop(
             if source_frame is None:
                 break
             frames += 1
+            live_diagnostics = frontend_session.live_diagnostics
+            timing_kwargs = {"collect_timing": True} if live_diagnostics is not None else {}
+            if live_diagnostics is not None:
+                live_diagnostics.begin_analysis(int(source_frame.frame_index))
             native_image = source_frame.image
             image = native_image
             if normalize:
@@ -347,6 +350,7 @@ def _run_pump_loop(
                     yolo_tower_hp_detections=yolo_tower_hp_detections,
                     rois=effective_rois,
                     native_frame=native_image,
+                    **timing_kwargs,
                 )
             else:
                 analysis = process_frame_fn(
@@ -356,8 +360,14 @@ def _run_pump_loop(
                     yolo_tower_hp_detections=yolo_tower_hp_detections,
                     rois=None,
                     native_frame=None,
+                    **timing_kwargs,
                 )
             timing_ms["process_frame"] = (time.monotonic() - t_stage) * 1000.0
+            if live_diagnostics is not None:
+                timing_ms.update({
+                    "vision." + name: elapsed
+                    for name, elapsed in analysis.vision_timing_ms.items()
+                })
             t_stage = time.monotonic()
             if filter_live_analysis_fn is not None:
                 analysis = filter_live_analysis_fn(analysis)
@@ -445,6 +455,7 @@ def _run_pump_loop(
                             elif not execute:
                                 result = "dry-run"
                             else:
+                                t_dispatch = time.monotonic()
                                 dispatch_fn(
                                     phone,
                                     action_obj,
@@ -452,6 +463,7 @@ def _run_pump_loop(
                                     calibration=calibration,
                                     observation=observation,
                                 )
+                                timing_ms["dispatch"] = (time.monotonic() - t_dispatch) * 1000.0
                                 # Mirror live seeding so the policy sees its own
                                 # dispatched card while the detector catches up.
                                 try:
@@ -485,10 +497,12 @@ def _run_pump_loop(
                                 dispatched_plays += 1
                                 result = "dispatched"
                                 if post_action_delay_s:
+                                    t_delay = time.monotonic()
                                     if stop_event is not None:
                                         stop_event.wait(post_action_delay_s)
                                     else:
                                         time.sleep(post_action_delay_s)
+                                    timing_ms["post_action_delay"] = (time.monotonic() - t_delay) * 1000.0
             t_stage = time.monotonic()
             record_obj = record_fn(
                 source_frame, step, action=action_json, result=result
@@ -545,14 +559,18 @@ def _run_pump_loop(
                 enemy_plays=new_enemy,
                 detections=detection_rows,
             )
-            if should_emit:
-                frontend_session.push(frontend_frame)
-            else:
-                now_mono = time.monotonic()
-                if now_mono - last_lobby_push_monotonic >= 1.0:
-                    frontend_session.push(frontend_frame)
-                    last_lobby_push_monotonic = now_mono
+            # Extraction and JPEG encoding have already completed. Publish
+            # every result, including lobby frames, rather than hiding work
+            # behind a one-second UI throttle.
+            frontend_session.push(frontend_frame)
             elapsed = time.monotonic() - started
+            if live_diagnostics is not None:
+                live_diagnostics.record_analysis(
+                    frame_index=int(source_frame.frame_index),
+                    publication_s=float(source_frame.timestamp_s),
+                    timing_ms={**timing_ms, "total": elapsed * 1000.0},
+                    in_game=in_game,
+                )
             if poll_interval:
                 remaining = poll_interval - elapsed
                 if remaining > 0:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -26,6 +28,10 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    if os.environ.get("CR_BOT_LIVE_DIAGNOSTICS") == "1":
+        from .services.live_diagnostics import LivePreviewTimingMiddleware
+
+        app.add_middleware(LivePreviewTimingMiddleware)
     app.include_router(system_router)
     app.include_router(video_router)
     app.include_router(live_router)

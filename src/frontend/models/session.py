@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import collections
 import threading
-from typing import Any
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
-from .frames import FrontendFrame
+from .frames import FrontendFrame, LivePreviewFrame
+
+if TYPE_CHECKING:
+    from ..services.live_diagnostics import LiveDiagnostics
 
 
 class FrontendSession:
@@ -25,6 +29,21 @@ class FrontendSession:
         # save/restore, so the running session is never disturbed.
         self.actor: Any | None = None
         self.actor_lock = threading.Lock()
+        self.live_diagnostics: LiveDiagnostics | None = None
+        self.live_frame_clock = "workstation-source-publication"
+        self._live_preview_provider: Callable[[], LivePreviewFrame | None] | None = None
+
+    def set_live_preview_provider(
+        self, provider: Callable[[], LivePreviewFrame | None] | None
+    ) -> None:
+        with self._lock:
+            self._live_preview_provider = provider
+
+    def get_live_preview(self) -> LivePreviewFrame | None:
+        with self._lock:
+            provider = self._live_preview_provider
+        # Encoding must not hold the history lock or wait for inference.
+        return provider() if provider is not None else None
 
     @property
     def history(self) -> list[FrontendFrame]:
