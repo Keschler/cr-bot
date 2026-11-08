@@ -1,5 +1,8 @@
+# Local runs, datasets, uploads, and reports
 outputs/
 uploads/
+output/
+tmp/
 data/audio_classifier/mined/
 data/eval/replay_cache/
 reviews/
@@ -7,8 +10,19 @@ data/eval/ground_truth/*.audit.json
 data/eval/ground_truth/*.audit.json.lock.json
 data/eval/ground_truth/README_GPT_VIDEO_ANNOTATION(1).md
 capture/runs/inference/
+# Python, test, and packaging caches
 **/__pycache__/
-*.pyc
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+vnev/
+node_modules/
+
+# Local agent and capture state
 .codex
 capture/.cache/
 capture/.pyinstaller-cache/

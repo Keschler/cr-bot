@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 SRC_ROOT = ROOT / "src"
 INVOCATION_CWD = Path.cwd()
 sys.path.insert(0, str(SRC_ROOT))
