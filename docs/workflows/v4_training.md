@@ -1,32 +1,24 @@
 # V4 training and evaluation
 
-The strategic target is a very strong policy for the fixed Hog 2.6 deck
-against the broadest enemy-deck set the simulator can represent. V4 provides
-three useful training paths: reward-only PPO from a random actor, reward-only
-PPO from a public-observation bootstrap actor, and outcome-search distillation
-from that same bootstrap actor. The paths are tools for reaching the policy
-goal, not a permanent requirement to run one fixed comparison. Frontier-
-initialized PPO remains a separate experiment and must not be reported as raw
-RL. Historical Stage-1/Stage-2 generators, timing curricula, and serialized
-search-dataset builders are retired.
+Use [project status](../../STATUS.md) for the strategic goal, current checkpoint
+selection and latest experiment decision. This guide documents the reusable
+V4 runner interfaces: public-observation bootstrap, reward-only PPO,
+outcome-search distillation, and separate frontier-initialized PPO experiments.
+Methods and budgets should follow measured policy weaknesses and complete-match
+evidence.
 
-The current experiment is the bounded pilot in the
-[comparison notes](v4_comparison_plan.md). It uses fresh real-deck training
-and development pools, checks public-only legality, bootstrap coverage,
-independent search corrections, actor exports, and measured cost, and fits
-within a local one-day decision window when the current throughput estimate
-holds. It does not require or authorize a large fixed main run. The 40-deck
-catalog (30 training and 10 reserved evaluation decks across five
-archetypes) is the present data boundary; the longer-term goal includes all
-supported enemy decks and special card forms.
+The [policy-learning design](../design/policy-learning.md),
+[tactical-learning workflow](v4_tactical_learning.md), and
+[replay-correction workflow](v4_replay_corrections.md) describe additional tools.
+The [experiment archive](../README.md#experiment-records) preserves the completed
+comparisons, their original decisions, and their limits.
 
-The commands below document the runner interfaces. Use fresh output roots and
-record the source revision before each experiment. For the current pilot,
-override broad defaults explicitly: use `--train-profile real
+Commands below are examples, not an experiment mandate. Use a new output root
+for changed source or settings and record the source revision before running.
+The historical bounded pilot overrode broad defaults with `--train-profile real
 --train-matches-per-archetype 1`, `--sealed-matches-per-archetype 0`, and a
-distinct pool seed for the development root. Run distillation with `--contexts 32
---methods soft-kl --seeds 900`; otherwise the runner starts its larger
-method/context/seed sweep.
+distinct development pool seed. `--contexts 32 --methods soft-kl --seeds 900`
+limits distillation to one declared setting; omitting them starts a larger sweep.
 
 ## Teacher bootstrap for the bootstrap-initialized arms
 
@@ -62,8 +54,9 @@ from one match. Reaching the preferred count never truncates a trajectory.
 The main fixed batch requires each match to terminate; smoke may stop at its
 short decision cap and records that truncation. The batch fails if it observes
 no PLAY or no WAIT labels; inspect mode
-coverage and collect more matches before using the actor. The bootstrap uses six
-scripted opponent archetypes; the real-deck catalog is used downstream.
+coverage and collect more matches before using the actor. The bootstrap CLI
+uses six scripted opponent archetypes by default. The collection API also
+accepts explicit catalog opponents, as described below.
 The manifest records collection settings and per-archetype match, mode,
 phase, and elapsed-time coverage alongside the loss history. Check these
 before using its actor for collection. Balanced sampling deliberately changes
@@ -86,6 +79,31 @@ PYTHONPATH=.:src outputs/venv/bin/python scripts/run_v4_bootstrap.py \
 ```
 
 Smoke output is an integration check and makes no quality claim.
+
+For a catalog initializer experiment, `catalog_training_opponent_specs()` in
+[`bootstrap.py`](../../simulator/rl/v4/bootstrap.py) returns the exact 30 training
+deck identities, card orders, strategies, and controller seeds used by native
+evaluation. Pass these through `BootstrapConfig.opponent_specs`; explicit
+mode runs the complete specs × `episodes_per_opponent` grid. In this mode,
+`n_states` does not shorten the grid, and `samples_per_episode` bounds retained
+states from each complete trajectory. Reserved deck IDs and matching card sets
+are rejected before collection.
+
+Catalog retention samples uniformly within driver/card/WAIT strata, then
+allocates the per-episode quota while preserving every observed stratum. A
+budget too small to preserve support raises an error. Provenance records actual
+match seeds, controller identities, eligible/retained stratum counts, and own
+elixir. Inverse inclusion weights apply to mode loss; conditional card and
+placement losses retain the sampled label balance.
+
+`generate_bootstrap_dataset()` accepts a label `teacher`, an optional separate
+`action_teacher`, and a `driver_name`. The opt-in `saving_teacher_label` uses
+public air-defense capabilities, spell target classes, urgent-threat priority,
+and conservative existing-defender coverage. Its coverage rule is a hypothesis
+to test in complete matches. `relabel_bootstrap_samples()` changes targets on
+the same retained observations without changing identities or inclusion
+weights, allowing an equal-input comparison of teachers. These APIs leave the
+historical CLI collector and default teacher available as controls.
 
 ## Frontier and search training
 
@@ -177,7 +195,7 @@ PYTHONPATH=.:src outputs/venv/bin/python scripts/run_v4_raw_ppo_starts.py \
 The `pinned` profile above is the controlled six-archetype baseline. For the
 main deck-distribution experiment, use `--profile real` for PPO and
 `--train-profile real` for frontier generation. Both use the same versioned
-[real deck catalog](../simulator/rl/v4/real_decks.json), seeded match openings,
+[real deck catalog](../../simulator/rl/v4/real_decks.json), seeded match openings,
 and five training archetypes. The catalog currently contains 30 complete
 training decks and ten disjoint evaluation decks from RoyaleAPI and Deck Shop
 (six training and two evaluation decks per archetype),
@@ -224,7 +242,7 @@ some combinations are strategically incoherent. Use it for simulator stress
 tests and action-coverage checks. `pinned`, `mixed`, and `real` are distinct
 experiments. Keep the profile and opponent list fixed within each comparison.
 
-After the controlled comparison, add frozen V4 actors to a real-deck PPO pool
+For an experiment with learned opponents, add frozen V4 actors to a real-deck PPO pool
 from previous runs. Each `--policy-opponent` adds one mirror-match cohort of
 the configured match count; repeat it for distinct older checkpoints. The
 runner records an absolute path and SHA-256 for each actor, verifies the hash
@@ -246,7 +264,7 @@ each comparison run, then add a new actor only between runs. Frozen V4 actors
 currently play the learner's deck in mirror matches, while scripted opponents
 cover the other decks.
 
-First run reward-only PPO from the bootstrap actor. The example comparison
+To run reward-only PPO from the bootstrap actor, use the following example. The example comparison
 checkpoint below is illustrative; replace it with the actor selected from the
 distillation development-validation reports. `--training-source match-start`
 rejects search-labelled entries, and `--bc-coef 0` removes anchor imitation.
@@ -351,12 +369,16 @@ action distribution and entropy. Public history is synchronized through
 | `v4/raw_ppo.py` | Search-free match-opening entries for reward-only PPO |
 | `v4/real_decks.py` and `real_decks.json` | Validated source-linked training/evaluation deck catalog |
 | `v4/policy_opponent.py` | Frozen V4 mirror opponents with player-one public memory |
+| `v4/opponent_population.py` | Pinned historical snapshots and train-only sampling/starts |
+| `v4/critic_warmup.py` | Completed-episode value fitting and validation gate |
+| `v4/policy_development.py` | Paired resumable teacher and opponent-style screens |
 | `v4/simulator_teacher.py` | Small public-state rules labeler used for bootstrap and audit |
 | `v4/model_v4.py` | Recurrent actor, action heads, and legality masks |
 | `v4/v4_ppo/` | Checkpoint loading, rollouts, updates, diagnostics, and value helpers |
 | `v4/frontier_ppo/` | Frontier-entry collection and paired evaluation |
 | `v4/search_distillation/` | Audited search targets and resumable distillation |
 | `foundation/opponent_pool.py` | Deterministic opponent decks and controllers |
+| `foundation/opponent_styles.py` | Explicit train/dev tactical styles and their identities |
 
 The simulator remains the authority for action legality and state transitions.
 The actor receives public observations; opponent controllers receive

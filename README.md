@@ -1,180 +1,20 @@
 # Clash Royale RL Bot
 
-This project runs a recurrent Clash Royale policy from live Android gameplay.
-It captures the newest phone frame, extracts public game state with computer
-vision, converts it to `PolicyObservationV2`, and lets the policy choose
-`WAIT` or `PLAY(card_slot, (column, row))`.
+Computer vision, public-state tracking, a deterministic battle simulator, and
+policy-learning tools for Clash Royale. The browser applications support
+recorded-video analysis, live phone observation, policy inspection, and
+simulator replay.
 
-The **Arena Replay Analyst** browser frontend brings recorded-video analysis,
-live phone capture, and policy inspection into one workspace. Inspect detected
-objects, cards, elixir, tower health, action history, and policy suggestions;
-scrub the frame timeline, edit labels, and export results.
+**[Current goal and status](STATUS.md)** is the single place for the selected
+policy, measured results, remaining work, and evidence limits.
+[Documentation](docs/README.md) separates reusable workflows, design notes,
+and dated experiments.
 
-<img src="docs/images/frontend-banner.png" alt="Arena Replay Analyst frontend showing live gameplay, action history, detected objects, and policy suggestions" width="1600" />
+<img src="docs/images/frontend-banner.png" alt="Arena Replay Analyst showing gameplay, action history, detected objects, and policy suggestions" width="1600" />
 
-## Watch simulator and training matches
+## Setup
 
-The separate **V4 Arena Lab** app provides a tactical simulator arena, recorded
-match playback, live sampled training episodes, checkpoint exhibitions, policy
-overlays, training charts, and run comparisons:
-
-```bash
-PYTHONPATH=.:src outputs/venv/bin/python -m sim_viewer
-```
-
-Open **http://127.0.0.1:8010/**. It discovers local V4 artifacts under
-`outputs/v4/`. Live training episodes require opt-in recording on newly started
-runs. See the [viewer guide](src/sim_viewer/README.md) for recording setup,
-controls, and checkpoint compatibility.
-
-## Run the frontend
-
-Complete the [development setup](#development), then run from the repository
-root with the environment activated:
-
-```bash
-uvicorn src.frontend.server:app --reload
-```
-
-Open **http://127.0.0.1:8000/**. The UI is served by the Python backend and uses
-native JavaScript modules; no Node.js installation or frontend build is needed.
-The server loads vision and policy dependencies when analysis starts. Analysis
-also needs the local detector/classifier assets and a policy checkpoint; the
-checkpoint selection is explicit; set `CR_BOT_V4_CHECKPOINT` for a configured
-default or choose a V4 checkpoint in the UI.
-
-### Analyze a video
-
-Select **Video** or **Open Replay**, upload a recording, and choose a checkpoint
-and inference device. Set the start frame, frame stride, and frame limit as
-needed. For recordings with a different layout, review and adjust the proposed
-ROIs before starting analysis.
-
-Use the timeline to inspect frames and confirmed own/opponent plays. Toggle
-boxes, grid, and labels, inspect policy suggestions, or edit detections and
-**Re-evaluate** the selected frame. Export frame data as JSON, action history as
-CSV, or the current frame as an image. Recent replays retain the parameters for
-rerunning analysis; they are not complete saved inference caches.
-
-### Connect a live phone
-
-Enable USB debugging, authorize the phone, and use `adb devices` to find its
-serial. ADB must be available on the server; H.264 streaming also needs FFmpeg.
-Select **Live**, enter the serial, and choose a checkpoint, transport
-(H.264 stream or screenshot polling), and inference device (automatic, CPU, or
-CUDA). Press **Start** to begin and **Stop** to end the session.
-
-Leave **Execute actions on device** unchecked to observe and inspect policy
-decisions. To enable taps, check it and **I confirm live control of this device**.
-An empty Calibration field uses the repository's
-[`ASUS AI2302 profile`](simulator/physical_lab/calibrations/phone-a-candidate.json)
-for its 1080×2400 layout. For another device/layout, enter the path to its own
-calibration JSON; relative paths resolve from the repository root.
-
-See the [frontend guide](src/frontend/README.md) for keyboard shortcuts,
-ROI editing, session behavior, and API endpoints.
-
-## Build and run the V4 binary
-
-For a standalone command-line workflow, first create a V4 checkpoint and
-[build a new native binary](simulator/RUN_PROTOTYPE_LIVE.md). The build bundles
-the selected checkpoint, Python runtime, CPU PyTorch, visual extractor, KataCR
-inference, card assets, ADB, and FFmpeg. The resulting executable does not
-require Python on the recipient's machine. Earlier prototype release binaries
-use a different checkpoint format and are not V4 builds.
-
-```text
-phone → live stream → visual extractor → public state
-      → policy → card + placement → ADB → phone action
-```
-
-The native build targets Linux x86-64 and uses CPU inference. Measure its size
-and live throughput after building from the current source and checkpoint.
-The commands below assume the built executable has been copied into the
-repository root.
-
-### 1. Make it executable
-
-```bash
-chmod +x prototype-live-linux-x86_64
-```
-
-### 2. Test on a video
-
-Use a compatible plain V4 state-dict checkpoint:
-
-```bash
-./prototype-live-linux-x86_64 \
-  --checkpoint /absolute/path/to/v4_actor.pt \
-  --video /absolute/path/to/gameplay.mp4 \
-  --max-frames 20
-```
-
-`--checkpoint` is required unless the binary was built with an explicit
-`CR_BOT_V4_CHECKPOINT` value.
-
-The repository also includes a [1080×2400 sample gameplay video](assets/pictures/gameplay.mp4)
-that can be used to reproduce the extractor locally. It starts with roughly
-five seconds of loading and the versus animation, so sampling every tenth
-source frame reaches the in-game section without preprocessing the video:
-
-```bash
-./prototype-live-linux-x86_64 \
-  --checkpoint /absolute/path/to/v4_actor.pt \
-  --video assets/pictures/gameplay.mp4 \
-  --frame-stride 10 \
-  --max-frames 30 \
-  --jsonl-out /tmp/prototype-gameplay.jsonl
-```
-
-`--max-frames` counts processed frames; with `--frame-stride 10`, these 30
-frames cover approximately the first 10 seconds. Use `--frame-stride 1` to
-process every frame, allowing enough frames to pass the opening animation.
-### 3. Dry run on a phone
-
-Enable USB debugging, connect and authorize the phone, then use its exact ADB
-serial:
-
-```bash
-./prototype-live-linux-x86_64 \
-  --checkpoint /absolute/path/to/v4_actor.pt \
-  --serial YOUR_PHONE_SERIAL \
-  --max-frames 100 \
-  --jsonl-out /tmp/prototype-live.jsonl
-```
-
-> [!NOTE]
-> This is a dry run by default: it observes the game and records decisions,
-> but never taps the phone. The default transport is a low-latency H.264
-> stream; use `--adb-transport screenshot` for diagnosis.
-
-### 4. Enable live actions
-
-> [!WARNING]
-> Live actions are calibrated only for a **1080×2400 phone**. Do not enable
-> taps on another resolution or layout without a separately reviewed
-> calibration.
-
-Validate dry runs first. Real taps require a phone-specific calibration file
-and both confirmation flags:
-
-```bash
-./prototype-live-linux-x86_64 \
-  --checkpoint /absolute/path/to/v4_actor.pt \
-  --serial YOUR_PHONE_SERIAL \
-  --calibration /absolute/path/to/phone-calibration.json \
-  --execute \
-  --confirm-live
-```
-
-Before every `PLAY`, the controller verifies the selected card and applies the
-calibrated card and arena taps. `WAIT` never taps the phone. Press `Ctrl-C` to
-stop the controller.
-
-## Development
-
-Python 3.12 is required for source development because the pinned PyTorch and
-JAX wheels do not support the newer system Python versions:
+Use Python 3.12 and the pinned KataCR submodule:
 
 ```bash
 git clone https://github.com/Keschler/cr-bot.git
@@ -186,170 +26,121 @@ python -m pip install --upgrade pip
 pip install -e .
 ```
 
-Initialize KataCR at the pinned revision before starting analysis. The live
-runtime can fall back to an older checkout under `capture/vendor`; that copy
-may lack the tracker compatibility fixes in `vendor/external/KataCR`.
+Dependencies are declared in `requirements.txt` and loaded by
+`pyproject.toml`. Local environments and generated artifacts live under
+`outputs/`. Detector/classifier assets and policy checkpoints are required
+for analysis; heavy dependencies load when analysis starts.
 
-The source launcher accepts the same options as the packaged executable:
+## Applications and commands
+
+| Purpose | Entry point | Guide |
+|---|---|---|
+| Video analysis and live phone workspace | `uvicorn src.frontend.server:app --reload` | [Frontend](src/frontend/README.md) |
+| Simulator arena, training views and evaluation playback | `PYTHONPATH=.:src python -m sim_viewer` | [Arena Lab](src/sim_viewer/README.md) |
+| Vision/tracking CLI | `cr-bot --help` | [Action evaluation](docs/eval/README.md) |
+| V4 training and evaluation | Scripts under `scripts/run_v4_*.py` | [Training workflow](docs/workflows/v4_training.md) |
+| Replay correction experiments | `python scripts/run_v4_replay_corrections.py --help` | [Correction workflow](docs/workflows/v4_replay_corrections.md) |
+| Standalone live/video policy runner | `python simulator/run_prototype_live.py --help` | [Live runner and packaging](simulator/RUN_PROTOTYPE_LIVE.md) |
+| Controlled two-phone measurements | `PYTHONPATH=.:src python -m simulator lab --help` | [Physical lab](simulator/physical_lab/README.md) |
+
+Run commands from the repository root with `outputs/venv/` activated. The
+frontend uses native JavaScript modules and requires no Node build or npm
+dependencies.
+
+### Analyze video or observe a phone
+
+Start the frontend and open **http://127.0.0.1:8000/**. Choose **Video** to
+upload a recording, or **Live** to select an explicitly identified ADB device.
+Choose a compatible V4 checkpoint in the UI or configure
+`CR_BOT_V4_CHECKPOINT`. Review the ROI/calibration for the recording or phone.
+
+Live capture supports H.264 streaming or screenshot polling; streaming needs
+ADB and FFmpeg. Observation runs without taps. Device execution additionally
+requires the UI's execution confirmation and the exact phone's reviewed
+calibration. The [frontend guide](src/frontend/README.md) covers controls,
+corrections, exports, and APIs.
+
+### Watch simulator evaluations
+
+Start Arena Lab and open **http://127.0.0.1:8010/**. Choose **Evaluation**,
+search for a deck such as `xbow`, `bait`, or `lavaloon`, and press Play.
+Filter **Result** by Wins/Losses or use **Order** to group outcomes. Local
+recordings and training artifacts are discovered under `outputs/v4/`.
+
+The [checkpoint and replay guide](docs/workflows/checkpoints-and-replays.md)
+explains local selection receipts, exact evaluation exports, and playback.
+Training records and model checkpoints are local artifacts rather than files
+automatically supplied by a source checkout.
+
+## Development and validation
 
 ```bash
-python simulator/run_prototype_live.py \
-  --checkpoint /absolute/path/to/v4_actor.pt \
-  --video /absolute/path/to/gameplay.mp4 \
-  --max-frames 20
+outputs/venv/bin/python -m pytest \
+  --ignore=tests/test_audio_dataset.py \
+  --ignore=tests/test_mining_pipeline.py
 ```
 
-Run the default test suite with:
+Test configuration lives in `pytest.ini`. Run focused tests while changing a
+component, then the default suite. The two excluded audio/mining files are
+run explicitly when changing those features. Repository conventions and
+subtree guidance are in [AGENTS.md](AGENTS.md).
 
-```bash
-pytest --ignore=tests/test_audio_dataset.py --ignore=tests/test_mining_pipeline.py
-```
-
-See [`simulator/RUN_PROTOTYPE_LIVE.md`](simulator/RUN_PROTOTYPE_LIVE.md) for
-complete ADB setup, option reference, troubleshooting, safety gates, and native
-PyInstaller build instructions.
-
-## Simulator and RL status
-
-The strategic goal is a very strong policy for the fixed Hog 2.6 deck against
-the broadest enemy-deck set the project can represent, eventually including
-all supported enemy decks and special card forms. The policy is trained
-against a deterministic, versioned Level-11 simulator. The actor receives
-public observations only; privileged simulator state is restricted to the
-training critic. The V4 workflow includes a simulator bootstrap, frontier
-search, search distillation, recurrent PPO, and held-out evaluation.
-
-The V1 research ruleset contains 124 definitions, including the 109-card
-eligible opponent roster. The current source-linked real-deck catalog is
-limited to 40 decks: 30 training and 10 evaluation decks across five
-archetypes. Its metadata remains explicitly `training_ready: false` because
-fidelity evidence is incomplete; that status does not block simulator
-learning. Current checkpoint results are simulator evidence, not proof of
-live-game strength or coverage of every enemy deck.
-
-The current training step is the bounded V4 pilot. Detailed simulator
-architecture, training commands, evaluation boundaries, and performance notes
-are in [`simulator/README.md`](simulator/README.md).
-
-For V4 active-search distillation and controlled PPO learning curves, see
-[the V4 training workflow](docs/v4_training.md). It documents public-history
-inputs, fixed-decision WAIT semantics, paired evaluation, and checkpoint
-compatibility.
-
-## Repository layout
+## Source layout
 
 ```text
 cr-bot/
+├── STATUS.md                 canonical goal, selected policy, results and work
+├── docs/
+│   ├── workflows/            reusable training and evaluation instructions
+│   ├── design/               design and policy-learning strategy
+│   ├── experiments/          dated results and diagnoses
+│   └── eval/                 video annotation and action evaluation
+├── src/
+│   ├── cr_bot/               vision, domain models, trackers, replay and CLI
+│   ├── frontend/             video/live analysis web application
+│   └── sim_viewer/           simulator arena and evaluation playback
 ├── simulator/
-│   ├── run_prototype_live.py       command-line live/video launcher
-│   ├── RUN_PROTOTYPE_LIVE.md       distribution and live-operation guide
-│   ├── prototype_live.spec         one-file PyInstaller build
-│   ├── physical_lab/               phone experiments and live control
-│   │   ├── capture/                devices, calibration, and capture
-│   │   ├── sensing/                screen and policy observations
-│   │   ├── workflow/               campaigns and run coordination
-│   │   ├── analysis/               comparison and fidelity analysis
-│   │   └── support/                shared schemas and artifacts
-│   ├── rl/                         policy and training packages
-│   │   ├── v4/                     current search and V4 training
-│   │   └── foundation/             opponent pool and shared PPO objectives
-│   ├── engine/                     deterministic battle engine
-│   ├── rulesets/                   versioned card and mechanic definitions
-│   ├── rosters/                    supported opponent roster data
-│   ├── scenario.py                 canonical scenario schema and loader
-│   └── tests/                      simulator-local tests
-├── src/frontend/                  Arena Replay Analyst web application
-│   ├── server.py                   Uvicorn entry point (app compatibility shim)
-│   ├── app.py                      FastAPI factory, routers, and static serving
-│   ├── api/                        session, frame, stream, ROI, and edit endpoints
-│   ├── models/                     requests, analyzed frames, and session state
-│   ├── services/                   workers, checkpoints, uploads, replay library
-│   ├── runners/                    video/live orchestration and shared frame pump
-│   ├── corrections/                edited observations and policy re-evaluation
-│   ├── scoring.py                  policy suggestion scoring
-│   └── static/                     HTML, CSS, and native JavaScript modules
-├── src/cr_bot/
-│   ├── app/                        frame pipeline and runtime orchestration
-│   ├── vision/                     detector, OCR, and frame extraction
-│   ├── domain/                     shared game-state and card models
-│   ├── features/                   policy feature and action-space builders
-│   ├── trackers/                   temporal action and state tracking
-│   ├── audio/                      audio models and features
-│   ├── replay/                     serialized frame-analysis caches
-│   └── eval/                       action evaluation tools
-├── capture/                        capture tooling and packaged live dependencies
-├── assets/                         detector, classifier, and template assets
-├── configs/                        detector training configuration
-├── data/                           evaluation inputs and local datasets
-├── scripts/                        training, evaluation, and debugging scripts
-├── tests/                          project tests, including tests/simulator/
-├── uploads/                        local uploaded videos and recent-replay metadata
-├── vendor/external/KataCR/         patched detector dependency
-└── pyproject.toml                  Python package and dependency configuration
+│   ├── engine/               deterministic battle engine
+│   ├── rl/foundation/        shared opponents and learning objectives
+│   ├── rl/v4/                policy, search, training and correction tools
+│   ├── physical_lab/         phone capture, control and fidelity measurements
+│   ├── rulesets/             versioned cards and mechanics
+│   └── tests/                simulator-local tests
+├── scripts/                  supported training, evaluation and dataset tools
+│   └── debug/                diagnostic entry points
+├── tests/                    project, frontend and simulator integration tests
+├── assets/                   detector, classifier and template assets
+├── data/                     curated evaluation inputs and source lists
+├── capture/                  capture adapter used by packaging
+├── packaging/                capture packaging specifications
+├── vendor/external/          pinned external dependencies
+└── outputs/                  ignored environments, models, recordings and runs
 ```
 
-## Current limitations
-
-- The packaged executable currently targets Linux x86-64 and CPU inference.
-- Live execution requires an accurate calibration for the exact phone/layout.
-- Vision errors in cards, entities, elixir, timer, or tower HP can affect policy
-  decisions; validate a dry run before enabling taps.
-- The simulator is provisional and does not yet claim complete live-game
-  mechanical fidelity.
-- The current policy is an experimental prototype and has not demonstrated
-  general live-game strength.
-
-## Credits
-
-Battlefield detection uses the patched KataCR dual-YOLO runtime. Hand-card and
-next-card classification use project-trained MobileNetV3-Small models.
+Existing local dataset media under `dataset_generation/data/` remain at their
+referenced paths. Standalone root recordings, the orphan prototype model,
+scratch renders and PDF reports have been preserved under `outputs/local/`.
+PyInstaller intermediates and obsolete generated executables can be rebuilt
+from the retained source and specifications.
 
 ## Architecture
 
 ```mermaid
-flowchart TD
-    UI["Browser: Arena Replay Analyst"]
-    API["FastAPI routes · src/frontend/api"]
-    Session["Session manager + background worker"]
-    Video["Video runner · uploaded recording"]
-    Live["Live runner · ADB stream / screenshots"]
-    Vision["cr_bot vision · KataCR, classifiers, OCR"]
-    Tracking["Frame pipeline + MatchSession · temporal trackers"]
-    Bridge["Policy bridge · PolicyObservationV2"]
-    Actor["V4Actor · recurrent policy checkpoint"]
-    Frames["FrontendSession · bounded frame history and suggestions"]
-    Edits["Label corrections · rebuild observation and re-score"]
-    Control["Execute + confirmation + calibration · verified ADB taps"]
-    Phone["Android phone"]
-    Training["Deterministic simulator + RL training"]
-
-    UI -->|start / stop / configure| API
-    API --> Session
-    Session --> Video
-    Session --> Live
-    Phone --> Live
-    Video --> Vision
-    Live --> Vision
-    Vision --> Tracking --> Bridge --> Actor
-    Tracking --> Frames
-    Actor --> Frames
-    Frames -->|SSE + polling · JSON and frame images| UI
-    UI -->|edit and re-evaluate via API| Edits
-    Frames --> Edits
-    Edits -->|updated suggestions| UI
-    Actor -->|live PLAY only| Control --> Phone
-    Training -.->|checkpoint| Actor
+flowchart LR
+    Input["Video or phone capture"] --> Vision["Detection, OCR and tracking"]
+    Vision --> Public["Public policy observation"]
+    Public --> Actor["Recurrent V4 actor"]
+    Vision --> UI["Analysis frontend"]
+    Actor --> UI
+    Actor --> Control["Calibrated device control"]
+    Simulator["Deterministic simulator"] --> Training["Training and evaluation"]
+    Training --> Actor
+    Training --> Viewer["Arena Lab and replays"]
 ```
 
-The browser handles presentation, timeline navigation, overlays, and exports.
-FastAPI manages a shared active session and runs analysis in a background
-worker. Video and live runners share the extraction, tracking, observation,
-and policy components; the command-line launcher also uses the physical-lab
-runtime. The session holds a bounded frame history for inspection, while
-uploaded videos and recent-replay metadata live under `uploads/`.
+Capture/video time, match time, and frame index remain separate throughout
+the pipeline. The [simulator guide](simulator/README.md) describes observation
+contracts, deterministic replay, mechanics, and the training boundary.
 
-Label re-evaluation scores an edited frame for inspection. Device execution
-belongs to the live runner and passes through calibration and confirmation
-gates. Simulator training produces policy checkpoints separately from frontend
-inference. Frame index, capture/video timestamp, and match clock remain distinct
-throughout the pipeline.
+Battlefield detection uses the patched KataCR dual-YOLO runtime. Hand and
+next-card classification use project-trained MobileNetV3-Small models.

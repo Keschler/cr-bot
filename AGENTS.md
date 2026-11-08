@@ -4,7 +4,10 @@
 
 This is a Python 3.12+ computer-vision and tracking project that extracts
 Clash Royale game state and card-play events from screenshots, recorded video,
-or live capture. In the future this should be used for a behavior-cloning bot.
+or live capture, with a deterministic simulator and policy-training tools.
+The canonical goal, selected policy, measured results, and remaining work are
+maintained in [STATUS.md](STATUS.md). Choose training methods, simulator
+improvements, and evaluation workloads from evidence toward that goal.
 
 The installable package uses a `src` layout:
 
@@ -131,6 +134,9 @@ specifically concerns KataCR integration. Keep compatibility logic in
   single commit.
 - Update README or files under `docs/` when public CLI behavior, setup,
   evaluation workflows, or architecture changes.
+- Maintain current goal/status only in `STATUS.md`; keep reusable guides under
+  `docs/workflows/`, designs under `docs/design/`, and dated experiment evidence
+  under `docs/experiments/`.
 - Before finishing, run the narrowest relevant tests and then the default
   test command above when practical. Include the two audio-related test files
   only when working on audio or audio mining. Report any tests that could not

@@ -2,10 +2,10 @@
 
 ## Automatic Delegation
 
-For the active deterministic Clash Royale simulator and physical-fidelity-lab
-goal, automatically delegate independent work when two or more workstreams are
+For simulator and Hog 2.6 policy-learning work, automatically delegate
+independent work when two or more workstreams are
 available. Spawn up to three subagents using the configured subagent defaults
-(`gpt-5.6-luna` with `max` reasoning), keep the primary agent as coordinator
+(`gpt-6.1-sol` with `xhigh` reasoning), keep the primary agent as coordinator
 and integrator, and wait for the workers' results before making cross-cutting
 decisions.
 

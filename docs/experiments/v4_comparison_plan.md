@@ -1,10 +1,26 @@
 # V4 comparison and bounded pilot
 
-Status: **the bounded pilot is the current experiment**. It is a one-day-scale
-feasibility and early-quality study for the Hog 2.6 policy goal. The former
-large three-seed comparison protocol is **superseded** and kept below as an
-optional historical reference. It is not a current launch plan, and it does
-not create a fixed future compute, match, or correction-label requirement.
+> Historical record (2026-09-30–2026-10-01). Results, checkpoint identities, verdicts and
+> proposed follow-ups below apply to this experiment and its sealed runtime.
+> See [project status](../../STATUS.md) for the current goal, selected actor and
+> latest decision.
+
+The bounded pilot completed after resuming. Both PPO arms and
+search distillation produced evaluated checkpoints. No best method was
+established. See [the recorded results](v4_pilot_results.md). The pilot was a one-day-scale
+feasibility study for the Hog 2.6 policy goal. The former large fixed
+comparison protocol is superseded. Training methods, budgets, match counts,
+and correction-label targets remain choices to test against the end goal.
+
+The subsequent [40-deck benchmark](v4_catalog_results.md) exposed severe
+policy weaknesses. Its [failure diagnosis](v4_catalog_diagnosis.md) led to a
+separate [initializer recovery and bounded PPO experiment](v4_recovery_results.md),
+which is also complete. The subsequent
+[catalog initializer experiment](v4_initializer_coverage_results.md) improved
+final wins to 92/400 versus 13/400 for the recovered baseline; PPO lost fresh
+confirmation. That report records a scripted-opponent placement warning and
+paired exclusion sensitivity. The design below records the historical pilot;
+each later report records its own protocol and evidence.
 
 The pilot must use a fresh source revision and fresh output directories. Older
 frontier, verdict, and distillation outputs are historical artifacts; do not
@@ -13,7 +29,7 @@ changes. The actor must receive public observations and legal-action masks
 only. A privileged critic or opponent controller may use simulator state
 during training, but those features must not enter actor inference.
 
-## Current bounded pilot
+## Recorded pilot design
 
 The pilot asks whether the training paths can produce valid, measurable data
 quickly enough to guide the next investment toward a strong Hog 2.6 policy
@@ -46,7 +62,7 @@ For a bounded run, use 16 search candidates per source match, eight discovery
 replicas, eight independent confirmation replicas, horizon 128, a 1,440
 decision match cap, and the current three-worker/one-Torch-thread setting.
 Use `soft-kl`, context 32, one distillation seed, batch 8, learning rate
-`1e-5`, and the existing 20-epoch export schedule. Override the distillation
+`1e-5`, and one optimizer epoch. Keep the initial and trained actor exports. Override the distillation
 runner defaults; they otherwise run four methods, two contexts, and three
 seeds. Set the frontier sealed-match count to zero explicitly.
 
@@ -103,27 +119,10 @@ nonempty match/mode group cannot be reconstructed after it was discarded.
 Search corrections require independent paired simulator replicas; a single
 replica is a diagnostic, not a certified correction.
 
-## Historical large protocol (superseded)
-
-The earlier proposal compared three arms over replicate seeds `0, 1, 2`, with
-24 training matches per archetype, 12 search-development matches per
-archetype, seven PPO checkpoints, a separate final evaluation, and a
-predeclared minimum of 100 training and 30 development corrections per
-replicate. Its final table contained 1,800 complete-match attempts. Those
-numbers are retained for provenance and planning context only. They are not
-requirements for the current pilot or an automatic next step.
-
-The historical proposal also fixed 16 candidates per source match, eight
-discovery and eight confirmation replicas, a branch cap of seven, horizon 128,
-three search workers, 32 PPO updates, and a single `soft-kl` distillation
-variant. The pilot borrows only the settings that fit a bounded measurement;
-future budgets, seeds, methods, and evaluation sizes remain decisions based on
-pilot evidence and available local compute.
-
 ## Historical runtime probes
 
 The following measurements are preserved because they explain why the large
-protocol is optional. They were local probes, not an end-to-end run of the
+protocol was expensive. They were local probes, not an end-to-end run of the
 current pilot, and should not be treated as current throughput guarantees.
 
 | Workload | Historical wall time |

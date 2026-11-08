@@ -1,8 +1,14 @@
-# Physical-fidelity lab goal and current implementation
+# Physical-fidelity lab
 
-## Goal
+The strategic goal and current project decisions are maintained in
+[project status](../../STATUS.md). This guide documents the controlled
+measurement workflow and its evidence contracts. Device-specific observations
+below describe the reviewed October 2026 setup and must be rechecked against
+the recorded device/calibration manifests before a connected run.
 
-Build a repeatable sim-to-real test corpus for the deterministic Clash Royale
+## Measurement workflow
+
+The lab builds a repeatable sim-to-real test corpus for the deterministic Clash Royale
 simulator. Two physical phones run the same reviewed interaction cases as the
 simulator, with the physical opening hand fixed by deck order. The campaign
 starts with isolated one-troop interactions and grows to paired, multi-card,
@@ -24,7 +30,7 @@ correct account. The fixed-order switch is also read back from the rendered
 blue active half before tapping, so a rerun does not accidentally turn an
 already-enabled switch off.
 
-The current device mapping is explicit: Phone A is the ASUS AI2302 at
+The reviewed device mapping is explicit: Phone A is the ASUS AI2302 at
 1080x2400, and Phone B is the Samsung SM-G970F/beyond0 at 1080x2280. Physical
 UI coordinates use each phone's native dimensions. The A extractor uses the
 ASUS-calibrated 1080x2400 identity path; the B extractor selects the existing
@@ -51,7 +57,7 @@ Cannon, Skeletons, Musketeer, Ice Golem, Ice Spirit`; its fixed-order opening
 hand is the first four of that order. Clone is not a permitted target card and
 must be removed from its actual human slot 8 before the deck is accepted.
 
-## Current implementation
+## Harness and measurement contracts
 
 - `campaign.py` defines the versioned `InteractionCampaign`, `CampaignCase`,
   and `DeckMutation` records. Decks are validated against the fixed ruleset,
@@ -180,6 +186,10 @@ metadata.
   already finalized, hash-verified raw videos.
 
 ## Required operator commands
+
+Run these commands from the repository root with `outputs/venv/`. Before a
+connected experiment, review its concrete device mapping, calibration and
+protocol under [simulator operator guidance](../AGENTS.md).
 
 Create the immutable case matrix:
 

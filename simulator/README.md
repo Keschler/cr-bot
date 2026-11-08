@@ -1,30 +1,24 @@
 # Deterministic Level-11 Simulator
 
-This directory contains the headless, versioned Clash Royale simulator used
-for deterministic testing, policy learning, and sim-to-real work. The
-[GOAL.md](GOAL.md) states the strategic Hog 2.6 policy goal and the boundaries
-of what simulator evidence can claim.
+This directory contains the headless, versioned Clash Royale simulator for
+deterministic testing, policy learning and sim-to-real measurement. The
+strategic goal, current policy selection and latest experiment decision are
+maintained in [project status](../STATUS.md). The simulator is the training
+and measurement instrument; simulator wins alone do not establish live-game
+strength.
 
-The current `v1` ruleset contains 124 definitions, including the 109-card
-eligible opponent roster. The source-linked real-deck catalog currently has
-40 decks: 30 training and 10 evaluation decks across five archetypes. It is an
-executable research ruleset, not a claim that every live-game mechanic or
-enemy deck has been measured. Its metadata remains `training_ready: false`.
+The `v1` ruleset contains 124 definitions, including the 109-card eligible
+opponent roster. The source-linked catalog has 40 decks: 30 training and ten
+reserved evaluation decks across five archetypes. These are implementation
+and evaluation limits, rather than limits on the all-deck goal. Its metadata
+remains `training_ready: false`, recording unresolved fidelity evidence without
+blocking simulator learning or checkpoint evaluation.
 
-The current execution priority is the bounded V4 pilot: improve the actor,
-training loop, evaluation, simulator throughput, and opponent breadth. The
-`training_ready` status records open fidelity evidence; it does not block
-simulator learning or checkpoint evaluation. Physical validation remains
-available when a learned policy provides evidence that transfer measurement is
-the useful next step.
-
-The active V4 pilot checks reward-only match-start PPO from a random actor,
-the same PPO from a simulator bootstrap, and search distillation from that
-bootstrap. Frontier-initialized PPO is a separate experiment. A fresh
-checkout has no promoted model checkpoint or measured policy strength. See
-the [V4 training guide](../docs/v4_training.md) and the
-[bounded comparison notes](../docs/v4_comparison_plan.md) for current
-commands, integrity checks, and the evaluation boundary.
+Use the [V4 training guide](../docs/workflows/v4_training.md),
+[policy-learning design](../docs/design/policy-learning.md), and
+[checkpoint and replay guide](../docs/workflows/checkpoints-and-replays.md) for
+learning and inspection. Dated findings belong in the
+[experiment archive](../docs/README.md#experiment-records).
 
 ## Setup and tests
 
@@ -97,15 +91,15 @@ PYTHONPATH=.:..:../src ../outputs/venv/bin/python -m simulator lab run \
   --json-out outputs/simulator/fidelity_media/physical_lab/offline-summary.json
 ```
 
-Offline runs remain `candidate_only`. The current two-phone campaign and
-connected workflow are documented in
-[the physical-lab goal](physical_lab/PHYSICAL_FIDELITY_GOAL.md).
+Offline runs remain `candidate_only`. The two-phone campaign and connected
+workflow are documented in the
+[physical-lab guide](physical_lab/README.md).
 
 ### V4 actor on video or a phone
 
 The visual frontend and the simulator use the same V4 actor checkpoint format.
-First produce a checkpoint with the [bootstrap](../docs/v4_training.md), then
-validate observation and action decoding on a recorded video:
+First produce a checkpoint with the [bootstrap](../docs/workflows/v4_training.md),
+then validate observation and action decoding on a recorded video:
 
 ```bash
 ../outputs/venv/bin/python run_prototype_live.py \
@@ -297,9 +291,9 @@ entity tokens.
 
 ## Neural policy and training
 
-Current search, distillation, PPO, and evaluation code lives in [rl/v4/](rl/v4/).
+Current search, distillation, PPO, and evaluation code lives in [rl/v4/](rl/v4).
 Shared tensor utilities and opponent pools live
-in [rl/foundation/](rl/foundation/). See the [V4 training guide](../docs/v4_training.md)
+in [rl/foundation/](rl/foundation). See the [V4 training guide](../docs/workflows/v4_training.md)
 for the bootstrap, dataset splits, recurrent context, and evaluation gates.
 The reward-only PPO and frontier paths can use a pinned catalog of complete
 base-card decks from RoyaleAPI and Deck Shop. Its train and evaluation decks
@@ -319,6 +313,39 @@ Legality masks remove impossible actions only. A privileged critic may use full
 simulator state during training; the actor receives public observations. Teacher
 and search outputs supply training targets. Ordinary PPO actions come from the
 actor. WAIT advances the fixed simulator decision interval.
+
+## Experiment and replay contracts
+
+Fixed seeds and actions must reproduce reset, save/restore, canonical state,
+public-event and replay hashes, and terminal versus truncated outcomes.
+Recurrent actor state resets at match boundaries. Actor inputs and actions
+must remain public-only and legal at the point of use. `WAIT` advances exactly
+one fixed decision interval.
+
+Every training or evaluation artifact records its code revision, ruleset and
+observation contracts, checkpoint hash and complete model configuration,
+opponent pool, seeds, data split and measured compute. Changed source requires
+a new output directory or explicit compatible-resume validation. Local files
+under `outputs/` are not current evidence solely because they exist.
+
+Keep training origins and opponent styles separate from held-out development
+origins/styles and reserved final deck identities. Freeze candidates before
+fresh complete-match comparisons with the starting actor. Report uncertainty,
+truncations, invalid actions, opponent warnings and per-opponent results;
+reward gains or label losses alone do not establish a better policy.
+
+A rules teacher may supply bootstrap labels or a diagnostic baseline, but it
+does not choose actions in ordinary actor-controlled PPO rollouts. A privileged
+critic may read simulator state during training; its features never enter
+actor inference. Phone/video adapters use the same actor input and checkpoint
+contract through public observations.
+
+The current catalog evaluation uses scripted opponents and ten reserved deck
+identities; learned mirror opponents support Hog 2.6 only. These measurements
+do not establish robustness against learned multi-deck adversaries, all human
+decks or real players. Preserve the smallest reproducer for an exploit, leak,
+invalid mask, replay mismatch or performance regression, add a regression test,
+and regenerate contaminated data before interpreting a policy result.
 
 ## Deterministic tick order
 
@@ -368,19 +395,11 @@ discovery and the `physical_lab` workflow for controlled deployment, timing,
 damage, targeting, collision, spell, spawn, and lifecycle measurements.
 Ambiguous or rejected observations remain auditable and cannot be promoted.
 
-Readiness requires, per card and mechanic:
-
-- complete rule/schema, determinism, replay, invariant, and backend-parity
-  coverage;
-- no missing required mechanic edge or critical source conflict;
-- at least two independent held-out groups with predeclared counts and
-  tolerances;
-- physical-lab provenance for causal, version-sensitive behavior;
-- at least 98% held-out agreement for decision-critical outcomes (normally
-  99%+ for common Hog interactions);
-- confidence intervals, oracle error, exclusions, and first-divergence data;
-- no unresolved provisional or split-leaked requirement.
-
+The existing `readiness` command retains its per-mechanic evidence checks
+and configurable thresholds. They describe that measurement tool, rather
+than a universal milestone for policy learning. Choose additional physical
+measurements to answer weaknesses or transfer questions identified by policy
+experiments.
 There is no single meaningful “overall accuracy” score.
 
 ## Performance
