@@ -47,9 +47,25 @@
 </label>
         <div class="filter-tabs" role="group" aria-label="Match source">
 <button class="active" data-source="all">All</button>
+<button data-source="evaluation">Evaluation</button>
 <button data-source="training">Training</button>
 <button data-source="frontier">Replays</button>
 <button data-source="exhibition">Exhibitions</button>
+</div>
+        <div class="library-controls">
+<label>Result<select id="match-outcome" aria-label="Filter matches by result">
+<option value="all">All results</option>
+<option value="win">Wins</option>
+<option value="loss">Losses</option>
+<option value="draw">Draws</option>
+<option value="unknown">Unknown / unfinished</option>
+</select></label>
+<label>Order<select id="match-sort" aria-label="Sort matches">
+<option value="newest">Newest first</option>
+<option value="oldest">Oldest first</option>
+<option value="wins-first">Wins first</option>
+<option value="losses-first">Losses first</option>
+</select></label>
 </div>
         <div class="library-caption">
 <span id="match-count">Loading matches…</span>

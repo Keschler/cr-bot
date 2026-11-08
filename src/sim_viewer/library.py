@@ -62,7 +62,14 @@ def read_json(path: Path, *, max_bytes: int = 32_000_000) -> Any:
         return json.load(handle)
 
 
-def _recording_info(path: Path) -> tuple[str, bool] | None:
+@dataclass(frozen=True)
+class _RecordingInfo:
+    source: str
+    unfinished: bool
+    outcome: str | None
+
+
+def _recording_info(path: Path) -> _RecordingInfo | None:
     try:
         with path.open("rb") as handle:
             first = handle.readline(262_144)
@@ -77,17 +84,37 @@ def _recording_info(path: Path) -> tuple[str, bool] | None:
             handle.seek(max(0, path.stat().st_size - 1))
             if handle.read() != b"\n":
                 tail = tail[:-1]
-        ended = False
+        footer = None
+        terminal_frame = False
         for line in tail[1:]:
-            if b'"end"' not in line:
+            if b'"end"' not in line and b'"frame"' not in line:
                 continue
             try:
-                ended = ended or json.loads(line).get("type") == "end"
-            except ValueError:
+                row = json.loads(line)
+                if row.get("type") == "end":
+                    footer = row
+                elif row.get("type") == "frame":
+                    terminal_frame = row.get("terminal") is True
+            except (ValueError, AttributeError):
                 continue
         source = str(header.get("source", "training"))
-        return "frontier" if source == "replay" else source, not ended
-    except (OSError, ValueError, AttributeError):
+        outcome = None
+        metadata = header.get("metadata", {})
+        native = metadata.get("native_record", {})
+        evaluation = metadata.get("evaluation", {})
+        complete = terminal_frame or (native.get("terminated") is True
+            and not native.get("truncated") and not native.get("cap_reached"))
+        if footer is not None and complete:
+            reason = str(footer.get("reason", "")).lower()
+            censored = any(word in reason for word in ("stop", "error", "cap", "truncat", "boundary"))
+            winner = footer.get("winner")
+            if not censored and (winner is None or type(winner) is int and winner in (0, 1)):
+                outcome = "draw" if winner is None else "win" if winner == 0 else "loss"
+                declared = evaluation.get("result")
+                if declared in {"win", "loss", "draw"} and declared != outcome:
+                    outcome = None
+        return _RecordingInfo("frontier" if source == "replay" else source, footer is None, outcome)
+    except (OSError, ValueError, AttributeError, TypeError):
         return None
 
 
@@ -154,8 +181,9 @@ class ArtifactLibrary:
                         elif path.suffix == ".jsonl":
                             info = _recording_info(path)
                             if info is not None:
-                                source, unfinished = info
-                                matches.append({**item, "source": source, "active": unfinished and time.time() - stat.st_mtime < 30, "unfinished": unfinished})
+                                matches.append({**item, "source": info.source, "outcome": info.outcome,
+                                    "active": info.unfinished and time.time() - stat.st_mtime < 30,
+                                    "unfinished": info.unfinished})
                         if name in REPORT_NAMES:
                             report_directory = resolved.parent
                             if name == "progress.json":
@@ -210,13 +238,30 @@ class ArtifactLibrary:
             self._checkpoints = sorted(checkpoints, key=lambda row: row["modified_at"], reverse=True)
             self._expires = time.monotonic() + 3.0
 
-    def listing(self, query: str = "", limit: int = 100) -> dict[str, Any]:
+    def listing(self, query: str = "", limit: int = 100, *, source: str = "all",
+                outcome: str = "all", sort: str = "newest") -> dict[str, Any]:
+        if outcome not in {"all", "win", "loss", "draw", "unknown"}:
+            raise ValueError("Unsupported match outcome filter")
+        if sort not in {"newest", "oldest", "wins-first", "losses-first"}:
+            raise ValueError("Unsupported match order")
         self.refresh()
         query = query.casefold()
         with self._lock:
             matches = [dict(row) for row in self._matches if query in row["name"].casefold() or query in row["path"].casefold()]
             runs = [dict(row) for row in self._runs if query in row["name"].casefold() or query in row["path"].casefold()]
-        return {"matches": matches[:limit], "runs": runs[:limit], "match_count": len(matches), "run_count": len(runs)}
+        matches = [row for row in matches if source == "all" or row["source"] == source]
+        counts = {key: sum((row.get("outcome") or "unknown") == key for row in matches)
+                  for key in ("win", "loss", "draw", "unknown")}
+        if outcome != "all":
+            matches = [row for row in matches if (row.get("outcome") or "unknown") == outcome]
+        if sort == "oldest":
+            matches.sort(key=lambda row: (row["modified_at"], row["path"]))
+        else:
+            priority = {"win": 0, "loss": 1, "draw": 2} if sort == "wins-first" else {"loss": 0, "win": 1, "draw": 2}
+            matches.sort(key=lambda row: (priority.get(row.get("outcome"), 3) if sort != "newest" else 0,
+                                           -row["modified_at"], row["path"]))
+        return {"matches": matches[:limit], "runs": runs[:limit], "match_count": len(matches),
+                "run_count": len(runs), "outcome_counts": counts}
 
     def checkpoints(self) -> list[dict[str, Any]]:
         self.refresh()

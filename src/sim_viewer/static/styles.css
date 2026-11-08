@@ -301,6 +301,36 @@ p {
   border-bottom-color:var(--accent);
   color:#c9d7e3
 }
+.library-controls {
+  display:grid;
+  grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+  gap:8px;
+  margin-top:12px
+}
+.library-controls label {
+  display:flex;
+  flex-direction:column;
+  gap:5px;
+  color:#8293a8;
+  font-size:10px
+}
+.library-controls select {
+  width:100%;
+  min-width:0;
+  padding:7px 5px;
+  border:1px solid #293546;
+  border-radius:5px;
+  background:#111a25;
+  color:#c4d3e3;
+  font-size:10px
+}
+.match-outcome {
+  margin-left:auto;
+  font-weight:650;
+  color:#8aa9d2
+}
+.match-outcome.win { color:var(--accent) }
+.match-outcome.loss { color:#e59b9b }
 .library-caption {
   display:flex;
   justify-content:space-between;

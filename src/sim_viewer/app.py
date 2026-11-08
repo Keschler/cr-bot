@@ -81,8 +81,10 @@ def create_app(*, paths: ViewerPaths | None = None, manager: Any = None) -> Fast
         return {"ok": True, "application": "V4 Arena Lab", "roots": [str(root) for root in paths.roots]}
 
     @app.get("/api/library")
-    def artifacts(query: str = "", limit: int = Query(default=100, ge=1, le=1000)) -> dict[str, Any]:
-        return library.listing(query, limit)
+    def artifacts(query: str = "", limit: int = Query(default=100, ge=1, le=1000),
+                  source: str = "all", outcome: Literal["all", "win", "loss", "draw", "unknown"] = "all",
+                  sort: Literal["newest", "oldest", "wins-first", "losses-first"] = "newest") -> dict[str, Any]:
+        return library.listing(query, limit, source=source, outcome=outcome, sort=sort)
 
     @app.get("/api/catalog")
     def catalog() -> dict[str, Any]:

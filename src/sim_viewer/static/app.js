@@ -4,7 +4,7 @@ import {playbackCommand} from './keyboard.js';
 
 const $=selector=>document.querySelector(selector);
 const $$=selector=>[...document.querySelectorAll(selector)];
-const state={catalog:{checkpoints:[],decks:[],archetypes:[]},library:{matches:[],runs:[]},source:'all',query:'',session:null,selectedPath:null,frames:[],position:0,playing:false,following:false,speed:1,clock:0,page:'watch',inspector:'overview',generation:0,polling:false,libraryLoading:false,eventLimit:300,runCache:new Map(),charts:{training:null,compare:null},runGeneration:{training:0,compare:0}};
+const state={catalog:{checkpoints:[],decks:[],archetypes:[]},library:{matches:[],runs:[]},source:'all',outcome:'all',sort:'newest',query:'',session:null,selectedPath:null,frames:[],position:0,playing:false,following:false,speed:1,clock:0,page:'watch',inspector:'overview',generation:0,polling:false,libraryLoading:false,eventLimit:300,runCache:new Map(),charts:{training:null,compare:null},runGeneration:{training:0,compare:0}};
 const arena=new Arena($('#arena'),()=>renderEntity());
 let noticeTimer,searchTimer,lastAnimation=0,timelineStamp="";
 const cardName=card=>typeof card==='object'&&card!==null?String(card.card_id??card.name??card.card??card.id??'Unknown'):String(card??'Unknown');
@@ -24,25 +24,32 @@ async function api(path,options={}){
 function notify(message,error=false){clearTimeout(noticeTimer);$('#notice').textContent=message;$('#notice').hidden=false;$('#notice').classList.toggle('error',error);noticeTimer=setTimeout(()=>{$('#notice').hidden=true;},error?14000:7000);}
 function bytes(n){return n>1048576?`${(n/1048576).toFixed(1)} MB`:n>1024?`${Math.round(n/1024)} KB`:`${n??0} B`;}
 function relativeDate(value){if(!value)return '';const date=asDate(value);if(!Number.isFinite(date.getTime()))return '';const age=(Date.now()-date.getTime())/1000;if(age<60)return 'just now';if(age<3600)return `${Math.floor(age/60)}m ago`;if(age<86400)return `${Math.floor(age/3600)}h ago`;return date.toLocaleDateString(undefined,{month:'short',day:'numeric'});}
-function sourceLabel(source){return {training:'Training sample',frontier:'Saved replay',replay:'Saved replay',exhibition:'Exhibition'}[source]??pretty(source);}
+function sourceLabel(source){return {evaluation:'Evaluated match',training:'Training sample',frontier:'Saved replay',replay:'Saved replay',exhibition:'Exhibition'}[source]??pretty(source);}
+const libraryQuery=()=>new URLSearchParams({limit:'500',query:state.query,source:state.source,outcome:state.outcome,sort:state.sort}).toString();
 
 async function loadLibrary(initial=false){
   if(state.libraryLoading)return;
   state.libraryLoading=true;
+  const query=libraryQuery();
   if(initial)$('#match-list').innerHTML='<div class="loading-skeleton"></div><div class="loading-skeleton"></div><div class="loading-skeleton"></div>';
   try{
-    const data=await api('/api/library?limit=500');
-    state.library={matches:data.matches??[],runs:data.runs??[]};
+    const data=await api(`/api/library?${query}`);
+    if(query!==libraryQuery())return;
+    state.library={matches:data.matches??[],runs:data.runs??[],match_count:data.match_count,outcome_counts:data.outcome_counts??{}};
+    const counts=state.library.outcome_counts;
+    for(const [value,label] of [['win','Wins'],['loss','Losses'],['draw','Draws'],['unknown','Unknown / unfinished']]){
+      const option=$(`#match-outcome option[value="${value}"]`);option.textContent=counts[value]==null?label:`${label} (${counts[value]})`;
+    }
     renderLibrary();populateRunSelectors();
     $('#library-updated').textContent='AUTO SYNC';
   }catch(error){if(initial)$('#match-list').innerHTML=`<div class="empty-library"><strong>Library unavailable</strong>${esc(error.message)}<br>Use refresh to try again.</div>`;else notify(error.message,true);}
-  finally{state.libraryLoading=false;}
+  finally{state.libraryLoading=false;if(query!==libraryQuery())loadLibrary();}
 }
 function renderLibrary(){
-  const matches=state.library.matches.filter(match=>(state.source==='all'||match.source===state.source)&&(!state.query||`${match.name} ${match.path} ${match.source}`.toLowerCase().includes(state.query)));
-  $('#match-count').textContent=`${matches.length} MATCH${matches.length===1?'':'ES'}`;
+  const matches=state.library.matches,total=state.library.match_count??matches.length;
+  $('#match-count').textContent=`${matches.length<total?`${matches.length} OF `:''}${total} MATCH${total===1?'':'ES'}`;
   const list=$('#match-list'),scrollY=list.scrollTop,scrollX=list.scrollLeft,focused=document.activeElement?.dataset?.matchPath;
-  list.innerHTML=matches.length?matches.map(match=>`<button class="match-card ${match.path===state.selectedPath?'selected':''}" data-match-path="${esc(match.path)}" aria-pressed="${match.path===state.selectedPath}" title="${esc(match.path)}"><span class="match-card-top"><span class="source-mark ${esc(match.source)}"></span>${esc(sourceLabel(match.source))}${match.active?'<span class="tiny-live">● LIVE</span>':''}</span><h3>${esc(match.name??match.path?.split('/').pop())}</h3><span class="match-card-meta"><span>${esc(relativeDate(match.modified_at))}</span><span>${bytes(match.size)}</span></span></button>`).join(''):`<div class="empty-library"><strong>${state.query?'No matching matches':'No matches here yet'}</strong>${state.query?'Try a different name or source.':'Launch an exhibition, or enable capture for a new V4 training run. Saved frontier replays appear automatically.'}</div>`;
+  list.innerHTML=matches.length?matches.map(match=>`<button class="match-card ${match.path===state.selectedPath?'selected':''}" data-match-path="${esc(match.path)}" aria-pressed="${match.path===state.selectedPath}" title="${esc(match.path)}"><span class="match-card-top"><span class="source-mark ${esc(match.source)}"></span>${esc(sourceLabel(match.source))}${match.outcome?`<span class="match-outcome ${esc(match.outcome)}">${esc(match.outcome)}</span>`:''}${match.active?'<span class="tiny-live">● LIVE</span>':''}</span><h3>${esc(match.name??match.path?.split('/').pop())}</h3><span class="match-card-meta"><span>${esc(relativeDate(match.modified_at))}</span><span>${bytes(match.size)}</span></span></button>`).join(''):`<div class="empty-library"><strong>No matching matches</strong>Try another result, name or source filter.</div>`;
   list.scrollTop=scrollY;list.scrollLeft=scrollX;
   list.querySelectorAll('[data-match-path]').forEach(button=>button.addEventListener('click',()=>openReplay(button.dataset.matchPath)));
   if(focused)list.querySelector(`[data-match-path="${CSS.escape(focused)}"]`)?.focus({preventScroll:true});
@@ -268,9 +275,11 @@ async function launch(event){
 async function stopMatch(){const id=state.session?.id,generation=state.generation;if(!id)return;$('#stop-match').disabled=true;try{const status=await api(`/api/matches/${encodeURIComponent(id)}/stop`,{method:'POST'});if(generation===state.generation){state.session=status;renderSession();await pollFrames();}}catch(error){notify(error.message,true);}finally{$('#stop-match').disabled=false;}}
 
 $$('[data-page]').forEach(button=>button.addEventListener('click',()=>setPage(button.dataset.page)));
-$$('[data-source]').forEach(button=>button.addEventListener('click',()=>{state.source=button.dataset.source;$$('[data-source]').forEach(item=>item.classList.toggle('active',item===button));renderLibrary();}));
+$$('[data-source]').forEach(button=>button.addEventListener('click',()=>{state.source=button.dataset.source;$$('[data-source]').forEach(item=>item.classList.toggle('active',item===button));loadLibrary();}));
 $$('[data-inspector]').forEach(button=>button.addEventListener('click',()=>{state.inspector=button.dataset.inspector;$$('[data-inspector]').forEach(item=>item.classList.toggle('active',item===button));$$('.inspector-content').forEach(panel=>panel.classList.toggle('active',panel.id===`${state.inspector}-inspector`));if(state.inspector==='events')renderEvents();if(state.inspector==='policy')renderPolicy();}));
-$('#match-search').addEventListener('input',event=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>{state.query=event.target.value.trim().toLowerCase();renderLibrary();},150);});
+$('#match-search').addEventListener('input',event=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>{state.query=event.target.value.trim().toLowerCase();loadLibrary();},150);});
+$('#match-outcome').addEventListener('change',event=>{state.outcome=event.target.value;loadLibrary();});
+$('#match-sort').addEventListener('change',event=>{state.sort=event.target.value;loadLibrary();});
 $('#event-search').addEventListener('input',renderEvents);
 $('#refresh-library').addEventListener('click',()=>{loadLibrary();loadCatalog();if(state.page==='training')loadTraining();if(state.page==='compare')loadComparison();});
 for(const id of ['#launch-button','#empty-launch'])$(id).addEventListener('click',()=>showLaunch());

@@ -21,6 +21,17 @@ outputs/venv/bin/python -m pip install uvicorn
 
 ## Watching matches
 
+- **Evaluated policy matches:** choose **Evaluation** and search for `xbow`,
+  `bait`, `lavaloon` or another deck name. Select a recording and press Play.
+  The selected targeted control's original 120 screen games are exported to
+  `outputs/v4/sim_viewer/evaluated_control/`, including wins and losses against
+  fixed, adaptive and split-pressure opponents. These cover 30 training deck
+  identities; this checkpoint has no reserved-ten-deck evaluation.
+  Use **Result → Wins/Losses** to filter, or **Order → Wins first/Losses first**
+  to group results. Both combine with source and deck search. Unknown or
+  unfinished results stay separate. Restart an already-running viewer server
+  after this update, then reload the browser. The original filenames also
+  support searching `__win__` or `__loss__` without the new controls.
 - **Recorded frontier matches:** choose a `*_match.json` from the match library.
   The backend reconstructs physics from the seed, decks, and both players'
   recorded actions. Every recorded decision state hash must match; an old file
@@ -77,6 +88,26 @@ frames. The map describes the actor's placement preference; it is neither a
 board-value estimate nor a prediction of winning. Historical frontier traces
 store unmasked softmax probabilities and only top cells; the Policy panel
 labels those raw values separately, and a dense heatmap is unavailable.
+
+## Exporting evaluated games
+
+To create or verify recordings of a saved native evaluation screen:
+
+```bash
+PYTHONPATH=.:src outputs/venv/bin/python -m sim_viewer.export_evaluations \
+  --screen outputs/v4/tactical_learning_20261019/screen_train/control \
+  --screen outputs/v4/tactical_learning_20261019/screen_dev/control \
+  --out outputs/v4/sim_viewer/evaluated_control --workers 3
+```
+
+You can also pass individual raw match JSON files as positional arguments.
+Each needs its original screen manifest and digest files. The exporter uses
+the original evaluator job, model configuration, stochastic seed derivation,
+opponent controller and recurrent history. It publishes a recording only when
+the complete native record and diagnostics reproduce exactly, and otherwise
+fails with an error. Existing verified recordings are reused after hash checks.
+Their pre-action snapshots include full masked policy probabilities and a
+final terminal frame. Exhibitions are separate newly sampled matches.
 
 ## Recording a training run
 
@@ -146,12 +177,19 @@ Interactive API documentation is at `/docs`. The main endpoints are
 `GET /api/matches/{id}`, `/api/matches/{id}/frames`,
 `/api/matches/{id}/stream` (SSE), plus `POST /api/matches/{id}/stop`.
 
+`/api/library` accepts `source`, `outcome=all|win|loss|draw|unknown` and
+`sort=newest|oldest|wins-first|losses-first`, alongside `query` and `limit`.
+Outcome counts reflect the selected source/search before outcome filtering;
+filtering and sorting run before the display limit. Results refer to player
+zero and require completed terminal recordings, rather than filename guesses.
+
 Focused tests:
 
 ```bash
 outputs/venv/bin/python -m pytest \
   tests/test_sim_viewer_library.py tests/test_sim_viewer_app.py \
   tests/test_sim_viewer_matches.py tests/test_sim_viewer_keyboard.py \
+  tests/test_sim_viewer_outcomes.py tests/test_sim_viewer_evaluation_export.py \
   simulator/tests/test_viewer_recording.py
 ```
 
