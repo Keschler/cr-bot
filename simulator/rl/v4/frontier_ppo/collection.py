@@ -25,6 +25,7 @@ class _FrontierLane:
     needs_entry: bool = True
     towers_start: tuple[float, float] = (0.0, 0.0)
     towers_prev: tuple[float, float] = (0.0, 0.0)
+    entry_id: str = ""
 
 
 def _start_entry(lane: _FrontierLane, entry: dict[str, Any], seed: int, tower_reward: bool) -> None:
@@ -40,6 +41,7 @@ def _start_entry(lane: _FrontierLane, entry: dict[str, Any], seed: int, tower_re
     )
     lane.estimator = PublicStateEstimator()
     lane.steps = 0
+    lane.entry_id = str(entry["entry_id"])
     if tower_reward:
         towers = tower_fracs(lane.env.state)
         start = (
@@ -159,6 +161,7 @@ def collect_frontier_rollout(
     illegal_attempts = 0
     episodes = 0
     episode_lens: list[int] = []
+    entry_outcomes: dict[str, dict[str, int]] = {}
     with torch.no_grad():
         for decision_index in range(n_decisions):
             for i in range(n_lanes):
@@ -167,6 +170,9 @@ def collect_frontier_rollout(
                     _start_entry(lanes[i], entry, seed, truncation_reward or step_tower_reward)
                     if i == 0:
                         viewer.start_episode(lanes[i].env, entry, lanes[i].visits)
+                    counts = entry_outcomes.setdefault(lanes[i].entry_id,
+                        dict(visits=0, wins=0, losses=0, draws=0, truncated=0))
+                    counts["visits"] += 1
                     hidden[:, i : i + 1, :] = 0.0
                     episodes += 1
             array_inputs, legals, masks = _observe_lanes(lanes, device)
@@ -255,6 +261,7 @@ def collect_frontier_rollout(
                     )
                 if done:
                     winner = result.info.get("winner")
+                    entry_outcomes[lanes[i].entry_id][{0: "wins", 1: "losses", None: "draws"}[winner]] += 1
                     if winner == 0:
                         wins += 1
                     elif winner == 1:
@@ -264,6 +271,7 @@ def collect_frontier_rollout(
                     episode_lens.append(lanes[i].steps)
                     lanes[i].needs_entry = True
                 elif cut:
+                    entry_outcomes[lanes[i].entry_id]["truncated"] += 1
                     episode_lens.append(lanes[i].steps)
                     lanes[i].needs_entry = True
                 mode = int(actions.mode[i, 0])
@@ -343,5 +351,9 @@ def collect_frontier_rollout(
         "truncation_reward": bool(truncation_reward),
         "step_tower_reward": bool(step_tower_reward),
         "truncation_bonuses": truncation_bonuses,
+        "entry_outcomes": entry_outcomes,
+        "entry_coverage": dict(available=len(entries), visited=len(entry_outcomes),
+            completed=sum(any(counts[key] for key in ("wins", "losses", "draws"))
+                          for counts in entry_outcomes.values())),
     }
     return batch, info

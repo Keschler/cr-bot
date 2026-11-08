@@ -106,8 +106,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="frontier entries or raw match openings used only for PPO rollouts",
     )
     parser.add_argument(
-        "--training-source", choices=("frontier", "match-start"), default="frontier",
-        help="identify and validate the PPO training source (match-start requires --bc-coef 0)",
+        "--training-source", choices=("frontier", "match-start", "anchored-match-start"), default="frontier",
+        help="raw match-start requires --bc-coef 0; anchored-match-start explicitly retains a frozen initializer",
     )
     parser.add_argument(
         "--sealed-entries",
@@ -182,6 +182,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--gae-lambda", type=float, default=0.95)
     parser.add_argument("--bc-coef", type=float, default=0.05)
     parser.add_argument("--ppo-epochs", type=int, default=1)
+    parser.add_argument("--critic-warmup-epochs", type=int, default=0,
+                        help="critic-only epochs before PPO; 0 disables, failed value gate prevents actor updates")
+    parser.add_argument("--critic-warmup-decisions", type=int, default=1440)
+    parser.add_argument("--critic-warmup-lanes", type=int, default=4)
+    parser.add_argument("--critic-warmup-minimum-episodes", type=int, default=4,
+                        help="completed episodes required in each disjoint warmup subset")
+    parser.add_argument("--critic-warmup-minimum-ev", type=float, default=.05,
+                        help="minimum validation return explained variance before actor updates")
     parser.add_argument("--device", default="cpu")
     parser.add_argument(
         "--model-config",
@@ -266,6 +274,11 @@ def main(argv: list[str] | None = None) -> int:
             gae_lambda=args.gae_lambda,
             bc_coef=args.bc_coef,
             ppo_epochs=args.ppo_epochs,
+            critic_warmup_epochs=args.critic_warmup_epochs,
+            critic_warmup_decisions=args.critic_warmup_decisions,
+            critic_warmup_lanes=args.critic_warmup_lanes,
+            critic_warmup_minimum_episodes=args.critic_warmup_minimum_episodes,
+            critic_warmup_minimum_ev=args.critic_warmup_minimum_ev,
             device=args.device,
             smoke=args.smoke,
             reward_mode=args.reward_mode,

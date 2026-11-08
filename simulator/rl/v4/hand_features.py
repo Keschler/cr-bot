@@ -30,7 +30,7 @@ V4_LEARNER_DECK: tuple[tuple[str, int, int, bool, bool, bool, bool, bool], ...] 
     ("musketeer", 72, 4, False, False, False, False, True),
     ("skeletons", 96, 1, False, False, False, True, False),
     ("ice-golem", 51, 2, False, False, False, False, False),
-    ("ice-spirit", 52, 1, False, False, False, False, False),
+    ("ice-spirit", 52, 1, False, False, False, False, True),
     ("fireball", 28, 4, False, True, False, False, False),
     ("log", 59, 2, False, True, False, False, False),
 )

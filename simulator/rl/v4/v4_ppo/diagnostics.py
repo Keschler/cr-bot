@@ -281,10 +281,9 @@ def build_update_report(
         reasons.append(f"mode flip {drift['mode_flip']:.3f} above 0.15")
     if drift["card_flip"] > 0.25:
         reasons.append(f"card flip {drift['card_flip']:.3f} above 0.25")
-    if drift["placement_move"] > 0.40:
-        reasons.append(
-            f"placement move {drift['placement_move']:.3f} above 0.40"
-        )
+    # Placement argmax movement is telemetry: near-tied masked distributions
+    # can change cells with negligible KL. True KL and numerical/entropy gates
+    # below still quarantine unsafe updates.
     head_kl: dict[str, float] = {}
     if batch.old_head_logits is not None:
         with torch.no_grad():
@@ -310,8 +309,8 @@ def build_update_report(
         # Landscape warning only (calibrated on the micro smoke): a
         # confident champion legitimately concentrates gradients where
         # uncertainty lives, and a near-zero mode gradient makes any
-        # ratio explode mechanically.  It quarantines only alongside
-        # movement, which is already covered above.
+        # ratio explode mechanically. The ratio remains telemetry; true
+        # placement KL and numerical/entropy gates handle unsafe updates.
         per_head["placement_grad_warning"] = placement_ratio
     # ``logits`` still holds the pre-update forward pass.  Recompute the
     # entropy from the post-step logits so the quarantine gate measures the

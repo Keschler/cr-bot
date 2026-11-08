@@ -65,60 +65,71 @@ def update_v4_ppo(
     with torch.no_grad():
         pre_logits, _, _ = _forward_sequence(policy, sequence, device)
         pre_decoded = policy.act_deterministic(pre_logits, trajectory.action_masks)
-    for _ in range(ppo_epochs):
-        actor_optimizer.zero_grad(set_to_none=True)
-        critic_optimizer.zero_grad(set_to_none=True)
-        logits, ht, _ = _forward_sequence(policy, sequence, device)
-        new_log_probs = policy.log_prob(logits, trajectory.action_masks, trajectory.actions)
-        values = critic(ht.detach())
-        anchor_log_probs: torch.Tensor | None = None
-        if batch.anchor_actions is not None and float(objective_config.bc_coef) > 0.0:
-            anchor_log_probs = policy.log_prob(
-                logits, trajectory.action_masks, batch.anchor_actions
+    # cuDNN's GRU backward requires the GRU forward to run with
+    # ``training=True`` so it saves its reserve space.  Keep the rest of the
+    # policy in eval mode (the collection path is eval and this preserves any
+    # encoder/head dropout semantics), and restore eval mode even when an
+    # update raises.  V4's GRU is single-layer and has no dropout of its own.
+    policy.recurrent.gru.train()
+    try:
+        for _ in range(ppo_epochs):
+            actor_optimizer.zero_grad(set_to_none=True)
+            critic_optimizer.zero_grad(set_to_none=True)
+            logits, ht, _ = _forward_sequence(policy, sequence, device)
+            new_log_probs = policy.log_prob(logits, trajectory.action_masks, trajectory.actions)
+            values = critic(ht.detach())
+            anchor_log_probs: torch.Tensor | None = None
+            if batch.anchor_actions is not None and float(objective_config.bc_coef) > 0.0:
+                anchor_log_probs = policy.log_prob(
+                    logits, trajectory.action_masks, batch.anchor_actions
+                )
+            new_entropy = policy.action_entropy(logits, trajectory.action_masks)["joint"]
+            result = ppo_objective(
+                old_log_probs=trajectory.old_log_probs.to(device),
+                new_log_probs=new_log_probs,
+                advantages=advantages,
+                values=values,
+                returns=returns,
+                entropy=new_entropy,
+                old_values=trajectory.values.to(device),
+                behavior_cloning_log_probs=anchor_log_probs,
+                config=objective_config,
             )
-        new_entropy = policy.action_entropy(logits, trajectory.action_masks)["joint"]
-        result = ppo_objective(
-            old_log_probs=trajectory.old_log_probs.to(device),
-            new_log_probs=new_log_probs,
-            advantages=advantages,
-            values=values,
-            returns=returns,
-            entropy=new_entropy,
-            old_values=trajectory.values.to(device),
-            behavior_cloning_log_probs=anchor_log_probs,
-            config=objective_config,
-        )
-        result.total_loss.backward(retain_graph=True)
-        grad_norms = _head_grad_norms(policy, critic)
-        # Per-term actor gradient norms answer "PPO vs BC: who is actually
-        # moving the policy?"  Separate autograd passes (graph retained
-        # above); the stepping backward below reuses it a final time.
-        actor_params = [p for p in policy.parameters() if p.requires_grad]
-        policy_grad_norm = _term_grad_norm(result.policy_loss, actor_params)
-        if anchor_log_probs is not None:
-            bc_measured = behavior_cloning_loss(
-                policy.log_prob(logits, trajectory.action_masks, batch.anchor_actions),
-                torch.ones_like(anchor_log_probs),
+            result.total_loss.backward(retain_graph=True)
+            grad_norms = _head_grad_norms(policy, critic)
+            # Per-term actor gradient norms answer "PPO vs BC: who is actually
+            # moving the policy?"  Separate autograd passes (graph retained
+            # above); the stepping backward below reuses it a final time.
+            actor_params = [p for p in policy.parameters() if p.requires_grad]
+            policy_grad_norm = _term_grad_norm(result.policy_loss, actor_params)
+            if anchor_log_probs is not None:
+                bc_measured = behavior_cloning_loss(
+                    policy.log_prob(logits, trajectory.action_masks, batch.anchor_actions),
+                    torch.ones_like(anchor_log_probs),
+                )
+                bc_grad_norm = _term_grad_norm(bc_measured, actor_params)
+            else:
+                bc_grad_norm = 0.0
+            actor_optimizer.zero_grad(set_to_none=True)
+            critic_optimizer.zero_grad(set_to_none=True)
+            result.total_loss.backward()
+            # Total-norm clip before stepping, matching the search-distillation
+            # sibling. A single pathological rollout must not be able to take an
+            # unbounded step, because the quarantine checks run after the step and
+            # cannot undo it.
+            # ``PPOObjectiveConfig`` owns loss coefficients; the V4 runtime
+            # keeps its optimizer safety default here for callers that pass
+            # that shared objective config directly.
+            max_grad_norm = float(getattr(objective_config, "max_grad_norm", 1.0))
+            torch.nn.utils.clip_grad_norm_(policy.parameters(), max_grad_norm)
+            torch.nn.utils.clip_grad_norm_(critic.parameters(), max_grad_norm)
+            actor_optimizer.step()
+            critic_optimizer.step()
+            report = build_update_report(
+                policy, batch, pre_decoded, result, values, returns, advantages,
+                objective_config, grad_norms, policy_grad_norm, bc_grad_norm,
             )
-            bc_grad_norm = _term_grad_norm(bc_measured, actor_params)
-        else:
-            bc_grad_norm = 0.0
-        actor_optimizer.zero_grad(set_to_none=True)
-        critic_optimizer.zero_grad(set_to_none=True)
-        result.total_loss.backward()
-        # Total-norm clip before stepping, matching the search-distillation
-        # sibling. A single pathological rollout must not be able to take an
-        # unbounded step, because the quarantine checks run after the step and
-        # cannot undo it.
-        max_grad_norm = float(objective_config.max_grad_norm)
-        torch.nn.utils.clip_grad_norm_(policy.parameters(), max_grad_norm)
-        torch.nn.utils.clip_grad_norm_(critic.parameters(), max_grad_norm)
-        actor_optimizer.step()
-        critic_optimizer.step()
-        report = build_update_report(
-            policy, batch, pre_decoded, result, values, returns, advantages,
-            objective_config, grad_norms, policy_grad_norm, bc_grad_norm,
-        )
+    finally:
+        policy.eval()
     assert report is not None
     return report
-

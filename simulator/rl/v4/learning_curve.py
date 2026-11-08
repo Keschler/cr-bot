@@ -28,7 +28,7 @@ import numpy as np
 
 
 LEARNING_CURVE_SCHEMA_VERSION = "v4-learning-curve-v1"
-LEARNING_CURVE_VERSION = "v4-controlled-learning-curve-6"
+LEARNING_CURVE_VERSION = "v4-controlled-learning-curve-7"
 # ``learning_curve.py`` now lives at ``simulator/rl/v4``.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _RUNNER_PATH = Path(__file__).resolve()
@@ -41,6 +41,8 @@ _RUNTIME_SOURCE_PATHS = (
     _REPO_ROOT / "simulator" / "rl" / "v4" / "frontier.py",
     _REPO_ROOT / "simulator" / "rl" / "v4" / "raw_ppo.py",
     _REPO_ROOT / "simulator" / "rl" / "v4" / "policy_opponent.py",
+    _REPO_ROOT / "simulator" / "rl" / "v4" / "opponent_population.py",
+    _REPO_ROOT / "simulator" / "rl" / "v4" / "critic_warmup.py",
     _REPO_ROOT / "simulator" / "rl" / "v4" / "real_decks.py",
     _REPO_ROOT / "simulator" / "rl" / "v4" / "real_decks.json",
     _REPO_ROOT / "simulator" / "rl" / "v4" / "frontier_eval.py",
@@ -48,6 +50,7 @@ _RUNTIME_SOURCE_PATHS = (
     _REPO_ROOT / "scripts" / "run_v4_random_actor.py",
     _REPO_ROOT / "simulator" / "rl" / "v4" / "model_v4.py",
     _REPO_ROOT / "simulator" / "rl" / "foundation" / "opponent_pool.py",
+    _REPO_ROOT / "simulator" / "rl" / "foundation" / "opponent_styles.py",
     _REPO_ROOT / "simulator" / "public_state_estimator.py",
     _REPO_ROOT / "simulator" / "observation_v3.py",
 )
@@ -365,6 +368,11 @@ class LearningCurveConfig:
     opponent_specs: tuple[dict[str, Any], ...] | None = None
     evaluation_only: bool = False
     allow_scripted_frontier_entries: bool = False
+    critic_warmup_epochs: int = 0
+    critic_warmup_decisions: int = 1440
+    critic_warmup_lanes: int = 4
+    critic_warmup_minimum_episodes: int = 4
+    critic_warmup_minimum_ev: float = 0.05
 
     def __post_init__(self) -> None:
         for name in ("checkpoint", "train_entries", "sealed_entries", "output_dir"):
@@ -389,6 +397,9 @@ class LearningCurveConfig:
             "choice_horizon",
             "choice_max_replicas",
             "ppo_epochs",
+            "critic_warmup_decisions",
+            "critic_warmup_lanes",
+            "critic_warmup_minimum_episodes",
         ):
             if type(getattr(self, name)) is not int or getattr(self, name) < 1:
                 raise ValueError(f"{name} must be a positive integer")
@@ -424,10 +435,21 @@ class LearningCurveConfig:
                     f"{-(-MIN_TERMINAL_BUDGET_US // DEFAULT_DECISION_INTERVAL_US)}, or use "
                     f"reward_mode=truncation or tower-delta, which pay on a cut episode"
                 )
-        if self.training_source not in ("frontier", "match-start"):
-            raise ValueError("training_source must be frontier or match-start")
+        if self.training_source not in ("frontier", "match-start", "anchored-match-start"):
+            raise ValueError("training_source must be frontier, match-start, or anchored-match-start")
         if self.training_source == "match-start" and self.bc_coef != 0.0:
             raise ValueError("match-start reward-only PPO requires bc_coef=0")
+        if self.training_source == "anchored-match-start" and self.bc_coef <= 0:
+            raise ValueError("anchored-match-start requires a positive frozen-policy retention coefficient")
+        if type(self.critic_warmup_epochs) is not int or self.critic_warmup_epochs < 0:
+            raise ValueError("critic_warmup_epochs must be a nonnegative integer")
+        if not np.isfinite(self.critic_warmup_minimum_ev) or not 0 <= self.critic_warmup_minimum_ev <= 1:
+            raise ValueError("critic_warmup_minimum_ev must be in [0, 1]")
+        if self.critic_warmup_epochs:
+            if self.evaluation_only or self.smoke or self.reward_mode != "terminal" or self.training_source == "frontier":
+                raise ValueError("critic warmup requires real terminal-reward match openings with training enabled")
+            if self.critic_warmup_decisions < 1440 or self.episode_cap < 1440:
+                raise ValueError("critic warmup requires at least 1440 rollout and episode decisions")
         if self.model_config is not None and not isinstance(self.model_config, Mapping):
             raise ValueError("model_config must be a JSON object or None")
         if type(self.allow_scripted_frontier_entries) is not bool:
@@ -481,6 +503,7 @@ class LearningCurveHooks:
     evaluate_choice: Callable[..., Sequence[dict[str, Any]]] | None = None
     save_checkpoint: Callable[..., Any] | None = None
     runtime_version: str = "unknown"
+    warmup_critic: Callable[..., Mapping[str, Any]] | None = None
 
 
 # Short alias for callers that prefer the experiment terminology.
@@ -716,6 +739,44 @@ def _default_hooks() -> LearningCurveHooks:
             max_replicas=config.choice_max_replicas, se_k=config.choice_se_k,
         )
 
+    def warmup(**kwargs: Any) -> Mapping[str, Any]:
+        from .critic_warmup import warmup_critic, critic_warmup_gate
+        config: LearningCurveConfig = kwargs["config"]
+        entries = kwargs["entries"]
+        origins = sorted({_entry_match_origin(entry) for entry in entries}, key=str)
+        if None in origins or len(origins) < 2:
+            raise ValueError("critic warmup needs at least two distinct raw match origins")
+        validation_origins = set(origins[1::2])
+        train = [entry for entry in entries if _entry_match_origin(entry) not in validation_origins]
+        validation = [entry for entry in entries if _entry_match_origin(entry) in validation_origins]
+        batches, infos = [], []
+        collection_seeds = [_phase_seed(config.seed, "critic-warmup", index) for index in range(2)]
+        for subset, seed in zip((train, validation), collection_seeds):
+            _set_reproducible_seed(seed)
+            batch, info = collect_frontier_rollout(
+                kwargs["policy"], kwargs["critic"], kwargs["anchor"], subset,
+                n_decisions=config.critic_warmup_decisions, n_lanes=config.critic_warmup_lanes,
+                episode_cap=config.episode_cap, device=config.device,
+                deterministic_policy=False, seed=seed,
+                truncation_reward=False, step_tower_reward=False,
+            )
+            if batch.illegal_attempts:
+                raise RuntimeError("critic warmup collection contains illegal learner attempts")
+            batches.append(batch)
+            infos.append(info)
+        report = warmup_critic(policy=kwargs["policy"], critic=kwargs["critic"],
+            optimizer=kwargs["critic_optimizer"], batch=batches[0], validation_batch=batches[1],
+            epochs=config.critic_warmup_epochs, gamma=config.gamma,
+            seed=_phase_seed(config.seed, "critic-fit"))
+        report["separation"] = dict(train_origins=sorted(set(origins) - validation_origins),
+            validation_origins=sorted(validation_origins), shared_origin_count=0,
+            collection_seeds=collection_seeds, source="training openings only; reserved decks excluded")
+        report["collection"] = _serialise(infos)
+        report["gate"] = critic_warmup_gate(report,
+            minimum_episodes=config.critic_warmup_minimum_episodes,
+            minimum_validation_ev=config.critic_warmup_minimum_ev)
+        return report
+
     return LearningCurveHooks(
         load_policy=load_policy,
         clone_policy=clone_policy,
@@ -726,6 +787,7 @@ def _default_hooks() -> LearningCurveHooks:
         evaluate_choice=choices,
         save_checkpoint=_default_save_checkpoint,
         runtime_version=runtime_version,
+        warmup_critic=warmup,
     )
 
 
@@ -1354,7 +1416,17 @@ def _record_key(record: Mapping[str, Any], index: int) -> tuple[Any, ...]:
     opponent = record.get("opponent")
     if isinstance(opponent, (Mapping, list, tuple, set, frozenset)):
         opponent = canonical_json(opponent)
-    return (record.get("archetype"), deck_id, seed, opponent)
+    # Controller and sampling settings are part of the matched condition.
+    # Legacy rows without these fields can still pair with other legacy
+    # rows, but cannot silently pair with newly identified conditions.
+    conditions = {
+        key: record[key] for key in (
+            "controller_seed", "strategy", "policy_seed", "deterministic_policy",
+            "learner_player", "learner_deck", "max_decisions", "decision_interval_us",
+            "engine_version", "ruleset_hash", "observation_contract_hash",
+        ) if key in record
+    }
+    return (record.get("archetype"), deck_id, seed, opponent, canonical_json(conditions))
 
 
 def paired_match_statistics(
@@ -1928,7 +2000,7 @@ def _load_runtime_entries(config: LearningCurveConfig) -> tuple[list[Any], list[
     train, train_meta = _load_entries(
         config.train_entries, label="train", required=not config.evaluation_only and not config.smoke
     )
-    if config.training_source == "match-start" and not config.evaluation_only and not config.smoke:
+    if config.training_source in ("match-start", "anchored-match-start") and not config.evaluation_only and not config.smoke:
         from .raw_ppo import RAW_PPO_STARTS_VERSION
         from .real_decks import catalog_sha256, real_decks_for
 
@@ -1947,6 +2019,16 @@ def _load_runtime_entries(config: LearningCurveConfig) -> tuple[list[Any], list[
                 raise ValueError(
                     f"train entry {index} is not a search-free raw PPO match opening"
                 )
+            opponent = entry.get("opponent", {})
+            if (opponent.get("style_identity", {}).get("split", "train") != "train"
+                    or opponent.get("population_split", "train") != "train"):
+                raise ValueError("raw PPO training openings cannot contain held-out styles/population members")
+            if "style" in opponent or "style_config" in opponent:
+                from simulator.rl.foundation.opponent_styles import style_identity
+                identity = style_identity(opponent["strategy"], opponent.get("style"),
+                    seed=opponent["controller_seed"], config=opponent.get("style_config"))
+                if identity["split"] != "train" or opponent.get("style_identity") != identity:
+                    raise ValueError("raw PPO style differs from its pinned training identity")
             if (
                 provenance.get("profile") == "real"
                 and entry.get("opponent", {}).get("kind") != "v4-checkpoint"
@@ -2076,6 +2158,16 @@ def run_learning_curve(
         if state is None:
             state = TrainingState()
 
+    critic_warmup_report = None
+    if config.critic_warmup_epochs:
+        if hooks.warmup_critic is None:
+            raise ValueError("the selected backend does not implement critic warmup")
+        critic_warmup_report = dict(_invoke(hooks.warmup_critic,
+            policy=policy, critic=state.critic, critic_optimizer=state.critic_optimizer,
+            anchor=anchor, entries=train_entries, config=config))
+        (output_dir / "critic_warmup.json").write_text(
+            canonical_json(_serialise(critic_warmup_report)) + "\n", encoding="utf-8")
+
     def evaluate(candidate: Any, *, evaluation_index: int) -> dict[str, Any]:
         # Evaluation may use torch/NumPy randomness in the simulator.  Give
         # every update point its own fixed stream so inserting an intermediate
@@ -2149,9 +2241,13 @@ def run_learning_curve(
 
     points: list[dict[str, Any]] = []
     update_reports: dict[int, Any] = {}
-    schedule = (0,) if config.evaluation_only else config.update_schedule
+    warmup_blocked = critic_warmup_report is not None and not critic_warmup_report["gate"]["eligible"]
+    schedule = (0,) if config.evaluation_only or warmup_blocked else config.update_schedule
     current_update = 0
-    quarantine_stop: dict[str, Any] | None = None
+    quarantine_stop: dict[str, Any] | None = (
+        {"stage": "critic-warmup", "stopped_before_actor_updates": True,
+         "reasons": critic_warmup_report["gate"]["reasons"]} if warmup_blocked else None
+    )
     for target_update in schedule:
         stopped = False
         while current_update < target_update:
@@ -2364,6 +2460,8 @@ def run_learning_curve(
                 "per completed update"
             ),
             "reward_mode": config.reward_mode,
+            "critic_warmup": critic_warmup_report,
+            "retention": ("frozen-initializer action anchor" if config.bc_coef > 0 else "none"),
             "quarantine_stop": quarantine_stop,
             "api_assumptions": [
                 "collect_frontier_rollout returns (rollout_batch, info)",

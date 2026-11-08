@@ -19,10 +19,11 @@ def run_setup(tmp_path, monkeypatch):
     for index, root in enumerate(roots):
         root.mkdir()
         torch.save([{"entry_id": f"train:hog#{index}:t2",
-                     "provenance": {"state_hash": str(index), "match_seed": index}}],
+                     "provenance": {"state_hash": f"{index}-2", "match_seed": index}}],
                    root / "frontier_train.pt")
         (root / f"train_hog_{index}_match.json").write_text(json.dumps({
             "config": {"archetype": "hog", "match_index": index, "match_seed": index},
+            "decisions": [{"state_hash": f"{index}-{t}"} for t in range(3)],
         }))
         (root / f"train_hog_{index}_t2_verdict.json").write_text("{}")
     checkpoint = tmp_path / "anchor.pt"

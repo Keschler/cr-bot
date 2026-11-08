@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any, Sequence
 
 import numpy as np
@@ -216,7 +218,7 @@ def full_match_record(
     deterministic: bool = True,
     max_decisions: int = 1200,
 ) -> list[dict[str, Any]]:
-    """Metric C: paired deterministic full matches vs a fixed opponent pool."""
+    """Complete matches with isolated policy RNG and explicit pairing identities."""
 
     import torch
 
@@ -225,31 +227,76 @@ def full_match_record(
     policy.eval()
 
     from simulator.roster import PLAYER_DECK
+    from simulator.actions import action_to_dict
+    from simulator.engine import ENGINE_VERSION
+    from simulator.observation_v3 import OBSERVATION_V3_CONTRACT_HASH
 
     from ..model_v4 import masks_from_legal_play
     from ..v4_ppo import decode_v4_sim_actions
     from ..v4_ppo.runtime import observe_v4_inputs
     from simulator.public_state_estimator import PublicStateEstimator
 
+    if type(max_decisions) is not int or max_decisions < 1:
+        raise ValueError("max_decisions must be a positive integer")
     out = []
     for spec in opponent_specs:
         if spec.get("kind") == "v4-checkpoint" and tuple(spec["deck"]) != tuple(PLAYER_DECK):
             raise ValueError("V4 checkpoint opponent currently requires the learner deck")
         for match_seed in seeds:
-            torch.manual_seed(_stable_seed("full-match", spec["archetype"], match_seed) & 0xFFFFFFFF)
             env = make_frontier_env()
             env.reset_v2(
                 seed=int(match_seed),
                 decks=(tuple(PLAYER_DECK), tuple(spec["deck"])),
                 shuffle_decks=True,
             )
-            opponent = make_opponent(spec, int(match_seed), env=env)
+            controller_seed = int(spec.get("controller_seed", match_seed))
+            opponent_identity = {
+                "kind": spec.get("kind", "scripted"),
+                "strategy": spec.get("strategy"),
+                "deck_id": spec.get("deck_id"),
+                "deck": list(spec["deck"]),
+                "controller_seed": controller_seed,
+            }
+            if spec.get("kind") == "v4-checkpoint":
+                opponent_identity["checkpoint_sha256"] = spec["sha256"]
+                # Optional metadata is execution identity, including compact
+                # architectures and independently seeded stochastic opponents.
+                for field in ("model_config", "inference", "seed", "sampling_seed", "member_id",
+                              "population_version", "population_split", "generation", "population_id",
+                              "population_schema_version"):
+                    if field in spec:
+                        opponent_identity[field] = spec[field]
+            if "style" in spec or "style_config" in spec:
+                from simulator.rl.foundation.opponent_styles import style_identity
+
+                resolved_style = style_identity(
+                    str(spec["strategy"]), spec.get("style"),
+                    seed=controller_seed, config=spec.get("style_config"),
+                )
+                if "style_identity" in spec and spec["style_identity"] != resolved_style:
+                    raise ValueError("Opponent style identity differs from its execution configuration")
+                opponent_identity["style"] = resolved_style
+            # Construct before seeding the actor: even a controller's cold
+            # checkpoint load must not consume the learner's sampling stream.
+            policy_seed = _stable_seed(
+                "full-match", json.dumps(opponent_identity, sort_keys=True), match_seed
+            ) & 0xFFFFFFFF
             hidden = policy.initial_hidden(1, device=device)
             estimator = PublicStateEstimator()
             winner: Any = None
             ran = 0
             completed = False
-            with torch.no_grad():
+            truncated = False
+            terminal_reason = None
+            initial_state_hash = env.state.state_hash()
+            initial_towers = {e.uid: max(0, e.hp) for e in env.state.entities.values() if e.kind == "tower"}
+            trace = hashlib.sha256()
+            # manual_seed also seeds CUDA. Restore every seeded device so
+            # evaluation cannot affect subsequent policy/training RNG streams.
+            cuda_devices = list(range(torch.cuda.device_count())) if torch.cuda.is_available() else []
+            with torch.random.fork_rng(devices=cuda_devices), torch.no_grad():
+                opponent = make_opponent(spec, controller_seed, env=env)
+                torch.manual_seed(policy_seed)
                 for _ in range(max_decisions):
                     if env.state is None or env.state.terminal:
                         break
@@ -278,22 +325,81 @@ def full_match_record(
                         player=0,
                     )[0]
                     opp = opponent.choose_action(env.engine, env.state, 1)
+                    trace.update(json.dumps(
+                        [action_to_dict(mine), action_to_dict(opp)],
+                        sort_keys=True, separators=(",", ":"),
+                    ).encode() + b"\n")
                     result = env.step_v2((mine, opp))
                     ran += 1
                     if result.terminated or result.truncated:
                         completed = bool(result.terminated) and not bool(result.truncated)
+                        truncated = bool(result.truncated)
+                        terminal_reason = result.info.get("terminal_reason")
                         winner = result.info.get("winner") if completed else None
                         break
+            cap_reached = not completed and not truncated and ran >= max_decisions
+            truncated = truncated or cap_reached
+            if cap_reached:
+                terminal_reason = "decision_cap"
+            state = env.state
+            towers = [
+                {"uid": e.uid, "player": e.owner, "role": e.role,
+                 "hp": max(0, e.hp) if e.alive else 0, "max_hp": e.max_hp}
+                for e in sorted(state.entities.values(), key=lambda e: e.uid) if e.kind == "tower"
+            ]
+            invalid = [0, 0]
+            plays = [0, 0]
+            spent = [0, 0]
+            for event in state.events:
+                player = event.get("player")
+                if player not in (0, 1):
+                    continue
+                if event.kind == "action_rejected":
+                    invalid[player] += 1
+                elif event.kind == "card_played":
+                    plays[player] += 1
+                    spent[player] += int(event.get("cost_milli", 0))
             out.append(
                 {
                     "archetype": spec["archetype"],
                     "deck_id": spec.get("deck_id"),
+                    "real_deck_split": spec.get("real_deck_split"),
+                    "opponent": opponent_identity,
+                    "controller_seed": controller_seed,
+                    "strategy": spec.get("strategy"),
                     "seed": int(match_seed),
+                    "policy_seed": policy_seed,
+                    "deterministic_policy": bool(deterministic),
+                    "learner_player": 0,
+                    "learner_deck": list(PLAYER_DECK),
                     "winner": winner,
                     "decisions": ran,
                     "result": ("win" if winner == 0 else ("loss" if winner == 1 else "draw")) if completed else "truncated",
                     "terminated": completed,
+                    "truncated": truncated,
+                    "cap_reached": cap_reached,
+                    "terminal_reason": terminal_reason,
+                    "max_decisions": max_decisions,
+                    "decision_interval_us": env.decision_interval_ticks * env.engine.ruleset.tick_us,
+                    "crowns": [p.crowns for p in state.players],
+                    "tower_hp": towers,
+                    # Includes tiebreak drain and automatic King-loss
+                    # collapse; this is HP reduction, not combat damage.
+                    "tower_hp_reduction": [
+                        sum(initial_towers[t["uid"]] - t["hp"] for t in towers if t["player"] == 1 - player)
+                        for player in (0, 1)
+                    ],
+                    "invalid_actions": invalid,
+                    "card_plays": plays,
+                    "spent_elixir_milli": spent,
+                    "initial_state_hash": initial_state_hash,
+                    "final_state_hash": state.state_hash(),
+                    "event_log_hash": state.event_log_hash(),
+                    "action_trace_sha256": trace.hexdigest(),
                     "runtime_version": FRONTIER_PPO_VERSION,
+                    "engine_version": ENGINE_VERSION,
+                    "ruleset_hash": state.ruleset_hash,
+                    "observation_contract_hash": OBSERVATION_V3_CONTRACT_HASH,
                 }
             )
     return out

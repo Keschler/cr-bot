@@ -10,12 +10,15 @@ from simulator.rl.v4.frontier_ppo import (
     action_logit_margins, collect_frontier_rollout, full_match_record,
     make_frontier_env, pinned_opponent_decks,
 )
-from simulator.rl.v4.model_v4 import RecurrentV4Policy, V4ActionBatch, V4ValueHead
-from simulator.rl.foundation.objectives import compute_gae
+from simulator.rl.v4.model_v4 import RecurrentV4Policy, V4ActionBatch, V4Logits, V4ValueHead
+from simulator.rl.foundation.objectives import PPOObjectiveConfig, PPOObjectiveResult, compute_gae
+from simulator.rl.foundation.trajectory import ActionMasks, RecurrentSequence, TrajectoryBatch
 from simulator.rl.v4.v4_ppo import (
     configure_v4_runtime, decode_v4_sim_actions, return_distribution,
 )
 from simulator.rl.v4.v4_ppo.rollout_utils import post_step_value, rollout_next_values
+from simulator.rl.v4.v4_ppo.records import V4RolloutBatch
+from simulator.rl.v4.v4_ppo.update import update_v4_ppo
 from simulator.roster import PLAYER_DECK
 from simulator.tests.test_v4_ppo_adapter import _inputs, _masks
 
@@ -131,6 +134,179 @@ def test_placement_bias_is_registered_before_first_forward():
     net = policy()
     optimizer = torch.optim.Adam(net.parameters())
     assert any(p is net.heads.cell_bias for group in optimizer.param_groups for p in group['params'])
+
+
+def _synthetic_ppo_batch(net, critic, *, device: str):
+    """Build a small recurrent batch that exercises the real PPO updater."""
+
+    data = _inputs(batch=2, time=2, device=device)
+    base_masks = _masks(batch=2)
+    masks = ActionMasks(
+        mode=base_masks.mode.expand(2, 2, 2).contiguous().to(device),
+        card=base_masks.card.expand(2, 2, 4).contiguous().to(device),
+        placement=base_masks.placement.expand(2, 2, 4, 32, 18).contiguous().to(device),
+    )
+    hidden0 = net.initial_hidden(2, device=device)
+    logits, actions, old_log_probs, _, recurrent, _ = net.rollout_sample(
+        data["raster"], data["global_features"], data["entities"],
+        data["entity_mask"], data["hand_tokens"], data["opp_hand_probs"],
+        data["opp_out_of_cycle"], data["opp_elixir_interval"],
+        data["event_history"], masks, reset_mask=data["reset_mask"], hidden=hidden0,
+    )
+    with torch.no_grad():
+        values = critic(recurrent.detach()).squeeze(-1)
+    sequence = RecurrentSequence(
+        raster=data["raster"], global_features=data["global_features"],
+        entities=data["entities"], entity_mask=data["entity_mask"],
+        reset_mask=data["reset_mask"], hand_tokens=data["hand_tokens"],
+        opp_hand_probs=data["opp_hand_probs"],
+        opp_out_of_cycle=data["opp_out_of_cycle"],
+        opp_elixir_interval=data["opp_elixir_interval"],
+        event_history=data["event_history"],
+    )
+    trajectory = TrajectoryBatch(
+        sequence=sequence, action_masks=masks, actions=actions,
+        rewards=torch.zeros(2, 2, device=device),
+        terminated=torch.zeros(2, 2, dtype=torch.bool, device=device),
+        truncated=torch.zeros(2, 2, dtype=torch.bool, device=device),
+        old_log_probs=old_log_probs.detach(), values=values.detach(),
+    )
+    return V4RolloutBatch(
+        trajectory=trajectory, anchor_actions=None, recurrent=recurrent.detach(),
+        next_values=torch.zeros(2, 2, device=device),
+    )
+
+
+def _run_synthetic_ppo_update(net, *, device: str, seen_modes=None):
+    configure_v4_runtime(net)
+    critic = V4ValueHead(net.config.gru_hidden_dim).to(device)
+    batch = _synthetic_ppo_batch(net, critic, device=device)
+    if seen_modes is not None:
+        seen_modes.clear()
+    actor_optimizer = torch.optim.Adam(net.parameters(), lr=1e-5)
+    critic_optimizer = torch.optim.Adam(critic.parameters(), lr=1e-4)
+    report = update_v4_ppo(
+        net, critic, actor_optimizer, critic_optimizer, batch,
+        bc_coef=0.0, ppo_epochs=1,
+    )
+    return report
+
+
+def test_ppo_update_uses_training_gru_forward_and_restores_eval():
+    net = policy()
+    seen_modes = []
+    hook = net.recurrent.gru.register_forward_pre_hook(
+        lambda module, _inputs: seen_modes.append(bool(module.training))
+    )
+    try:
+        report = _run_synthetic_ppo_update(net, device="cpu", seen_modes=seen_modes)
+    finally:
+        hook.remove()
+    assert seen_modes[0] is False  # pre-update deterministic decode
+    assert any(seen_modes[1:])  # autograd forward has cuDNN's reserve space
+    assert net.training is False
+    assert net.recurrent.gru.training is False
+    assert torch.isfinite(torch.tensor(report.policy_loss))
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
+def test_ppo_update_runs_recurrent_backward_on_cuda():
+    net = policy().to("cuda")
+    report = _run_synthetic_ppo_update(net, device="cuda")
+    assert torch.isfinite(torch.tensor(report.policy_loss, device="cuda"))
+    assert all(torch.isfinite(torch.tensor(value, device="cuda"))
+               for value in report.grad_norms.values())
+    assert net.training is False
+    assert net.recurrent.gru.training is False
+
+
+def test_near_tied_placement_argmax_move_is_telemetry_only(monkeypatch):
+    """A tiny KL can move an argmax across cells without a bad update."""
+
+    import simulator.rl.v4.v4_ppo.diagnostics as diagnostics
+
+    net = policy()
+    configure_v4_runtime(net)
+    critic = V4ValueHead(net.config.gru_hidden_dim)
+    batch = _synthetic_ppo_batch(net, critic, device="cpu")
+    masks = batch.trajectory.action_masks
+    mode = torch.zeros(2, 2, 2)
+    mode[..., 1] = 8.0  # PLAY is the deterministic mode on every row.
+    duration = torch.zeros(2, 2, net.heads.duration_head.out_features)
+    card = torch.zeros(2, 2, 4)
+    card[..., 0] = 8.0  # Slot zero is legal in the synthetic masks.
+    placement = torch.where(
+        masks.placement,
+        torch.full((2, 2, 4, 32, 18), -1.0),
+        torch.full((2, 2, 4, 32, 18), -5.0),
+    )
+    epsilon = 1e-6
+    # The post-update argmax moves two cells, while old/new distributions
+    # differ only by an epsilon swap and therefore have negligible KL.
+    placement[..., 0, 0, 0] = epsilon
+    placement[..., 0, 0, 2] = epsilon * 2.0
+    old_placement = placement.clone()
+    old_placement[..., 0, 0, 0] = epsilon * 2.0
+    old_placement[..., 0, 0, 2] = epsilon
+    post_logits = V4Logits(mode, duration, card, placement)
+    old_head_logits = {
+        "mode": mode.clone(),
+        "duration": duration.clone(),
+        "card": card.clone(),
+        "placement": old_placement,
+    }
+    old_logits = V4Logits(mode, duration, card, old_placement)
+    old_log_probs = net.log_prob(old_logits, masks, batch.trajectory.actions).detach()
+    entropy = net.action_entropy(post_logits, masks)
+    batch = replace(
+        batch,
+        trajectory=replace(batch.trajectory, old_log_probs=old_log_probs),
+        old_head_logits=old_head_logits,
+        per_head_entropy={key: value.detach() for key, value in entropy.items()},
+    )
+    pre_decoded = V4ActionBatch(
+        mode=torch.ones(2, 2, dtype=torch.long),
+        card_slot=torch.zeros(2, 2, dtype=torch.long),
+        placement=torch.zeros(2, 2, 2, dtype=torch.long),
+        wait_duration=torch.zeros(2, 2, dtype=torch.long),
+    )
+    zeros = torch.zeros((), dtype=torch.float32)
+    result = PPOObjectiveResult(
+        total_loss=zeros,
+        policy_loss=zeros,
+        value_loss=zeros,
+        entropy=zeros,
+        behavior_cloning_loss=zeros,
+        approx_kl=zeros,
+        mean_abs_log_ratio=zeros,
+        clip_fraction=zeros,
+    )
+    monkeypatch.setattr(
+        diagnostics,
+        "_forward_sequence",
+        lambda *_args, **_kwargs: (
+            post_logits,
+            torch.zeros(2, 2, net.config.gru_hidden_dim),
+            torch.zeros(1, 2, net.config.gru_hidden_dim),
+        ),
+    )
+    report = diagnostics.build_update_report(
+        net,
+        batch,
+        pre_decoded,
+        result,
+        torch.zeros(2, 2),
+        torch.zeros(2, 2),
+        torch.zeros(2, 2),
+        PPOObjectiveConfig(bc_coef=0.0),
+        {"mode": 1.0, "placement": 1.0},
+        0.0,
+        0.0,
+    )
+    assert report.placement_move_fraction == pytest.approx(1.0)
+    assert report.per_head_kl["placement"] < 1e-5
+    assert report.quarantined is False
+    assert report.quarantine_reasons == []
 
 
 def test_successor_value_uses_next_observation_without_consuming_rng():

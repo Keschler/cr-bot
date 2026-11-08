@@ -368,10 +368,32 @@ def plan_branches(
 
 def make_opponent(spec: dict[str, Any], seed: int, *, env: Any = None) -> Any:
     if spec.get("kind") == "v4-checkpoint":
+        if any(key in spec for key in ("style", "style_config", "style_identity")):
+            raise ValueError("checkpoint opponents cannot also request a scripted style")
         if env is None:
             raise ValueError("V4 checkpoint opponent requires a bound environment")
         from .policy_opponent import V4PolicyOpponent
-        return V4PolicyOpponent(env, str(spec["checkpoint"]), str(spec["sha256"]))
+        return V4PolicyOpponent(
+            env, str(spec["checkpoint"]), str(spec["sha256"]),
+            model_config=spec.get("model_config"),
+            inference=str(spec.get("inference", "deterministic")),
+            seed=int(spec.get("sampling_seed", spec.get("seed", seed))),
+            deck=spec.get("deck"),
+        )
+    if "style" in spec or "style_config" in spec:
+        try:
+            from ..foundation.opponent_styles import make_styled_opponent
+        except ImportError:  # pragma: no cover
+            from simulator.rl.foundation.opponent_styles import make_styled_opponent
+        opponent = make_styled_opponent(
+            str(spec["strategy"]), spec.get("style"),
+            seed=spec.get("controller_seed", seed), config=spec.get("style_config"),
+        )
+        if "style_identity" in spec and spec["style_identity"] != opponent.identity:
+            raise ValueError("opponent style identity does not match resolved configuration")
+        return opponent
+    if "style_identity" in spec:
+        raise ValueError("opponent style_identity requires an explicit style or style_config")
     try:
         from ..foundation.opponent_pool import make_opponent_controller
     except ImportError:  # pragma: no cover

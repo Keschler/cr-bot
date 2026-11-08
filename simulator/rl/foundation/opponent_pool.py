@@ -24,12 +24,16 @@ from typing import Any, Callable, Mapping, Protocol
 try:
     from ...actions import PlayCardAction, SimAction, WaitAction
     from ...engine import BattleEngine
+    from ...fixed import distance_mtile
+    from ...geometry import cell_center_mtile
     from ...ruleset import Ruleset, load_fixed_ruleset
     from ...roster import PLAYER_DECK
     from ...soa import is_visibility_concealed
 except ImportError:  # pragma: no cover - top-level ``rl`` layout
     from simulator.actions import PlayCardAction, SimAction, WaitAction
     from simulator.engine import BattleEngine
+    from simulator.fixed import distance_mtile
+    from simulator.geometry import cell_center_mtile
     from simulator.ruleset import Ruleset, load_fixed_ruleset
     from simulator.roster import PLAYER_DECK
     from simulator.soa import is_visibility_concealed
@@ -630,6 +634,73 @@ def _has_live_card(state: Any, player: int, card_ids: set[str]) -> bool:
     )
 
 
+def _held_card_unaffordable(
+    engine: BattleEngine,
+    state: Any,
+    player: int,
+    card_id: str,
+) -> bool:
+    player_state = state.players[player]
+    return any(
+        held_card == card_id
+        and engine._effective_card_cost(player_state, engine.ruleset.card(held_card))
+        > player_state.elixir_milli
+        for held_card in player_state.hand
+    )
+
+
+def _tower_connection_cell(
+    engine: BattleEngine,
+    state: Any,
+    player: int,
+    card_id: str,
+    lane: int,
+) -> tuple[int, int] | None:
+    """Find the closest legal cell from which a siege card can hit a tower."""
+
+    card = engine.ruleset.card(card_id)
+    attack_range = int(card.range_mtile or card.sight_range_mtile or 0)
+    if attack_range <= 0:
+        return None
+    towers = [tower for tower in _enemy_towers(state, player) if tower.role != "king"]
+    if not towers:
+        towers = _enemy_towers(state, player)
+    if not towers:
+        return None
+    lane_x = _lane_col(lane) * 1_000 + 500
+    tower = min(
+        towers,
+        key=lambda candidate: (
+            abs(candidate.x_mtile - lane_x),
+            candidate.y_mtile,
+            candidate.uid,
+        ),
+    )
+    source_radius = int(card.collision_radius_mtile or 0)
+    tower_radius = int(engine._tower_collision_radii[tower.card_id])
+    connected: list[tuple[int, int]] = []
+    for cell in engine.legal_cells(state, player, card_id):
+        x_mtile, y_mtile = cell_center_mtile(cell)
+        edge_distance = (
+            distance_mtile(x_mtile, y_mtile, tower.x_mtile, tower.y_mtile)
+            - source_radius
+            - tower_radius
+        )
+        if edge_distance <= attack_range:
+            connected.append(cell)
+    if not connected:
+        return None
+    return min(
+        connected,
+        key=lambda cell: (
+            distance_mtile(*cell_center_mtile(cell), tower.x_mtile, tower.y_mtile),
+            abs(cell_center_mtile(cell)[0] - tower.x_mtile),
+            cell[1],
+            cell[0],
+        ),
+    )
+
+
 class _HeuristicController:
     """Common legal-action and placement helpers for simulator opponents."""
 
@@ -714,6 +785,8 @@ class _HeuristicController:
                 continue
             card = engine.ruleset.card(card_id)
             if card.kind == "spell":
+                cell = _target_cell(engine, state, player)
+            elif card_id == "miner":
                 cell = _target_cell(engine, state, player)
             elif card.kind == "building":
                 cell = (8, rows[2])
@@ -844,6 +917,13 @@ class AggressivePressureController(_HeuristicController):
             action = self._try_priority(engine, state, player, self._DEFENSE, cells)
             if action is not None:
                 return action
+        else:
+            for card_id in self._WIN_CONDITIONS:
+                if card_id not in state.players[player].hand:
+                    continue
+                if _held_card_unaffordable(engine, state, player, card_id):
+                    return WaitAction(player)
+                break
         action = self._try_priority(engine, state, player, self._WIN_CONDITIONS, cells)
         if action is not None:
             return action
@@ -919,6 +999,14 @@ class DefensiveCycleController(_HeuristicController):
             action = self._try_priority(engine, state, player, self._DEFENSIVE, cells)
             if action is not None:
                 return action
+        elif "x-bow" in state.players[player].hand:
+            xbow_cell = _tower_connection_cell(engine, state, player, "x-bow", lane)
+            if xbow_cell is not None:
+                action = self._try_card(engine, state, player, "x-bow", xbow_cell)
+                if action is not None:
+                    return action
+            if _held_card_unaffordable(engine, state, player, "x-bow"):
+                return WaitAction(player)
         action = self._try_priority(engine, state, player, self._CYCLE, cells)
         if action is not None:
             return action
@@ -935,10 +1023,12 @@ class BeatdownTankSupportController(_HeuristicController):
         "giant",
         "giant-skeleton",
         "lava-hound",
+        "balloon",
         "pekka",
         "mega-knight",
     )
     _SUPPORT = (
+        "balloon",
         "night-witch",
         "witch",
         "baby-dragon",
@@ -971,6 +1061,15 @@ class BeatdownTankSupportController(_HeuristicController):
         target = _target_cell(engine, state, player, crossed_only=True)
         crossed = [entity for entity in _enemy_troops(state, player) if _is_crossed(engine, entity, player)]
         own_tank = _has_live_card(state, player, set(self._TANKS))
+        if own_tank and not crossed:
+            living_tanks = [
+                entity
+                for entity in _own_entities(state, player)
+                if entity.card_id in self._TANKS
+            ]
+            primary_tanks = [entity for entity in living_tanks if entity.card_id != "balloon"]
+            anchor_tank = max(primary_tanks or living_tanks, key=lambda entity: (entity.spawn_tick, entity.uid))
+            lane = _lane_for_x(engine, anchor_tank.x_mtile)
         cells = {
             "default": (_lane_col(lane), rows[0]),
             "golem": (_lane_col(lane), rows[0] + (2 if player == 0 else -2)),
@@ -979,6 +1078,7 @@ class BeatdownTankSupportController(_HeuristicController):
             "giant": (_lane_col(lane), rows[0] + (2 if player == 0 else -2)),
             "giant-skeleton": (_lane_col(lane), rows[0] + (2 if player == 0 else -2)),
             "lava-hound": (_lane_col(lane), rows[0] + (2 if player == 0 else -2)),
+            "balloon": (_lane_col(lane), rows[0] + (4 if player == 0 else -4)),
             "pekka": (_lane_col(lane), rows[0]),
             "mega-knight": (_lane_col(lane), rows[1]),
             "night-witch": (_lane_col(lane), rows[0] + (4 if player == 0 else -4)),
@@ -1006,9 +1106,24 @@ class BeatdownTankSupportController(_HeuristicController):
             if action is not None:
                 return action
         if not own_tank:
+            if not crossed:
+                for card_id in self._TANKS:
+                    if card_id not in state.players[player].hand:
+                        continue
+                    if _held_card_unaffordable(engine, state, player, card_id):
+                        return WaitAction(player)
+                    break
             action = self._try_priority(engine, state, player, self._TANKS, cells)
             if action is not None:
                 return action
+        if not crossed:
+            reserved = any(
+                _held_card_unaffordable(engine, state, player, card_id)
+                and (not own_tank or card_id == "balloon")
+                for card_id in self._TANKS
+            )
+            if reserved:
+                return WaitAction(player)
         action = self._try_priority(engine, state, player, self._SUPPORT, cells)
         if action is not None:
             return action
@@ -1057,9 +1172,14 @@ class SiegeBaitController(_HeuristicController):
         lane = _threat_lane(engine, state, player)
         target = _target_cell(engine, state, player, crossed_only=True)
         crossed = [entity for entity in _enemy_troops(state, player) if _is_crossed(engine, entity, player)]
+        xbow_cell = (
+            _tower_connection_cell(engine, state, player, "x-bow", lane)
+            if "x-bow" in state.players[player].hand
+            else None
+        )
         cells = {
             "default": (8, rows[2]),
-            "x-bow": (8, rows[2]),
+            "x-bow": xbow_cell or (8, rows[2]),
             "mortar": (8, rows[2]),
             "goblin-drill": target,
             "goblin-barrel": target,
@@ -1088,6 +1208,14 @@ class SiegeBaitController(_HeuristicController):
             action = self._try_priority(engine, state, player, self._DEFENSE, cells)
             if action is not None:
                 return action
+        else:
+            primary_priorities = (*self._SIEGE, "goblin-barrel")
+            for card_id in primary_priorities:
+                if card_id not in state.players[player].hand:
+                    continue
+                if _held_card_unaffordable(engine, state, player, card_id):
+                    return WaitAction(player)
+                break
         action = self._try_priority(engine, state, player, self._SIEGE, cells)
         if action is not None:
             return action

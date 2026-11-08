@@ -228,8 +228,54 @@ def _source_match_seeds(root: Path, entries: list[Any], retention_count: int) ->
     return seeds
 
 
+def _check_entry_source_provenance(root: Path, entries: list[Any]) -> None:
+    """Bind each frontier entry's claimed origin to its source decision."""
+
+    matches: dict[tuple[str, str], Mapping[str, Any]] = {}
+    for entry in entries:
+        entry_id = str(entry.get("entry_id", ""))
+        split, match_id, offset = parse_entry_id(entry_id)
+        key = (split, match_id)
+        if key not in matches:
+            path = match_json_path(root, split, match_id)
+            try:
+                match = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, TypeError) as exc:
+                raise ValueError(f"entry source match is unreadable: {path}") from exc
+            if not isinstance(match, Mapping):
+                raise ValueError(f"entry source match is invalid: {path}")
+            matches[key] = match
+        match = matches[key]
+        config = match.get("config")
+        if not isinstance(config, Mapping):
+            raise ValueError(f"entry source match lacks config provenance: {entry_id}")
+        source_match_id = f"{config.get('archetype')}#{config.get('match_index')}"
+        if source_match_id != match_id:
+            raise ValueError(f"entry id does not identify its source match: {entry_id}")
+        seed = config.get("match_seed")
+        provenance = entry.get("provenance")
+        if not isinstance(provenance, Mapping):
+            raise ValueError(f"entry lacks source provenance: {entry_id}")
+        provenance_seed = provenance.get("match_seed")
+        if (
+            type(seed) is not int or type(provenance_seed) is not int
+            or provenance_seed != seed
+        ):
+            raise ValueError(f"entry match_seed differs from its source match: {entry_id}")
+        decisions = match.get("decisions")
+        if not isinstance(decisions, list) or offset >= len(decisions):
+            raise ValueError(f"entry offset is outside its source match: {entry_id}")
+        state_hash = decisions[offset].get("state_hash")
+        if not isinstance(state_hash, str) or not state_hash:
+            raise ValueError(f"entry source decision lacks state_hash: {entry_id}")
+        if provenance.get("state_hash") != state_hash:
+            raise ValueError(f"entry state_hash differs from its source decision: {entry_id}")
+
+
 def _check_disjoint_sources(args: argparse.Namespace, train_entries: list[Any], validation_entries: list[Any]) -> None:
     _check_disjoint_entries(train_entries, validation_entries)
+    _check_entry_source_provenance(args.dataset_root, train_entries)
+    _check_entry_source_provenance(args.validation_root, validation_entries)
     train = _source_match_seeds(args.dataset_root, train_entries, args.max_retention)
     validation = _source_match_seeds(args.validation_root, validation_entries, args.validation_retention)
     overlap = train & validation

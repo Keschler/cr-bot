@@ -12,6 +12,7 @@ from .real_decks import REAL_DECK_ARCHETYPES, catalog_sha256
 
 RAW_PPO_STARTS_VERSION = "raw-ppo-starts-v3"
 MIXED_ARCHETYPES = (*DISCOVERY_ARCHETYPES, "random-legal")
+DIVERSE_PPO_STARTS_VERSION = "raw-ppo-diverse-real-1"
 
 
 def make_match_start_entries(
@@ -107,6 +108,64 @@ def make_match_start_entries(
                         "generator": RAW_PPO_STARTS_VERSION, "profile": profile,
                         "pool_seed": pool_seed, "match_index": match_index,
                         "match_seed": match_seed, "state_hash": env.state.state_hash(),
+                    },
+                })
+    return entries
+
+
+def make_diverse_match_start_entries(
+    *, pool_seed: int, matches_per_deck: int = 1,
+    styles: Sequence[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Cover every training-catalog deck and each explicit training style.
+
+    The legacy generator and fixed benchmark remain unchanged. Development
+    styles and reserved decks cannot enter this training-only entry builder.
+    """
+    from simulator.engine.core import BattleEngine
+    from simulator.env import SimulatorEnv
+    from simulator.roster import PLAYER_DECK
+    from simulator.ruleset import load_fixed_ruleset
+    from simulator.rl.foundation.opponent_styles import TRAIN_STYLE_IDS, style_identity
+    from .real_decks import load_real_decks
+
+    if type(pool_seed) is not int or pool_seed < 0:
+        raise ValueError("pool_seed must be a non-negative integer")
+    if type(matches_per_deck) is not int or matches_per_deck < 1:
+        raise ValueError("matches_per_deck must be a positive integer")
+    chosen = tuple(TRAIN_STYLE_IDS if styles is None else styles)
+    if not chosen or len(set(chosen)) != len(chosen) or any(style not in TRAIN_STYLE_IDS for style in chosen):
+        raise ValueError("styles must be unique training styles; held-out styles are forbidden")
+    ruleset = load_fixed_ruleset()
+    entries = []
+    for deck in load_real_decks():
+        if deck.split != "train":
+            continue
+        for style in chosen:
+            for match_index in range(matches_per_deck):
+                match_seed = _stable_seed("diverse-real", pool_seed, deck.deck_id, style, match_index)
+                controller_seed = _stable_seed("diverse-controller", pool_seed, deck.deck_id, style) & 0xFFFFFFFF
+                env = SimulatorEnv(BattleEngine(ruleset, validate_every_tick=False))
+                env.reset_v2(seed=match_seed, decks=(tuple(PLAYER_DECK), deck.cards), shuffle_decks=True)
+                if env.state is None:
+                    raise RuntimeError("diverse PPO match reset returned no state")
+                entries.append({
+                    "entry_id": f"raw-diverse:{deck.deck_id}:{style}:{match_index}",
+                    "split": "train", "initial_state": env.save_state(),
+                    "learner_deck": list(PLAYER_DECK), "opponent_deck": list(deck.cards),
+                    "opponent": {
+                        "archetype": deck.archetype, "strategy": deck.archetype,
+                        "deck_id": deck.deck_id, "real_deck_split": "train",
+                        "controller_seed": controller_seed, "style": style,
+                        "style_identity": style_identity(deck.archetype, style, seed=controller_seed),
+                    },
+                    "provenance": {
+                        "generator": RAW_PPO_STARTS_VERSION,
+                        "diversity_generator": DIVERSE_PPO_STARTS_VERSION,
+                        "profile": "real", "real_deck_catalog_sha256": catalog_sha256(),
+                        "real_deck_id": deck.deck_id, "pool_seed": pool_seed,
+                        "match_index": match_index, "match_seed": match_seed,
+                        "state_hash": env.state.state_hash(),
                     },
                 })
     return entries

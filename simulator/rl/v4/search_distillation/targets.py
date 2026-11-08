@@ -102,6 +102,13 @@ def _branch_mean(
     return float(branch.get("mean", 0.0))
 
 
+def _replica_indices(values: Sequence[Any]) -> tuple[tuple[int, ...], bool]:
+    """Normalize replica ids and report whether this one list is unique."""
+
+    indices = tuple(int(value) for value in (() if values is None else values))
+    return indices, len(indices) == len(set(indices))
+
+
 def paired_advantage(verdict: Mapping[str, Any], *, require_independent: bool = False) -> dict[str, Any]:
     """Return paired best-vs-recorded statistics from one verdict.
 
@@ -125,17 +132,30 @@ def paired_advantage(verdict: Mapping[str, Any], *, require_independent: bool = 
     # Confirmation replicas must be disjoint from discovery replicas.  When
     # the producer records indices, also require the same paired index set for
     # best and sim so the subtraction remains common-random-number paired.
-    discovery_indices = set(int(v) for v in verdict.get("discovery_replica_indices", ()))
-    discovery_indices.update(int(v) for v in best.get("discovery_replica_indices", ()))
-    discovery_indices.update(int(v) for v in sim.get("discovery_replica_indices", ()))
-    confirmation_indices_best = tuple(int(v) for v in best.get(
+    discovery_lists = (
+        verdict.get("discovery_replica_indices", ()),
+        best.get("discovery_replica_indices", ()),
+        sim.get("discovery_replica_indices", ()),
+    )
+    discovery_indices: set[int] = set()
+    discovery_unique = True
+    for raw_indices in discovery_lists:
+        indices, unique = _replica_indices(raw_indices)
+        discovery_indices.update(indices)
+        discovery_unique = discovery_unique and unique
+    confirmation_indices_best, confirmation_best_unique = _replica_indices(best.get(
         "confirmation_replica_indices", best.get("validation_replica_indices", verdict.get("confirmation_replica_indices", ()))))
-    confirmation_indices_sim = tuple(int(v) for v in sim.get(
+    confirmation_indices_sim, confirmation_sim_unique = _replica_indices(sim.get(
         "confirmation_replica_indices", sim.get("validation_replica_indices", verdict.get("confirmation_replica_indices", ()))))
+    confirmation_unique = confirmation_best_unique and confirmation_sim_unique
     if require_independent:
-        independent = independent and bool(discovery_indices) and bool(confirmation_indices_best)
+        independent = (
+            independent and bool(discovery_indices) and bool(confirmation_indices_best)
+            and discovery_unique and confirmation_unique
+        )
     if confirmation_indices_best or confirmation_indices_sim:
         independent = independent and bool(confirmation_indices_best)
+        independent = independent and confirmation_unique
         independent = independent and confirmation_indices_best == confirmation_indices_sim
         independent = independent and len(confirmation_indices_best) == len(best_values)
         independent = independent and not discovery_indices.intersection(confirmation_indices_best)
